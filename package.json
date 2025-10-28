@@ -16,7 +16,9 @@
   "keywords": [
     "electron",
     "electron-builder",
+    "electron-packager",
     "packager",
+    "packaging",
     "cross-platform",
     "multi-platform",
     "windows",
@@ -24,22 +26,34 @@
     "linux",
     "android",
     "pwa",
-    "desktop-app"
+    "desktop-app",
+    "desktop-application",
+    "build-tool",
+    "developer-tools",
+    "automation",
+    "icon-generator",
+    "app-builder",
+    "dmg",
+    "exe",
+    "appimage",
+    "apk",
+    "nsis",
+    "code-signing"
   ],
   "author": "Nadir",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/electron-multi-platform-packager.git"
+    "url": "https://github.com/mehmetnadir/electron-multi-platform-packager.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/electron-multi-platform-packager/issues"
+    "url": "https://github.com/mehmetnadir/electron-multi-platform-packager/issues"
   },
-  "homepage": "https://github.com/yourusername/electron-multi-platform-packager#readme",
+  "homepage": "https://github.com/mehmetnadir/electron-multi-platform-packager#readme",
   "devDependencies": {
     "concurrently": "^8.2.2",
     "electron": "^39.0.0",
-    "electron-builder": "^24.6.4",
+    "electron-builder": "^26.0.12",
     "nodemon": "^3.0.1",
     "socket.io-client": "^4.8.1"
   },

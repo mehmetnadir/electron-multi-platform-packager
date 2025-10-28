@@ -1,10 +1,16 @@
 # 🚀 Electron Multi-Platform Packager
 
-A powerful desktop application for packaging web applications into native executables for Windows, macOS, Linux, Android, and PWA.
+**Package web apps into native executables for Windows, macOS, Linux, Android, and PWA in 5 minutes!**
+
+A powerful desktop application and build tool for packaging web applications into native executables. Supports Electron app packaging, automatic icon generation, and cross-platform builds with zero configuration.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)
 ![Electron](https://img.shields.io/badge/electron-39.0.0-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
+![Downloads](https://img.shields.io/github/downloads/mehmetnadir/electron-multi-platform-packager/total.svg)
+
+**Keywords:** electron packager, electron builder, multi-platform packaging, cross-platform build tool, desktop app packager, icon generator, Windows app builder, macOS app builder, Linux app builder, Android APK builder, PWA generator, automated packaging, developer tools
 
 ## 🌟 Overview
 
