@@ -41,19 +41,19 @@ class ConfigManager {
       maxParallelZips: 2,
       autoCleanTemp: true,
       keepBuildLogs: true,
-      // Yayınevi ayarları (çoklu yayınevi desteği)
+      // Publisher settings (multi-publisher support)
       publishers: [],
-      // publishers array yapısı:
+      // publishers array structure:
       // {
       //   id: 'unique-id',
-      //   name: 'Yayınevi Adı',
+      //   name: 'Publisher Name',
       //   logo: '/path/to/logo.png',
-      //   akillitahtaId: 'publisher_123',
+      //   logoId: 'logo-uuid',
       //   apiKey: 'api-key',
       //   autoUpload: false,
       //   isDefault: false
       // }
-      defaultPublisherId: null // Varsayılan yayınevi ID'si
+      defaultPublisherId: null // Default publisher ID
     };
     
     this.settings = null;
@@ -365,23 +365,22 @@ class ConfigManager {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   }
   
-  // ==================== YAYINEVİ YÖNETİMİ ====================
+  // ==================== PUBLISHER MANAGEMENT ====================
   
-  // Yayınevi ekle
+  // Add publisher
   addPublisher(publisherData) {
     const publisher = {
       id: this.generateId(),
       name: publisherData.name || '',
       logo: publisherData.logo || '',
-      logoId: publisherData.logoId || null, // Logo ID ekle
-      akillitahtaId: publisherData.akillitahtaId || '',
+      logoId: publisherData.logoId || null,
       apiKey: publisherData.apiKey || '',
       autoUpload: publisherData.autoUpload || false,
       isDefault: publisherData.isDefault || false,
       createdAt: new Date().toISOString()
     };
     
-    // Eğer bu varsayılan olarak işaretlendiyse, diğerlerini kaldır
+    // If this is marked as default, remove default from others
     if (publisher.isDefault) {
       this.settings.publishers.forEach(p => p.isDefault = false);
       this.settings.defaultPublisherId = publisher.id;
@@ -393,15 +392,15 @@ class ConfigManager {
     return publisher;
   }
   
-  // Yayınevi güncelle
+  // Update publisher
   updatePublisher(publisherId, updates) {
     const index = this.settings.publishers.findIndex(p => p.id === publisherId);
     
     if (index === -1) {
-      throw new Error('Yayınevi bulunamadı');
+      throw new Error('Publisher not found');
     }
     
-    // Varsayılan değişikliği kontrol et
+    // Check default change
     if (updates.isDefault === true) {
       this.settings.publishers.forEach(p => p.isDefault = false);
       this.settings.defaultPublisherId = publisherId;
@@ -417,7 +416,7 @@ class ConfigManager {
     return this.settings.publishers[index];
   }
   
-  // Mevcut publisher'lara logoId ekle (migration)
+  // Add logoId to existing publishers (migration)
   migratePublishersLogoId() {
     let updated = false;
     this.settings.publishers.forEach(publisher => {
@@ -433,18 +432,18 @@ class ConfigManager {
     }
   }
   
-  // Yayınevi sil
+  // Delete publisher
   deletePublisher(publisherId) {
     const index = this.settings.publishers.findIndex(p => p.id === publisherId);
     
     if (index === -1) {
-      throw new Error('Yayınevi bulunamadı');
+      throw new Error('Publisher not found');
     }
     
     const wasDefault = this.settings.publishers[index].isDefault;
     this.settings.publishers.splice(index, 1);
     
-    // Varsayılan silindiyse, ilk yayınevini varsayılan yap
+    // If default was deleted, make first publisher default
     if (wasDefault && this.settings.publishers.length > 0) {
       this.settings.publishers[0].isDefault = true;
       this.settings.defaultPublisherId = this.settings.publishers[0].id;
@@ -456,38 +455,38 @@ class ConfigManager {
     return true;
   }
   
-  // Tüm yayınevlerini getir
+  // Get all publishers
   getPublishers() {
     return this.settings.publishers || [];
   }
   
-  // Belirli bir yayınevini getir
+  // Get specific publisher
   getPublisher(publisherId) {
     return this.settings.publishers.find(p => p.id === publisherId);
   }
   
-  // Varsayılan yayınevini getir
+  // Get default publisher
   getDefaultPublisher() {
     if (this.settings.defaultPublisherId) {
       return this.getPublisher(this.settings.defaultPublisherId);
     }
     
-    // Varsayılan yoksa ilkini döndür
+    // If no default, return first one
     return this.settings.publishers.length > 0 ? this.settings.publishers[0] : null;
   }
   
-  // Varsayılan yayınevini ayarla
+  // Set default publisher
   setDefaultPublisher(publisherId) {
     const publisher = this.getPublisher(publisherId);
     
     if (!publisher) {
-      throw new Error('Yayınevi bulunamadı');
+      throw new Error('Publisher not found');
     }
     
-    // Tüm yayınevlerinin varsayılan işaretini kaldır
+    // Remove default flag from all publishers
     this.settings.publishers.forEach(p => p.isDefault = false);
     
-    // Seçileni varsayılan yap
+    // Set selected as default
     publisher.isDefault = true;
     this.settings.defaultPublisherId = publisherId;
     
@@ -495,7 +494,7 @@ class ConfigManager {
     return true;
   }
   
-  // Unique ID oluştur
+  // Generate unique ID
   generateId() {
     return 'pub_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
   }
