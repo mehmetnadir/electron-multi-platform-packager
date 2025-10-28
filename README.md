@@ -6,46 +6,65 @@ A powerful desktop application for packaging web applications into native execut
 ![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)
 ![Electron](https://img.shields.io/badge/electron-39.0.0-blue.svg)
 
+## 🌟 Overview
+
+Electron Multi-Platform Packager is a comprehensive solution for developers who need to package their web applications into native desktop and mobile applications. Built on top of industry-standard tools like Electron Builder and Capacitor, it provides a unified interface for multi-platform builds.
+
+### Why This Tool?
+
+- **Unified Workflow**: Package for 5 platforms from a single interface
+- **Time Saving**: Automated icon generation and build configuration
+- **Professional Output**: Code-signing ready with proper app metadata
+- **Queue Management**: Handle multiple packaging jobs efficiently
+- **Real-time Feedback**: WebSocket-based progress tracking
+
 ## ✨ Features
 
 ### 🎯 Multi-Platform Support
-- **🪟 Windows** - EXE installer with NSIS
-- **🍎 macOS** - DMG with code signing support
-- **🐧 Linux** - AppImage and DEB packages
-- **🤖 Android** - APK via Capacitor
-- **🌐 PWA** - Progressive Web App with manifest
+
+| Platform | Output Format | Features |
+|----------|---------------|----------|
+| 🪟 **Windows** | EXE + NSIS Installer | Code signing ready, custom icons, installer wizard |
+| 🍎 **macOS** | DMG | Notarization ready, ICNS icons, app bundle |
+| 🐧 **Linux** | AppImage + DEB | Desktop integration, portable execution |
+| 🤖 **Android** | APK | Capacitor-based, adaptive icons, all densities |
+| 🌐 **PWA** | Web App | Service worker, manifest, offline support |
 
 ### 🎨 Advanced Features
-- **Custom Logo Support** - Use your own logo for all platforms
-- **Queue Management** - Handle multiple packaging jobs efficiently
-- **Real-time Progress** - WebSocket-based progress tracking
-- **Modern Web UI** - Clean and intuitive interface
-- **Automatic Icon Generation** - Convert logos to platform-specific formats
-- **Build Caching** - Speed up repeated builds
+
+- **Custom Logo Support** - Automatically convert your logo to all platform-specific formats
+- **Queue System** - Process multiple packaging jobs with priority management
+- **Real-time Progress** - WebSocket-based live updates during packaging
+- **Modern Web UI** - Clean, intuitive interface built with modern web standards
+- **Automatic Icon Generation** - Convert single logo to ICO, ICNS, PNG in all required sizes
+- **Build Caching** - Speed up repeated builds with intelligent caching
 
 ## 📋 Requirements
 
+### System Requirements
 - **Node.js** 18.0.0 or higher
 - **npm** or **yarn**
-- **4GB RAM** minimum (8GB recommended)
+- **4GB RAM** minimum (8GB recommended for Android builds)
 - **10GB free disk space**
 
 ### Platform-Specific Requirements
 
-#### Windows Packaging:
-- Windows 10/11 or macOS/Linux with Wine
+#### For Windows Packaging:
+- Windows 10/11 (native)
+- OR macOS/Linux with Wine installed
 
-#### macOS Packaging:
-- macOS 10.13 or higher (for building)
-- Xcode Command Line Tools
+#### For macOS Packaging:
+- macOS 10.13 or higher
+- Xcode Command Line Tools: `xcode-select --install`
 
-#### Linux Packaging:
-- Any Linux distribution
-- `fuse` for AppImage testing
+#### For Linux Packaging:
+- Any modern Linux distribution
+- `fuse` package for AppImage testing
 
-#### Android Packaging:
+#### For Android Packaging:
 - Java JDK 17
 - Android SDK (automatically installed via Capacitor)
+- 4GB additional RAM recommended
 
 ## 🚀 Quick Start
 
@@ -53,7 +72,7 @@ A powerful desktop application for packaging web applications into native execut
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/electron-multi-platform-packager.git
+git clone https://github.com/mehmetnadir/electron-multi-platform-packager.git
 cd electron-multi-platform-packager
 
 # Install dependencies
@@ -65,62 +84,91 @@ npm run electron
 
 ### First Build
 
-1. **Upload Build Files**
-   - Click "Upload Build" or drag & drop your ZIP file
-   - ZIP should contain your web application files
+1. **Prepare Your Build**
+   - Create a ZIP file containing your web application
+   - Include all HTML, CSS, JS, and assets
+   - Ensure you have an `index.html` entry point
 
-2. **Configure**
-   - Enter app name and version
-   - Select target platforms
-   - (Optional) Upload custom logo
+2. **Upload Build Files**
+   - Launch the application
+   - Click "Upload Build" or drag & drop your ZIP
+   - Wait for extraction to complete
 
-3. **Start Packaging**
+3. **Configure Your App**
+   - Enter application name
+   - Set version number (semver format)
+   - Add description (optional)
+   - Upload custom logo (optional, 512x512 PNG recommended)
+
+4. **Select Platforms**
+   - Choose target platforms
+   - Configure platform-specific options if needed
+
+5. **Start Packaging**
    - Click "Start Packaging"
-   - Monitor progress in real-time
-   - Download completed packages
+   - Monitor real-time progress
+   - Download completed packages from output directory
 
 ## 📖 Usage
 
-### Web Interface
-
-The application provides a modern web interface accessible at `http://localhost:3000` when running in server mode, or through the Electron window.
-
-#### Main Features:
-- **Upload Management** - Drag & drop or browse for build files
-- **Platform Selection** - Choose which platforms to build for
-- **Queue View** - Monitor active and completed jobs
-- **Logo Management** - Upload and manage custom logos
-- **Settings** - Configure build options and preferences
-
-### Command Line
+### Desktop Application Mode
 
 ```bash
-# Start Electron app
+# Start Electron app with GUI
 npm run electron
 
-# Start server only (no Electron window)
+# Development mode with DevTools
+npm run electron-dev
+```
+
+The application will open with a modern web interface where you can:
+- Upload and manage build files
+- Configure packaging options
+- Monitor active and completed jobs
+- Manage custom logos
+- View detailed logs
+
+### Server Mode
+
+```bash
+# Start as web server only (no Electron window)
 npm start
 
-# Development mode with auto-reload
+# Access via browser
+open http://localhost:3000
+```
+
+### Development Mode
+
+```bash
+# Start with auto-reload
 npm run dev
 ```
 
 ## 🎨 Logo Support
 
-All platforms support custom logos:
+All platforms support custom logos with automatic format conversion:
 
-| Platform | Format | Sizes |
-|----------|--------|-------|
+### Supported Formats
+- **Input**: PNG, JPG, JPEG, SVG
+- **Recommended**: PNG with transparent background, 512x512px, 1:1 aspect ratio
+
+### Platform-Specific Output
+
+| Platform | Format | Sizes Generated |
+|----------|--------|-----------------|
 | Windows | ICO | 16, 32, 48, 64, 128, 256 |
 | macOS | ICNS | 16, 32, 64, 128, 256, 512 |
 | Linux | PNG | 512x512 |
-| Android | PNG | 48, 72, 96, 144, 192 |
+| Android | PNG | 48, 72, 96, 144, 192 (mdpi to xxxhdpi) |
 | PWA | PNG | 72, 96, 128, 144, 152, 192, 384, 512 |
 
-**Recommended Logo:**
-- Format: PNG with transparent background
-- Size: 512x512 pixels minimum
-- Aspect ratio: 1:1 (square)
+### How It Works
+
+1. Upload your logo (PNG, 512x512 recommended)
+2. Logo is automatically converted to all required formats
+3. Each platform receives optimized icons
+4. Fallback to default icon if no logo provided
 
 ## 🔧 Configuration
 
@@ -141,7 +189,7 @@ DEBUG=true
 
 ### Build Configuration
 
-Edit `package.json` to customize build settings:
+Customize packaging in `package.json`:
 
 ```json
 {
@@ -151,11 +199,16 @@ Edit `package.json` to customize build settings:
     "win": {
       "target": "nsis",
       "certificateFile": "./certs/cert.pfx",
-      "certificatePassword": "password"
+      "certificatePassword": "${CERT_PASSWORD}"
     },
     "mac": {
       "category": "public.app-category.developer-tools",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Development"
     }
   }
 }
@@ -163,88 +216,154 @@ Edit `package.json` to customize build settings:
 
 ## 🏗️ Architecture
 
+### Project Structure
+
 ```
 electron-multi-platform-packager/
 ├── src/
-│   ├── main.js              # Electron main process
-│   ├── client/              # Web UI
+│   ├── main.js                    # Electron main process
+│   ├── preload.js                 # Preload script for security
+│   │
+│   ├── client/                    # Frontend
 │   │   ├── public/
-│   │   │   ├── index.html   # Main interface
-│   │   │   └── app.js       # Frontend logic
-│   │   └── settings.html    # Settings page
-│   ├── server/              # Express server
-│   │   ├── app.js           # Main server
-│   │   └── localPackagingRoutes.js
-│   ├── packaging/           # Packaging logic
-│   │   └── packagingService.js
-│   ├── services/            # Core services
-│   │   ├── queueService.js  # Job queue
-│   │   └── uploadService.js # File uploads
-│   └── utils/               # Utilities
-│       └── logoService.js   # Logo management
-├── package.json
-└── README.md
+│   │   │   ├── index.html        # Main UI
+│   │   │   ├── app.js            # Frontend logic
+│   │   │   └── uploadManager.js  # File upload handling
+│   │   └── settings.html         # Settings page
+│   │
+│   ├── server/                    # Backend
+│   │   ├── app.js                # Express server
+│   │   ├── localPackagingRoutes.js
+│   │   ├── settingsRoutes.js
+│   │   └── pwa-config-manager.js
+│   │
+│   ├── packaging/                 # Core packaging logic
+│   │   ├── packagingService.js   # Main service
+│   │   └── [platform templates]
+│   │
+│   ├── services/                  # Supporting services
+│   │   ├── queueService.js       # Job queue management
+│   │   ├── uploadService.js      # File upload handling
+│   │   └── chunkedUploadService.js
+│   │
+│   ├── config/                    # Configuration
+│   │   └── ConfigManager.js      # Settings management
+│   │
+│   └── utils/                     # Utilities
+│       └── logoService.js        # Logo processing
+│
+├── package.json                   # Dependencies and scripts
+├── README.md                      # This file
+├── CONTRIBUTING.md                # Contribution guidelines
+└── LICENSE                        # MIT License
 ```
 
-## 🧪 Testing
+### Technology Stack
 
-```bash
-# Run all tests
-npm test
+**Core:**
+- [Electron](https://www.electronjs.org/) - Desktop application framework
+- [Node.js](https://nodejs.org/) - JavaScript runtime
+- [Express.js](https://expressjs.com/) - Web server framework
 
-# Run specific tests
-npm run test:unit
-npm run test:packaging
-npm run test:dmg
-```
+**Packaging:**
+- [electron-builder](https://www.electron.build/) - Windows, macOS, Linux packaging
+- [Capacitor](https://capacitorjs.com/) - Android packaging
+- [NSIS](https://nsis.sourceforge.io/) - Windows installer
+
+**Image Processing:**
+- [sharp](https://sharp.pixelplumbing.com/) - High-performance image processing
+- [to-ico](https://www.npmjs.com/package/to-ico) - ICO file generation
+
+**Real-time Communication:**
+- [Socket.io](https://socket.io/) - WebSocket for live updates
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please follow these steps:
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Quick Contribution Guide
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
 
-### Development Guidelines
+### Areas for Contribution
 
-- Follow existing code style
-- Add tests for new features
-- Update documentation
-- Keep commits atomic and descriptive
+- 🐛 Bug fixes
+- 📚 Documentation improvements
+- ✨ New features
+- 🧪 Testing and QA
+- 🌍 Translations
+- 🎨 UI/UX improvements
 
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+### What This Means
+
+- ✅ Commercial use allowed
+- ✅ Modification allowed
+- ✅ Distribution allowed
+- ✅ Private use allowed
+- ⚠️ No warranty provided
+- ⚠️ No liability accepted
+
 ## 🙏 Acknowledgments
 
-- Built with [Electron](https://www.electronjs.org/)
-- Packaging powered by [electron-builder](https://www.electron.build/)
-- Android support via [Capacitor](https://capacitorjs.com/)
-- Icons generated with [sharp](https://sharp.pixelplumbing.com/)
+This project builds upon excellent open-source tools:
+
+- **Electron** - Cross-platform desktop apps with web technologies
+- **electron-builder** - Complete solution to package Electron apps
+- **Capacitor** - Native mobile runtime for web apps
+- **Sharp** - High-performance Node.js image processing
+- **Express** - Fast, unopinionated web framework
+- **Socket.io** - Real-time bidirectional event-based communication
 
 ## 📧 Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/electron-multi-platform-packager/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/electron-multi-platform-packager/discussions)
+- **Issues**: [GitHub Issues](https://github.com/mehmetnadir/electron-multi-platform-packager/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/mehmetnadir/electron-multi-platform-packager/discussions)
+- **Documentation**: This README and inline code comments
 
 ## 🗺️ Roadmap
+
+### Planned Features
 
 - [ ] iOS support via Capacitor
 - [ ] Snap package for Linux
 - [ ] Flatpak support
+- [ ] Windows Store (MSIX) packaging
 - [ ] Automated testing pipeline
-- [ ] Plugin system for custom packaging steps
+- [ ] Plugin system for custom build steps
 - [ ] Multi-language UI support
 - [ ] Cloud build service integration
+- [ ] Build templates and presets
+- [ ] Incremental update support
+
+### In Progress
+
+- [x] Multi-platform packaging
+- [x] Custom logo support
+- [x] Queue management
+- [x] Real-time progress tracking
+- [x] Modern web UI
+
+## 📊 Project Stats
+
+- **Platforms Supported**: 5 (Windows, macOS, Linux, Android, PWA)
+- **Languages**: JavaScript (Node.js)
+- **License**: MIT
+- **Status**: Active Development
 
 ## ⭐ Star History
 
-If you find this project useful, please consider giving it a star on GitHub!
+If you find this project useful, please consider giving it a star on GitHub! It helps others discover the project and motivates continued development.
 
 ---
 
-**Made with ❤️ by the open source community**
+**Built with ❤️ for the developer community**
+
+*Making multi-platform packaging accessible to everyone*
