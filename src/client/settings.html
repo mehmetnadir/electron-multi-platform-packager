@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ayarlar - Electron Paketleyici</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    
+    .settings-container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      overflow: hidden;
+    }
+    
+    .settings-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+    
+    .settings-header h1 {
+      font-size: 2em;
+      margin-bottom: 10px;
+    }
+    
+    .settings-header p {
+      opacity: 0.9;
+    }
+    
+    .settings-content {
+      padding: 30px;
+    }
+    
+    .setting-section {
+      margin-bottom: 30px;
+      padding-bottom: 30px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .setting-section:last-child {
+      border-bottom: none;
+    }
+    
+    .setting-section h2 {
+      color: #667eea;
+      margin-bottom: 15px;
+      font-size: 1.3em;
+    }
+    
+    .setting-item {
+      margin-bottom: 20px;
+    }
+    
+    .setting-item label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #333;
+    }
+    
+    .setting-item .description {
+      font-size: 0.9em;
+      color: #666;
+      margin-bottom: 10px;
+    }
+    
+    .input-group {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .input-group input[type="text"] {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    
+    .input-group input[type="text"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #5568d3;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    
+    .btn-secondary:hover {
+      background: #5a6268;
+    }
+    
+    .btn-success {
+      background: #28a745;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background: #218838;
+    }
+    
+    .btn-danger {
+      background: #dc3545;
+      color: white;
+    }
+    
+    .btn-danger:hover {
+      background: #c82333;
+    }
+    
+    .info-box {
+      background: #f8f9fa;
+      border-left: 4px solid #667eea;
+      padding: 15px;
+      border-radius: 6px;
+      margin-top: 15px;
+    }
+    
+    .info-box h3 {
+      color: #667eea;
+      margin-bottom: 10px;
+      font-size: 1.1em;
+    }
+    
+    .info-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .info-item:last-child {
+      border-bottom: none;
+    }
+    
+    .info-label {
+      font-weight: 600;
+      color: #555;
+    }
+    
+    .info-value {
+      color: #333;
+    }
+    
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.85em;
+      font-weight: 600;
+    }
+    
+    .status-success {
+      background: #d4edda;
+      color: #155724;
+    }
+    
+    .status-warning {
+      background: #fff3cd;
+      color: #856404;
+    }
+    
+    .status-error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    
+    input[type="number"] {
+      width: 100px;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    
+    select {
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      background: white;
+      cursor: pointer;
+    }
+    
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .checkbox-group input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+    }
+    
+    .back-button {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: white;
+      color: #667eea;
+      padding: 10px 20px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      transition: all 0.3s;
+    }
+    
+    .back-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back-button">← Ana Sayfa</a>
+  
+  <div class="settings-container">
+    <div class="settings-header">
+      <h1>⚙️ Ayarlar</h1>
+      <p>Uygulama ayarlarını ve konfigürasyon deposunu yönetin</p>
+    </div>
+    
+    <div class="settings-content">
+      <!-- Konfigürasyon Deposu -->
+      <div class="setting-section">
+        <h2>📁 Konfigürasyon Deposu</h2>
+        
+        <div class="setting-item">
+          <label>Depo Konumu</label>
+          <div class="description">
+            Tüm ayarlar, logolar, yüklemeler ve çıktılar bu klasörde saklanır.
+            Google Drive, Dropbox gibi senkronize klasörler kullanabilirsiniz.
+          </div>
+          
+          <div class="input-group">
+            <input 
+              type="text" 
+              id="configRepository" 
+              readonly
+              placeholder="Klasör seçilmedi"
+            >
+            <button class="btn btn-primary" onclick="selectConfigRepository()">
+              📂 Klasör Seç
+            </button>
+          </div>
+        </div>
+        
+        <div class="info-box" id="repositoryInfo">
+          <h3>Depo Bilgileri</h3>
+          <div class="info-item">
+            <span class="info-label">Durum:</span>
+            <span class="info-value" id="repoStatus">Yükleniyor...</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Dosya Sayısı:</span>
+            <span class="info-value" id="repoFileCount">-</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Toplam Boyut:</span>
+            <span class="info-value" id="repoSize">-</span>
+          </div>
+          <div class="info-item">
+            <span class="info-label">Son Değişiklik:</span>
+            <span class="info-value" id="repoLastModified">-</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Klasör Yapısı -->
+      <div class="setting-section">
+        <h2>📂 Klasör Yapısı</h2>
+        
+        <div class="setting-item">
+          <label>Yükleme Klasörü</label>
+          <div class="description">Yüklenen proje dosyalarının saklandığı klasör</div>
+          <div class="input-group">
+            <input type="text" id="uploadDir" readonly>
+          </div>
+        </div>
+        
+        <div class="setting-item">
+          <label>Logo Klasörü</label>
+          <div class="description">Uygulama logolarının saklandığı klasör</div>
+          <div class="input-group">
+            <input type="text" id="logoDir" readonly>
+          </div>
+        </div>
+        
+        <div class="setting-item">
+          <label>Geçici Klasör</label>
+          <div class="description">Build sırasında kullanılan geçici dosyalar</div>
+          <div class="input-group">
+            <input type="text" id="tempDir" readonly>
+          </div>
+        </div>
+        
+        <div class="setting-item">
+          <label>Çıktı Klasörü</label>
+          <div class="description">Oluşturulan paketlerin saklandığı klasör</div>
+          <div class="input-group">
+            <input type="text" id="outputDir" readonly>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Performans Ayarları -->
+      <div class="setting-section">
+        <h2>⚡ Performans Ayarları</h2>
+        
+        <div class="setting-item">
+          <label>Maksimum Paralel Build</label>
+          <div class="description">Aynı anda kaç build işlemi çalışabilir</div>
+          <input type="number" id="maxParallelBuilds" min="1" max="10" value="5">
+        </div>
+        
+        <div class="setting-item">
+          <label>Maksimum Paralel ZIP</label>
+          <div class="description">Aynı anda kaç ZIP işlemi çalışabilir</div>
+          <input type="number" id="maxParallelZips" min="1" max="5" value="2">
+        </div>
+      </div>
+      
+      <!-- Yayınevi Yönetimi -->
+      <div class="setting-section">
+        <h2>🏢 Yayınevi Yönetimi</h2>
+        <div class="description" style="margin-bottom: 20px;">
+          Yayınevlerinizi ekleyin ve yönetin. Paketleme sırasında hangi yayınevini kullanacağınızı seçebilirsiniz.
+        </div>
+        
+        <div class="setting-item">
+          <a href="/publishers" class="btn btn-primary" style="display: inline-block; text-decoration: none;">
+            🏢 Yayınevi Yönetimine Git
+          </a>
+          <p style="margin-top: 10px; color: #666; font-size: 0.9rem;">
+            Birden fazla yayınevi ekleyebilir, düzenleyebilir ve varsayılan yayınevinizi seçebilirsiniz.
+          </p>
+        </div>
+      </div>
+      
+      <!-- Genel Ayarlar -->
+      <div class="setting-section">
+        <h2>🎨 Genel Ayarlar</h2>
+        
+        <div class="setting-item">
+          <label>Tema</label>
+          <select id="theme">
+            <option value="dark">Koyu</option>
+            <option value="light">Açık</option>
+          </select>
+        </div>
+        
+        <div class="setting-item">
+          <label>Dil</label>
+          <select id="language">
+            <option value="tr">Türkçe</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        
+        <div class="setting-item">
+          <div class="checkbox-group">
+            <input type="checkbox" id="autoCleanTemp">
+            <label for="autoCleanTemp">Build sonrası geçici dosyaları otomatik temizle</label>
+          </div>
+        </div>
+        
+        <div class="setting-item">
+          <div class="checkbox-group">
+            <input type="checkbox" id="keepBuildLogs">
+            <label for="keepBuildLogs">Build loglarını sakla</label>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Aksiyonlar -->
+      <div class="actions">
+        <button class="btn btn-success" onclick="saveSettings()">
+          💾 Ayarları Kaydet
+        </button>
+        <button class="btn btn-secondary" onclick="loadSettings()">
+          🔄 Yenile
+        </button>
+        <button class="btn btn-danger" onclick="resetSettings()">
+          ⚠️ Varsayılanlara Dön
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Ayarları yükle
+    async function loadSettings() {
+      try {
+        let settings;
+        
+        // Electron API kullan (öncelikli)
+        if (window.electronAPI) {
+          settings = await window.electronAPI.getConfigSettings();
+        } else {
+          // Web modunda API kullan
+          const response = await fetch('/api/settings');
+          settings = await response.json();
+        }
+        
+        console.log('Yüklenen ayarlar:', settings);
+        
+        // Form alanlarını doldur
+        document.getElementById('configRepository').value = settings.configRepository || '';
+        document.getElementById('uploadDir').value = settings.uploadDir || 'Otomatik (config/uploads)';
+        document.getElementById('logoDir').value = settings.logoDir || 'Otomatik (config/logos)';
+        document.getElementById('tempDir').value = settings.tempDir || 'Otomatik (config/temp)';
+        document.getElementById('outputDir').value = settings.outputDir || 'Otomatik (config/output)';
+        document.getElementById('maxParallelBuilds').value = settings.maxParallelBuilds || 5;
+        document.getElementById('maxParallelZips').value = settings.maxParallelZips || 2;
+        document.getElementById('theme').value = settings.theme || 'dark';
+        document.getElementById('language').value = settings.language || 'tr';
+        document.getElementById('autoCleanTemp').checked = settings.autoCleanTemp !== false;
+        document.getElementById('keepBuildLogs').checked = settings.keepBuildLogs !== false;
+        
+        // Yayınevi ayarlarını yükle
+        if (settings.publisher) {
+          document.getElementById('publisherName').value = settings.publisher.name || '';
+          document.getElementById('publisherLogo').value = settings.publisher.logo || '';
+          document.getElementById('publisherAkillitahtaId').value = settings.publisher.akillitahtaId || '';
+          document.getElementById('publisherApiKey').value = settings.publisher.apiKey || '';
+          document.getElementById('publisherAutoUpload').checked = settings.publisher.autoUpload || false;
+          
+          // Logo önizlemesi
+          if (settings.publisher.logo) {
+            showLogoPreview(settings.publisher.logo);
+          }
+        }
+        
+        // Depo bilgilerini yükle
+        loadRepositoryInfo();
+      } catch (error) {
+        console.error('Ayarlar yüklenemedi:', error);
+        alert('Ayarlar yüklenirken hata oluştu: ' + error.message);
+      }
+    }
+    
+    // Depo bilgilerini yükle
+    async function loadRepositoryInfo() {
+      try {
+        const response = await fetch('/api/settings/repository-info');
+        const info = await response.json();
+        
+        if (info.exists) {
+          document.getElementById('repoStatus').innerHTML = 
+            '<span class="status-badge status-success">✓ Aktif</span>';
+          document.getElementById('repoFileCount').textContent = info.fileCount;
+          document.getElementById('repoSize').textContent = formatBytes(info.size);
+          document.getElementById('repoLastModified').textContent = 
+            new Date(info.lastModified).toLocaleString('tr-TR');
+        } else {
+          document.getElementById('repoStatus').innerHTML = 
+            '<span class="status-badge status-error">✗ Bulunamadı</span>';
+        }
+      } catch (error) {
+        console.error('Depo bilgileri yüklenemedi:', error);
+      }
+    }
+    
+    // Klasör seç
+    async function selectConfigRepository() {
+      try {
+        // Electron IPC kullan
+        if (window.electronAPI) {
+          const result = await window.electronAPI.selectDirectory({
+            title: 'Konfigürasyon Deposu Seçin',
+            message: 'Tüm ayarlar ve veriler bu klasörde saklanacak. Google Drive, Dropbox gibi senkronize klasörler kullanabilirsiniz.',
+            buttonLabel: 'Seç'
+          });
+          
+          if (result.canceled || result.filePaths.length === 0) {
+            return;
+          }
+          
+          const selectedPath = result.filePaths[0];
+          
+          // Kullanıcıya sor: Mevcut verileri taşımak ister misiniz?
+          const moveData = confirm(
+            'Mevcut verilerinizi yeni konuma taşımak ister misiniz?\n\n' +
+            '✅ EVET: Tüm ayarlar, logolar, yüklemeler ve çıktılar yeni konuma kopyalanır.\n' +
+            '❌ HAYIR: Sadece yeni konum ayarlanır, veriler eski konumda kalır.'
+          );
+          
+          // Config repository'yi güncelle
+          const updateResult = await window.electronAPI.setConfigRepository(selectedPath, moveData);
+          
+          if (updateResult.success) {
+            document.getElementById('configRepository').value = selectedPath;
+            loadRepositoryInfo();
+            loadSettings();
+            
+            if (moveData) {
+              alert('✅ Konfigürasyon deposu değiştirildi ve tüm veriler taşındı!');
+            } else {
+              alert('✅ Konfigürasyon deposu değiştirildi!');
+            }
+          } else {
+            alert('❌ Hata: ' + updateResult.error);
+          }
+        } else {
+          // Web modunda API kullan
+          const response = await fetch('/api/settings/select-repository', {
+            method: 'POST'
+          });
+          
+          const result = await response.json();
+          
+          if (result.success) {
+            document.getElementById('configRepository').value = result.path;
+            loadRepositoryInfo();
+            alert('Konfigürasyon deposu başarıyla değiştirildi!');
+          }
+        }
+      } catch (error) {
+        console.error('Klasör seçilemedi:', error);
+        alert('Klasör seçilirken hata oluştu: ' + error.message);
+      }
+    }
+    
+    // Ayarları kaydet
+    async function saveSettings() {
+      try {
+        const settings = {
+          maxParallelBuilds: parseInt(document.getElementById('maxParallelBuilds').value),
+          maxParallelZips: parseInt(document.getElementById('maxParallelZips').value),
+          theme: document.getElementById('theme').value,
+          language: document.getElementById('language').value,
+          autoCleanTemp: document.getElementById('autoCleanTemp').checked,
+          keepBuildLogs: document.getElementById('keepBuildLogs').checked,
+          publisher: {
+            name: document.getElementById('publisherName').value,
+            logo: document.getElementById('publisherLogo').value,
+            akillitahtaId: document.getElementById('publisherAkillitahtaId').value,
+            apiKey: document.getElementById('publisherApiKey').value,
+            autoUpload: document.getElementById('publisherAutoUpload').checked
+          }
+        };
+        
+        const response = await fetch('/api/settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(settings)
+        });
+        
+        if (response.ok) {
+          alert('Ayarlar başarıyla kaydedildi!');
+        } else {
+          alert('Ayarlar kaydedilemedi!');
+        }
+      } catch (error) {
+        console.error('Ayarlar kaydedilemedi:', error);
+        alert('Ayarlar kaydedilirken hata oluştu!');
+      }
+    }
+    
+    // Varsayılanlara dön
+    async function resetSettings() {
+      if (!confirm('Tüm ayarlar varsayılan değerlere döndürülecek. Emin misiniz?')) {
+        return;
+      }
+      
+      try {
+        const response = await fetch('/api/settings/reset', {
+          method: 'POST'
+        });
+        
+        if (response.ok) {
+          alert('Ayarlar varsayılan değerlere döndürüldü!');
+          loadSettings();
+        } else {
+          alert('Ayarlar sıfırlanamadı!');
+        }
+      } catch (error) {
+        console.error('Ayarlar sıfırlanamadı:', error);
+        alert('Ayarlar sıfırlanırken hata oluştu!');
+      }
+    }
+    
+    // Yayınevi logosu seç
+    async function selectPublisherLogo() {
+      try {
+        if (window.electronAPI) {
+          const result = await window.electronAPI.showOpenDialog({
+            title: 'Yayınevi Logosu Seçin',
+            properties: ['openFile'],
+            filters: [
+              { name: 'Resim Dosyaları', extensions: ['png', 'jpg', 'jpeg', 'svg', 'webp'] }
+            ]
+          });
+          
+          if (!result.canceled && result.filePaths.length > 0) {
+            const logoPath = result.filePaths[0];
+            document.getElementById('publisherLogo').value = logoPath;
+            showLogoPreview(logoPath);
+          }
+        } else {
+          alert('Logo seçme özelliği sadece Electron modunda çalışır');
+        }
+      } catch (error) {
+        console.error('Logo seçilemedi:', error);
+        alert('Logo seçilirken hata oluştu: ' + error.message);
+      }
+    }
+    
+    // Logo önizlemesini göster
+    function showLogoPreview(logoPath) {
+      const preview = document.getElementById('publisherLogoPreview');
+      const img = document.getElementById('publisherLogoImg');
+      
+      if (logoPath) {
+        // Electron'da file:// protokolü kullan
+        img.src = logoPath.startsWith('http') ? logoPath : `file://${logoPath}`;
+        preview.style.display = 'block';
+      } else {
+        preview.style.display = 'none';
+      }
+    }
+    
+    // API Key görünürlüğünü değiştir
+    function toggleApiKeyVisibility() {
+      const apiKeyInput = document.getElementById('publisherApiKey');
+      if (apiKeyInput.type === 'password') {
+        apiKeyInput.type = 'text';
+      } else {
+        apiKeyInput.type = 'password';
+      }
+    }
+    
+    // Akıllı Tahta bağlantısını test et
+    async function testAkillitahtaConnection() {
+      const statusSpan = document.getElementById('connectionStatus');
+      const akillitahtaId = document.getElementById('publisherAkillitahtaId').value;
+      const apiKey = document.getElementById('publisherApiKey').value;
+      
+      if (!akillitahtaId || !apiKey) {
+        statusSpan.innerHTML = '<span style="color: #dc3545;">❌ Lütfen ID ve API Key girin</span>';
+        return;
+      }
+      
+      statusSpan.innerHTML = '<span style="color: #ffc107;">⏳ Test ediliyor...</span>';
+      
+      try {
+        const response = await fetch('/api/akillitahta/test-connection', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            publisherId: akillitahtaId,
+            apiKey: apiKey
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          statusSpan.innerHTML = '<span style="color: #28a745;">✅ Bağlantı başarılı!</span>';
+        } else {
+          statusSpan.innerHTML = `<span style="color: #dc3545;">❌ Hata: ${result.error}</span>`;
+        }
+      } catch (error) {
+        console.error('Bağlantı testi hatası:', error);
+        statusSpan.innerHTML = '<span style="color: #dc3545;">❌ Bağlantı hatası</span>';
+      }
+    }
+    
+    // Byte formatla
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+    
+    // Sayfa yüklendiğinde ayarları yükle
+    window.addEventListener('load', loadSettings);
+  </script>
+</body>
+</html>

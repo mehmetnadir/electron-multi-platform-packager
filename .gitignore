@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+output/
+*.dmg
+*.exe
+*.deb
+*.AppImage
+*.apk
+
+# Temporary files
+temp/
+uploads/
+*.log
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates and keys
+*.pfx
+*.p12
+*.pem
+*.key
+certs/
+
+# Config
+config/settings.json
+logos/
+
+# Test files
+coverage/
+.nyc_output/
+# Large test files
+tools/*.apks
+tools/*.jar
+*.zip

@@ -1,0 +1,5 @@
+pwa-test/
+node_modules/
+temp/
+uploads/
+.DS_Store

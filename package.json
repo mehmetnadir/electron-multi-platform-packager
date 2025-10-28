@@ -1,0 +1,118 @@
+{
+  "name": "electron-multi-platform-packager",
+  "version": "1.0.0",
+  "description": "A powerful desktop application for packaging web applications into native executables for Windows, macOS, Linux, Android, and PWA",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/server/app.js",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "nodemon src/server/app.js",
+    "client": "cd src/client && npm start",
+    "electron": "electron src/main.js",
+    "electron-dev": "ELECTRON_IS_DEV=1 electron src/main.js",
+    "build": "npm run build-client && electron-builder",
+    "build-client": "cd src/client && npm run build",
+    "dist": "electron-builder --publish=never",
+    "test": "node test-app.js",
+    "test:all": "node tests/test-index.js",
+    "test:quick": "node test-app.js",
+    "test:unit": "node tests/run-unit-tests.js",
+    "test:cache": "node tests/unit/cache.test.js",
+    "test:publishers": "node tests/unit/publishers.test.js",
+    "test:logos": "node tests/unit/logos.test.js",
+    "test:config": "node tests/unit/config.test.js",
+    "test:packaging": "node tests/unit/packaging.test.js",
+    "test:dmg": "node tests/unit/dmg-packaging.test.js",
+    "test:dmg-live": "node tests/integration/dmg-live-monitor.test.js",
+    "test:upload-cleanup": "node tests/integration/upload-cleanup.test.js",
+    "test:features": "node tests/integration/features-test.js",
+    "test:splash": "node tests/integration/splash-screen-test.js"
+  },
+  "keywords": [
+    "electron",
+    "electron-builder",
+    "packager",
+    "cross-platform",
+    "multi-platform",
+    "windows",
+    "macos",
+    "linux",
+    "android",
+    "pwa",
+    "desktop-app"
+  ],
+  "author": "Nadir",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/electron-multi-platform-packager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/electron-multi-platform-packager/issues"
+  },
+  "homepage": "https://github.com/yourusername/electron-multi-platform-packager#readme",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^39.0.0",
+    "electron-builder": "^24.6.4",
+    "nodemon": "^3.0.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "adm-zip": "^0.5.16",
+    "archiver": "^6.0.1",
+    "axios": "^1.12.2",
+    "busboy": "^1.6.0",
+    "cordova": "^12.0.0",
+    "cors": "^2.8.5",
+    "cross-spawn": "^7.0.3",
+    "express": "^4.18.2",
+    "fs-extra": "^11.1.1",
+    "multer": "^2.0.1",
+    "node-notifier": "^10.0.1",
+    "node-ssh": "^13.2.1",
+    "path": "^0.12.7",
+    "sharp": "^0.34.4",
+    "socket.io": "^4.7.2",
+    "to-ico": "^1.1.5",
+    "uuid": "^9.0.0"
+  },
+  "build": {
+    "appId": "com.electron.multi-platform-packager",
+    "productName": "Electron Multi-Platform Packager",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

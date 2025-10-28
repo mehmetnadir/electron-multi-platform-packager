@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kitap Yönetimi</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            color: #333;
+        }
+
+        .back-button {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: background 0.3s;
+        }
+
+        .back-button:hover {
+            background: #5568d3;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            gap: 20px;
+        }
+
+        .publisher-select {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .publisher-select label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .publisher-select select {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        .publisher-select select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filters {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .filters select {
+            padding: 10px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            transition: border-color 0.3s;
+        }
+
+        .filters select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .btn-info:hover {
+            background: #138496;
+        }
+
+        .books-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .book-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s;
+            background: white;
+        }
+
+        .book-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .book-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .book-info {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            margin-bottom: 15px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .book-info span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .book-platforms {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            font-size: 1.5rem;
+        }
+
+        .platform-icon {
+            opacity: 0.3;
+        }
+
+        .platform-icon.enabled {
+            opacity: 1;
+        }
+
+        .book-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .book-actions .btn {
+            flex: 1;
+            min-width: 120px;
+            justify-content: center;
+        }
+
+        .no-books {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+            font-size: 1.2rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: #667eea;
+            font-size: 1.2rem;
+        }
+
+        .loading i {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .stat-card {
+            flex: 1;
+            min-width: 200px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 0.9rem;
+            font-weight: 500;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-book"></i> Kitap Yönetimi</h1>
+            <a href="/" class="back-button"><i class="fas fa-arrow-left"></i> Ana Sayfa</a>
+        </div>
+
+        <div class="toolbar">
+            <div class="publisher-select">
+                <label><i class="fas fa-building"></i> Yayınevi:</label>
+                <select id="publisherSelect">
+                    <option value="">Yükleniyor...</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" onclick="showNewBookModal()">
+                <i class="fas fa-plus"></i> Yeni Kitap
+            </button>
+        </div>
+
+        <div id="statsContainer" class="stats" style="display: none;">
+            <div class="stat-card">
+                <h3>Toplam Kitap</h3>
+                <div class="value" id="totalBooks">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Windows</h3>
+                <div class="value" id="windowsCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>macOS</h3>
+                <div class="value" id="macosCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Pardus</h3>
+                <div class="value" id="pardusCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Web</h3>
+                <div class="value" id="webCount">0</div>
+            </div>
+        </div>
+
+        <div class="filters" id="filtersContainer" style="display: none;">
+            <select id="gradeFilter">
+                <option value="">Tüm Sınıflar</option>
+            </select>
+            <select id="subjectFilter">
+                <option value="">Tüm Dersler</option>
+            </select>
+            <select id="typeFilter">
+                <option value="">Tüm Türler</option>
+            </select>
+        </div>
+
+        <div id="booksList" class="books-grid">
+            <div class="loading">
+                <i class="fas fa-spinner"></i> Yükleniyor...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPublisherId = null;
+        let allBooks = [];
+        let publishers = [];
+
+        // Sayfa yüklendiğinde
+        window.addEventListener('DOMContentLoaded', async () => {
+            await loadPublishers();
+        });
+
+        // Yayınevlerini yükle
+        async function loadPublishers() {
+            try {
+                const response = await fetch('/api/akillitahta/publishers');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Yayınevleri yüklenemedi');
+                }
+
+                publishers = data.publishers;
+                
+                const select = document.getElementById('publisherSelect');
+                select.innerHTML = '<option value="">Yayınevi Seçiniz...</option>';
+                
+                publishers.forEach(pub => {
+                    const option = document.createElement('option');
+                    option.value = pub.id;
+                    option.textContent = pub.name;
+                    select.appendChild(option);
+                });
+
+                select.addEventListener('change', (e) => {
+                    currentPublisherId = e.target.value;
+                    if (currentPublisherId) {
+                        loadBooks();
+                    } else {
+                        document.getElementById('booksList').innerHTML = '<div class="no-books">Lütfen bir yayınevi seçin</div>';
+                        document.getElementById('statsContainer').style.display = 'none';
+                        document.getElementById('filtersContainer').style.display = 'none';
+                    }
+                });
+            } catch (error) {
+                console.error('Yayınevleri yüklenemedi:', error);
+                document.getElementById('booksList').innerHTML = '<div class="no-books">❌ Yayınevleri yüklenemedi: ' + error.message + '</div>';
+            }
+        }
+
+        // Kitapları yükle
+        async function loadBooks() {
+            if (!currentPublisherId) return;
+
+            try {
+                document.getElementById('booksList').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Kitaplar yükleniyor...</div>';
+
+                const grade = document.getElementById('gradeFilter').value;
+                const subject = document.getElementById('subjectFilter').value;
+                const type = document.getElementById('typeFilter').value;
+
+                const params = new URLSearchParams();
+                if (grade) params.append('grade', grade);
+                if (subject) params.append('subject', subject);
+                if (type) params.append('bookType', type);
+
+                const url = `/api/akillitahta/publishers/${currentPublisherId}/books${params.toString() ? '?' + params.toString() : ''}`;
+                console.log('Fetching:', url);
+
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Kitaplar yüklenemedi');
+                }
+
+                allBooks = data.books;
+                
+                // Filtreleri güncelle
+                updateFilters();
+                
+                // İstatistikleri güncelle
+                updateStats();
+                
+                // Kitapları render et
+                renderBooks();
+                
+                document.getElementById('statsContainer').style.display = 'flex';
+                document.getElementById('filtersContainer').style.display = 'flex';
+            } catch (error) {
+                console.error('Kitaplar yüklenemedi:', error);
+                document.getElementById('booksList').innerHTML = '<div class="no-books">❌ Kitaplar yüklenemedi: ' + error.message + '</div>';
+            }
+        }
+
+        // Filtreleri güncelle
+        function updateFilters() {
+            // Sınıflar
+            const grades = [...new Set(allBooks.map(b => b.grade).filter(Boolean))].sort();
+            const gradeFilter = document.getElementById('gradeFilter');
+            const currentGrade = gradeFilter.value;
+            gradeFilter.innerHTML = '<option value="">Tüm Sınıflar</option>';
+            grades.forEach(grade => {
+                const option = document.createElement('option');
+                option.value = grade;
+                option.textContent = grade + '. Sınıf';
+                if (grade === currentGrade) option.selected = true;
+                gradeFilter.appendChild(option);
+            });
+
+            // Dersler
+            const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
+            const subjectFilter = document.getElementById('subjectFilter');
+            const currentSubject = subjectFilter.value;
+            subjectFilter.innerHTML = '<option value="">Tüm Dersler</option>';
+            subjects.forEach(subject => {
+                const option = document.createElement('option');
+                option.value = subject;
+                option.textContent = subject;
+                if (subject === currentSubject) option.selected = true;
+                subjectFilter.appendChild(option);
+            });
+
+            // Türler
+            const types = [...new Set(allBooks.map(b => b.bookType).filter(Boolean))].sort();
+            const typeFilter = document.getElementById('typeFilter');
+            const currentType = typeFilter.value;
+            typeFilter.innerHTML = '<option value="">Tüm Türler</option>';
+            types.forEach(type => {
+                const option = document.createElement('option');
+                option.value = type;
+                option.textContent = type;
+                if (type === currentType) option.selected = true;
+                typeFilter.appendChild(option);
+            });
+
+            // Filter change event
+            [gradeFilter, subjectFilter, typeFilter].forEach(filter => {
+                filter.addEventListener('change', loadBooks);
+            });
+        }
+
+        // İstatistikleri güncelle
+        function updateStats() {
+            document.getElementById('totalBooks').textContent = allBooks.length;
+            document.getElementById('windowsCount').textContent = allBooks.filter(b => b.platforms.windows?.enabled).length;
+            document.getElementById('macosCount').textContent = allBooks.filter(b => b.platforms.macos?.enabled).length;
+            document.getElementById('pardusCount').textContent = allBooks.filter(b => b.platforms.pardus?.enabled).length;
+            document.getElementById('webCount').textContent = allBooks.filter(b => b.platforms.web?.enabled).length;
+        }
+
+        // Kitapları render et
+        function renderBooks() {
+            const container = document.getElementById('booksList');
+            
+            if (allBooks.length === 0) {
+                container.innerHTML = '<div class="no-books"><i class="fas fa-inbox"></i><br><br>Kitap bulunamadı</div>';
+                return;
+            }
+
+            container.innerHTML = allBooks.map(book => `
+                <div class="book-card">
+                    <div class="book-title">${book.title}</div>
+                    <div class="book-info">
+                        ${book.grade ? `<span><i class="fas fa-graduation-cap"></i> ${book.grade}. Sınıf</span>` : ''}
+                        ${book.subject ? `<span><i class="fas fa-book-open"></i> ${book.subject}</span>` : ''}
+                        ${book.bookType ? `<span><i class="fas fa-tag"></i> ${book.bookType}</span>` : ''}
+                    </div>
+                    <div class="book-platforms">
+                        <span class="platform-icon ${book.platforms.windows?.enabled ? 'enabled' : ''}" title="Windows">
+                            <i class="fab fa-windows"></i>
+                        </span>
+                        <span class="platform-icon ${book.platforms.macos?.enabled ? 'enabled' : ''}" title="macOS">
+                            <i class="fab fa-apple"></i>
+                        </span>
+                        <span class="platform-icon ${book.platforms.pardus?.enabled ? 'enabled' : ''}" title="Pardus">
+                            <i class="fab fa-linux"></i>
+                        </span>
+                        <span class="platform-icon ${book.platforms.web?.enabled ? 'enabled' : ''}" title="Web">
+                            <i class="fas fa-globe"></i>
+                        </span>
+                    </div>
+                    <div class="book-actions">
+                        <button class="btn btn-success" onclick="packageBook('${book.id}')">
+                            <i class="fas fa-box"></i> Paketle
+                        </button>
+                        <button class="btn btn-info" onclick="viewBook('${book.id}')">
+                            <i class="fas fa-info-circle"></i> Detay
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Kitap paketleme sayfasına git
+        function packageBook(bookId) {
+            window.location.href = `/package-book.html?bookId=${bookId}&publisherId=${currentPublisherId}`;
+        }
+
+        // Kitap detaylarını göster
+        function viewBook(bookId) {
+            const book = allBooks.find(b => b.id === bookId);
+            if (!book) return;
+            
+            alert(`Kitap Detayları:\n\n` +
+                  `ID: ${book.id}\n` +
+                  `Başlık: ${book.title}\n` +
+                  `Sınıf: ${book.grade || 'Belirtilmemiş'}\n` +
+                  `Ders: ${book.subject || 'Belirtilmemiş'}\n` +
+                  `Tür: ${book.bookType || 'Belirtilmemiş'}\n\n` +
+                  `Platformlar:\n` +
+                  `- Windows: ${book.platforms.windows?.enabled ? '✓' : '✗'}\n` +
+                  `- macOS: ${book.platforms.macos?.enabled ? '✓' : '✗'}\n` +
+                  `- Pardus: ${book.platforms.pardus?.enabled ? '✓' : '✗'}\n` +
+                  `- Web: ${book.platforms.web?.enabled ? '✓' : '✗'}`
+            );
+        }
+
+        // Yeni kitap modal'ı
+        function showNewBookModal() {
+            if (!currentPublisherId) {
+                alert('Lütfen önce bir yayınevi seçin!');
+                return;
+            }
+            
+            window.location.href = `/new-book.html?publisherId=${currentPublisherId}`;
+        }
+    </script>
+</body>
+</html>

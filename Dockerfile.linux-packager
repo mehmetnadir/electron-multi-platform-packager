@@ -1,0 +1,36 @@
+# Linux Paketleme Container
+# macOS'ta Linux AppImage oluşturmak için
+
+FROM ubuntu:22.04
+
+# Timezone ayarla (interactive prompt'u önlemek için)
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Istanbul
+
+# Gerekli paketleri yükle
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    libfuse2 \
+    file \
+    desktop-file-utils \
+    zsync \
+    unzip \
+    zenity \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 18 yükle
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs
+
+# appimagetool indir
+RUN wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool \
+    && chmod +x /usr/local/bin/appimagetool
+
+# Çalışma dizini
+WORKDIR /workspace
+
+# Container başlatıldığında bash aç
+CMD ["/bin/bash"]

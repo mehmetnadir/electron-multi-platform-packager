@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kitap Paketleme</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            color: #333;
+        }
+
+        .back-button {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: background 0.3s;
+        }
+
+        .back-button:hover {
+            background: #5568d3;
+        }
+
+        .book-info {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+
+        .book-info h2 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        .book-info .details {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 0.95rem;
+            opacity: 0.9;
+        }
+
+        .platform-section {
+            margin-bottom: 30px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            transition: border-color 0.3s;
+        }
+
+        .platform-section.active {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+
+        .platform-section.completed {
+            border-color: #28a745;
+            background: #f0fff4;
+        }
+
+        .platform-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .platform-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+
+        .platform-title i {
+            font-size: 1.5rem;
+        }
+
+        .platform-status {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-pending {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .status-uploading {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .status-completed {
+            background: #28a745;
+            color: white;
+        }
+
+        .file-input-wrapper {
+            margin-bottom: 15px;
+        }
+
+        .file-input-wrapper label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px dashed #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+
+        .file-input-wrapper input[type="file"]:hover {
+            border-color: #667eea;
+        }
+
+        .version-input {
+            margin-bottom: 15px;
+        }
+
+        .version-input label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .version-input input {
+            width: 200px;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+        .version-input input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            display: none;
+        }
+
+        .progress-bar.active {
+            display: block;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        .upload-info {
+            font-size: 0.9rem;
+            color: #666;
+            display: none;
+        }
+
+        .upload-info.active {
+            display: block;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #218838;
+        }
+
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        .summary {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 30px;
+        }
+
+        .summary h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+        }
+
+        .summary-item .label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .summary-item .value {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-box-open"></i> Kitap Paketleme</h1>
+            <a href="/books" class="back-button" id="backButton"><i class="fas fa-arrow-left"></i> Kitaplara Dön</a>
+        </div>
+
+        <div id="alertContainer"></div>
+
+        <div class="book-info" id="bookInfo">
+            <h2 id="bookTitle">Yükleniyor...</h2>
+            <div class="details" id="bookDetails"></div>
+        </div>
+
+        <!-- Windows Platform -->
+        <div class="platform-section" id="windowsSection">
+            <div class="platform-header">
+                <div class="platform-title">
+                    <i class="fab fa-windows"></i>
+                    <span>Windows</span>
+                </div>
+                <span class="platform-status status-pending" id="windowsStatus">Bekliyor</span>
+            </div>
+            <div class="version-input">
+                <label>Versiyon:</label>
+                <input type="text" id="windowsVersion" value="1.0.0" placeholder="1.0.0">
+            </div>
+            <div class="file-input-wrapper">
+                <label>Dosya Seç (.exe):</label>
+                <input type="file" id="windowsFile" accept=".exe">
+            </div>
+            <div class="progress-bar" id="windowsProgress">
+                <div class="progress-fill" id="windowsProgressFill">0%</div>
+            </div>
+            <div class="upload-info" id="windowsInfo"></div>
+            <button class="btn btn-primary" id="windowsUpload" onclick="uploadPlatform('windows')">
+                <i class="fas fa-upload"></i> Yükle
+            </button>
+        </div>
+
+        <!-- macOS Platform -->
+        <div class="platform-section" id="macosSection">
+            <div class="platform-header">
+                <div class="platform-title">
+                    <i class="fab fa-apple"></i>
+                    <span>macOS</span>
+                </div>
+                <span class="platform-status status-pending" id="macosStatus">Bekliyor</span>
+            </div>
+            <div class="version-input">
+                <label>Versiyon:</label>
+                <input type="text" id="macosVersion" value="1.0.0" placeholder="1.0.0">
+            </div>
+            <div class="file-input-wrapper">
+                <label>Dosya Seç (.dmg):</label>
+                <input type="file" id="macosFile" accept=".dmg">
+            </div>
+            <div class="progress-bar" id="macosProgress">
+                <div class="progress-fill" id="macosProgressFill">0%</div>
+            </div>
+            <div class="upload-info" id="macosInfo"></div>
+            <button class="btn btn-primary" id="macosUpload" onclick="uploadPlatform('macos')">
+                <i class="fas fa-upload"></i> Yükle
+            </button>
+        </div>
+
+        <!-- Pardus Platform -->
+        <div class="platform-section" id="pardusSection">
+            <div class="platform-header">
+                <div class="platform-title">
+                    <i class="fab fa-linux"></i>
+                    <span>Pardus</span>
+                </div>
+                <span class="platform-status status-pending" id="pardusStatus">Bekliyor</span>
+            </div>
+            <div class="version-input">
+                <label>Versiyon:</label>
+                <input type="text" id="pardusVersion" value="1.0.0" placeholder="1.0.0">
+            </div>
+            <div class="file-input-wrapper">
+                <label>Dosya Seç (.impark):</label>
+                <input type="file" id="pardusFile" accept=".impark">
+            </div>
+            <div class="progress-bar" id="pardusProgress">
+                <div class="progress-fill" id="pardusProgressFill">0%</div>
+            </div>
+            <div class="upload-info" id="pardusInfo"></div>
+            <button class="btn btn-primary" id="pardusUpload" onclick="uploadPlatform('pardus')">
+                <i class="fas fa-upload"></i> Yükle
+            </button>
+        </div>
+
+        <!-- Web Platform -->
+        <div class="platform-section" id="webSection">
+            <div class="platform-header">
+                <div class="platform-title">
+                    <i class="fas fa-globe"></i>
+                    <span>Web</span>
+                </div>
+                <span class="platform-status status-pending" id="webStatus">Bekliyor</span>
+            </div>
+            <div class="version-input">
+                <label>Versiyon:</label>
+                <input type="text" id="webVersion" value="1.0.0" placeholder="1.0.0">
+            </div>
+            <div class="file-input-wrapper">
+                <label>Dosya Seç (.zip):</label>
+                <input type="file" id="webFile" accept=".zip">
+            </div>
+            <div class="progress-bar" id="webProgress">
+                <div class="progress-fill" id="webProgressFill">0%</div>
+            </div>
+            <div class="upload-info" id="webInfo"></div>
+            <button class="btn btn-primary" id="webUpload" onclick="uploadPlatform('web')">
+                <i class="fas fa-upload"></i> Yükle
+            </button>
+        </div>
+
+        <div class="summary" id="summary" style="display: none;">
+            <h3><i class="fas fa-check-circle"></i> Yükleme Özeti</h3>
+            <div class="summary-grid" id="summaryGrid"></div>
+        </div>
+
+        <button class="btn btn-success" id="finishButton" onclick="finishPackaging()" style="display: none; width: 100%; margin-top: 20px;">
+            <i class="fas fa-check-double"></i> Tamamla ve Kitaplara Dön
+        </button>
+    </div>
+
+    <script>
+        // URL'den parametreleri al
+        const urlParams = new URLSearchParams(window.location.search);
+        const bookId = urlParams.get('bookId');
+        const publisherId = urlParams.get('publisherId');
+
+        let uploadedPlatforms = [];
+        let bookData = null;
+
+        if (!bookId || !publisherId) {
+            showAlert('error', 'Kitap ID veya Yayınevi ID bulunamadı!');
+        } else {
+            loadBookInfo();
+        }
+
+        // Kitap bilgilerini yükle
+        async function loadBookInfo() {
+            try {
+                const response = await fetch(`https://akillitahta.ndr.ist/api/v1/public/publishers/${publisherId}/books`);
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Kitap bilgileri yüklenemedi');
+                }
+
+                bookData = data.books.find(b => b.id === bookId);
+                
+                if (!bookData) {
+                    throw new Error('Kitap bulunamadı');
+                }
+
+                // Kitap bilgilerini göster
+                document.getElementById('bookTitle').textContent = bookData.title;
+                document.getElementById('bookDetails').innerHTML = `
+                    ${bookData.grade ? `<span><i class="fas fa-graduation-cap"></i> ${bookData.grade}. Sınıf</span>` : ''}
+                    ${bookData.subject ? `<span><i class="fas fa-book-open"></i> ${bookData.subject}</span>` : ''}
+                    ${bookData.bookType ? `<span><i class="fas fa-tag"></i> ${bookData.bookType}</span>` : ''}
+                    <span><i class="fas fa-fingerprint"></i> ID: ${bookData.id}</span>
+                `;
+
+                // Zaten yüklenmiş platformları kontrol et
+                checkUploadedPlatforms();
+
+            } catch (error) {
+                console.error('Error loading book info:', error);
+                showAlert('error', '❌ Kitap bilgileri yüklenemedi: ' + error.message);
+            }
+        }
+
+        // Yüklenmiş platformları kontrol et
+        function checkUploadedPlatforms() {
+            ['windows', 'macos', 'pardus', 'web'].forEach(platform => {
+                if (bookData.platforms[platform]?.enabled) {
+                    markAsCompleted(platform);
+                }
+            });
+        }
+
+        // Platform yükleme
+        async function uploadPlatform(platform) {
+            const fileInput = document.getElementById(`${platform}File`);
+            const versionInput = document.getElementById(`${platform}Version`);
+            const uploadButton = document.getElementById(`${platform}Upload`);
+            const progressBar = document.getElementById(`${platform}Progress`);
+            const progressFill = document.getElementById(`${platform}ProgressFill`);
+            const statusSpan = document.getElementById(`${platform}Status`);
+            const infoDiv = document.getElementById(`${platform}Info`);
+            const section = document.getElementById(`${platform}Section`);
+
+            const file = fileInput.files[0];
+            const version = versionInput.value.trim();
+
+            if (!file) {
+                showAlert('error', 'Lütfen bir dosya seçin!');
+                return;
+            }
+
+            if (!version) {
+                showAlert('error', 'Lütfen versiyon girin!');
+                return;
+            }
+
+            // UI güncelle
+            uploadButton.disabled = true;
+            statusSpan.textContent = 'Yükleniyor...';
+            statusSpan.className = 'platform-status status-uploading';
+            section.classList.add('active');
+            progressBar.classList.add('active');
+            infoDiv.classList.add('active');
+
+            try {
+                // FormData oluştur
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('platform', platform);
+                formData.append('version', version);
+
+                // Upload
+                const xhr = new XMLHttpRequest();
+                
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        progressFill.style.width = percent + '%';
+                        progressFill.textContent = percent + '%';
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    if (xhr.status === 200) {
+                        const response = JSON.parse(xhr.responseText);
+                        if (response.success) {
+                            markAsCompleted(platform, response);
+                            uploadedPlatforms.push(platform);
+                            updateSummary();
+                            showAlert('success', `✅ ${platform.toUpperCase()} paketi başarıyla yüklendi!`);
+                        } else {
+                            throw new Error(response.error || 'Yükleme başarısız');
+                        }
+                    } else {
+                        throw new Error(`HTTP ${xhr.status}: ${xhr.statusText}`);
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    throw new Error('Network error');
+                });
+
+                xhr.open('POST', `https://akillitahta.ndr.ist/api/v1/public/books/${bookId}/upload-package`);
+                xhr.send(formData);
+
+            } catch (error) {
+                console.error('Upload error:', error);
+                showAlert('error', `❌ ${platform.toUpperCase()} yükleme hatası: ` + error.message);
+                
+                // UI'yi sıfırla
+                uploadButton.disabled = false;
+                statusSpan.textContent = 'Hata';
+                statusSpan.className = 'platform-status status-pending';
+                section.classList.remove('active');
+                progressBar.classList.remove('active');
+            }
+        }
+
+        // Tamamlandı olarak işaretle
+        function markAsCompleted(platform, response = null) {
+            const statusSpan = document.getElementById(`${platform}Status`);
+            const section = document.getElementById(`${platform}Section`);
+            const uploadButton = document.getElementById(`${platform}Upload`);
+            const infoDiv = document.getElementById(`${platform}Info`);
+            const progressBar = document.getElementById(`${platform}Progress`);
+            const progressFill = document.getElementById(`${platform}ProgressFill`);
+
+            statusSpan.textContent = 'Tamamlandı';
+            statusSpan.className = 'platform-status status-completed';
+            section.classList.remove('active');
+            section.classList.add('completed');
+            uploadButton.disabled = true;
+            uploadButton.textContent = '✓ Yüklendi';
+            progressBar.classList.remove('active');
+
+            if (response) {
+                infoDiv.innerHTML = `
+                    <strong>Yükleme Bilgileri:</strong><br>
+                    Dosya Boyutu: ${formatBytes(response.fileSize)}<br>
+                    Checksum: ${response.checksum}<br>
+                    URL: ${response.url}
+                `;
+            }
+        }
+
+        // Özet güncelle
+        function updateSummary() {
+            const summary = document.getElementById('summary');
+            const summaryGrid = document.getElementById('summaryGrid');
+            const finishButton = document.getElementById('finishButton');
+
+            if (uploadedPlatforms.length > 0) {
+                summary.style.display = 'block';
+                finishButton.style.display = 'block';
+
+                summaryGrid.innerHTML = uploadedPlatforms.map(platform => `
+                    <div class="summary-item">
+                        <span class="label">${platform.toUpperCase()}</span>
+                        <span class="value">✓ Yüklendi</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Paketlemeyi tamamla
+        function finishPackaging() {
+            window.location.href = `/books?publisherId=${publisherId}`;
+        }
+
+        // Alert göster
+        function showAlert(type, message) {
+            const container = document.getElementById('alertContainer');
+            const alertClass = type === 'success' ? 'alert-success' : 
+                              type === 'error' ? 'alert-error' : 'alert-info';
+            const icon = type === 'success' ? 'check-circle' : 
+                        type === 'error' ? 'exclamation-circle' : 'info-circle';
+
+            container.innerHTML = `
+                <div class="alert ${alertClass}">
+                    <i class="fas fa-${icon}"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+
+            // 5 saniye sonra kaldır
+            setTimeout(() => {
+                container.innerHTML = '';
+            }, 5000);
+        }
+
+        // Byte formatla
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>
