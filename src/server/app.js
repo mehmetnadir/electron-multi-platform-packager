@@ -87,6 +87,48 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'Sunucu çalışıyor', timestamp: new Date().toISOString() });
 });
 
+// Çıktı klasörünü işletim sistemi dosya gezgininde aç.
+// Tarayıcı modunda kullanılır (Electron dışında window.electronAPI yoktur).
+// Server kullanıcıyla aynı makinede çalıştığı için OS 'open' komutu güvenle çalışır.
+app.post('/api/open-folder', async (req, res) => {
+  try {
+    const { folderPath } = req.body || {};
+    if (!folderPath || typeof folderPath !== 'string') {
+      return res.status(400).json({ success: false, error: 'folderPath gerekli' });
+    }
+
+    if (!await fs.pathExists(folderPath)) {
+      return res.status(404).json({ success: false, error: 'Klasör bulunamadı' });
+    }
+
+    // Dosya verildiyse içeren klasörü aç
+    const stat = await fs.stat(folderPath);
+    const target = stat.isDirectory() ? folderPath : path.dirname(folderPath);
+
+    const { spawn } = require('child_process');
+    let command;
+    let args;
+    switch (process.platform) {
+      case 'darwin': command = 'open'; args = [target]; break;
+      case 'win32': command = 'explorer'; args = [target]; break;
+      default: command = 'xdg-open'; args = [target]; break; // linux
+    }
+
+    // shell:false → path enjeksiyonuna kapalı (arg olarak geçer)
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.on('error', (err) => {
+      console.error('❌ Klasör açma hatası:', err.message);
+    });
+    child.unref();
+
+    console.log('📁 Klasör açıldı:', target);
+    return res.json({ success: true, opened: target });
+  } catch (error) {
+    console.error('❌ /api/open-folder exception:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Enhanced Upload Endpoints - Hash tabanlı resumable upload
 
 // Upload session başlat
@@ -996,10 +1038,35 @@ app.get('/api/queue-status', (req, res) => {
 });
 
 // Tek bir işi sil (paketler dahil)
+// Output klasörünü GÜVENLE sil — yalnızca yapılandırılmış output dizini İÇİNDEyse.
+// Yanlış/zararlı yol ile output dışındaki bir klasörün silinmesini engeller.
+async function safeRemoveOutputDir(outputPath) {
+  if (!outputPath || typeof outputPath !== 'string') return false;
+  try {
+    const outputBase = path.resolve(serverConfigManager.getOutputDir());
+    const target = path.resolve(outputPath);
+    const rel = path.relative(outputBase, target);
+    // target outputBase'in kendisi VEYA dışında ise reddet
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      console.warn(`⚠️ Güvenlik: output dizini dışında, silinmedi: ${target}`);
+      return false;
+    }
+    if (await fs.pathExists(target)) {
+      await fs.remove(target);
+      console.log(`✅ Output paketleri silindi: ${target}`);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.error('❌ Output silme hatası:', e.message);
+    return false;
+  }
+}
+
 app.delete('/api/delete-job/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
-    
+
     console.log(`🗑️ İş siliniyor: ${jobId}`);
     
     // Temp klasöründeki job klasörünü bul ve sil
@@ -1023,10 +1090,13 @@ app.delete('/api/delete-job/:jobId', async (req, res) => {
     }
     
     if (!deleted) {
-      console.log(`⚠️ İş klasörü bulunamadı: ${jobId}`);
+      console.log(`⚠️ İş temp klasörü bulunamadı: ${jobId}`);
     }
-    
-    res.json({ success: true, deleted, jobId });
+
+    // Gerçek paketleri output klasöründen sil (frontend outputPath gönderir)
+    const outputDeleted = await safeRemoveOutputDir(req.body && req.body.outputPath);
+
+    res.json({ success: true, deleted, outputDeleted, jobId });
   } catch (error) {
     console.error('❌ Silme hatası:', error);
     res.status(500).json({ error: 'İş silinirken hata oluştu: ' + error.message });
@@ -1064,9 +1134,18 @@ app.delete('/api/delete-jobs', async (req, res) => {
       }
     }
     
-    console.log(`✅ ${deletedCount}/${jobIds.length} iş silindi`);
-    
-    res.json({ success: true, deletedCount, totalRequested: jobIds.length });
+    // Gerçek paketleri output klasöründen sil
+    let outputDeletedCount = 0;
+    const { outputPaths } = req.body;
+    if (Array.isArray(outputPaths)) {
+      for (const op of outputPaths) {
+        if (await safeRemoveOutputDir(op)) outputDeletedCount++;
+      }
+    }
+
+    console.log(`✅ ${deletedCount}/${jobIds.length} temp, ${outputDeletedCount} output silindi`);
+
+    res.json({ success: true, deletedCount, outputDeletedCount, totalRequested: jobIds.length });
   } catch (error) {
     console.error('❌ Silme hatası:', error);
     res.status(500).json({ error: 'İşler silinirken hata oluştu: ' + error.message });

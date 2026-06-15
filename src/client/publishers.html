@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Yayınevi Yönetimi - Electron Paketleyici</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+      position: relative;
+    }
+
+    .header h1 { font-size: 2em; margin-bottom: 8px; }
+    .header p { opacity: 0.9; }
+
+    .back-link {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      color: white;
+      text-decoration: none;
+      background: rgba(255,255,255,0.2);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: background 0.3s;
+    }
+    .back-link:hover { background: rgba(255,255,255,0.35); }
+
+    .content { padding: 30px; }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .toolbar h2 { color: #667eea; font-size: 1.3em; }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary { background: #667eea; color: white; }
+    .btn-primary:hover { background: #5568d3; transform: translateY(-1px); }
+    .btn-secondary { background: #e9ecef; color: #333; }
+    .btn-secondary:hover { background: #dde1e5; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-danger:hover { background: #c82333; }
+    .btn-success { background: #28a745; color: white; }
+    .btn-success:hover { background: #218838; }
+    .btn-sm { padding: 6px 12px; font-size: 13px; }
+
+    /* Publisher list */
+    .publisher-list { display: flex; flex-direction: column; gap: 14px; }
+
+    .publisher-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .publisher-card:hover { border-color: #c5cae9; box-shadow: 0 2px 10px rgba(102,126,234,0.12); }
+    .publisher-card.is-default { border-color: #28a745; background: #f6fff8; }
+
+    .publisher-logo {
+      width: 56px; height: 56px;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #f1f3f5;
+      border: 1px solid #e0e0e0;
+      flex-shrink: 0;
+    }
+    .publisher-logo-placeholder {
+      width: 56px; height: 56px;
+      border-radius: 10px;
+      background: #f1f3f5;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; color: #adb5bd;
+      flex-shrink: 0;
+    }
+
+    .publisher-info { flex: 1; min-width: 0; }
+    .publisher-name {
+      font-weight: 700; font-size: 1.05em; color: #333;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .default-badge {
+      background: #28a745; color: white;
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .publisher-meta { font-size: 0.85em; color: #888; margin-top: 4px; }
+
+    .publisher-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+    .empty-state {
+      text-align: center; padding: 50px 20px; color: #999;
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: white;
+      border-radius: 12px;
+      width: 100%; max-width: 520px;
+      max-height: 90vh; overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid #eee;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .modal-header h3 { color: #667eea; }
+    .modal-close {
+      background: none; border: none; font-size: 24px;
+      cursor: pointer; color: #999; line-height: 1;
+    }
+    .modal-body { padding: 24px; }
+    .modal-footer {
+      padding: 16px 24px; border-top: 1px solid #eee;
+      display: flex; justify-content: flex-end; gap: 10px;
+    }
+
+    .form-group { margin-bottom: 18px; }
+    .form-group label {
+      display: block; margin-bottom: 6px;
+      font-weight: 600; color: #333; font-size: 14px;
+    }
+    .form-group input[type="text"],
+    .form-group input[type="password"] {
+      width: 100%; padding: 11px;
+      border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;
+    }
+    .form-group input:focus { outline: none; border-color: #667eea; }
+
+    .checkbox-row {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+    }
+    .checkbox-row input { width: 18px; height: 18px; cursor: pointer; }
+    .checkbox-row label { font-weight: 500; cursor: pointer; }
+
+    .api-key-wrap { display: flex; gap: 8px; }
+    .api-key-wrap input { flex: 1; }
+
+    .logo-upload-row { display: flex; align-items: center; gap: 14px; }
+    .logo-preview {
+      width: 64px; height: 64px; border-radius: 10px;
+      object-fit: cover; background: #f1f3f5; border: 1px solid #e0e0e0;
+      display: none;
+    }
+
+    .toast {
+      position: fixed; bottom: 24px; right: 24px;
+      padding: 14px 20px; border-radius: 8px; color: white;
+      font-weight: 600; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      opacity: 0; transform: translateY(10px); transition: all 0.3s;
+      z-index: 2000; max-width: 360px;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.success { background: #28a745; }
+    .toast.error { background: #dc3545; }
+    .toast.info { background: #667eea; }
+
+    .loading { text-align: center; padding: 40px; color: #999; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <a href="/" class="back-link">← Ana Sayfa</a>
+      <h1>🏢 Yayınevi Yönetimi</h1>
+      <p>Yayınevlerini ekleyin, düzenleyin ve varsayılanı seçin</p>
+    </div>
+
+    <div class="content">
+      <div class="toolbar">
+        <h2>Yayınevleri</h2>
+        <button class="btn btn-primary" onclick="openAddModal()">+ Yeni Yayınevi</button>
+      </div>
+
+      <div id="publisherList" class="publisher-list">
+        <div class="loading">Yükleniyor...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Yeni Yayınevi</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editId">
+
+        <div class="form-group">
+          <label for="pubName">Yayınevi Adı *</label>
+          <input type="text" id="pubName" placeholder="Örn: Dijitap Yayınları">
+        </div>
+
+        <div class="form-group">
+          <label for="pubApiKey">API Key</label>
+          <div class="api-key-wrap">
+            <input type="password" id="pubApiKey" placeholder="API anahtarı (opsiyonel)">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="toggleApiKey()" id="apiKeyToggle">Göster</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Logo</label>
+          <div class="logo-upload-row">
+            <img id="logoPreview" class="logo-preview" alt="logo">
+            <div>
+              <input type="file" id="logoFile" accept=".png,.jpg,.jpeg,.ico,.icns" onchange="uploadLogo()">
+              <div id="logoStatus" style="font-size:0.8em;color:#888;margin-top:4px;"></div>
+            </div>
+          </div>
+          <input type="hidden" id="pubLogo">
+          <input type="hidden" id="pubLogoId">
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="pubAutoUpload">
+          <label for="pubAutoUpload">Paketleme sonrası otomatik yükle</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="pubIsDefault">
+          <label for="pubIsDefault">Varsayılan yayınevi yap</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal()">İptal</button>
+        <button class="btn btn-primary" id="saveBtn" onclick="savePublisher()">Kaydet</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let publishers = [];
+
+    // ==================== TOAST ====================
+    function showToast(message, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = `toast ${type} show`;
+      setTimeout(() => { toast.className = `toast ${type}`; }, 3000);
+    }
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    // ==================== LOAD ====================
+    async function loadPublishers() {
+      const list = document.getElementById('publisherList');
+      try {
+        const res = await fetch('/api/publishers');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        publishers = await res.json();
+        renderPublishers();
+      } catch (error) {
+        console.error('Yayınevleri yüklenemedi:', error);
+        list.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div>Yayınevleri yüklenemedi: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderPublishers() {
+      const list = document.getElementById('publisherList');
+
+      if (!Array.isArray(publishers) || publishers.length === 0) {
+        list.innerHTML = `<div class="empty-state">
+          <div class="icon">📭</div>
+          <p>Henüz yayınevi eklenmemiş.</p>
+          <p style="margin-top:8px;">"+ Yeni Yayınevi" ile başlayın.</p>
+        </div>`;
+        return;
+      }
+
+      list.innerHTML = publishers.map(p => {
+        const logoHtml = p.logo
+          ? `<img class="publisher-logo" src="${escapeHtml(p.logo)}" alt="${escapeHtml(p.name)}" onerror="this.outerHTML='<div class=\\'publisher-logo-placeholder\\'>🏢</div>'">`
+          : `<div class="publisher-logo-placeholder">🏢</div>`;
+
+        return `<div class="publisher-card ${p.isDefault ? 'is-default' : ''}">
+          ${logoHtml}
+          <div class="publisher-info">
+            <div class="publisher-name">
+              ${escapeHtml(p.name) || '(isimsiz)'}
+              ${p.isDefault ? '<span class="default-badge">Varsayılan</span>' : ''}
+            </div>
+            <div class="publisher-meta">
+              ${p.apiKey ? '🔑 API Key tanımlı' : '🔓 API Key yok'}
+              &nbsp;·&nbsp; ${p.autoUpload ? '⬆️ Otomatik yükleme açık' : '⏸️ Otomatik yükleme kapalı'}
+            </div>
+          </div>
+          <div class="publisher-actions">
+            ${p.isDefault ? '' : `<button class="btn btn-success btn-sm" onclick="setDefault('${p.id}')">Varsayılan Yap</button>`}
+            <button class="btn btn-secondary btn-sm" onclick="openEditModal('${p.id}')">Düzenle</button>
+            <button class="btn btn-danger btn-sm" onclick="deletePublisher('${p.id}', '${escapeHtml(p.name)}')">Sil</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ==================== MODAL ====================
+    function openAddModal() {
+      document.getElementById('modalTitle').textContent = 'Yeni Yayınevi';
+      document.getElementById('editId').value = '';
+      document.getElementById('pubName').value = '';
+      document.getElementById('pubApiKey').value = '';
+      document.getElementById('pubLogo').value = '';
+      document.getElementById('pubLogoId').value = '';
+      document.getElementById('pubAutoUpload').checked = false;
+      document.getElementById('pubIsDefault').checked = false;
+      document.getElementById('logoStatus').textContent = '';
+      document.getElementById('logoFile').value = '';
+      updateLogoPreview('');
+      document.getElementById('modalOverlay').classList.add('open');
+    }
+
+    function openEditModal(id) {
+      const p = publishers.find(x => x.id === id);
+      if (!p) return;
+      document.getElementById('modalTitle').textContent = 'Yayınevini Düzenle';
+      document.getElementById('editId').value = p.id;
+      document.getElementById('pubName').value = p.name || '';
+      document.getElementById('pubApiKey').value = p.apiKey || '';
+      document.getElementById('pubLogo').value = p.logo || '';
+      document.getElementById('pubLogoId').value = p.logoId || '';
+      document.getElementById('pubAutoUpload').checked = !!p.autoUpload;
+      document.getElementById('pubIsDefault').checked = !!p.isDefault;
+      document.getElementById('logoStatus').textContent = '';
+      document.getElementById('logoFile').value = '';
+      updateLogoPreview(p.logo || '');
+      document.getElementById('modalOverlay').classList.add('open');
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').classList.remove('open');
+    }
+
+    function toggleApiKey() {
+      const input = document.getElementById('pubApiKey');
+      const btn = document.getElementById('apiKeyToggle');
+      if (input.type === 'password') { input.type = 'text'; btn.textContent = 'Gizle'; }
+      else { input.type = 'password'; btn.textContent = 'Göster'; }
+    }
+
+    function updateLogoPreview(url) {
+      const preview = document.getElementById('logoPreview');
+      if (url) { preview.src = url; preview.style.display = 'block'; }
+      else { preview.style.display = 'none'; }
+    }
+
+    // ==================== LOGO UPLOAD ====================
+    async function uploadLogo() {
+      const fileInput = document.getElementById('logoFile');
+      const status = document.getElementById('logoStatus');
+      if (!fileInput.files || !fileInput.files[0]) return;
+
+      const name = document.getElementById('pubName').value.trim() || 'publisher';
+      const kurumId = name.toLowerCase().replace(/[^a-z0-9]/g, '') || 'publisher';
+
+      const formData = new FormData();
+      formData.append('logo', fileInput.files[0]);
+      formData.append('kurumId', kurumId);
+      formData.append('kurumAdi', name);
+
+      status.textContent = 'Yükleniyor...';
+      try {
+        const res = await fetch('/api/logos', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok && data.success && data.logoInfo) {
+          const url = `/logos/${data.logoInfo.fileName}`;
+          document.getElementById('pubLogo').value = url;
+          document.getElementById('pubLogoId').value = data.logoInfo.id || '';
+          updateLogoPreview(url);
+          status.textContent = '✅ Logo yüklendi';
+        } else {
+          status.textContent = '❌ ' + (data.error || 'Yükleme başarısız');
+        }
+      } catch (error) {
+        console.error('Logo yükleme hatası:', error);
+        status.textContent = '❌ ' + error.message;
+      }
+    }
+
+    // ==================== SAVE ====================
+    async function savePublisher() {
+      const id = document.getElementById('editId').value;
+      const name = document.getElementById('pubName').value.trim();
+
+      if (!name) { showToast('Yayınevi adı zorunlu', 'error'); return; }
+
+      const payload = {
+        name,
+        apiKey: document.getElementById('pubApiKey').value.trim(),
+        logo: document.getElementById('pubLogo').value,
+        logoId: document.getElementById('pubLogoId').value || null,
+        autoUpload: document.getElementById('pubAutoUpload').checked,
+        isDefault: document.getElementById('pubIsDefault').checked
+      };
+
+      const saveBtn = document.getElementById('saveBtn');
+      saveBtn.disabled = true;
+      try {
+        const url = id ? `/api/publishers/${id}` : '/api/publishers';
+        const method = id ? 'PUT' : 'POST';
+        const res = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok && data.success !== false) {
+          showToast(id ? 'Yayınevi güncellendi' : 'Yayınevi eklendi', 'success');
+          closeModal();
+          await loadPublishers();
+        } else {
+          showToast(data.error || 'Kaydedilemedi', 'error');
+        }
+      } catch (error) {
+        console.error('Kaydetme hatası:', error);
+        showToast('Hata: ' + error.message, 'error');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    // ==================== SET DEFAULT ====================
+    async function setDefault(id) {
+      try {
+        const res = await fetch(`/api/publishers/${id}/set-default`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok && data.success !== false) {
+          showToast('Varsayılan yayınevi ayarlandı', 'success');
+          await loadPublishers();
+        } else {
+          showToast(data.error || 'Ayarlanamadı', 'error');
+        }
+      } catch (error) {
+        showToast('Hata: ' + error.message, 'error');
+      }
+    }
+
+    // ==================== DELETE ====================
+    async function deletePublisher(id, name) {
+      if (!confirm(`"${name}" yayınevini silmek istediğinize emin misiniz?`)) return;
+      try {
+        const res = await fetch(`/api/publishers/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok && data.success !== false) {
+          showToast('Yayınevi silindi', 'success');
+          await loadPublishers();
+        } else {
+          showToast(data.error || 'Silinemedi', 'error');
+        }
+      } catch (error) {
+        showToast('Hata: ' + error.message, 'error');
+      }
+    }
+
+    // Modal'ı overlay'e tıklayınca kapat
+    document.getElementById('modalOverlay').addEventListener('click', (e) => {
+      if (e.target.id === 'modalOverlay') closeModal();
+    });
+
+    // Başlat
+    window.addEventListener('load', loadPublishers);
+  </script>
+</body>
+</html>

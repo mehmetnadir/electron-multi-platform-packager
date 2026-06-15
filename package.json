@@ -58,9 +58,9 @@
     "socket.io-client": "^4.8.1"
   },
   "dependencies": {
-    "@capacitor/android": "^7.4.3",
-    "@capacitor/cli": "^7.4.3",
-    "@capacitor/core": "^7.4.3",
+    "@capacitor/android": "^7.6.6",
+    "@capacitor/cli": "^7.6.6",
+    "@capacitor/core": "^7.6.6",
     "adm-zip": "^0.5.16",
     "archiver": "^6.0.1",
     "axios": "^1.14.0",

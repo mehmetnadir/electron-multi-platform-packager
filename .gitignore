@@ -53,3 +53,6 @@ coverage/
 tools/*.apks
 tools/*.jar
 *.zip
+
+# Runtime PWA config data
+pwa-configs/

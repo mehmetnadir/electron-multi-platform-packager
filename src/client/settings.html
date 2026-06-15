@@ -466,14 +466,15 @@
         document.getElementById('autoCleanTemp').checked = settings.autoCleanTemp !== false;
         document.getElementById('keepBuildLogs').checked = settings.keepBuildLogs !== false;
         
-        // Yayınevi ayarlarını yükle
-        if (settings.publisher) {
+        // Yayınevi ayarları artık ayrı "Yayınevi Yönetimi" sayfasında.
+        // Alanlar bu sayfada yoksa atla (null'a yazıp çökmeyi önle).
+        if (settings.publisher && document.getElementById('publisherName')) {
           document.getElementById('publisherName').value = settings.publisher.name || '';
           document.getElementById('publisherLogo').value = settings.publisher.logo || '';
           document.getElementById('publisherAkillitahtaId').value = settings.publisher.akillitahtaId || '';
           document.getElementById('publisherApiKey').value = settings.publisher.apiKey || '';
           document.getElementById('publisherAutoUpload').checked = settings.publisher.autoUpload || false;
-          
+
           // Logo önizlemesi
           if (settings.publisher.logo) {
             showLogoPreview(settings.publisher.logo);
@@ -579,15 +580,21 @@
           theme: document.getElementById('theme').value,
           language: document.getElementById('language').value,
           autoCleanTemp: document.getElementById('autoCleanTemp').checked,
-          keepBuildLogs: document.getElementById('keepBuildLogs').checked,
-          publisher: {
+          keepBuildLogs: document.getElementById('keepBuildLogs').checked
+        };
+
+        // Yayınevi alanları yalnızca bu sayfada mevcutsa gönderilir.
+        // Aksi halde payload'a eklenmez → backend mevcut publisher verisini KORUR
+        // (her key updateSetting ile yazıldığı için boş göndermek veri kaybı olurdu).
+        if (document.getElementById('publisherName')) {
+          settings.publisher = {
             name: document.getElementById('publisherName').value,
             logo: document.getElementById('publisherLogo').value,
             akillitahtaId: document.getElementById('publisherAkillitahtaId').value,
             apiKey: document.getElementById('publisherApiKey').value,
             autoUpload: document.getElementById('publisherAutoUpload').checked
-          }
-        };
+          };
+        }
         
         const response = await fetch('/api/settings', {
           method: 'POST',

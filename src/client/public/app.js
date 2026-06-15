@@ -1272,9 +1272,6 @@ class ElectronPackagerWizard {
                         <button class="btn-action btn-download" onclick="app.showJobDetails('${job.jobId}', true)" title="Detaylar">
                             <i class="fas fa-info-circle"></i> Detay
                         </button>
-                        <button class="btn-action btn-reprocess" onclick="app.reprocessJob(${index})" title="Yeniden İşle">
-                            <i class="fas fa-redo"></i> Yeniden İşle
-                        </button>
                         <button class="btn-action btn-delete" onclick="app.deleteJob(${index})" title="Sil">
                             <i class="fas fa-trash"></i> Sil
                         </button>
@@ -1396,66 +1393,23 @@ class ElectronPackagerWizard {
     }
     
     // ==================== TAMAMLANAN İŞLEM YÖNETİMİ ====================
-    
-    async reprocessJob(index) {
-        const job = this.completedJobs[index];
-        
-        if (!confirm(`"${job.appName}" işini yeniden paketlemek istediğinizden emin misiniz?`)) {
-            return;
-        }
-        
-        console.log('🔄 Yeniden işleme başlatılıyor:', job);
-        
-        // Session ID kontrolü
-        if (!job.sessionId) {
-            alert('Bu iş için session ID bulunamadı. Yeniden işlenemez.');
-            return;
-        }
-        
-        const packagingData = {
-            sessionId: job.sessionId,
-            platforms: job.platforms || [],
-            logoId: null,
-            appName: job.appName,
-            appVersion: job.appVersion || '1.0.0',
-            description: ''
-        };
-        
-        try {
-            const response = await fetch('/api/package', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(packagingData)
-            });
-            
-            const result = await response.json();
-            
-            if (result.error) {
-                throw new Error(result.error);
-            }
-            
-            console.log('✅ Yeniden paketleme başlatıldı:', result);
-            this.showNotification('Yeniden İşleme', 'İş kuyruğa eklendi', 'success');
-            
-        } catch (error) {
-            console.error('❌ Yeniden işleme hatası:', error);
-            alert('Yeniden işleme başlatılırken hata oluştu: ' + error.message);
-        }
-    }
-    
+    // Not: "Yeniden İşle" kaldırıldı — kuyruk boşalınca uploads otomatik temizlendiği
+    // için (queueService.checkAndCleanIfQueueEmpty) kaynak session silinir ve reprocess
+    // çalışamaz. Tekrar paketleme için ZIP yeniden yüklenmelidir.
+
     async deleteJob(index) {
         if (!confirm('Bu işi silmek istediğinizden emin misiniz? Oluşturulan paketler de silinecek.')) {
             return;
         }
         
         const job = this.completedJobs[index];
-        
+
         try {
-            // Sunucuya silme isteği gönder
+            // Sunucuya silme isteği gönder (outputPath ile gerçek paketler de silinir)
             const response = await fetch(`/api/delete-job/${job.jobId}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ outputPath: job.outputPath || null })
             });
             
             if (response.ok) {
@@ -1478,13 +1432,14 @@ class ElectronPackagerWizard {
         
         try {
             const jobIds = this.completedJobs.map(j => j.jobId);
-            
+            const outputPaths = this.completedJobs.map(j => j.outputPath).filter(Boolean);
+
             const response = await fetch('/api/delete-jobs', {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ jobIds })
+                body: JSON.stringify({ jobIds, outputPaths })
             });
             
             if (response.ok) {
@@ -1938,9 +1893,29 @@ class ElectronPackagerWizard {
                 app.showToast('Klasör açılamadı: ' + error.message, 'error');
             }
         } else {
-            // Electron API yoksa, yolu göster
-            console.warn('⚠️ Electron API bulunamadı');
-            alert(`Output Klasörü:\n${folderPath}`);
+            // Tarayıcı modu: Electron API yok. Server aynı makinede çalıştığı için
+            // /api/open-folder ile klasörü OS dosya gezgininde açtır.
+            console.warn('⚠️ Electron API yok — tarayıcı modu, server üzerinden açılıyor');
+            try {
+                const response = await fetch('/api/open-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderPath })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    app.showToast('Klasör açıldı', 'success');
+                } else {
+                    const errorMsg = result?.error || 'Bilinmeyen hata';
+                    console.error('❌ Klasör açılamadı:', errorMsg);
+                    app.showToast('Klasör açılamadı: ' + errorMsg, 'error');
+                    alert(`Output Klasörü:\n${folderPath}`);
+                }
+            } catch (error) {
+                console.error('❌ Klasör açma exception:', error);
+                app.showToast('Klasör açılamadı: ' + error.message, 'error');
+                alert(`Output Klasörü:\n${folderPath}`);
+            }
         }
     }
 

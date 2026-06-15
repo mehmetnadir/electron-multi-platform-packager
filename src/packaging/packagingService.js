@@ -2280,6 +2280,18 @@ if (!window.cordova) {
           }
         }
         
+        // Viewport meta normalize et — içeriğin ekrana sığması için kritik.
+        // device-width olmadan WebView geniş bir logical width raporlar ve
+        // sayfanın responsive breakpoint'leri tetiklenmez (içerik taşar).
+        const viewportMeta = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">';
+        if (/<meta\s+name=["']viewport["'][^>]*>/i.test(htmlContent)) {
+          htmlContent = htmlContent.replace(/<meta\s+name=["']viewport["'][^>]*>/i, viewportMeta);
+          console.log('📐 Mevcut viewport meta güncellendi (device-width)');
+        } else if (htmlContent.includes('</head>')) {
+          htmlContent = htmlContent.replace('</head>', '  ' + viewportMeta + '\n</head>');
+          console.log('📐 Viewport meta eklendi (device-width)');
+        }
+
         // CSS'i head'e ekle
         if (htmlContent.includes('</head>')) {
           htmlContent = htmlContent.replace('</head>', fullscreenCSS + '\n</head>');
@@ -2632,11 +2644,12 @@ if (!window.cordova) {
     return new Promise((resolve, reject) => {
       const javaArgs = ['-jar', toolPath, ...args];
       
-      const child = spawn('java', javaArgs, { 
+      const javaHome = this.getJavaHome();
+      const child = spawn('java', javaArgs, {
         shell: true,
         env: {
           ...process.env,
-          JAVA_HOME: '/usr/local/Cellar/openjdk@21/21.0.8/libexec/openjdk.jdk/Contents/Home'
+          ...(javaHome ? { JAVA_HOME: javaHome } : {})
         }
       });
       
@@ -3469,56 +3482,401 @@ if (!window.cordova) {
     } catch (error) {
       console.log('Android platform zaten mevcut veya ekleme hatası:', error.message);
     }
-    
+
+    // Yatay ekranı native seviyede zorla (web JS lock Capacitor'da güvenilir değil)
+    await this.configureAndroidManifest(webAppPath);
+
+    // Tam ekran (immersive) — status + navigation bar'ı native gizle
+    await this.configureAndroidFullscreen(webAppPath);
+
+    // www/index.html'e viewport + fullscreen enjekte et (cap sync bunu kopyalar)
+    await this.enableAndroidFullscreen(wwwPath);
+
+    // Kitap viewer'larını WebView'e uyumlu hale getir: viewport normalize +
+    // window.require shim (Electron butonları çökmesin) + window.isApp=true zorla
+    // (localStorage kalıcılık: tour skip, kalınan sayfa, arka plan kaydedilsin).
+    await this.normalizeBookViewerViewports(wwwPath);
+
     // Logo setup (eğer varsa)
     if (logoPath && await fs.pathExists(logoPath)) {
       await this.setupCapacitorIcons(webAppPath, logoPath, appName);
     }
-    
+
     console.log('Capacitor projesi hazırlandı');
   }
 
+  // AndroidManifest'i düzenle: uygulamayı YATAY ekrana kilitle.
+  // sensorLandscape = her iki yatay yönü kabul eder, dikeyi engeller.
+  // Web tarafındaki screen.orientation.lock Capacitor WebView'de güvenilir değil;
+  // native android:screenOrientation tek otoriter yöntemdir.
+  async configureAndroidManifest(webAppPath) {
+    try {
+      const manifestPath = path.join(
+        webAppPath, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'
+      );
+
+      if (!await fs.pathExists(manifestPath)) {
+        console.warn('⚠️ AndroidManifest.xml bulunamadı, orientation ayarlanamadı:', manifestPath);
+        return;
+      }
+
+      let manifest = await fs.readFile(manifestPath, 'utf8');
+
+      if (manifest.includes('android:screenOrientation')) {
+        console.log('ℹ️ screenOrientation zaten tanımlı, atlanıyor');
+        return;
+      }
+
+      // MainActivity <activity> etiketinin İÇİNE screenOrientation attribute'u ekle.
+      // ÖNEMLİ: attribute <activity ...> etiketinin içinde olmalı; etiketten önce
+      // koyarsak serbest text olur ve Android yok sayar.
+      const before = manifest;
+      manifest = manifest.replace(
+        /<activity(\b[^>]*?android:name="\.MainActivity")/,
+        '<activity android:screenOrientation="sensorLandscape"$1'
+      );
+
+      if (manifest === before) {
+        // Beklenen pattern bulunamadıysa: ilk <activity etiketine ekle
+        manifest = manifest.replace(
+          /<activity\b/,
+          '<activity android:screenOrientation="sensorLandscape"'
+        );
+      }
+
+      if (manifest !== before) {
+        await fs.writeFile(manifestPath, manifest);
+        console.log('✅ AndroidManifest: yatay ekran (sensorLandscape) zorlandı');
+      } else {
+        console.warn('⚠️ MainActivity etiketi bulunamadı, orientation eklenemedi');
+      }
+    } catch (error) {
+      console.error('❌ AndroidManifest düzenlenirken hata:', error.message);
+      // Build'i durdurma — orientation olmadan da APK üretilebilir
+    }
+  }
+
+  // Tam ekran (immersive) modu native seviyede zorla.
+  // Web StatusBar.hide() @capacitor/status-bar plugin gerektirir; plugin'siz çalışmaz.
+  // Bu yüzden (1) MainActivity.java'ya immersive-sticky flag'leri, (2) styles.xml
+  // temalarına windowFullscreen ekler. İkisi birlikte status + navigation bar'ı gizler,
+  // WebView tüm ekran yüksekliğini alır (içerik taşması/yanlış yükseklik düzelir).
+  async configureAndroidFullscreen(webAppPath) {
+    try {
+      const javaRoot = path.join(webAppPath, 'android', 'app', 'src', 'main', 'java');
+
+      // MainActivity.java'yı bul (paket adı dinamik: com.dijitap.<app>)
+      const findMainActivity = async (dir) => {
+        let entries = [];
+        try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return null; }
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) {
+            const found = await findMainActivity(full);
+            if (found) return found;
+          } else if (e.name === 'MainActivity.java') {
+            return full;
+          }
+        }
+        return null;
+      };
+
+      const mainActivityPath = await findMainActivity(javaRoot);
+      if (mainActivityPath) {
+        const original = await fs.readFile(mainActivityPath, 'utf8');
+        const pkgMatch = original.match(/package\s+([\w.]+)\s*;/);
+        const pkg = pkgMatch ? pkgMatch[1] : null;
+
+        if (pkg) {
+          const immersive = `package ${pkg};
+
+import android.os.Bundle;
+import android.view.View;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        hideSystemBars();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
+    }
+
+    private void hideSystemBars() {
+        getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_FULLSCREEN
+            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        );
+    }
+}
+`;
+          await fs.writeFile(mainActivityPath, immersive);
+          console.log('✅ MainActivity: immersive fullscreen eklendi');
+        } else {
+          console.warn('⚠️ MainActivity package adı çözülemedi, fullscreen atlandı');
+        }
+      } else {
+        console.warn('⚠️ MainActivity.java bulunamadı, immersive eklenemedi');
+      }
+
+      // styles.xml temalarına windowFullscreen ekle (status bar gizleme + cutout)
+      const stylesPath = path.join(
+        webAppPath, 'android', 'app', 'src', 'main', 'res', 'values', 'styles.xml'
+      );
+      if (await fs.pathExists(stylesPath)) {
+        let styles = await fs.readFile(stylesPath, 'utf8');
+        if (!styles.includes('android:windowFullscreen')) {
+          const fsItems =
+            '\n        <item name="android:windowFullscreen">true</item>' +
+            '\n        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>';
+          // AppTheme ile başlayan her <style ...> bloğunun açılışından sonra ekle
+          styles = styles.replace(
+            /(<style\s+name="AppTheme[^"]*"[^>]*>)/g,
+            `$1${fsItems}`
+          );
+          await fs.writeFile(stylesPath, styles);
+          console.log('✅ styles.xml: windowFullscreen eklendi');
+        }
+      }
+    } catch (error) {
+      console.error('❌ Fullscreen yapılandırma hatası:', error.message);
+      // Build'i durdurma
+    }
+  }
+
+  // Kitap viewer SPA'larını (book*/index.html) WebView'e uyumlu hale getir:
+  //   1) Viewport normalize (device-width, initial-scale=1.0)
+  //   2) window.require shim enjekte (path/fs/electron stub) — Electron-bağımlı
+  //      butonlar (ana ekrana dön, kapat) WebView'de çökmesin
+  //   3) SPA bundle'da window.isApp=true zorla → kalıcılık localStorage'a döner
+  //      (tour skip, kalınan sayfa, arka plan ayarları kaydedilir)
+  // SADECE book*/ entry sayfa + top-level bundle'a dokunur (deep content'e değil).
+  async normalizeBookViewerViewports(wwwPath) {
+    try {
+      const viewportMeta = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">';
+      const requireShim = this._buildWebViewRequireShim();
+      const entries = await fs.readdir(wwwPath, { withFileTypes: true });
+
+      for (const e of entries) {
+        if (!e.isDirectory() || !/^book\d*$/i.test(e.name)) continue;
+        const bookDir = path.join(wwwPath, e.name);
+
+        // --- index.html: viewport + require shim ---
+        const idx = path.join(bookDir, 'index.html');
+        if (await fs.pathExists(idx)) {
+          let html = await fs.readFile(idx, 'utf8');
+
+          if (/<meta\s+name=["']viewport["'][^>]*>/i.test(html)) {
+            html = html.replace(/<meta\s+name=["']viewport["'][^>]*>/i, viewportMeta);
+          } else if (/<\/head>/i.test(html)) {
+            html = html.replace(/<\/head>/i, viewportMeta + '</head>');
+          }
+
+          // Shim'i <head>'in HEMEN başına koy (app.config.js ve SPA bundle'larından önce)
+          if (!html.includes('__webviewCompatShim')) {
+            html = html.replace(/<head[^>]*>/i, (m) => m + '\n' + requireShim);
+          }
+
+          await fs.writeFile(idx, html);
+          console.log(`📐 Viewport + require shim: ${e.name}/index.html`);
+        }
+
+        // --- bundle: window.isApp=true zorla (top-level .js dosyalarında) ---
+        let patched = 0;
+        const files = await fs.readdir(bookDir, { withFileTypes: true });
+        for (const f of files) {
+          if (!f.isFile() || !f.name.endsWith('.js')) continue;
+          const jsPath = path.join(bookDir, f.name);
+          let js = await fs.readFile(jsPath, 'utf8');
+          if (js.includes('window.isApp=Boolean(')) {
+            js = js.split('window.isApp=Boolean(').join('window.isApp=true||Boolean(');
+            await fs.writeFile(jsPath, js);
+            patched++;
+          }
+        }
+        if (patched > 0) {
+          console.log(`✅ ${e.name}: window.isApp=true zorlandı (${patched} dosya) — localStorage kalıcılık`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Book viewer WebView uyumluluk hatası:', error.message);
+    }
+  }
+
+  // WebView'de eksik olan window.require'ı Electron/Node stub'larıyla taklit eden script.
+  // Kitap Electron modunda export edilse bile require("path"/"fs"/"electron") çökmesin.
+  _buildWebViewRequireShim() {
+    return `<script id="__webviewCompatShim">
+(function(){
+  if (typeof window.require === 'function') return;
+
+  // path: join '..' ve '.' segmentlerini ÇÖZER. Capacitor asset loader ham URL'deki
+  // '..'yi (path-traversal koruması) reddettiği için home nav'da çözülmüş yol şart.
+  var P = {
+    sep: '/',
+    dirname: function(p){ p=String(p||''); var s=p.replace(/\\/+$/,''); var i=s.lastIndexOf('/'); return i<=0 ? '/' : s.slice(0,i); },
+    basename: function(p){ p=String(p||''); return p.slice(p.lastIndexOf('/')+1); },
+    extname: function(p){ var m=/\\.[^.\\/]+$/.exec(String(p||'')); return m?m[0]:''; },
+    join: function(){
+      var parts = Array.prototype.filter.call(arguments, function(x){ return x!=null && x!==''; });
+      var joined = parts.join('/');
+      var origin = '';
+      var mm = /^([a-zA-Z][a-zA-Z0-9+.-]*:\\/\\/[^\\/]*)/.exec(joined);
+      if (mm){ origin = mm[1]; joined = joined.slice(origin.length); }
+      var abs = joined.charAt(0) === '/';
+      var segs = joined.split('/');
+      var out = [];
+      for (var i=0;i<segs.length;i++){
+        var s = segs[i];
+        if (s==='' || s==='.') continue;
+        if (s==='..'){ if(out.length && out[out.length-1]!=='..') out.pop(); else if(!abs) out.push('..'); continue; }
+        out.push(s);
+      }
+      var body = out.join('/');
+      // origin varsa köke çözülen yolda SONDA slash bırakma:
+      // join('https://localhost/book1','../') -> 'https://localhost' (NOT 'https://localhost/').
+      // Aksi halde SPA buna '/index.html' ekleyince '//index.html' oluşuyor (Capacitor reddediyor).
+      var res = origin
+        ? (body ? '/' + body : '')
+        : ((abs ? '/' : '') + body);
+      return origin + res;
+    }
+  };
+
+  // fs: localStorage-destekli SANAL dosya sistemi. Kitabın electron-dosya tabanlı
+  // kalıcılık katmanı (kalınan sayfa, settings, answers) şeffafça localStorage'a yazılır.
+  var VFS_PREFIX = '__vfs__';
+  var FS = {
+    existsSync: function(p){ try{ return localStorage.getItem(VFS_PREFIX+p) !== null; }catch(e){ return false; } },
+    readFileSync: function(p){ try{ return localStorage.getItem(VFS_PREFIX+p); }catch(e){ return null; } },
+    writeFileSync: function(p, data){ try{ localStorage.setItem(VFS_PREFIX+p, String(data)); }catch(e){} },
+    copyFileSync: function(a,b){ try{ var v=localStorage.getItem(VFS_PREFIX+a); if(v!==null) localStorage.setItem(VFS_PREFIX+b,v); }catch(e){} },
+    unlinkSync: function(p){ try{ localStorage.removeItem(VFS_PREFIX+p); }catch(e){} },
+    mkdirSync: function(){}, readdirSync: function(){ return []; }
+  };
+
+  var ELECTRON = {
+    remote: { app: { quit:function(){}, getAppPath:function(){return ''; } } },
+    shell: { openExternal:function(u){ try{ window.open(u,'_blank'); }catch(e){} } },
+    ipcRenderer: { send:function(){}, on:function(){}, invoke:function(){return Promise.resolve();} }
+  };
+
+  window.require = function(m){
+    if (m==='path') return P;
+    if (m==='fs' || m==='fs-extra') return FS;
+    if (m==='electron') return ELECTRON;
+    return {};
+  };
+})();
+
+// Navigasyon normalize: SPA home butonu URL'i string-concat ile kursa bile
+// Capacitor asset loader'a ULAŞMADAN temizle. Capacitor ham '..' yolunu (path-traversal)
+// reddeder; ayrıca kök /index.html bazı sürümlerde 404 döner ama kök '/' açılışta çalışır.
+// Bu yüzden: '..'/'.' çöz + KÖK '/index.html' -> '/'. (book1/index.html gibi alt sayfalar dokunulmaz.)
+(function(){
+  function clean(u){
+    try {
+      var url = new URL(String(u), document.baseURI);
+      // path'teki tekrarlı '/'leri tekille (ör. //index.html -> /index.html).
+      // origin'deki protokol '//' etkilenmez (o pathname'de değil).
+      url.pathname = url.pathname.replace(/\\/{2,}/g, '/');
+      var abs = url.href;
+      // KÖK /index.html -> / (açılışta çalışan kök). Alt sayfalar (book1/index.html) korunur.
+      abs = abs.replace(/^(https?:\\/\\/[^\\/]+)\\/index\\.html(\\?|#|$)/, '$1/$2');
+      return abs;
+    } catch(e){ return u; }
+  }
+  try {
+    var oa = window.location.assign.bind(window.location);
+    window.location.assign = function(u){ return oa(clean(u)); };
+  } catch(e){}
+  try {
+    var orp = window.location.replace.bind(window.location);
+    window.location.replace = function(u){ return orp(clean(u)); };
+  } catch(e){}
+  try {
+    var d = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+    if (d && d.set){
+      Object.defineProperty(window.location, 'href', {
+        configurable: true,
+        get: function(){ return d.get.call(window.location); },
+        set: function(u){ d.set.call(window.location, clean(u)); }
+      });
+    }
+  } catch(e){}
+  try {
+    document.addEventListener('click', function(ev){
+      try {
+        var a = ev.target && ev.target.closest && ev.target.closest('a[href]');
+        if (a){ var h0 = a.getAttribute('href'); var c = clean(h0); if (c !== h0) a.setAttribute('href', c); }
+      } catch(e){}
+    }, true);
+  } catch(e){}
+})();
+</script>`;
+  }
+
   // Capacitor için icon setup (Web arayüzü versiyonu)
+  // Capacitor 7 template'i adaptive icon (mipmap-anydpi-v26/ic_launcher.xml) kullanır;
+  // bu XML API 26+'da düz PNG'yi gölgeler. Garantili görünür ikon için:
+  //   1) Her density'ye ic_launcher.png + ic_launcher_round.png üret
+  //   2) Çakışan .webp varyantlarını sil (aynı isim = duplicate resource = build FAIL)
+  //   3) mipmap-anydpi-v26 (adaptive XML) klasörünü sil → PNG otoriter olur
   async setupCapacitorIcons(webAppPath, logoPath, appName) {
     const sharp = require('sharp');
     console.log('🖼️ Capacitor Android icon setup başlatılıyor:', appName);
-    
+
     try {
-      // Android res klasörü
-      const androidPath = path.join(webAppPath, 'android', 'app', 'src', 'main');
-      const resPath = path.join(androidPath, 'res');
-      
-      // İcon density'leri
+      const resPath = path.join(webAppPath, 'android', 'app', 'src', 'main', 'res');
+
       const densities = [
-        { name: 'mipmap-ldpi', size: 36 },
         { name: 'mipmap-mdpi', size: 48 },
         { name: 'mipmap-hdpi', size: 72 },
         { name: 'mipmap-xhdpi', size: 96 },
         { name: 'mipmap-xxhdpi', size: 144 },
         { name: 'mipmap-xxxhdpi', size: 192 }
       ];
-      
+
+      const white = { r: 255, g: 255, b: 255, alpha: 1 };
+
       for (const density of densities) {
         const densityPath = path.join(resPath, density.name);
         await fs.ensureDir(densityPath);
-        
-        // Ana icon
-        await sharp(logoPath)
-          .resize(density.size, density.size)
+
+        // Çakışmayı önle: template .webp kullanıyorsa aynı isimli .png ekleyince
+        // "duplicate resources" hatası olur. Önce .webp varyantlarını kaldır.
+        for (const f of ['ic_launcher.webp', 'ic_launcher_round.webp', 'ic_launcher_foreground.webp']) {
+          await fs.remove(path.join(densityPath, f));
+        }
+
+        // Logoyu kareye sığdır (contain + beyaz zemin) — geniş logolar bozulmaz
+        const iconBuffer = await sharp(logoPath)
+          .resize(density.size, density.size, { fit: 'contain', background: white })
+          .flatten({ background: white })
           .png()
-          .toFile(path.join(densityPath, 'ic_launcher.png'));
-          
-        // Foreground icon (Android 8+ için)
-        await sharp(logoPath)
-          .resize(density.size, density.size)
-          .png()
-          .toFile(path.join(densityPath, 'ic_launcher_foreground.png'));
-          
-        console.log(`  ✓ ${density.name} icons oluşturuldu (${density.size}x${density.size})`);
+          .toBuffer();
+
+        await fs.writeFile(path.join(densityPath, 'ic_launcher.png'), iconBuffer);
+        await fs.writeFile(path.join(densityPath, 'ic_launcher_round.png'), iconBuffer);
+
+        console.log(`  ✓ ${density.name} (${density.size}x${density.size})`);
       }
-      
+
+      // Adaptive icon XML'lerini kaldır → düz PNG her API'de kullanılır
+      await fs.remove(path.join(resPath, 'mipmap-anydpi-v26'));
+      console.log('  ✓ mipmap-anydpi-v26 (adaptive XML) kaldırıldı — PNG otoriter');
+
       console.log('✅ Capacitor Android iconları başarıyla oluşturuldu!');
-      
+
     } catch (error) {
       console.error('❌ Capacitor icon setup hatası:', error.message);
       // Devam et, icon olmasa da APK oluşabilir
@@ -3526,9 +3884,58 @@ if (!window.cordova) {
   }
 
   // Gradle build çalıştırıcı
+  // Android build için uygun JAVA_HOME'u çöz. Hardcode etme — makine/sürüm değişir.
+  // Capacitor 7 (AGP 8.7.2) JDK 21 ister; bu yüzden adaylar arasından 21+ olanı seçer.
+  // Sırayla: env JAVA_HOME → Homebrew openjdk@21 (intel+arm) → `/usr/libexec/java_home`.
+  // 21+ yoksa ilk geçerli JDK'ya düşer (gradle net "Java 21 gerekli" hatası verir).
+  getJavaHome() {
+    if (this._javaHomeCache !== undefined) return this._javaHomeCache;
+
+    const javaMajor = (home) => {
+      try {
+        const bin = home && path.join(home, 'bin', 'java');
+        if (!bin || !fs.existsSync(bin)) return 0;
+        const { execSync } = require('child_process');
+        const out = execSync(`"${bin}" -version 2>&1`, { encoding: 'utf8' });
+        const m = out.match(/version "(\d+)/);
+        return m ? parseInt(m[1], 10) : 0;
+      } catch (e) {
+        return 0;
+      }
+    };
+
+    const candidates = [];
+    if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME);
+    candidates.push('/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home'); // Homebrew (Intel)
+    candidates.push('/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home'); // Homebrew (Apple Silicon)
+    try {
+      const { execSync } = require('child_process');
+      const def = execSync('/usr/libexec/java_home', { encoding: 'utf8' }).trim();
+      if (def) candidates.push(def);
+    } catch (e) {
+      console.error('⚠️ /usr/libexec/java_home çözülemedi:', e.message);
+    }
+
+    // Önce JDK 21+ olan ilk geçerli home
+    for (const c of candidates) {
+      if (javaMajor(c) >= 21) { this._javaHomeCache = c; return c; }
+    }
+    // 21 yoksa ilk geçerli JDK (build muhtemelen sürüm hatası verecek ama net mesajla)
+    for (const c of candidates) {
+      if (javaMajor(c) >= 1) {
+        console.warn(`⚠️ JDK 21 bulunamadı, ${c} kullanılıyor — Capacitor 7 JDK 21 ister.`);
+        this._javaHomeCache = c;
+        return c;
+      }
+    }
+
+    this._javaHomeCache = '';
+    return this._javaHomeCache;
+  }
+
   async runGradleBuild(webAppPath, task) {
     const { spawn } = require('child_process');
-    
+
     return new Promise(async (resolve, reject) => {
       const androidPath = path.join(webAppPath, 'android');
       const gradlePath = path.join(androidPath, 'gradlew');
@@ -3551,15 +3958,18 @@ if (!window.cordova) {
       console.log(`📁 Working directory: ${androidPath}`);
       console.log(`🛠️ Gradle path: ${gradlePath}`);
       
+      const buildEnv = {
+        ...process.env,
+        ANDROID_HOME: process.env.ANDROID_HOME || '/Users/nadir/Library/Android/sdk',
+        ANDROID_SDK_ROOT: process.env.ANDROID_SDK_ROOT || '/Users/nadir/Library/Android/sdk'
+      };
+      const javaHome = this.getJavaHome();
+      if (javaHome) buildEnv.JAVA_HOME = javaHome;
+
       const child = spawn('./gradlew', [task], {
         cwd: androidPath,
         shell: true,
-        env: {
-          ...process.env,
-          ANDROID_HOME: process.env.ANDROID_HOME || '/Users/nadir/Library/Android/sdk',
-          ANDROID_SDK_ROOT: process.env.ANDROID_SDK_ROOT || '/Users/nadir/Library/Android/sdk',
-          JAVA_HOME: process.env.JAVA_HOME || '/usr/libexec/java_home'
-        }
+        env: buildEnv
       });
       
       let output = '';
