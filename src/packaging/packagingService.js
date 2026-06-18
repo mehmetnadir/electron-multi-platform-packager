@@ -995,9 +995,9 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
         await new Promise((resolve, reject) => {
           https.get('https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage', (response) => {
             response.pipe(file);
-            file.on('finish', () => {
+            file.on('finish', async () => {
               file.close();
-              fs.chmod(appimagetoolPath, 0o755);
+              await fs.chmod(appimagetoolPath, 0o755); // await: spawn'dan önce executable olmalı (yarış önle)
               resolve();
             });
           }).on('error', reject);
@@ -1009,16 +1009,25 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       const imparkPath = path.join(outputPath, imparkName);
       
       await new Promise((resolve, reject) => {
+        // APPIMAGE_EXTRACT_AND_RUN: appimagetool kendisi bir AppImage; sunucuda/CI'da FUSE
+        // mount edilemediğinde kendini extract edip çalışır (FUSE bağımlılığını kaldırır).
         const pack = require('child_process').spawn(appimagetoolPath, [extractDir, imparkPath], {
           cwd: outputPath,
           stdio: 'pipe',
-          env: { ...process.env, ARCH: 'x86_64' }
+          env: { ...process.env, ARCH: 'x86_64', APPIMAGE_EXTRACT_AND_RUN: '1' }
         });
-        
+
         let output = '';
         pack.stdout.on('data', data => output += data.toString());
         pack.stderr.on('data', data => output += data.toString());
-        
+
+        // 'error' handler ŞART: yoksa spawn hatası (EACCES/ENOEXEC) unhandled event olarak
+        // tüm packager-service process'ini çökertir (in-memory job map kaybolur → 404).
+        pack.on('error', err => {
+          console.error('❌ appimagetool spawn hatası:', err.message);
+          reject(err);
+        });
+
         pack.on('close', code => {
           if (code === 0) {
             console.log('✅ .impark dosyası oluşturuldu');
