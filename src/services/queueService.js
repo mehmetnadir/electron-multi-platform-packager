@@ -772,11 +772,18 @@ Electron Paketleyici ile oluşturuldu
       if (zipJobs.length === 0 && packagingJobs.length === 0) {
         console.log('🧹 Kuyruk tamamen boş! Tüm temp ve uploads temizleniyor...');
         
-        // Tüm temp klasörünü temizle (korunacak dosya olmadan)
+        // Temp klasörünü temizle AMA yeni tamamlanan job'ın çıktısını KORU.
+        // HTTP/agent client (book-update worker, Mac agent) artifact'ı status=completed
+        // gördükten SONRA /api/download ile indiriyor; emptyDir onu silince indirme 404 olur.
+        // excludeJobId dizinini bırak → bir sonraki job tamamlanınca o da temizlenir.
         const tempPath = path.join(process.cwd(), 'temp');
         if (await fs.pathExists(tempPath)) {
-          await fs.emptyDir(tempPath);
-          console.log('🗑️ Temp klasörü tamamen temizlendi');
+          const entries = await fs.readdir(tempPath);
+          for (const entry of entries) {
+            if (excludeJobId && entry === excludeJobId) continue; // tamamlanan job'ın artifact'ını koru
+            await fs.remove(path.join(tempPath, entry));
+          }
+          console.log(`🗑️ Temp klasörü temizlendi (korunan job: ${excludeJobId || 'yok'})`);
         }
         
         // Tüm uploads klasörünü temizle
