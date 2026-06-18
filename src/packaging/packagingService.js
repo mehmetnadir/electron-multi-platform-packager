@@ -1998,7 +1998,9 @@ StartupWMClass=${appName}
     }
 
     const files = await fs.readdir(outputPath);
-    const appImageFile = files.find(file => file.endsWith('.AppImage'));
+    // customizeAppImage .AppImage'ı .impark'a rename eder → result.packages'a .impark da
+    // dahil edilmeli (yoksa AppImage entry kaybolur, sadece .deb kalır, indirme yanlış dosya verir).
+    const appImageFile = files.find(file => file.endsWith('.impark') || file.endsWith('.AppImage'));
     const debFile = files.find(file => file.endsWith('.deb'));
 
     const results = [];
