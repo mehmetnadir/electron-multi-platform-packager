@@ -2000,6 +2000,7 @@ StartupWMClass=${appName}
     const files = await fs.readdir(outputPath);
     // customizeAppImage .AppImage'ı .impark'a rename eder → result.packages'a .impark da
     // dahil edilmeli (yoksa AppImage entry kaybolur, sadece .deb kalır, indirme yanlış dosya verir).
+    console.log(`[packageLinux] readdir(${outputPath}) →`, files.filter(f => f.endsWith('.impark') || f.endsWith('.AppImage') || f.endsWith('.deb') || f.endsWith('.zip')));
     const appImageFile = files.find(file => file.endsWith('.impark') || file.endsWith('.AppImage'));
     const debFile = files.find(file => file.endsWith('.deb'));
 
