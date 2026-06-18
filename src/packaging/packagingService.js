@@ -986,7 +986,9 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       console.log('📦 Yeniden paketleniyor...');
       
       // appimagetool'u indir (eğer yoksa)
-      const appimagetoolPath = path.join(outputPath, 'appimagetool-x86_64.AppImage');
+      // path.resolve (path.join DEĞİL): outputPath relatif olabilir; spawn relatif komut
+      // yolunu cwd'ye göre çözmeye çalışıp ENOENT verir. Absolute yol şart (extract adımıyla aynı).
+      const appimagetoolPath = path.resolve(outputPath, 'appimagetool-x86_64.AppImage');
       if (!await fs.pathExists(appimagetoolPath)) {
         console.log('⬇️ appimagetool indiriliyor...');
         const https = require('https');
@@ -1006,13 +1008,13 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       
       // Yeni AppImage oluştur (.impark uzantısı ile)
       const imparkName = `${appName.replace(/\s+/g, '-')}-${appVersion}.impark`;
-      const imparkPath = path.join(outputPath, imparkName);
+      const imparkPath = path.resolve(outputPath, imparkName);
       
       await new Promise((resolve, reject) => {
         // APPIMAGE_EXTRACT_AND_RUN: appimagetool kendisi bir AppImage; sunucuda/CI'da FUSE
         // mount edilemediğinde kendini extract edip çalışır (FUSE bağımlılığını kaldırır).
         const pack = require('child_process').spawn(appimagetoolPath, [extractDir, imparkPath], {
-          cwd: outputPath,
+          cwd: path.resolve(outputPath),
           stdio: 'pipe',
           env: { ...process.env, ARCH: 'x86_64', APPIMAGE_EXTRACT_AND_RUN: '1' }
         });
