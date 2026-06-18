@@ -644,20 +644,29 @@ class QueueService extends EventEmitter {
           filesToMove.push(result.path);
         }
         
-        // Dosyaları taşı
+        // Dosyaları taşı + result path'lerini KALICI output konumuna güncelle.
+        // Aksi halde /api/download result.path/packages[].path'in (temp) eski yolunu kullanır;
+        // temp cleanup sonrası dosya kaybolur → indirme 404. Output dizini kalıcıdır.
         const movedPaths = [];
         for (const filePath of filesToMove) {
           if (await fs.pathExists(filePath)) {
             const fileName = path.basename(filePath);
             const destPath = path.join(platformDir, fileName);
-            
+
             await fs.copy(filePath, destPath);
             movedPaths.push(destPath);
-            
+
+            // result objesindeki yolu output konumuyla değiştir (job.results referansı → download route görür)
+            if (result.packages && Array.isArray(result.packages)) {
+              const pkg = result.packages.find(p => p.path === filePath);
+              if (pkg) pkg.path = destPath;
+            }
+            if (result.path === filePath) result.path = destPath;
+
             console.log(`  ✓ Taşındı: ${fileName} → ${platformDir}`);
           }
         }
-        
+
         if (movedPaths.length > 0) {
           movedFiles[platform] = movedPaths;
         }
