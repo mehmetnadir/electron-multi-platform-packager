@@ -1753,18 +1753,22 @@ function closeSplashScreen() {
         description: options.description || appName,
         vendor: options.vendor || "Dijitap",
         maintainer: options.maintainer || `${appName} Team`,
-        // DEB paket ayarları
+        // DEB/desktop entry ayarları.
+        // electron-builder 26.x: desktop entry anahtarları `entry` altına taşınmalı
+        // (şema: { desktopActions?, entry? }). Düz key-value v26'da reddedilir.
         desktop: {
-          Name: appName,
-          Comment: `${appName} - ${companyInfo}`,
-          Categories: "Education;Teaching;X-Education;", // Eğitim kategorisi için
-          StartupNotify: "true",
-          // Pardus uyumluluğu için ek ayarlar
-          Keywords: `${appName};Electron;${companyInfo};Education;Eğitim;`,
-          MimeType: "application/x-electron;",
-          // Eğitim uygulaması olduğunu belirt
-          GenericName: "Eğitim Uygulaması",
-          Type: "Application"
+          entry: {
+            Name: appName,
+            Comment: `${appName} - ${companyInfo}`,
+            Categories: "Education;Teaching;X-Education;", // Eğitim kategorisi için
+            StartupNotify: "true",
+            // Pardus uyumluluğu için ek ayarlar
+            Keywords: `${appName};Electron;${companyInfo};Education;Eğitim;`,
+            MimeType: "application/x-electron;",
+            // Eğitim uygulaması olduğunu belirt
+            GenericName: "Eğitim Uygulaması",
+            Type: "Application"
+          }
         },
         // AppImage kurulum mesajı
         executableName: appName.toLowerCase().replace(/\s+/g, '-'),
