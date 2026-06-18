@@ -2006,29 +2006,32 @@ StartupWMClass=${appName}
     const results = [];
     
     if (appImageFile) {
+      const appImageAbsPath = path.resolve(outputPath, appImageFile);
       results.push({
         type: 'AppImage',
         filename: appImageFile,
-        path: path.join(outputPath, appImageFile),
-        size: (await fs.stat(path.join(outputPath, appImageFile))).size
+        path: appImageAbsPath,
+        size: (await fs.stat(appImageAbsPath)).size
       });
+      console.log(`[packageLinux] AppImage/impark path (abs): ${appImageAbsPath}`);
     }
 
     if (debFile) {
+      const debAbsPath = path.resolve(outputPath, debFile);
       results.push({
         type: 'DEB',
         filename: debFile,
-        path: path.join(outputPath, debFile),
-        size: (await fs.stat(path.join(outputPath, debFile))).size
+        path: debAbsPath,
+        size: (await fs.stat(debAbsPath)).size
       });
     }
 
     // Flatpak ZIP dosyasını kontrol et
     const outputFiles = await fs.readdir(outputPath);
     const flatpakZipFile = outputFiles.find(file => file.endsWith('-flatpak.zip'));
-    
+
     if (flatpakZipFile) {
-      const flatpakZipPath = path.join(outputPath, flatpakZipFile);
+      const flatpakZipPath = path.resolve(outputPath, flatpakZipFile);
       const stats = await fs.stat(flatpakZipPath);
       
       results.push({

@@ -664,6 +664,8 @@ class QueueService extends EventEmitter {
             if (result.path === filePath) result.path = destPath;
 
             console.log(`  ✓ Taşındı: ${fileName} → ${platformDir}`);
+          } else {
+            console.warn(`  ⚠️ Dosya bulunamadı, taşınamadı (pathExists=false): ${filePath}`);
           }
         }
 
