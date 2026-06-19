@@ -1045,13 +1045,25 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       await fs.remove(appImagePath);
       await fs.remove(extractDir);
       await fs.remove(appimagetoolPath);
-      
-      console.log('✅ Özel AppImage oluşturuldu:', imparkName);
-      
+
+      // Doğrulama: .impark gerçekten var mı?
+      const imparkExists = await fs.pathExists(imparkPath);
+      console.log(`✅ Özel AppImage oluşturuldu: ${imparkName}`);
+      console.log(`[customizeAppImage] imparkPath: ${imparkPath}`);
+      console.log(`[customizeAppImage] imparkPath exists: ${imparkExists}`);
+
+      if (!imparkExists) {
+        console.error(`❌ .impark dosyası beklenen konumda bulunamadı: ${imparkPath}`);
+        return null;
+      }
+
+      return imparkPath;
+
     } catch (error) {
       console.error('❌ AppImage özelleştirme hatası:', error);
       console.warn('⚠️ Standart AppImage kullanılacak');
       // Hata olsa bile devam et
+      return null;
     }
   }
   
@@ -1824,7 +1836,7 @@ function closeSplashScreen() {
     console.log('  - companyName:', companyName);
     console.log('  - companyId:', companyId);
     console.log('  - logoPath:', logoPath);
-    await this.customizeAppImage(outputPath, appName, appVersion, companyName, companyId, logoPath);
+    const customizedImparkPath = await this.customizeAppImage(outputPath, appName, appVersion, companyName, companyId, logoPath);
 
     // Flatpak dosyalarını oluştur
     await this.generateFlatpakFiles(outputPath, appName, appVersion, companyName || 'DijiTap', options.description);
@@ -1997,24 +2009,53 @@ StartupWMClass=${appName}
       });
     }
 
+    // customizeAppImage .impark yolunu döndürür (veya null). readdir'e güvenmiyoruz çünkü
+    // generateFlatpakFiles/diğer kod arasında dosya kaybolabilir — doğrudan path kullan.
     const files = await fs.readdir(outputPath);
-    // customizeAppImage .AppImage'ı .impark'a rename eder → result.packages'a .impark da
-    // dahil edilmeli (yoksa AppImage entry kaybolur, sadece .deb kalır, indirme yanlış dosya verir).
     console.log(`[packageLinux] readdir(${outputPath}) →`, files.filter(f => f.endsWith('.impark') || f.endsWith('.AppImage') || f.endsWith('.deb') || f.endsWith('.zip')));
-    const appImageFile = files.find(file => file.endsWith('.impark') || file.endsWith('.AppImage'));
+
+    // .deb hâlâ readdir ile bulunur (electron-builder üretir, path önceden bilinmez)
     const debFile = files.find(file => file.endsWith('.deb'));
 
     const results = [];
-    
-    if (appImageFile) {
-      const appImageAbsPath = path.resolve(outputPath, appImageFile);
+
+    // .impark: customizeAppImage'ın döndürdüğü kesin yolu kullan
+    if (customizedImparkPath && await fs.pathExists(customizedImparkPath)) {
+      const imparkFilename = path.basename(customizedImparkPath);
       results.push({
         type: 'AppImage',
-        filename: appImageFile,
-        path: appImageAbsPath,
-        size: (await fs.stat(appImageAbsPath)).size
+        filename: imparkFilename,
+        path: customizedImparkPath,
+        size: (await fs.stat(customizedImparkPath)).size
       });
-      console.log(`[packageLinux] AppImage/impark path (abs): ${appImageAbsPath}`);
+      console.log(`[packageLinux] .impark confirmed at: ${customizedImparkPath}`);
+    } else if (customizedImparkPath) {
+      console.error(`[packageLinux] customizeAppImage returned path but file not found: ${customizedImparkPath}`);
+      // Fallback: readdir'den dene
+      const appImageFile = files.find(file => file.endsWith('.impark') || file.endsWith('.AppImage'));
+      if (appImageFile) {
+        const appImageAbsPath = path.resolve(outputPath, appImageFile);
+        results.push({
+          type: 'AppImage',
+          filename: appImageFile,
+          path: appImageAbsPath,
+          size: (await fs.stat(appImageAbsPath)).size
+        });
+        console.log(`[packageLinux] fallback AppImage/impark path: ${appImageAbsPath}`);
+      }
+    } else {
+      // customizeAppImage başarısız oldu veya macOS'ta atlandı — readdir'den dene
+      const appImageFile = files.find(file => file.endsWith('.impark') || file.endsWith('.AppImage'));
+      if (appImageFile) {
+        const appImageAbsPath = path.resolve(outputPath, appImageFile);
+        results.push({
+          type: 'AppImage',
+          filename: appImageFile,
+          path: appImageAbsPath,
+          size: (await fs.stat(appImageAbsPath)).size
+        });
+        console.log(`[packageLinux] fallback AppImage/impark path: ${appImageAbsPath}`);
+      }
     }
 
     if (debFile) {
