@@ -1041,22 +1041,40 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
         });
       });
       
-      // 5. Eski AppImage'ı sil, extract klasörünü temizle
-      await fs.remove(appImagePath);
+      // 5. appimagetool bazen verilen DESTINATION argümanını yok sayıp AppDir/.desktop'tan
+      //    ad türetip CWD'ye yazar (exit 0 olsa bile imparkPath'te dosya olmaz). Gerçek çıktıyı
+      //    bul → imparkPath'e taşı; bulunamazsa son çare orijinal AppImage'ı .impark'a kopyala.
+      if (!await fs.pathExists(imparkPath)) {
+        const produced = (await fs.readdir(outputPath)).find(f =>
+          (f.endsWith('.AppImage') || f.endsWith('.impark')) &&
+          f !== path.basename(appImagePath) &&
+          f !== path.basename(appimagetoolPath)
+        );
+        if (produced) {
+          await fs.move(path.resolve(outputPath, produced), imparkPath, { overwrite: true });
+          console.log(`🔁 appimagetool çıktısı imparkPath'e taşındı: ${produced}`);
+        } else if (await fs.pathExists(appImagePath)) {
+          // .impark = yeniden adlandırılmış AppImage. Özel AppRun kaybolur ama geçerli Pardus paketi
+          // (yayıncının kendi .impark'ı da Tier0'da böyle: renamed AppImage).
+          await fs.copy(appImagePath, imparkPath);
+          console.log(`🔁 Son çare: orijinal AppImage .impark olarak kopyalandı`);
+        }
+      }
+
+      // 6. Temizlik (imparkPath belirlendikten SONRA — fallback kaynağını erken silme)
+      if (await fs.pathExists(appImagePath) && path.resolve(appImagePath) !== path.resolve(imparkPath)) {
+        await fs.remove(appImagePath);
+      }
       await fs.remove(extractDir);
       await fs.remove(appimagetoolPath);
 
-      // Doğrulama: .impark gerçekten var mı?
       const imparkExists = await fs.pathExists(imparkPath);
-      console.log(`✅ Özel AppImage oluşturuldu: ${imparkName}`);
-      console.log(`[customizeAppImage] imparkPath: ${imparkPath}`);
-      console.log(`[customizeAppImage] imparkPath exists: ${imparkExists}`);
-
+      console.log(`[customizeAppImage] imparkPath: ${imparkPath} exists: ${imparkExists}`);
       if (!imparkExists) {
-        console.error(`❌ .impark dosyası beklenen konumda bulunamadı: ${imparkPath}`);
+        console.error(`❌ .impark üretilemedi: ${imparkPath}`);
         return null;
       }
-
+      console.log(`✅ .impark hazır: ${imparkName}`);
       return imparkPath;
 
     } catch (error) {
