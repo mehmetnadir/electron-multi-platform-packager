@@ -173,20 +173,54 @@ async function heartbeat(auth) {
   }
 }
 
+/** Ask the server for a presigned R2 PUT URL for this job's artifact. */
+async function presignUpload(auth, job) {
+  const res = await axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign`),
+    { bookId: job.bookId, platform: job.platform },
+    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
+  );
+  if (res.status !== 200 || !res.data || !res.data.uploadUrl) {
+    throw new Error(`presign failed: HTTP ${res.status} ${JSON.stringify(res.data)}`);
+  }
+  return res.data; // { uploadUrl, r2ObjectKey, publicUrl, contentType }
+}
+
 async function postResultSuccess(auth, job, artifactPath) {
-  const form = new FormData();
-  form.append('file', fs.createReadStream(artifactPath), path.basename(artifactPath));
-  form.append('bookId', job.bookId);
-  form.append('platform', job.platform);
-  form.append('status', 'completed');
-  form.append('buildMethod', 'build');
-  const res = await axios.post(joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result`), form, {
-    headers: { ...agentHeaders(auth), ...form.getHeaders() },
+  // Presigned R2 PUT: upload the (possibly multi-GB) artifact STRAIGHT to R2,
+  // bypassing the Cloudflare edge body-size limit (~100MB) that 413s large APKs.
+  // The server then settles the job from the JSON /result body (Decision A path).
+  const size = fs.statSync(artifactPath).size;
+  const presigned = await presignUpload(auth, job);
+  log('uploading artifact to R2 (presigned)...', presigned.r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
+  const put = await axios.put(presigned.uploadUrl, fs.createReadStream(artifactPath), {
+    // ContentType is part of the signature → must match exactly. Length is required
+    // (R2 presigned PUT does not accept chunked transfer-encoding).
+    headers: {
+      'Content-Type': presigned.contentType || 'application/octet-stream',
+      'Content-Length': size,
+    },
     maxBodyLength: Infinity,
     maxContentLength: Infinity,
     timeout: CONFIG.packageTimeoutMs,
     validateStatus: () => true,
   });
+  if (put.status < 200 || put.status >= 300) {
+    throw new Error(`R2 PUT failed: HTTP ${put.status}`);
+  }
+  log('artifact uploaded to R2 — reporting result...');
+  const res = await axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result`),
+    {
+      bookId: job.bookId,
+      platform: job.platform,
+      status: 'completed',
+      buildMethod: 'build',
+      r2ObjectKey: presigned.r2ObjectKey,
+      publicUrl: presigned.publicUrl,
+    },
+    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
+  );
   if (res.status !== 200) {
     throw new Error(`result(completed) rejected: HTTP ${res.status} ${JSON.stringify(res.data)}`);
   }
