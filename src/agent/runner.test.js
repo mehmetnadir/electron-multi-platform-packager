@@ -27,3 +27,16 @@ test('result is settled via JSON body with the returned key/url (Decision A)', (
   assert.match(SRC, /r2ObjectKey:\s*presigned\.r2ObjectKey/);
   assert.match(SRC, /publicUrl:\s*presigned\.publicUrl/);
 });
+
+test('source cache: reuse build.zip per (book, version) instead of re-downloading', () => {
+  // shared cache root (overridable), keyed by bookId + source filename
+  assert.match(SRC, /EMPP_SOURCE_CACHE/);
+  assert.match(SRC, /cachedZip/);
+  // cache HIT path copies the cached build.zip and SKIPS the download
+  assert.match(SRC, /source cache HIT/);
+  assert.match(SRC, /cacheHit\s*=\s*true/);
+  // download only happens on MISS
+  assert.match(SRC, /if\s*\(!cacheHit\)/);
+  // populated atomically (tmp + rename)
+  assert.match(SRC, /\.rename\(tmp,\s*cachedZip\)/);
+});

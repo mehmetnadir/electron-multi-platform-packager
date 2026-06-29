@@ -439,21 +439,52 @@ async function processJob(auth, job) {
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
   try {
-    // 1. download SFX exe.
-    const exePath = path.join(work, 'source.exe');
-    log('downloading source exe...');
-    await downloadFile(job.downloadUrl, exePath);
-
-    // 2. extract -> find resources/app/build.
-    const extractDir = path.join(work, 'extracted');
-    log('extracting SFX...');
-    await extractSfx(exePath, extractDir);
-    const buildDir = await findBuildDir(extractDir);
-    log('build dir:', buildDir);
-
-    // 3. zip + drive the LOCAL packager.
+    // 1-3. Source cache: the extracted web `build.zip` is produced ONCE per
+    //      (book, source-version) and REUSED across platforms + retries — the
+    //      SAME web build feeds apk / impark / dmg. This avoids re-downloading
+    //      the multi-GB Windows SFX on every job (the slow link is paid once).
+    const cacheRoot = process.env.EMPP_SOURCE_CACHE || '/var/empp-cache';
+    const srcVersion = (job.downloadUrl.split(/[/?#]/).filter(Boolean).pop() || 'src')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 80);
+    const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
     const zipPath = path.join(work, 'build.zip');
-    await zipDir(buildDir, zipPath);
+
+    let cacheHit = false;
+    try {
+      await fsp.access(cachedZip);
+      await fsp.copyFile(cachedZip, zipPath);
+      const mb = ((await fsp.stat(zipPath)).size / 1e6).toFixed(0);
+      log(`source cache HIT (${mb}MB) — skip download:`, cachedZip);
+      cacheHit = true;
+    } catch (_) {
+      /* cache miss — fall through to download */
+    }
+
+    if (!cacheHit) {
+      const exePath = path.join(work, 'source.exe');
+      log('source cache MISS — downloading source exe...');
+      await downloadFile(job.downloadUrl, exePath);
+
+      const extractDir = path.join(work, 'extracted');
+      log('extracting SFX...');
+      await extractSfx(exePath, extractDir);
+      const buildDir = await findBuildDir(extractDir);
+      log('build dir:', buildDir);
+
+      await zipDir(buildDir, zipPath);
+
+      // Populate the shared cache atomically (tmp + rename). Non-fatal on error.
+      try {
+        await fsp.mkdir(path.dirname(cachedZip), { recursive: true });
+        const tmp = `${cachedZip}.tmp-${process.pid}`;
+        await fsp.copyFile(zipPath, tmp);
+        await fsp.rename(tmp, cachedZip);
+        log('source cached for reuse:', cachedZip);
+      } catch (e) {
+        warn('source cache populate failed (non-fatal):', e.message);
+      }
+    }
     const appName = job.bookTitle || `book-${job.bookId}`;
     const appVersion = '1.0.0';
     log('uploading build to packager...');
