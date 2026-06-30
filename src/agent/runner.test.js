@@ -28,6 +28,13 @@ test('result is settled via JSON body with the returned key/url (Decision A)', (
   assert.match(SRC, /publicUrl:\s*presigned\.publicUrl/);
 });
 
+test('heartbeat reports the in-flight job so the server extends its lease', () => {
+  // Without this, a build slower than LEASE_MINUTES loses the lease mid-build.
+  assert.match(SRC, /heldJobs:\s*currentJob\s*\?\s*\[currentJob\]\s*:\s*\[\]/);
+  assert.match(SRC, /currentJob\s*=\s*\{\s*bookId:\s*job\.bookId,\s*platform:\s*job\.platform\s*\}/);
+  assert.match(SRC, /currentJob\s*=\s*null/); // cleared when idle
+});
+
 test('source cache: reuse build.zip per (book, version) instead of re-downloading', () => {
   // shared cache root (overridable), keyed by bookId + source filename
   assert.match(SRC, /EMPP_SOURCE_CACHE/);

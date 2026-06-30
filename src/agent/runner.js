@@ -72,6 +72,11 @@ const errlog = (...args) => console.error(new Date().toISOString(), '[agent][err
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let stopping = false;
+// The job currently in flight ({bookId, platform}) — the heartbeat reports it as a
+// heldJob so the server extends its lease. Without this, a build slower than the
+// lease window (e.g. a 39-min download on a slow link) loses the lease mid-build
+// and the job gets re-dispatched, wasting the work. Null when idle.
+let currentJob = null;
 
 // ---------------------------------------------------------------------------
 // Small process helper.
@@ -165,7 +170,7 @@ async function heartbeat(auth) {
   try {
     await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
-      {},
+      { heldJobs: currentJob ? [currentJob] : [] },
       { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
     );
   } catch (e) {
@@ -436,6 +441,8 @@ async function processJob(auth, job) {
     throw new Error(`unsupported platform for this agent: ${job.platform}`);
   }
   log('job:', job.bookId, job.platform, '->', packagerPlatform);
+  // Mark in-flight so the heartbeat keeps this job's lease alive during a long build.
+  currentJob = { bookId: job.bookId, platform: job.platform };
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
   try {
@@ -508,6 +515,7 @@ async function processJob(auth, job) {
     await postResultSuccess(auth, job, artifactPath);
     log('job done:', job.bookId, job.platform);
   } finally {
+    currentJob = null; // idle again — stop extending the lease
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
