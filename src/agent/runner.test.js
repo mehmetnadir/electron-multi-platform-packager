@@ -28,17 +28,13 @@ test('result is settled via JSON body with the returned key/url (Decision A)', (
   assert.match(SRC, /publicUrl:\s*presigned\.publicUrl/);
 });
 
-test('downloadFile is resumable + integrity-checked (survives flaky link)', () => {
-  // probes total size via a ranged request
-  assert.match(SRC, /Range:\s*'bytes=0-0'/);
-  // resumes from bytes already on disk
-  assert.match(SRC, /Range:\s*`bytes=\$\{have\}-`/);
-  // 206 appends, 200 overwrites
-  assert.match(SRC, /streamToFile\(res,\s*destPath,\s*res\.status\s*===\s*206\)/);
-  // final integrity gate: byte count must equal Content-Length
-  assert.match(SRC, /download incomplete: \$\{finalSize\}\/\$\{total\}/);
-  // oversized result is discarded + restarted
-  assert.match(SRC, /oversized/);
+test('downloadFile uses curl -C - (resume) + integrity check (survives flaky link)', () => {
+  assert.match(SRC, /run\('curl'/);
+  assert.match(SRC, /'-C',\s*'-'/);              // resume from disk
+  assert.match(SRC, /--retry-all-errors/);        // reset/stall -> resumed retry
+  assert.match(SRC, /--speed-limit/);             // abort stalls early to force retry
+  // final integrity gate: byte count must equal server total
+  assert.match(SRC, /download incomplete: \$\{size\}\/\$\{total\}/);
 });
 
 test('heartbeat reports the in-flight job so the server extends its lease', () => {
