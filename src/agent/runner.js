@@ -251,16 +251,96 @@ async function postResultFailure(auth, job, errorMessage) {
 // ---------------------------------------------------------------------------
 // Download + extract.
 // ---------------------------------------------------------------------------
-async function downloadFile(url, destPath) {
-  const res = await axios.get(url, { responseType: 'stream', timeout: CONFIG.packageTimeoutMs, validateStatus: () => true });
-  if (res.status !== 200) throw new Error(`download failed: HTTP ${res.status} (${url})`);
-  await new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(destPath);
+/** Pipe an axios stream response into destPath (append or overwrite). */
+function streamToFile(res, destPath, append) {
+  return new Promise((resolve, reject) => {
+    const out = fs.createWriteStream(destPath, { flags: append ? 'a' : 'w' });
     res.data.pipe(out);
     out.on('finish', resolve);
     out.on('error', reject);
     res.data.on('error', reject);
   });
+}
+
+/**
+ * Robust resumable download for an UNSTABLE link (S21's path to the publisher
+ * truncates/corrupts large transfers — 1.42GB source arrives short or oversized).
+ *
+ * Strategy: probe the total size, then pull via HTTP Range, resuming from whatever
+ * is already on disk. On a short/reset transfer, retry the REMAINDER (append). On
+ * an oversized/corrupt result, discard and restart. Finally assert the byte count
+ * equals Content-Length so a corrupt file never reaches extraction. Survives many
+ * partial failures; the slow link is paid once (then cached).
+ */
+async function downloadFile(url, destPath) {
+  const MAX_ATTEMPTS = Number(process.env.AGENT_DOWNLOAD_MAX_ATTEMPTS || 60);
+
+  // Probe total size + range support via a 1-byte ranged GET.
+  let total = null;
+  let supportsRange = false;
+  try {
+    const probe = await axios.get(url, {
+      responseType: 'stream',
+      headers: { Range: 'bytes=0-0' },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+    probe.data?.destroy?.();
+    const cr = probe.headers['content-range']; // e.g. "bytes 0-0/1523339304"
+    if (cr && /\/(\d+)\s*$/.test(cr)) total = Number(cr.match(/\/(\d+)\s*$/)[1]);
+    else if (probe.status === 200 && probe.headers['content-length']) total = Number(probe.headers['content-length']);
+    supportsRange = probe.status === 206;
+  } catch (_) { /* fall back to plain download */ }
+
+  await fsp.rm(destPath, { force: true }).catch(() => {});
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (stopping) throw new Error('shutting down');
+    let have = 0;
+    try { have = (await fsp.stat(destPath)).size; } catch (_) {}
+
+    if (total !== null && have === total) break;              // complete
+    if (total !== null && have > total) {                     // oversized/corrupt → restart
+      warn(`download oversized (${have}/${total}) — discarding + restarting`);
+      await fsp.rm(destPath, { force: true }).catch(() => {});
+      have = 0;
+    }
+
+    const useRange = supportsRange && have > 0;
+    let res;
+    try {
+      res = await axios.get(url, {
+        responseType: 'stream',
+        headers: useRange ? { Range: `bytes=${have}-` } : {},
+        timeout: CONFIG.packageTimeoutMs,
+        validateStatus: () => true,
+      });
+    } catch (e) {
+      warn(`download attempt ${attempt}: request error (${e.message}) — retry`); await sleep(backoffMs(attempt, 2000, 30000)); continue;
+    }
+    if (res.status !== 200 && res.status !== 206) {
+      warn(`download attempt ${attempt}: HTTP ${res.status} — retry`); await sleep(backoffMs(attempt, 2000, 30000)); continue;
+    }
+    if (total === null && res.headers['content-length']) total = (have && res.status === 206 ? have : 0) + Number(res.headers['content-length']);
+
+    try {
+      // 206 → append to what we have; 200 → server sent the whole file, overwrite.
+      await streamToFile(res, destPath, res.status === 206);
+    } catch (e) {
+      warn(`download attempt ${attempt}: stream error (${e.message}) — resume`); await sleep(backoffMs(attempt, 2000, 30000)); continue;
+    }
+
+    const now = (await fsp.stat(destPath)).size;
+    if (total === null) break; // no size to verify against — accept single pass
+    if (now >= total) break;
+    log(`download partial ${(now / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)}MB (attempt ${attempt}) — resuming`);
+    await sleep(1500);
+  }
+
+  const finalSize = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
+  if (total !== null && finalSize !== total) {
+    throw new Error(`download incomplete: ${finalSize}/${total} bytes after ${MAX_ATTEMPTS} attempts`);
+  }
 }
 
 /** Extract a WinRAR SFX exe (unrar first, 7z fallback) — mirrors book-update extractor. */
