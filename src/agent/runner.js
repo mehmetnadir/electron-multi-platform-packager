@@ -306,7 +306,10 @@ async function downloadFile(url, destPath) {
       have = 0;
     }
 
-    const useRange = supportsRange && have > 0;
+    // Always attempt Range when we already have bytes — never trust a single probe
+    // (it can fail on the flaky link and wrongly disable resume). The server's
+    // response status decides append(206) vs overwrite(200).
+    const useRange = have > 0;
     let res;
     try {
       res = await axios.get(url, {
@@ -321,7 +324,10 @@ async function downloadFile(url, destPath) {
     if (res.status !== 200 && res.status !== 206) {
       warn(`download attempt ${attempt}: HTTP ${res.status} — retry`); await sleep(backoffMs(attempt, 2000, 30000)); continue;
     }
-    if (total === null && res.headers['content-length']) total = (have && res.status === 206 ? have : 0) + Number(res.headers['content-length']);
+    // Total size: prefer the authoritative Content-Range ("bytes A-B/TOTAL").
+    const crange = res.headers['content-range'];
+    if (crange && /\/(\d+)\s*$/.test(crange)) total = Number(crange.match(/\/(\d+)\s*$/)[1]);
+    else if (total === null && res.headers['content-length']) total = (have && res.status === 206 ? have : 0) + Number(res.headers['content-length']);
 
     try {
       // 206 → append to what we have; 200 → server sent the whole file, overwrite.
