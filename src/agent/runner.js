@@ -269,17 +269,11 @@ async function downloadFile(url, destPath) {
   const MAX = Number(process.env.AGENT_DOWNLOAD_MAX_ATTEMPTS || 12);
 
   // This URL is served INCONSISTENTLY: the SAME url intermittently returns the valid
-  // ~1.42GB SFX OR a corrupt oversized (~2.1GB) object (7z: "Missing volume"). The
-  // HEAD content-length is the stable truth — retry the whole fetch until the body
-  // matches it, so a bad object never reaches extraction.
-  let expected = null;
-  for (let i = 0; i < 6 && expected === null; i++) {
-    const h = await run('curl', ['-sS', '-4', '-I', '-L', '--max-time', '30', url]);
-    const m = /content-length:\s*(\d+)/i.exec(h.stdout || '');
-    if (m) expected = Number(m[1]);
-    else await sleep(2000);
-  }
-
+  // ~1.42GB SFX OR a corrupt ~2.1GB object — and BOTH the HEAD and GET can agree on the
+  // wrong size, so a byte-count check is not enough. The only reliable discriminator is
+  // whether the download is a VALID archive (7z can list it; the bad one fails with
+  // "Missing volume"). Retry the whole fetch until a listable archive lands, so a
+  // corrupt object never reaches extraction/build.
   for (let attempt = 1; attempt <= MAX; attempt++) {
     if (stopping) throw new Error('shutting down');
     await fsp.rm(destPath, { force: true }).catch(() => {});
@@ -296,16 +290,22 @@ async function downloadFile(url, destPath) {
     ]);
     const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
 
-    if (expected !== null) {
-      if (size === expected) { log(`download ok: ${size} bytes (attempt ${attempt})`); return; }
-      warn(`download attempt ${attempt}: got ${size} != expected ${expected} (curl exit ${res.code}) — server served a bad object, retrying`);
-    } else {
-      if (res.code === 0 && size > 0) return; // no size to verify — accept a clean pass
-      warn(`download attempt ${attempt}: curl exit ${res.code}, ${size} bytes — retrying`);
+    if (res.code !== 0 && size === 0) {
+      warn(`download attempt ${attempt}: curl exit ${res.code}, empty — retrying`);
+      await sleep(backoffMs(attempt, 3000, 30000));
+      continue;
     }
+    // Validate: is it a listable archive? (bad object → "Missing volume".)
+    const chk = await run('7z', ['l', destPath]);
+    const bad = chk.code !== 0 || /Missing volume|Cannot open|ERROR/i.test(`${chk.stdout}${chk.stderr}`);
+    if (!bad) {
+      log(`download ok: ${(size / 1e6).toFixed(0)}MB, valid archive (attempt ${attempt})`);
+      return;
+    }
+    warn(`download attempt ${attempt}: ${(size / 1e6).toFixed(0)}MB but NOT a valid archive — server served a bad object, retrying`);
     await sleep(backoffMs(attempt, 3000, 30000));
   }
-  throw new Error(`download failed after ${MAX} attempts (server kept serving a wrong-sized object)`);
+  throw new Error(`download failed after ${MAX} attempts (server kept serving a corrupt object)`);
 }
 
 /** Extract a WinRAR SFX exe (unrar first, 7z fallback) — mirrors book-update extractor. */

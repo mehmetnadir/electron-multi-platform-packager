@@ -33,10 +33,10 @@ test('downloadFile: throttled curl + size-verified retry (server serves inconsis
   assert.match(SRC, /'-C',\s*'-'/);              // resume from disk
   assert.match(SRC, /--retry-all-errors/);        // genuine reset -> resumed retry
   assert.match(SRC, /--limit-rate/);              // throttle under the gateway reset
-  // integrity: retry the WHOLE fetch until body size == HEAD content-length
-  assert.match(SRC, /content-length:\s*/i);
-  assert.match(SRC, /size === expected/);
-  assert.match(SRC, /server served a bad object/);
+  // integrity: retry the WHOLE fetch until a VALID (listable) archive lands
+  assert.match(SRC, /run\('7z',\s*\['l'/);
+  assert.match(SRC, /Missing volume/);
+  assert.match(SRC, /NOT a valid archive/);
 });
 
 test('heartbeat reports the in-flight job so the server extends its lease', () => {
