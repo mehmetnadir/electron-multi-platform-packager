@@ -28,10 +28,10 @@ test('result is settled via JSON body with the returned key/url (Decision A)', (
   assert.match(SRC, /publicUrl:\s*presigned\.publicUrl/);
 });
 
-test('downloadFile: throttled curl + size-verified retry (server serves inconsistent objects)', () => {
+test('downloadFile: throttled fresh-fetch + archive-validity retry (inconsistent origin)', () => {
   assert.match(SRC, /run\('curl'/);
-  assert.match(SRC, /'-C',\s*'-'/);              // resume from disk
-  assert.match(SRC, /--retry-all-errors/);        // genuine reset -> resumed retry
+  assert.doesNotMatch(SRC, /'-C',\s*'-'/);        // NO resume: append-on-reset oversized the file
+  assert.match(SRC, /--retry-all-errors/);
   assert.match(SRC, /--limit-rate/);              // throttle under the gateway reset
   // integrity: retry the WHOLE fetch until a VALID (listable) archive lands
   assert.match(SRC, /run\('7z',\s*\['l'/);

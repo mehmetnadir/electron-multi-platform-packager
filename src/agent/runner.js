@@ -279,9 +279,11 @@ async function downloadFile(url, destPath) {
     await fsp.rm(destPath, { force: true }).catch(() => {});
     // Steady throttled pass. NO --speed-time (it tripped a bad -C - resume that this
     // server mis-answers → appended → oversized). --retry handles a genuine reset.
+    // NO -C - : resume on this server appends the FULL file after a reset (origin
+    // mis-answers the Range) → oversized/corrupt. Each attempt is a FRESH download;
+    // the throttle prevents most resets, and an invalid result is caught + retried.
     const res = await run('curl', [
       '-sS', '-4', '-L', '--fail',
-      '-C', '-',
       '--retry', '300', '--retry-delay', '3', '--retry-all-errors',
       '--retry-max-time', String(retryMax),
       ...(rate ? ['--limit-rate', rate] : []),
