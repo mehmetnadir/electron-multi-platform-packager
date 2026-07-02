@@ -266,6 +266,10 @@ async function downloadFile(url, destPath) {
 
   // -C - resumes from what's on disk; --retry-all-errors + --speed-limit/--speed-time
   // turn stalls/resets into a resumed retry. Runs to completion or exhausts retries.
+  // Throttle: S21's gateway (10.0.0.2) appears to reset LARGE/fast sustained HTTPS
+  // transfers (0% packet loss, MTU 1500 ok — so it's a session/shaper reset, not the
+  // link). A steady modest rate can slip under that trigger. Empty string disables.
+  const rate = process.env.AGENT_DOWNLOAD_RATE ?? '2M';
   const res = await run('curl', [
     '-sS', '-4', '-L', '--fail',
     '-C', '-',
@@ -274,6 +278,7 @@ async function downloadFile(url, destPath) {
     '--retry-all-errors',
     '--speed-limit', '8000', '--speed-time', '30',
     '--retry-max-time', String(retryMax),
+    ...(rate ? ['--limit-rate', rate] : []),
     '-o', destPath,
     url,
   ]);
