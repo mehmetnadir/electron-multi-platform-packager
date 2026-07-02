@@ -276,8 +276,10 @@ async function downloadFile(url, destPath) {
     '--retry', '300',
     '--retry-delay', '3',
     '--retry-all-errors',
-    '--speed-limit', '8000', '--speed-time', '30',
     '--retry-max-time', String(retryMax),
+    // NO --speed-time here: with --limit-rate a brief slow patch would trip it and
+    // force a -C - resume that this server mis-answers (appends → oversized file).
+    // A steady throttled single pass fetches the exact, valid file (verified).
     ...(rate ? ['--limit-rate', rate] : []),
     '-o', destPath,
     url,
