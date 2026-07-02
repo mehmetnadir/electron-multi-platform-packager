@@ -28,13 +28,15 @@ test('result is settled via JSON body with the returned key/url (Decision A)', (
   assert.match(SRC, /publicUrl:\s*presigned\.publicUrl/);
 });
 
-test('downloadFile uses curl -C - (resume) + integrity check (survives flaky link)', () => {
+test('downloadFile: throttled curl + size-verified retry (server serves inconsistent objects)', () => {
   assert.match(SRC, /run\('curl'/);
   assert.match(SRC, /'-C',\s*'-'/);              // resume from disk
-  assert.match(SRC, /--retry-all-errors/);        // reset/stall -> resumed retry
-  assert.match(SRC, /--speed-limit/);             // abort stalls early to force retry
-  // final integrity gate: byte count must equal server total
-  assert.match(SRC, /download incomplete: \$\{size\}\/\$\{total\}/);
+  assert.match(SRC, /--retry-all-errors/);        // genuine reset -> resumed retry
+  assert.match(SRC, /--limit-rate/);              // throttle under the gateway reset
+  // integrity: retry the WHOLE fetch until body size == HEAD content-length
+  assert.match(SRC, /content-length:\s*/i);
+  assert.match(SRC, /size === expected/);
+  assert.match(SRC, /server served a bad object/);
 });
 
 test('heartbeat reports the in-flight job so the server extends its lease', () => {

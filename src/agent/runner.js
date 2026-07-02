@@ -262,46 +262,50 @@ async function postResultFailure(auth, job, errorMessage) {
  */
 async function downloadFile(url, destPath) {
   const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
-  await fsp.rm(destPath, { force: true }).catch(() => {});
-
-  // -C - resumes from what's on disk; --retry-all-errors + --speed-limit/--speed-time
-  // turn stalls/resets into a resumed retry. Runs to completion or exhausts retries.
-  // Throttle: S21's gateway (10.0.0.2) appears to reset LARGE/fast sustained HTTPS
-  // transfers (0% packet loss, MTU 1500 ok — so it's a session/shaper reset, not the
-  // link). A steady modest rate can slip under that trigger. Empty string disables.
+  // Throttle: S21's gateway (10.0.0.2) resets LARGE/fast sustained HTTPS transfers
+  // (0% packet loss, MTU 1500 ok — a session/shaper reset, not the link). A steady
+  // modest rate (--limit-rate) slips under it. Empty AGENT_DOWNLOAD_RATE disables.
   const rate = process.env.AGENT_DOWNLOAD_RATE ?? '2M';
-  const res = await run('curl', [
-    '-sS', '-4', '-L', '--fail',
-    '-C', '-',
-    '--retry', '300',
-    '--retry-delay', '3',
-    '--retry-all-errors',
-    '--retry-max-time', String(retryMax),
-    // NO --speed-time here: with --limit-rate a brief slow patch would trip it and
-    // force a -C - resume that this server mis-answers (appends → oversized file).
-    // A steady throttled single pass fetches the exact, valid file (verified).
-    ...(rate ? ['--limit-rate', rate] : []),
-    '-o', destPath,
-    url,
-  ]);
+  const MAX = Number(process.env.AGENT_DOWNLOAD_MAX_ATTEMPTS || 12);
 
-  const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
-
-  // Authoritative total via a cheap ranged HEAD (retry a few times on the flaky link).
-  let total = null;
-  for (let i = 0; i < 5 && total === null; i++) {
-    const probe = await run('curl', ['-sS', '-4', '-I', '-r', '0-0', '--max-time', '30', url]);
-    const m = /content-range:\s*bytes\s+\d+-\d+\/(\d+)/i.exec(probe.stdout || '');
-    if (m) total = Number(m[1]);
+  // This URL is served INCONSISTENTLY: the SAME url intermittently returns the valid
+  // ~1.42GB SFX OR a corrupt oversized (~2.1GB) object (7z: "Missing volume"). The
+  // HEAD content-length is the stable truth — retry the whole fetch until the body
+  // matches it, so a bad object never reaches extraction.
+  let expected = null;
+  for (let i = 0; i < 6 && expected === null; i++) {
+    const h = await run('curl', ['-sS', '-4', '-I', '-L', '--max-time', '30', url]);
+    const m = /content-length:\s*(\d+)/i.exec(h.stdout || '');
+    if (m) expected = Number(m[1]);
     else await sleep(2000);
   }
 
-  if (total !== null && size !== total) {
-    throw new Error(`download incomplete: ${size}/${total} bytes (curl exit ${res.code})`);
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    if (stopping) throw new Error('shutting down');
+    await fsp.rm(destPath, { force: true }).catch(() => {});
+    // Steady throttled pass. NO --speed-time (it tripped a bad -C - resume that this
+    // server mis-answers → appended → oversized). --retry handles a genuine reset.
+    const res = await run('curl', [
+      '-sS', '-4', '-L', '--fail',
+      '-C', '-',
+      '--retry', '300', '--retry-delay', '3', '--retry-all-errors',
+      '--retry-max-time', String(retryMax),
+      ...(rate ? ['--limit-rate', rate] : []),
+      '-o', destPath,
+      url,
+    ]);
+    const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
+
+    if (expected !== null) {
+      if (size === expected) { log(`download ok: ${size} bytes (attempt ${attempt})`); return; }
+      warn(`download attempt ${attempt}: got ${size} != expected ${expected} (curl exit ${res.code}) — server served a bad object, retrying`);
+    } else {
+      if (res.code === 0 && size > 0) return; // no size to verify — accept a clean pass
+      warn(`download attempt ${attempt}: curl exit ${res.code}, ${size} bytes — retrying`);
+    }
+    await sleep(backoffMs(attempt, 3000, 30000));
   }
-  if (res.code !== 0 && total === null) {
-    throw new Error(`download failed: curl exit ${res.code}: ${(res.stderr || '').slice(-200)}`);
-  }
+  throw new Error(`download failed after ${MAX} attempts (server kept serving a wrong-sized object)`);
 }
 
 /** Extract a WinRAR SFX exe (unrar first, 7z fallback) — mirrors book-update extractor. */
