@@ -196,24 +196,37 @@ async function postResultSuccess(auth, job, artifactPath) {
   // bypassing the Cloudflare edge body-size limit (~100MB) that 413s large APKs.
   // The server then settles the job from the JSON /result body (Decision A path).
   const size = fs.statSync(artifactPath).size;
-  const presigned = await presignUpload(auth, job);
-  log('uploading artifact to R2 (presigned)...', presigned.r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
-  const put = await axios.put(presigned.uploadUrl, fs.createReadStream(artifactPath), {
-    // ContentType is part of the signature → must match exactly. Length is required
-    // (R2 presigned PUT does not accept chunked transfer-encoding).
-    headers: {
-      'Content-Type': presigned.contentType || 'application/octet-stream',
-      'Content-Length': size,
-    },
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-    timeout: CONFIG.packageTimeoutMs,
-    validateStatus: () => true,
-  });
-  if (put.status < 200 || put.status >= 300) {
-    throw new Error(`R2 PUT failed: HTTP ${put.status}`);
+  // Upload via curl, NOT axios: S21's gateway RESETS large sustained HTTPS transfers
+  // (a 3.15GB axios PUT died with ECONNRESET ~2 min in — the same shaper that resets
+  // big downloads, now outbound). A steady --limit-rate slips under it; on a reset we
+  // re-presign (1h expiry, but stay safe) and retry the whole PUT. curl --upload-file
+  // sets Content-Length (R2 rejects chunked) and PUTs; the SIGNED Content-Type header
+  // must be sent verbatim. Empty AGENT_UPLOAD_RATE disables the throttle.
+  const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
+  const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
+  const MAX = Number(process.env.AGENT_UPLOAD_MAX_ATTEMPTS || 6);
+  let presigned; // hoisted: the result POST below settles the job from these keys
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    if (stopping) throw new Error('shutting down');
+    presigned = await presignUpload(auth, job); // fresh URL each attempt
+    log(`uploading artifact to R2 (presigned${rate ? `, ${rate}` : ''})...`, presigned.r2ObjectKey, `${(size / 1e9).toFixed(2)}GB (attempt ${attempt})`);
+    const res = await run('curl', [
+      '-sS', '-4', '--fail', '-X', 'PUT',
+      '-H', `Content-Type: ${presigned.contentType || 'application/octet-stream'}`,
+      '--upload-file', artifactPath,
+      '--retry', '2', '--retry-delay', '5', '--retry-all-errors',
+      '--retry-max-time', String(retryMax),
+      ...(rate ? ['--limit-rate', rate] : []),
+      presigned.uploadUrl,
+    ]);
+    if (res.code === 0) {
+      log(`artifact uploaded to R2 (attempt ${attempt}) — reporting result...`);
+      break;
+    }
+    warn(`R2 PUT attempt ${attempt} failed: curl exit ${res.code} ${res.stderr.slice(-160)}`);
+    if (attempt === MAX) throw new Error(`R2 PUT failed after ${MAX} attempts (last curl exit ${res.code})`);
+    await sleep(backoffMs(attempt, 5000, 60000));
   }
-  log('artifact uploaded to R2 — reporting result...');
   const res = await axios.post(
     joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result`),
     {
@@ -429,8 +442,39 @@ async function packagerPoll(jobId) {
   throw new Error('packager job timed out');
 }
 
+/**
+ * Download the built artifact from the LOCAL packager. This is NOT the flaky publisher
+ * source (WAN link, inconsistent bodies) — it's a localhost transfer of a file WE just
+ * built, so it must NOT reuse downloadFile's WAN hardening:
+ *   - NO --limit-rate throttle: localhost has no gateway shaper; throttling a multi-GB
+ *     APK to 2MB/s wastes ~25 min per build for nothing.
+ *   - NO `7z l` validity gate: a Gradle/Capacitor APK is a large ZIP64 archive with an
+ *     APK Signing Block, which p7zip's `7z l` mis-parses and reports as "ERROR"/invalid
+ *     — a FALSE negative that loops the download forever. Validate ZIP-family artifacts
+ *     with `unzip -l` (ZIP64-aware) instead; for non-zip artifacts (.dmg) trust curl's
+ *     completion (a truncated chunked stream makes curl exit non-zero) plus a size floor.
+ */
+async function downloadArtifact(url, destPath) {
+  await fsp.rm(destPath, { force: true }).catch(() => {});
+  const res = await run('curl', [
+    '-sS', '-4', '-L', '--fail',
+    '--retry', '5', '--retry-delay', '2', '--retry-all-errors',
+    '-o', destPath, url,
+  ]);
+  const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
+  if (res.code !== 0) throw new Error(`artifact download failed: curl exit ${res.code} (${res.stderr.slice(-200)})`);
+  if (size < 1_000_000) throw new Error(`artifact suspiciously small: ${size} bytes`);
+  if (/\.(apk|zip)$/i.test(destPath)) {
+    const chk = await run('unzip', ['-l', destPath]);
+    if (chk.code !== 0) {
+      throw new Error(`artifact not a valid zip (unzip -l exit ${chk.code}): ${chk.stderr.slice(-200)}`);
+    }
+  }
+  log(`artifact downloaded: ${(size / 1e6).toFixed(0)}MB (valid)`);
+}
+
 async function packagerDownload(jobId, packagerPlatform, destPath) {
-  await downloadFile(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
+  await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
 }
 
 // ---------------------------------------------------------------------------

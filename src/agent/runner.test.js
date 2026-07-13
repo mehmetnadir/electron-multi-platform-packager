@@ -13,13 +13,24 @@ const path = require('node:path');
  */
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 
-test('postResultSuccess presigns then PUTs the artifact straight to R2', () => {
-  // 1. asks the server for a presigned URL
+test('postResultSuccess presigns then PUTs the artifact straight to R2 (throttled curl)', () => {
+  // 1. asks the server for a presigned URL (re-presigned each attempt for reset-retry)
   assert.match(SRC, /agents\/\$\{auth\.agentId\}\/result\/presign/);
-  // 2. uploads the file directly to the presigned R2 URL
-  assert.match(SRC, /axios\.put\(presigned\.uploadUrl/);
-  // 3. Content-Length is sent (R2 presigned PUT rejects chunked transfer)
-  assert.match(SRC, /['"]Content-Length['"]:\s*size/);
+  // 2. uploads via curl --upload-file (NOT axios): the gateway resets a big axios PUT
+  //    (ECONNRESET); a throttled curl PUT slips under the shaper and retries on reset.
+  const fn = SRC.slice(SRC.indexOf('async function postResultSuccess'), SRC.indexOf('async function postResultFailure'));
+  assert.match(fn, /run\('curl'/);
+  assert.match(fn, /'--upload-file',\s*artifactPath/);      // sets Content-Length; PUT
+  assert.match(fn, /'-X',\s*'PUT'/);
+  assert.match(fn, /Content-Type: \$\{presigned\.contentType/); // signed header, verbatim
+  assert.match(fn, /AGENT_UPLOAD_RATE/);                    // throttle under the reset
+  assert.match(fn, /--limit-rate/);
+  assert.doesNotMatch(fn, /axios\.put/);                    // axios PUT got ECONNRESET
+  // `presigned` MUST be hoisted (let) above the retry loop — the result POST settles
+  // the job from presigned.r2ObjectKey/publicUrl; declaring it `const` inside the loop
+  // threw "presigned is not defined" AFTER a successful upload.
+  assert.match(fn, /let presigned;/);
+  assert.match(fn, /r2ObjectKey:\s*presigned\.r2ObjectKey/);
 });
 
 test('result is settled via JSON body with the returned key/url (Decision A)', () => {
@@ -37,6 +48,20 @@ test('downloadFile: throttled fresh-fetch + archive-validity retry (inconsistent
   assert.match(SRC, /run\('7z',\s*\['l'/);
   assert.match(SRC, /Missing volume/);
   assert.match(SRC, /NOT a valid archive/);
+});
+
+test('downloadArtifact (LOCAL packager): no throttle, no 7z gate, ZIP64-safe unzip check', () => {
+  // The built APK is a multi-GB ZIP64 archive with an APK Signing Block that p7zip's
+  // `7z l` mis-parses as invalid — a false negative that looped the download forever.
+  // Isolate the local-artifact fetch and assert it does NOT reuse the WAN hardening.
+  const fn = SRC.slice(SRC.indexOf('async function downloadArtifact'), SRC.indexOf('async function packagerDownload'));
+  assert.match(fn, /run\('curl'/);
+  assert.doesNotMatch(fn, /--limit-rate/);        // localhost: no gateway shaper to dodge
+  assert.doesNotMatch(fn, /run\('7z'/);           // 7z false-rejects large signed zip64 apks
+  assert.match(fn, /\\\.\(apk\|zip\)\$/);          // zip-family only
+  assert.match(fn, /run\('unzip',\s*\['-l'/);      // ZIP64-aware validity
+  // packagerDownload delegates to the local-artifact path, not downloadFile
+  assert.match(SRC, /async function packagerDownload[\s\S]*?downloadArtifact\(/);
 });
 
 test('heartbeat reports the in-flight job so the server extends its lease', () => {
