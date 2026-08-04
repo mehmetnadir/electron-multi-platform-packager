@@ -2092,20 +2092,20 @@ StartupWMClass=${appName}
         });
       }
       
-      // Hata durumunda proje dosyalarını hazırla
-      const zipPath = path.join(tempPath, `${appName}-android-project-v${appVersion}.zip`);
-      await this.createZip(androidPath, zipPath);
-      
-      return {
-        platform: 'android',
-        filename: path.basename(zipPath),
-        path: zipPath,
-        size: (await fs.stat(zipPath)).size,
-        type: 'project',
-        message: 'APK otomatik oluşturulamadı. Android proje dosyaları hazırlandı. Manuel build için talimatları takip edin.',
-        requiresManualBuild: true,
-        error: error.message
-      };
+      // FALLBACK KALDIRILDI (2026-08-04, kullanıcı kararı).
+      //
+      // Eskiden burada android proje klasörü zip'lenip BAŞARILI sonuç olarak
+      // döndürülüyordu. Sonuç `.apk` adıyla teslim ediliyor ama içinde
+      // AndroidManifest.xml/classes.dex OLMADIĞI için telefona kurulamıyordu;
+      // üstelik geçerli bir zip olduğu için tüm doğrulamaları geçiyordu
+      // (45695 vakası: aylarca "APK üretildi" sanıldı — gerçekte webapp zip'i).
+      //
+      // Artık build başarısızsa İŞ BAŞARISIZDIR. Sessiz sahte başarı YOK.
+      // Proje dosyalarını incelemek gerekirse: temp klasörü + build log'ları.
+      throw new Error(
+        `Android APK üretilemedi: ${error.message}. ` +
+        'Gerçek APK üretilemediği için iş başarısız sayıldı (fallback zip KALDIRILDI).'
+      );
     }
   }
 
@@ -2135,23 +2135,23 @@ StartupWMClass=${appName}
     
     // Capacitor config oluştur
     const packageId = `com.dijitap.${appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    const capacitorConfig = `import type { CapacitorConfig } from '@capacitor/cli';
+    // KRİTİK (2026-08-04): config JSON olarak yazılır, .ts DEĞİL.
+    // Capacitor, capacitor.config.ts okumak için projede TypeScript kurulu olmasını
+    // ŞART koşuyor; kurulu olmadığı için `cap add android` ve `cap sync android`
+    // "Could not find installation of TypeScript" ile patlıyordu. Hata yutulduğu
+    // için de sessizce fallback zip üretilip "APK" diye teslim ediliyordu.
+    // JSON config hiçbir ek bağımlılık gerektirmez.
+    const capacitorConfig = {
+      appId: packageId,
+      appName: appName,
+      webDir: 'www',
+      server: { androidScheme: 'https' },
+      android: { allowMixedContent: true }
+    };
 
-const config: CapacitorConfig = {
-  appId: '${packageId}',
-  appName: '${appName}',
-  webDir: 'www',
-  server: {
-    androidScheme: 'https'
-  },
-  android: {
-    allowMixedContent: true
-  }
-};
-
-export default config;`;
-    
-    await fs.writeFile(path.join(webAppPath, 'capacitor.config.ts'), capacitorConfig);
+    await fs.writeJson(path.join(webAppPath, 'capacitor.config.json'), capacitorConfig, { spaces: 2 });
+    // Eski .ts config kalıntısı varsa temizle (ikisi bir arada olursa .ts kazanır).
+    await fs.remove(path.join(webAppPath, 'capacitor.config.ts')).catch(() => {});
     
     console.log('Capacitor Android dosyaları oluşturuldu:', webAppPath);
   }
@@ -3475,12 +3475,47 @@ if (!window.cordova) {
     const wwwPath = path.join(webAppPath, 'www');
     await fs.ensureDir(wwwPath);
     await fs.copy(workingPath, wwwPath);
+
+    // KRİTİK (2026-08-04): Capacitor `www/index.html`i KÖKTE ister; yoksa
+    // `cap sync android` "The web assets directory (./www) must contain an
+    // index.html file" ile patlar. Yüklenen zip tek bir sarmal klasör altına
+    // açıldığında (ör. www/extracted/index.html) bu durum oluşuyordu ve hata
+    // eskiden fallback zip'e yutuluyordu. Sarmalı tespit edip içeriği yukarı al.
+    if (!await fs.pathExists(path.join(wwwPath, 'index.html'))) {
+      const entries = await fs.readdir(wwwPath);
+      for (const entry of entries) {
+        const candidate = path.join(wwwPath, entry);
+        const stat = await fs.stat(candidate).catch(() => null);
+        if (!stat || !stat.isDirectory()) continue;
+        if (!await fs.pathExists(path.join(candidate, 'index.html'))) continue;
+        console.log(`www: index.html "${entry}/" altında bulundu — içerik köke taşınıyor`);
+        const lifted = path.join(webAppPath, '__www_lifted');
+        await fs.remove(lifted);
+        await fs.move(candidate, lifted);
+        await fs.remove(wwwPath);
+        await fs.move(lifted, wwwPath);
+        break;
+      }
+    }
+    if (!await fs.pathExists(path.join(wwwPath, 'index.html'))) {
+      throw new Error(
+        'Web içeriğinde index.html bulunamadı (www/index.html). ' +
+        'APK üretilemez — gönderilen paketin web build klasörü hatalı.'
+      );
+    }
     
-    // Android platform ekle
-    try {
+    // Android platform ekle. Hata YUTULMAZ (2026-08-04 dersi): `cap add android`
+    // sessizce başarısız olunca android/ klasörü hiç oluşmuyor, ardından
+    // `cap sync android` patlıyor ve iş fallback zip'e düşüyordu.
+    const androidPlatformPath = path.join(webAppPath, 'android');
+    if (!await fs.pathExists(androidPlatformPath)) {
       await this.runCapacitorCommand('add', ['android'], webAppPath);
-    } catch (error) {
-      console.log('Android platform zaten mevcut veya ekleme hatası:', error.message);
+    }
+    if (!await fs.pathExists(androidPlatformPath)) {
+      throw new Error(
+        'Capacitor android platformu oluşturulamadı (android/ klasörü yok). ' +
+        'APK üretilemez — `npx cap add android` çıktısına bakın.'
+      );
     }
 
     // Yatay ekranı native seviyede zorla (web JS lock Capacitor'da güvenilir değil)
