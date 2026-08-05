@@ -387,8 +387,7 @@ async function downloadFile(url, destPath) {
     }
     // Validate: is it a listable archive? (bad object → "Missing volume".)
     const chk = await run('7z', ['l', destPath]);
-    const bad = chk.code !== 0 || /Missing volume|Cannot open|ERROR/i.test(`${chk.stdout}${chk.stderr}`);
-    if (!bad) {
+    if (isValidArchiveOutput(chk.code, chk.stdout, chk.stderr)) {
       log(`download ok: ${(size / 1e6).toFixed(0)}MB, valid archive (attempt ${attempt})`);
       return;
     }
@@ -396,6 +395,29 @@ async function downloadFile(url, destPath) {
     await sleep(backoffMs(attempt, 3000, 30000));
   }
   throw new Error(`download failed after ${MAX} attempts (server kept serving a corrupt object)`);
+}
+
+/**
+ * 7z çıktısı GERÇEKTEN bozuk arşiv mi gösteriyor?
+ *
+ * Eski kontrol `/ERROR/i` idi ve arşivin İÇİNDEKİ dosya adlarına takılıyordu
+ * (`errors.js`, `XMLDOMErrorHandler.js` …). Sonuç: 1659MB'lık SAĞLAM kaynak
+ * 7 kez reddedildi, yayıncıdan boşuna ~10GB indirildi ve hiçbir kitap
+ * üretilemedi (2026-08-05). Yalnız satır başına çapalanmış gerçek hata
+ * imzalarına bak. Test için dışa açık.
+ */
+function isValidArchiveOutput(code, stdout, stderr) {
+  if (code !== 0) return false;
+  const text = `${stdout}\n${stderr}`;
+  const fatal = [
+    /^\s*ERRORS?:/im,
+    /^\s*ERROR:/im,
+    /^\s*Cannot open/im,
+    /Missing volume/i,
+    /Can not open (the )?file as archive/i,
+    /Unexpected end of archive/i,
+  ];
+  return !fatal.some((re) => re.test(text));
 }
 
 /** Extract a WinRAR SFX exe (unrar first, 7z fallback) — mirrors book-update extractor. */
@@ -776,4 +798,4 @@ if (require.main === module) {
 }
 
 module.exports = {
-  looksLikeRealApk, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac };
+  looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac };

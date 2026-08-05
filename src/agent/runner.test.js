@@ -114,3 +114,22 @@ test('big artifacts go multipart; a stale single PUT never runs after it succeed
   // Çok parçalı başarılıysa tek-parça döngüsü HİÇ çalışmamalı.
   assert.match(fn, /presigned === null && attempt <= MAX/);
 });
+
+test('isValidArchiveOutput: arşiv İÇİNDEKİ "error" adlı dosyalar geçerli arşivi reddettirmez', () => {
+  const { isValidArchiveOutput } = require('./runner.js');
+  // 2026-08-05: /ERROR/i deseni errors.js dosya adına takıldı → SAĞLAM 1659MB kaynak
+  // 7 kez reddedildi, yayıncıdan boşuna ~10GB indirildi, hiçbir kitap üretilemedi.
+  const listing = [
+    'Path = kitap.exe', 'Type = Rar',
+    '2026-01-01  ..... 1024  webapp/js/errors.js',
+    '2026-01-01  .....  512  webapp/js/XMLDOMErrorHandler.js',
+  ].join('\n');
+  assert.equal(isValidArchiveOutput(0, listing, ''), true);
+});
+
+test('isValidArchiveOutput: gerçek bozukluk imzaları reddedilir', () => {
+  const { isValidArchiveOutput } = require('./runner.js');
+  assert.equal(isValidArchiveOutput(0, 'Open ERROR: Can not open the file as archive', ''), false);
+  assert.equal(isValidArchiveOutput(0, 'ERRORS:\nMissing volume : kitap.part2.rar', ''), false);
+  assert.equal(isValidArchiveOutput(2, '', ''), false);            // 7z çıkış kodu
+});
