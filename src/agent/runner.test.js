@@ -29,7 +29,7 @@ test('postResultSuccess presigns then PUTs the artifact straight to R2 (throttle
   // `presigned` MUST be hoisted (let) above the retry loop — the result POST settles
   // the job from presigned.r2ObjectKey/publicUrl; declaring it `const` inside the loop
   // threw "presigned is not defined" AFTER a successful upload.
-  assert.match(fn, /let presigned;/);
+  assert.match(fn, /let presigned = null;/);
   assert.match(fn, /r2ObjectKey:\s*presigned\.r2ObjectKey/);
 });
 
@@ -103,4 +103,14 @@ test('looksLikeRealApk accepts a Gradle-built APK listing', () => {
     '     6048  1981-01-01 01:01   AndroidManifest.xml',
   ].join('\n');
   assert.equal(looksLikeRealApk(real).ok, true);
+});
+
+test('big artifacts go multipart; a stale single PUT never runs after it succeeds', () => {
+  const fn = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8');
+  // 1.9GB tek parça PUT ~17 dk sürüp gateway resetiyle BAŞTAN başlıyordu (curl 56).
+  assert.match(fn, /presign-multipart/);
+  assert.match(fn, /complete-multipart/);
+  assert.match(fn, /MULTIPART_THRESHOLD/);
+  // Çok parçalı başarılıysa tek-parça döngüsü HİÇ çalışmamalı.
+  assert.match(fn, /presigned === null && attempt <= MAX/);
 });

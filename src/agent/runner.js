@@ -191,6 +191,76 @@ async function presignUpload(auth, job) {
   return res.data; // { uploadUrl, r2ObjectKey, publicUrl, contentType }
 }
 
+/**
+ * ÇOK-PARÇALI YÜKLEME — büyük artifact'ler için (2026-08-05).
+ * Tek parça PUT, 1.9GB'lık APK'da ~17 dk sürüyor ve S21'in gateway'i bağlantıyı
+ * resetleyince (curl 56) TÜM yükleme baştan başlıyordu. Parçalar kısa ömürlü
+ * bağlantılar: reset olursa yalnız o parça yeniden gider.
+ * Sunucu eski sürümdeyse (uç 404) çağıran taraf tek-parça yola düşer.
+ */
+const MULTIPART_THRESHOLD = Number(process.env.AGENT_MULTIPART_THRESHOLD || 300 * 1024 * 1024);
+const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 * 1024 * 1024);
+
+async function uploadMultipart(auth, job, artifactPath, size) {
+  const partSize = MULTIPART_PART_SIZE;
+  const partCount = Math.ceil(size / partSize);
+  const start = await axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-multipart`),
+    { bookId: job.bookId, platform: job.platform, partCount },
+    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+  );
+  if (start.status === 404) return null;             // eski sunucu → tek parça yola düş
+  if (start.status !== 200 || !start.data?.uploadId) {
+    throw new Error(`presign-multipart failed: HTTP ${start.status} ${JSON.stringify(start.data)}`);
+  }
+  const { uploadId, r2ObjectKey, contentType, urls } = start.data;
+  log(`uploading artifact to R2 (multipart: ${partCount}×${(partSize / 1e6).toFixed(0)}MB)`, r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
+
+  const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
+  const partFile = `${artifactPath}.part`;
+  const parts = [];
+  try {
+    for (const { partNumber, url } of urls) {
+      const offsetMB = ((partNumber - 1) * partSize) / (1024 * 1024);
+      const countMB = Math.ceil(Math.min(partSize, size - (partNumber - 1) * partSize) / (1024 * 1024));
+      let etag = null;
+      for (let attempt = 1; attempt <= 4 && !etag; attempt++) {
+        if (stopping) throw new Error('shutting down');
+        await run('dd', [`if=${artifactPath}`, `of=${partFile}`, 'bs=1M', `skip=${offsetMB}`, `count=${countMB}`, 'status=none']);
+        const res = await run('curl', [
+          '-sS', '-4', '--fail', '-X', 'PUT', '-D', '-', '-o', '/dev/null',
+          '-H', `Content-Type: ${contentType || 'application/octet-stream'}`,
+          '--upload-file', partFile,
+          ...(rate ? ['--limit-rate', rate] : []),
+          url,
+        ]);
+        if (res.code === 0) {
+          const m = res.stdout.match(/^etag:\s*"?([^"\r\n]+)"?/im);
+          if (m) etag = `"${m[1]}"`;
+          else warn(`part ${partNumber}: ETag başlığı yok, yeniden denenecek`);
+        } else {
+          warn(`part ${partNumber} attempt ${attempt} failed: curl exit ${res.code} ${res.stderr.slice(-120)}`);
+          await sleep(backoffMs(attempt, 3000, 30000));
+        }
+      }
+      if (!etag) throw new Error(`part ${partNumber} could not be uploaded`);
+      parts.push({ partNumber, etag });
+      if (partNumber % 5 === 0 || partNumber === partCount) log(`  parça ${partNumber}/${partCount} yüklendi`);
+    }
+  } finally {
+    await fsp.rm(partFile, { force: true }).catch(() => {});
+  }
+
+  const done = await axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
+    { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
+    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+  );
+  if (done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done.status} ${JSON.stringify(done.data)}`);
+  log('artifact uploaded to R2 (multipart) — reporting result...');
+  return { r2ObjectKey, publicUrl: done.data.publicUrl };
+}
+
 async function postResultSuccess(auth, job, artifactPath) {
   // Presigned R2 PUT: upload the (possibly multi-GB) artifact STRAIGHT to R2,
   // bypassing the Cloudflare edge body-size limit (~100MB) that 413s large APKs.
@@ -202,11 +272,16 @@ async function postResultSuccess(auth, job, artifactPath) {
   // re-presign (1h expiry, but stay safe) and retry the whole PUT. curl --upload-file
   // sets Content-Length (R2 rejects chunked) and PUTs; the SIGNED Content-Type header
   // must be sent verbatim. Empty AGENT_UPLOAD_RATE disables the throttle.
+  // Büyük artifact → çok parçalı (reset dayanıklı). Sunucu desteklemiyorsa null döner.
+  let presigned = null;
+  if (size >= MULTIPART_THRESHOLD) {
+    presigned = await uploadMultipart(auth, job, artifactPath, size);
+  }
+
   const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
   const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
   const MAX = Number(process.env.AGENT_UPLOAD_MAX_ATTEMPTS || 6);
-  let presigned; // hoisted: the result POST below settles the job from these keys
-  for (let attempt = 1; attempt <= MAX; attempt++) {
+  for (let attempt = 1; presigned === null && attempt <= MAX; attempt++) {
     if (stopping) throw new Error('shutting down');
     presigned = await presignUpload(auth, job); // fresh URL each attempt
     log(`uploading artifact to R2 (presigned${rate ? `, ${rate}` : ''})...`, presigned.r2ObjectKey, `${(size / 1e9).toFixed(2)}GB (attempt ${attempt})`);
