@@ -115,21 +115,27 @@ test('big artifacts go multipart; a stale single PUT never runs after it succeed
   assert.match(fn, /presigned === null && attempt <= MAX/);
 });
 
-test('isValidArchiveOutput: arşiv İÇİNDEKİ "error" adlı dosyalar geçerli arşivi reddettirmez', () => {
+test('isValidArchiveOutput: SAĞLAM SFX kabul edilir — çıkış kodu ayırt edici değil', () => {
   const { isValidArchiveOutput } = require('./runner.js');
-  // 2026-08-05: /ERROR/i deseni errors.js dosya adına takıldı → SAĞLAM 1659MB kaynak
-  // 7 kez reddedildi, yayıncıdan boşuna ~10GB indirildi, hiçbir kitap üretilemedi.
-  const listing = [
-    'Path = kitap.exe', 'Type = Rar',
-    '2026-01-01  ..... 1024  webapp/js/errors.js',
-    '2026-01-01  .....  512  webapp/js/XMLDOMErrorHandler.js',
+  // Saha kanıtı (2026-08-05): bilinen sağlam 1.52GB SFX'te `7z l` kod 2 +
+  // "WARNING = Checksum error", `unrar l` kod 3 veriyor. Kod'a bakan kapı
+  // HİÇBİR kitabı geçirmedi; içindeki "error" adlı dosyalar da reddettiriyordu.
+  const saglam = [
+    '    ..A....    173876  2025-10-20 00:15  resources/app/build/book4/assets/errors.js',
+    '    ..A....    482032  2025-10-20 00:15  resources/app/build/book4/assets/XMLDOMErrorHandler.js',
+    'Corrupt header is found',
   ].join('\n');
-  assert.equal(isValidArchiveOutput(0, listing, ''), true);
+  assert.equal(isValidArchiveOutput(3, saglam, ''), true);
+  assert.equal(isValidArchiveOutput(2, saglam, ''), true);
 });
 
-test('isValidArchiveOutput: gerçek bozukluk imzaları reddedilir', () => {
+test('isValidArchiveOutput: KESİK indirme reddedilir (asıl arıza biçimimiz)', () => {
   const { isValidArchiveOutput } = require('./runner.js');
-  assert.equal(isValidArchiveOutput(0, 'Open ERROR: Can not open the file as archive', ''), false);
-  assert.equal(isValidArchiveOutput(0, 'ERRORS:\nMissing volume : kitap.part2.rar', ''), false);
-  assert.equal(isValidArchiveOutput(2, '', ''), false);            // 7z çıkış kodu
+  const kesik = [
+    '    ..A....    117570  2025-11-03 13:48  resources/app/build/book5/assets/y.png',
+    'Unexpected end of archive',
+  ].join('\n');
+  assert.equal(isValidArchiveOutput(1, kesik, ''), false);
+  assert.equal(isValidArchiveOutput(0, 'Can not open the file as archive', ''), false);
+  assert.equal(isValidArchiveOutput(0, 'UNRAR 6.11 beta 1 freeware\n', ''), false);  // boş liste
 });

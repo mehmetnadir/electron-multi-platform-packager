@@ -386,7 +386,10 @@ async function downloadFile(url, destPath) {
       continue;
     }
     // Validate: is it a listable archive? (bad object → "Missing volume".)
-    const chk = await run('7z', ['l', destPath]);
+    // unrar ile doğrula — çıkarımı da o yapıyor. Yoksa 7z'ye düş.
+    const chk = (await commandExists('unrar'))
+      ? await run('unrar', ['l', '-p-', destPath])
+      : await run('7z', ['l', destPath]);
     if (isValidArchiveOutput(chk.code, chk.stdout, chk.stderr)) {
       log(`download ok: ${(size / 1e6).toFixed(0)}MB, valid archive (attempt ${attempt})`);
       return;
@@ -398,26 +401,35 @@ async function downloadFile(url, destPath) {
 }
 
 /**
- * 7z çıktısı GERÇEKTEN bozuk arşiv mi gösteriyor?
+ * İndirilen SFX kaynağı GERÇEKTEN bozuk mu?
  *
- * Eski kontrol `/ERROR/i` idi ve arşivin İÇİNDEKİ dosya adlarına takılıyordu
- * (`errors.js`, `XMLDOMErrorHandler.js` …). Sonuç: 1659MB'lık SAĞLAM kaynak
- * 7 kez reddedildi, yayıncıdan boşuna ~10GB indirildi ve hiçbir kitap
- * üretilemedi (2026-08-05). Yalnız satır başına çapalanmış gerçek hata
- * imzalarına bak. Test için dışa açık.
+ * İKİ KEZ YANLIŞ KURULDU (2026-08-05, ~10GB boşuna indirme + 4.5 saat):
+ *   1. `/ERROR/i` deseni arşivin İÇİNDEKİ dosya adlarına takılıyordu
+ *      (`errors.js`, `XMLDOMErrorHandler.js`).
+ *   2. Araç yanlıştı: bu paketler WinRAR SFX; `7z l` onları "Type = PE" görüp
+ *      "WARNING = Checksum error" ile ÇIKIŞ KODU 2 veriyor — bilinen SAĞLAM
+ *      dosyada bile. Yani hiçbir kitap kapıdan geçemiyordu.
+ *
+ * Doğru ölçüt, çıkarımda kullanılan aracın (unrar) listesi:
+ *   - kesik dosya  → "Unexpected end of archive"   (bizim gerçek arıza biçimimiz)
+ *   - sağlam dosya → dosya tablosu listelenir
+ * unrar'ın ÇIKIŞ KODU ayırt edici DEĞİL (sağlamda 3, kesikte 1) — kullanma.
+ * Test için dışa açık.
  */
 function isValidArchiveOutput(code, stdout, stderr) {
-  if (code !== 0) return false;
   const text = `${stdout}\n${stderr}`;
+  // Kesinlikle bozuk: kesilmiş arşiv ya da hiç açılamayan dosya.
   const fatal = [
-    /^\s*ERRORS?:/im,
-    /^\s*ERROR:/im,
-    /^\s*Cannot open/im,
+    /Unexpected end of archive/i,
     /Missing volume/i,
     /Can not open (the )?file as archive/i,
-    /Unexpected end of archive/i,
+    /^\s*Cannot open/im,
+    /is not RAR archive/i,
   ];
-  return !fatal.some((re) => re.test(text));
+  if (fatal.some((re) => re.test(text))) return false;
+  // Sağlamlık kanıtı: listede en az bir dosya satırı olmalı (unrar tablo satırı
+  // ya da 7z listesi). Boş/anlamsız çıktı kabul edilmez.
+  return /\.\.A\.\.\.\.|resources\/app|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(text);
 }
 
 /** Extract a WinRAR SFX exe (unrar first, 7z fallback) — mirrors book-update extractor. */
