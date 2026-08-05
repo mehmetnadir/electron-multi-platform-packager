@@ -454,6 +454,21 @@ async function packagerPoll(jobId) {
  *     with `unzip -l` (ZIP64-aware) instead; for non-zip artifacts (.dmg) trust curl's
  *     completion (a truncated chunked stream makes curl exit non-zero) plus a size floor.
  */
+/**
+ * A `.apk` must be an INSTALLABLE Android package, not just a valid zip.
+ * The packager used to fall back to zipping the web folder when the Gradle build
+ * failed and return it as `.apk`; it passed every zip check and shipped to R2
+ * (45695: 3.15GB of `webapp/` files, uninstallable). Gate on the two markers no
+ * real APK can lack. Exported for tests.
+ */
+function looksLikeRealApk(unzipListing) {
+  const missing = ['AndroidManifest.xml', 'classes.dex'].filter(marker => {
+    const re = new RegExp(`(^|/|\\s)${marker.replace('.', '\\.')}\\s*$`, 'm');
+    return !re.test(unzipListing);
+  });
+  return { ok: missing.length === 0, missing };
+}
+
 async function downloadArtifact(url, destPath) {
   await fsp.rm(destPath, { force: true }).catch(() => {});
   const res = await run('curl', [
@@ -468,6 +483,16 @@ async function downloadArtifact(url, destPath) {
     const chk = await run('unzip', ['-l', destPath]);
     if (chk.code !== 0) {
       throw new Error(`artifact not a valid zip (unzip -l exit ${chk.code}): ${chk.stderr.slice(-200)}`);
+    }
+    if (/\.apk$/i.test(destPath)) {
+      const verdict = looksLikeRealApk(chk.stdout);
+      if (!verdict.ok) {
+        throw new Error(
+          `NOT A REAL APK — missing ${verdict.missing.join(', ')}. The Capacitor/Gradle ` +
+          'build almost certainly failed and a non-APK archive was produced. Refusing to ' +
+          'upload: this file cannot be installed on a device.'
+        );
+      }
     }
   }
   log(`artifact downloaded: ${(size / 1e6).toFixed(0)}MB (valid)`);
@@ -675,4 +700,5 @@ if (require.main === module) {
   });
 }
 
-module.exports = { CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac };
+module.exports = {
+  looksLikeRealApk, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac };

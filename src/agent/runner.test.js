@@ -83,3 +83,24 @@ test('source cache: reuse build.zip per (book, version) instead of re-downloadin
   // populated atomically (tmp + rename)
   assert.match(SRC, /\.rename\(tmp,\s*cachedZip\)/);
 });
+
+test('looksLikeRealApk rejects the 45695 fake (web zip named .apk)', () => {
+  const { looksLikeRealApk } = require('./runner.js');
+  const fake = [
+    '  1523  1981-01-01 01:01   webapp/index.html',
+    '  9912  1981-01-01 01:01   webapp/js/app.js',
+  ].join('\n');
+  const verdict = looksLikeRealApk(fake);
+  assert.equal(verdict.ok, false);
+  assert.deepEqual(verdict.missing, ['AndroidManifest.xml', 'classes.dex']);
+});
+
+test('looksLikeRealApk accepts a Gradle-built APK listing', () => {
+  const { looksLikeRealApk } = require('./runner.js');
+  const real = [
+    '  8192284  1981-01-01 01:01   classes.dex',
+    '   198080  1981-01-01 01:01   classes2.dex',
+    '     6048  1981-01-01 01:01   AndroidManifest.xml',
+  ].join('\n');
+  assert.equal(looksLikeRealApk(real).ok, true);
+});
