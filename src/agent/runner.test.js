@@ -139,3 +139,106 @@ test('isValidArchiveOutput: KESİK indirme reddedilir (asıl arıza biçimimiz)'
   assert.equal(isValidArchiveOutput(0, 'Can not open the file as archive', ''), false);
   assert.equal(isValidArchiveOutput(0, 'UNRAR 6.11 beta 1 freeware\n', ''), false);  // boş liste
 });
+
+// ---------------------------------------------------------------------------
+// 2026-08-18: packager output birikmesi + cache TTL işareti
+// ---------------------------------------------------------------------------
+
+const http = require('node:http');
+const os = require('node:os');
+const fsp = require('node:fs/promises');
+const { packagerReleaseJob, touchCacheEntry, CONFIG } = require('./runner.js');
+
+/** Test süresince packager API'sini yerel bir sunucuya yönlendirir. */
+async function withFakePackager(handler, fn) {
+  const server = http.createServer(handler);
+  await new Promise(res => server.listen(0, '127.0.0.1', res));
+  const prev = CONFIG.packagerApi;
+  CONFIG.packagerApi = `http://127.0.0.1:${server.address().port}`;
+  try {
+    return await fn();
+  } finally {
+    CONFIG.packagerApi = prev;
+    await new Promise(res => server.close(res));
+  }
+}
+
+test('R2 yüklemesi bittikten sonra packager output BIRAKILIR (118 GB birikmesinin fix i)', () => {
+  // Sentinel: postResultSuccess'ten hemen sonra release çağrısı olmalı.
+  const fn = SRC.slice(SRC.indexOf('await postResultSuccess(auth, job, artifactPath)'), SRC.indexOf("log('job done:'"));
+  assert.match(fn, /packagerReleaseJob\(jobId\)/);
+});
+
+test('packagerReleaseJob doğru jobId ile DELETE atar ve 200 de true döner', async () => {
+  let seen = null;
+  const ok = await withFakePackager((req, res) => {
+    seen = { method: req.method, url: req.url };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"success":true}');
+  }, () => packagerReleaseJob('job-abc-123'));
+
+  assert.strictEqual(ok, true);
+  assert.strictEqual(seen.method, 'DELETE');
+  assert.strictEqual(seen.url, '/api/delete-job/job-abc-123');
+});
+
+test('packagerReleaseJob 404 te (eski packager) FIRLATMAZ — iş başarılı kalır', async () => {
+  const ok = await withFakePackager((req, res) => {
+    res.writeHead(404); res.end('not found');
+  }, () => packagerReleaseJob('job-x'));
+
+  assert.strictEqual(ok, false); // temizlik olmadı ama hata da fırlamadı
+});
+
+test('packagerReleaseJob 500 de FIRLATMAZ — artifact zaten R2 de', async () => {
+  const ok = await withFakePackager((req, res) => {
+    res.writeHead(500); res.end('boom');
+  }, () => packagerReleaseJob('job-y'));
+
+  assert.strictEqual(ok, false);
+});
+
+test('packagerReleaseJob packager kapalıyken de FIRLATMAZ', async () => {
+  const prev = CONFIG.packagerApi;
+  CONFIG.packagerApi = 'http://127.0.0.1:1';   // kapalı port
+  try {
+    assert.strictEqual(await packagerReleaseJob('job-z'), false);
+  } finally {
+    CONFIG.packagerApi = prev;
+  }
+});
+
+test('jobId yoksa boşuna istek atılmaz', async () => {
+  let called = false;
+  const ok = await withFakePackager((req, res) => { called = true; res.writeHead(200); res.end('{}'); },
+    () => packagerReleaseJob(null));
+
+  assert.strictEqual(ok, false);
+  assert.strictEqual(called, false);
+});
+
+test('touchCacheEntry mtime i tazeler — TTL temizleyicisinin baktığı işaret', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cache-touch-'));
+  try {
+    const old = new Date(Date.now() - 30 * 24 * 3600 * 1000); // 30 gün önce
+    await fsp.utimes(dir, old, old);
+    assert.ok(Date.now() - (await fsp.stat(dir)).mtimeMs > 20 * 24 * 3600 * 1000);
+
+    assert.strictEqual(await touchCacheEntry(dir), true);
+
+    assert.ok(Date.now() - (await fsp.stat(dir)).mtimeMs < 5000); // tazelendi
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('touchCacheEntry olmayan dizinde FIRLATMAZ — üretim durmaz', async () => {
+  assert.strictEqual(await touchCacheEntry('/tmp/kesinlikle-olmayan-dizin-38471'), false);
+});
+
+test('cache HIT te kullanım işareti konur (ölü cache taze görünmesin)', () => {
+  const hit = SRC.slice(SRC.indexOf('source cache HIT'), SRC.indexOf('if (!cacheHit)'));
+  assert.match(hit, /touchCacheEntry\(/);
+  // atime a güvenilmediği gerekçesi kodda kayıtlı kalsın
+  assert.match(hit, /atime kullanılamaz/);
+});

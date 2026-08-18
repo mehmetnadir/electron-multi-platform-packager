@@ -611,6 +611,55 @@ async function packagerDownload(jobId, packagerPlatform, destPath) {
   await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
 }
 
+/**
+ * Paket R2'ye yüklendikten sonra packager'daki yerel kopyayı bırakır.
+ *
+ * Packager `DELETE /api/delete-job/:jobId` ile hem temp hem output klasörünü
+ * siler, ama bunu çağıran kimse yoktu: her üretim output/ altında 1-3 GB
+ * bırakıyor, hiç silinmiyordu (2026-08-18: 119 paket / 118 GB).
+ *
+ * Asla fırlatmaz — temizlik başarısız olsa bile iş BAŞARILI sayılır; artifact
+ * zaten R2'de. Eski packager sürümünde uç yoksa (404) sessizce geçilir.
+ */
+async function packagerReleaseJob(jobId) {
+  if (!jobId) return false;
+  try {
+    const res = await axios.delete(joinUrl(CONFIG.packagerApi, `api/delete-job/${jobId}`), {
+      timeout: 60000,
+      validateStatus: () => true
+    });
+    if (res.status === 200) {
+      log('packager output released:', jobId);
+      return true;
+    }
+    if (res.status === 404) {
+      warn('packager delete-job desteklenmiyor (404) — output elde temizlenmeli');
+      return false;
+    }
+    warn(`packager delete-job HTTP ${res.status} — output bırakılamadı`);
+    return false;
+  } catch (e) {
+    warn('packager delete-job hatası (iş yine de başarılı):', e.message);
+    return false;
+  }
+}
+
+/**
+ * Cache girdisinin mtime'ını şimdiye çeker — TTL temizleyicisi için
+ * "gerçekten kullanıldı" işareti. atime bu iş için güvenilmez: `du`,
+ * yedekleme, virüs taraması gibi her okuma onu tazeler.
+ * Hata yutulur; işaret koyamamak üretimi durdurmaz.
+ */
+async function touchCacheEntry(dir) {
+  try {
+    const now = new Date();
+    await fsp.utimes(dir, now, now);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // macOS signing (best-effort).
 // ---------------------------------------------------------------------------
@@ -689,6 +738,10 @@ async function processJob(auth, job) {
       const mb = ((await fsp.stat(zipPath)).size / 1e6).toFixed(0);
       log(`source cache HIT (${mb}MB) — skip download:`, cachedZip);
       cacheHit = true;
+      // Kullanım işaretini mtime'a yaz: TTL temizleyicisi buna bakar.
+      // atime kullanılamaz — herhangi bir `du`/yedekleme taraması onu tazeler
+      // ve ölü cache sonsuza kadar taze görünür (2026-08-18 tespiti).
+      await touchCacheEntry(path.dirname(cachedZip));
     } catch (_) {
       /* cache miss — fall through to download */
     }
@@ -712,6 +765,7 @@ async function processJob(auth, job) {
         const tmp = `${cachedZip}.tmp-${process.pid}`;
         await fsp.copyFile(zipPath, tmp);
         await fsp.rename(tmp, cachedZip);
+        await touchCacheEntry(path.dirname(cachedZip));
         log('source cached for reuse:', cachedZip);
       } catch (e) {
         warn('source cache populate failed (non-fatal):', e.message);
@@ -738,6 +792,13 @@ async function processJob(auth, job) {
     // 5. POST artifact FILE back (server uploads to R2).
     log('posting result (completed) with artifact file...');
     await postResultSuccess(auth, job, artifactPath);
+
+    // Artifact R2'ye gitti — packager'ın yerel kopyasını tutmanın anlamı yok.
+    // Bu adım eksikti: her üretim packager'ın output/ dizininde 1-3 GB bırakıyor,
+    // hiç silinmiyordu. 2026-08-18'de 119 paket / 118 GB birikmişti.
+    // Gerekirse paket R2'den indirilir.
+    await packagerReleaseJob(jobId);
+
     log('job done:', job.bookId, job.platform);
   } finally {
     currentJob = null; // idle again — stop extending the lease
@@ -810,4 +871,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac };
+  looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
+  packagerReleaseJob,
+  touchCacheEntry
+};
