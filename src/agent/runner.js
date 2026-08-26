@@ -39,6 +39,7 @@ const {
   packageStatusOf,
   artifactExtension,
   joinUrl,
+  pickLogoId,
 } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
@@ -516,10 +517,20 @@ async function packagerUploadBuild(zipPath, appName, appVersion) {
   return res.data.sessionId;
 }
 
-async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion) {
+// Yayinciya gore logoId (paketleyicideki kayitli logolardan). Hata = logo yok, is surer.
+async function packagerLogoIdFor(publisherName) {
+  try {
+    const res = await axios.get(joinUrl(CONFIG.packagerApi, 'api/logos'), { timeout: 15000, validateStatus: () => true });
+    const id = res.status === 200 ? pickLogoId(res.data, publisherName) : null;
+    if (id) log('logo:', publisherName, '->', id); else warn('logo bulunamadi, varsayilan ikon:', publisherName || '(yayinci yok)');
+    return id;
+  } catch (e) { warn('logo listesi alinamadi:', e.message); return null; }
+}
+
+async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId) {
   const res = await axios.post(
     joinUrl(CONFIG.packagerApi, 'api/package'),
-    { sessionId, platforms: [packagerPlatform], appName, appVersion },
+    { sessionId, platforms: [packagerPlatform], appName, appVersion, ...(logoId ? { logoId } : {}) },
     { timeout: 60000, validateStatus: () => true },
   );
   if (res.status !== 200 || !res.data || !res.data.jobId) {
@@ -776,7 +787,8 @@ async function processJob(auth, job) {
     log('uploading build to packager...');
     const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
     log('packager session:', sessionId, '- starting package...');
-    const jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion);
+    const logoId = await packagerLogoIdFor(job.publisherName);
+    const jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
     log('packager jobId:', jobId, '- polling...');
     await packagerPoll(jobId);
 

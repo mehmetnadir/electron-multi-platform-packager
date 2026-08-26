@@ -113,3 +113,22 @@ test('joinUrl: single slash', () => {
   assert.equal(joinUrl('https://api/v1', 'agents/x'), 'https://api/v1/agents/x');
   assert.equal(joinUrl('https://api/v1/', '/agents/x'), 'https://api/v1/agents/x');
 });
+
+test('pickLogoId: yayinci adina gore logo (bosluk/harf duyarsiz), yoksa null', () => {
+  const { pickLogoId } = require('./runner-helpers');
+  const logos = [
+    { id: 'a', kurumId: 'flashypublishing', kurumAdi: 'Flashy Publishing' },
+    { id: 'b', kurumId: 'ydspublishing', kurumAdi: 'YDS Publishing' },
+  ];
+  assert.strictEqual(pickLogoId(logos, 'YDS Publishing'), 'b');
+  assert.strictEqual(pickLogoId(logos, 'yds publishing'), 'b');
+  assert.strictEqual(pickLogoId(logos, 'Flashy ELT'), null);   // farkli yayinci adi -> uydurma yok
+  assert.strictEqual(pickLogoId(logos, undefined), null);
+  assert.strictEqual(pickLogoId(null, 'YDS Publishing'), null);
+});
+
+test('parseNextJob publisherName tasir', () => {
+  const { parseNextJob } = require('./runner-helpers');
+  const j = parseNextJob(200, { bookId: '1', platform: 'mac', downloadUrl: 'https://x/a.exe', publisherName: 'YDS Publishing' });
+  assert.strictEqual(j.publisherName, 'YDS Publishing');
+});

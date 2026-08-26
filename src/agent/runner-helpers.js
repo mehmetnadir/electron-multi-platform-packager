@@ -85,7 +85,30 @@ function parseNextJob(status, body) {
     downloadUrl,
     buildMethod: job.buildMethod != null ? String(job.buildMethod) : undefined,
     bookTitle: job.bookTitle != null ? String(job.bookTitle) : undefined,
+    ...(job.publisherName != null ? { publisherName: String(job.publisherName) } : {}),
   };
+}
+
+/**
+ * Yayinci adina gore paketleyici logosu sec. Eslesme kurumAdi ile (buyuk/kucuk
+ * harf ve bosluk duyarsiz); yoksa kurumId ile slug karsilastirmasi. Bulunamazsa
+ * null: paketleyici varsayilan ikonu kullanir (2026-08-26'ya kadar HER paket boyleydi —
+ * ajan logoId hic gondermiyordu, dmg/apk mavi Electron ikonuyla cikiyordu).
+ * @param {Array<{id:string,kurumId?:string,kurumAdi?:string}>} logos
+ * @param {string|undefined} publisherName
+ */
+function pickLogoId(logos, publisherName) {
+  if (!Array.isArray(logos) || !publisherName) return null;
+  const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const want = norm(publisherName);
+  if (!want) return null;
+  const byName = logos.find((l) => norm(l.kurumAdi) === want);
+  if (byName) return byName.id;
+  const byId = logos.find((l) => norm(l.kurumId) === want);
+  if (byId) return byId.id;
+  // "YDS Publishing" vs "ydspublishing" gibi kısmi eşleşme (bir yönde içerme)
+  const loose = logos.find((l) => want.includes(norm(l.kurumId)) || norm(l.kurumAdi).includes(want));
+  return loose ? loose.id : null;
 }
 
 /**
@@ -133,6 +156,7 @@ function joinUrl(base, p) {
 }
 
 module.exports = {
+  pickLogoId,
   mapPlatform,
   backoffMs,
   parseNextJob,
