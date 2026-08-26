@@ -382,9 +382,18 @@ class MacOSPackagingService extends BasePackagingService {
                 },
                 icon: iconPath,
                 category: this.category,
-                hardenedRuntime: false, // Eğitim uygulamaları için devre dışı
-                gatekeeperAssess: false, // Geliştirme amaçlı
-                // Ek macOS ayarları
+                // İMZA (2026-08-26): hardenedRuntime:false + identity yok → electron-builder
+                // .app'i AD-HOC imzalıyordu; dmg'yi sonradan imzalamak Gatekeeper için
+                // anlamsız ("no usable signature — rejected"). Developer ID kimliği env'den
+                // (APPLE_SIGN_IDENTITY); yoksa eski davranış (ad-hoc) sürer, uyarı loglanır.
+                ...(process.env.APPLE_SIGN_IDENTITY ? {
+                    identity: process.env.APPLE_SIGN_IDENTITY,
+                    hardenedRuntime: true,
+                    entitlements: path.resolve(__dirname, 'resources/entitlements.mac.plist'),
+                    entitlementsInherit: path.resolve(__dirname, 'resources/entitlements.mac.plist'),
+                } : { hardenedRuntime: false }),
+                gatekeeperAssess: false,      // notarization ajan tarafında ayrı adım
+                notarize: false,              // electron-builder notarize etmesin; ajan notarytool ile
                 type: "distribution",
                 minimumSystemVersion: "10.14.0" // Mojave ve üzeri
             },
@@ -447,6 +456,9 @@ class MacOSPackagingService extends BasePackagingService {
             console.log(`  - Working Dir: ${workingDir}`);
             console.log(`  - Platform: mac`);
 
+            if (!process.env.APPLE_SIGN_IDENTITY) {
+                console.warn('⚠️ APPLE_SIGN_IDENTITY yok — .app ad-hoc imzalanacak, Gatekeeper reddeder');
+            }
             const child = spawn('npx', [
                 'electron-builder',
                 '--config', absoluteConfigPath,
