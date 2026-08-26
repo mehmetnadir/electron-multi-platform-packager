@@ -4,6 +4,7 @@ const path = require('path');
 const archiver = require('archiver');
 const crypto = require('crypto');
 const pwaConfigManager = require('../server/pwa-config-manager');
+const { macSigningConfig } = require('../platforms/macos/mac-signing');
 
 class PackagingService {
   constructor() {
@@ -1576,9 +1577,9 @@ function closeSplashScreen() {
         },
         icon: validIcon ? path.resolve(validIcon) : undefined,
         category: "public.app-category.education", // Eğitim kategorisi
-        hardenedRuntime: false,
-        gatekeeperAssess: false,
-        identity: null  // Signing'i devre dışı bırak
+        // İMZA (2026-08-26): canlı /api/package yolu BURASI — MacOSPackagingService değil.
+        // Sabit identity:null ad-hoc .app üretiyordu (Gatekeeper reddi). Kimlik env'den.
+        ...macSigningConfig(),
       },
       dmg: {
         title: `${appName} ${appVersion}`,
