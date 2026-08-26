@@ -11,7 +11,12 @@ const path = require('path');
 const ENTITLEMENTS = path.resolve(__dirname, 'resources/entitlements.mac.plist');
 
 function macSigningConfig(env = process.env, log = console) {
-  const identity = (env.APPLE_SIGN_IDENTITY || '').trim();
+  // electron-builder "Developer ID Application:" ön ekini REDDEDİYOR ("Please remove
+  // prefix ... appropriate certificate will be chosen automatically", 2026-08-26 canlı
+  // hata). Kullanıcı `security find-identity` çıktısını olduğu gibi yapıştırabilsin diye
+  // ön ek burada kırpılır: "Developer ID Application: Ad (TEAM)" → "Ad (TEAM)".
+  const identity = (env.APPLE_SIGN_IDENTITY || '').trim()
+    .replace(/^(Developer ID Application|Apple Development|Mac Developer|3rd Party Mac Developer Application):\s*/i, '');
   if (!identity) {
     if (log && typeof log.warn === 'function') {
       log.warn('⚠️ APPLE_SIGN_IDENTITY yok — .app ad-hoc imzalanacak, Gatekeeper reddeder');
