@@ -3550,21 +3550,39 @@ if (!window.cordova) {
         'APK üretilemez — gönderilen paketin web build klasörü hatalı.'
       );
     }
-    // MOBİL UYGULAMA MODU (2026-08-28): yayıncı bundle'ı `window.isApp = Boolean(query.app)` — kendi
-    // Android sarmalayıcısı index.html'i `?app=1` ile açıyor. Düz index.html'de masaüstü (Electron)
-    // moduna düşüp `window.require` olmadığı için aktivasyon sonrası tıkanıyordu. Bundle
-    // `location.search`'ü çalışırken okur → ilk script'te replaceState ile `app=1` eklenir.
+    // ANDROID NODE-UYUMLULUK KATMANI (2026-08-28): bundle masaüstü modunda window.require
+    // ('fs','path','electron'...) ister; Capacitor'da yok → sayfa görselleri hiç istenmiyor,
+    // anahtar deposu okunamıyordu. empp-android-shim.js İLK script olarak eklenir (VFS +
+    // yerel asset okuma). readdir için manifest üretilir. (Önceki ?app=1 yaklaşımı kaldırıldı:
+    // mobil mod farklı bir akış; Mac ile aynı masaüstü modu hedeflenir.)
     try {
+      await fs.copy(path.join(__dirname, '../platforms/android/empp-android-shim.js'), path.join(wwwPath, 'empp-android-shim.js'));
+      const tree = {}; const dirs = [];
+      const listDir = async (rel) => {
+        const abs = path.join(wwwPath, rel);
+        const ents = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
+        tree[rel] = ents.map((e) => e.name).filter((n) => n !== 'empp-manifest.json');
+        for (const e of ents) if (e.isDirectory()) dirs.push(rel ? `${rel}/${e.name}` : e.name);
+      };
+      await listDir('');
+      for (const top of ['assets', 'classlibraries', 'temp', 'core']) {
+        if (await fs.pathExists(path.join(wwwPath, top))) {
+          await listDir(top);
+          if (top === 'assets') for (const id of tree.assets || []) { if ((await fs.stat(path.join(wwwPath, 'assets', id)).catch(() => null))?.isDirectory()) await listDir(`assets/${id}`); }
+        }
+      }
+      await fs.writeJson(path.join(wwwPath, 'empp-manifest.json'), { tree, dirs }, { spaces: 0 });
       const idx = path.join(wwwPath, 'index.html');
       let html = await fs.readFile(idx, 'utf8');
-      if (!html.includes('empp-app-mode')) {
-        const tag = '<script id="empp-app-mode">(function(){try{var q=new URLSearchParams(location.search);if(!q.has("app")){q.set("app","1");history.replaceState(null,"",location.pathname+"?"+q.toString()+location.hash);}}catch(e){}})();</script>';
+      html = html.replace(/<script id="empp-app-mode">[\s\S]*?<\/script>/, '');
+      if (!html.includes('empp-android-shim.js')) {
+        const tag = '<script src="empp-android-shim.js"></script>';
         html = html.includes('<head>') ? html.replace('<head>', '<head>' + tag) : tag + html;
         await fs.writeFile(idx, html);
-        console.log('✅ app=1 (mobil mod) enjekte edildi: www/index.html');
+        console.log('✅ empp-android-shim.js www/index.html\'e ilk script olarak enjekte edildi');
       }
-    } catch (e) { console.warn('⚠️ app=1 enjeksiyonu başarısız:', e.message); }
-    
+    } catch (e) { console.warn('⚠️ android shim enjeksiyonu başarısız:', e.message); }
+
     // Android platform ekle. Hata YUTULMAZ (2026-08-04 dersi): `cap add android`
     // sessizce başarısız olunca android/ klasörü hiç oluşmuyor, ardından
     // `cap sync android` patlıyor ve iş fallback zip'e düşüyordu.

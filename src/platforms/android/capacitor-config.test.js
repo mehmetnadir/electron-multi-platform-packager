@@ -7,7 +7,8 @@ test('capacitor config: CapacitorHttp açık (yayıncı API CORS vermiyor — ak
   const src = fs.readFileSync(path.join(__dirname, '../../packaging/packagingService.js'), 'utf8');
   assert.ok(/plugins: \{ CapacitorHttp: \{ enabled: true \} \}/.test(src));
   assert.ok(/androidScheme: 'https'/.test(src));
-  assert.ok(src.includes('empp-app-mode') && src.includes('q.set("app","1")'), 'www/index.html\'e ?app=1 (isApp) enjeksiyonu');
+  assert.ok(src.includes("empp-android-shim.js") && src.includes('empp-manifest.json'), 'www/index.html\'e android shim + manifest');
+  assert.ok(!/q\.set\("app","1"\)/.test(src), '?app=1 yaklaşımı kaldırıldı (masaüstü modu)');
   const alt = fs.readFileSync(path.join(__dirname, 'AndroidPackagingService.js'), 'utf8');
   assert.ok(/plugins: \{ CapacitorHttp: \{ enabled: true \} \}/.test(alt), 'AndroidPackagingService .ts config de CapacitorHttp taşımalı');
   const sr = fs.readFileSync(path.join(__dirname, '../../server/settingsRoutes.js'), 'utf8');
