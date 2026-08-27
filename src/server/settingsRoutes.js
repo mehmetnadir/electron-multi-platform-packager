@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { dialog } = require('electron');
+// 'electron' yalnız masaüstü GUI'de var; sunucuda (S21, pm2) yok → require çökertmesin (2026-08-27:
+// packager-service 22 kez crash-loop). dialog gerekmediğinde null kalır.
+let dialog = null;
+try { ({ dialog } = require('electron')); } catch (e) { dialog = null; }
 
 let configManager = null;
 

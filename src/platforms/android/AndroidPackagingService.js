@@ -202,7 +202,8 @@ const config: CapacitorConfig = {
   appName: '${appName}',
   webDir: 'www',
   server: { androidScheme: 'https' },
-  android: { allowMixedContent: true }
+  android: { allowMixedContent: true },
+  plugins: { CapacitorHttp: { enabled: true } } // yayıncı API CORS vermiyor (2026-08-27)
 };
 
 export default config;`;
