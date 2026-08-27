@@ -828,7 +828,11 @@ app.on('activate', () => {
       `;
       
       await fs.writeFile(mainJsPath, mainJsContent.trim());
-    } else {
+    }
+    // main.js'i HER DURUMDA güncelle (2026-08-27): eskiden yalnız "main.js zaten vardı" dalında
+    // çalışıyordu; yayıncının electron.js'i kopyalanınca title/fullscreen/sandbox/fs-shim
+    // enjeksiyonlarının hiçbiri uygulanmıyordu (Marvel 11 dmg'de doğrulandı).
+    {
       // Mevcut main.js dosyasında title'ı güncelle
       try {
         let mainJsContent = await fs.readFile(mainJsPath, 'utf8');

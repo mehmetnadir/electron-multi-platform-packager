@@ -60,4 +60,5 @@ test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR ve
   assert.ok(src.includes('empp-fs-shim.js'));
   assert.ok(src.includes("process.env.EMPP_WORK_DIR"));
   assert.ok(!/asar: false/.test(src), 'asar kapatılmamalı (10k dosya imzası saatler sürer)');
+  assert.ok(!/\} else \{\s*\n\s*\/\/ Mevcut main\.js/.test(src), 'main.js düzenleme bloğu else dalında kalmamalı (electron.js kopyalanınca atlanıyordu)');
 });
