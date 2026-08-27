@@ -15,7 +15,8 @@ test('SVG uygulama adını kaçırarak taşır ve yönerge + ok içerir', () => 
 
 test('arka plan PNG üretilir (sharp) ve pencere ölçüsünde', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dmg-bg-'));
-  const out = await writeDmgBackground(dir, 'Test App');
+  const out = await writeDmgBackground(path.relative(process.cwd(), dir) || dir, 'Test App');
+  assert.ok(path.isAbsolute(out), 'arka plan yolu mutlak olmalı (electron-builder app dizinine göre çözer)');
   const sharp = require('sharp');
   const meta = await sharp(out).metadata();
   assert.strictEqual(meta.width, WINDOW.width);

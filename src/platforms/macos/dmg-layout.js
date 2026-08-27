@@ -32,7 +32,9 @@ function dmgBackgroundSvg(appName) {
 async function writeDmgBackground(dir, appName) {
   const sharp = require('sharp');
   await fs.ensureDir(dir);
-  const out = path.join(dir, 'dmg-background.png');
+  // MUTLAK yol: electron-builder `dmg.background`'ı proje (app) dizinine göre çözer;
+  // göreli temp yolu app/temp/... altında aranıp ENOENT verdi (2026-08-27 canlı hata).
+  const out = path.resolve(dir, 'dmg-background.png');
   await sharp(Buffer.from(dmgBackgroundSvg(appName))).png().toFile(out);
   return out;
 }
