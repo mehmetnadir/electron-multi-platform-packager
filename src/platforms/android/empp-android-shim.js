@@ -239,12 +239,22 @@
   // → 0 ≠ 404 → "var" sanıp retina klasörüne gidiyor → gerçek 404 → sayfa boş (2026-08-28 telefon).
   // Çözüm: sync (async=false) isteklerde orijinal open/send (CapacitorWebXMLHttpRequest) kullanılır.
   function installSyncXhr() {
-    var X = win.XMLHttpRequest, o = win.CapacitorWebXMLHttpRequest;
-    if (!X || !o || typeof o.open !== 'function' || typeof o.send !== 'function' || X.prototype.__emppSyncPatched) return;
-    var patchedOpen = X.prototype.open, patchedSend = X.prototype.send;
-    X.prototype.open = function (m, u, a) { this.__emppSync = (a === false); return (this.__emppSync ? o.open : patchedOpen).apply(this, arguments); };
-    X.prototype.send = function () { return (this.__emppSync ? o.send : patchedSend).apply(this, arguments); };
-    X.prototype.__emppSyncPatched = true;
+    var Cap = win.XMLHttpRequest, o = win.CapacitorWebXMLHttpRequest;
+    if (!Cap || Cap.__emppWrapped || !o || typeof o.open !== 'function' || typeof o.send !== 'function') return;
+    // Capacitor window.XMLHttpRequest'i KURUCU düzeyinde sarar (örnekler başka prototipten gelir);
+    // prototip yaması işe yaramaz. Kurucu sarılır, örneğe kendi open/send'i (own property) yazılır:
+    // sync → orijinal (o.open/o.send), async → Capacitor'ın yamalı yolu.
+    function EmppXHR() {
+      var x = new Cap();
+      var capOpen = x.open, capSend = x.send;
+      Object.defineProperty(x, 'open', { configurable: true, writable: true, value: function (m, u, a) { x.__emppSync = (a === false); return (x.__emppSync ? o.open : capOpen).apply(x, arguments); } });
+      Object.defineProperty(x, 'send', { configurable: true, writable: true, value: function () { return (x.__emppSync ? o.send : capSend).apply(x, arguments); } });
+      return x;
+    }
+    EmppXHR.prototype = Cap.prototype;
+    ['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE'].forEach(function (k, i) { EmppXHR[k] = i; });
+    EmppXHR.__emppWrapped = true;
+    win.XMLHttpRequest = EmppXHR;
   }
 
   function install() {
