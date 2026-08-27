@@ -89,6 +89,19 @@ test('stub modüller: os.networkInterfaces boş, electron.remote yok, https.get 
   await new Promise((res) => { win.require('https').get('https://x', () => {}).on('error', (e) => { assert.ok(e); res(); }); });
 });
 
+test('CapacitorHttp yamalı XHR: orijinal open/send (CapacitorWebXMLHttpRequest) kullanılır', () => {
+  const win = fakeWindow({ 'kurum.txt': '60' });
+  const RealXHR = win.XMLHttpRequest;
+  // Yamalı XHR: sync istekte status 0 (CapacitorHttp davranışı); orijinal metodlar ayrı objede
+  function Patched() { this.status = 0; this.responseText = ''; }
+  Patched.prototype.open = function () {}; Patched.prototype.send = function () { this.status = 0; };
+  Patched.prototype.overrideMimeType = function () {};
+  win.XMLHttpRequest = Patched;
+  win.CapacitorWebXMLHttpRequest = { open: RealXHR.prototype.open, send: RealXHR.prototype.send };
+  load(win);
+  assert.strictEqual(win.require('fs').readFileSync('/kurum.txt', 'utf8'), '60');
+});
+
 test('gerçek Node ortamında (window.require varsa) kurulmaz', () => {
   const win = fakeWindow({});
   win.require = () => 'node';

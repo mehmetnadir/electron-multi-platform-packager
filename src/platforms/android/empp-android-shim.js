@@ -68,13 +68,23 @@
     }
     return v;
   }
-  var XHR = (isBrowser && (win.CapacitorWebXMLHttpRequest || win.XMLHttpRequest)) || null;
+  // CapacitorHttp XHR'ı yamalar ve SENKRON istekte status 0 döner; orijinal prototip
+  // metodları window.CapacitorWebXMLHttpRequest.{open,send} olarak saklanır (constructor
+  // değil!). Gerçek XHR üzerinde orijinal open/send çağrılınca senkron yerel okuma çalışır.
+  function makeXhr() {
+    if (!isBrowser || !win.XMLHttpRequest) return null;
+    var x = new win.XMLHttpRequest();
+    var o = win.CapacitorWebXMLHttpRequest;
+    var open = (o && typeof o.open === 'function') ? o.open : x.open;
+    var send = (o && typeof o.send === 'function') ? o.send : x.send;
+    return { x: x, open: function (m, u, a) { return open.call(x, m, u, a); }, send: function (b) { return send.call(x, b); } };
+  }
   function syncGet(url, asBinary) {
-    if (!XHR) return null;
+    var h = makeXhr(); if (!h) return null;
     try {
-      var x = new XHR(); x.open('GET', url, false);
+      var x = h.x; h.open('GET', url, false);
       if (asBinary && x.overrideMimeType) x.overrideMimeType('text/plain; charset=x-user-defined');
-      x.send(null);
+      h.send(null);
       if (x.status >= 200 && x.status < 300) {
         if (!asBinary) return x.responseText;
         var t = x.responseText, u = new Uint8Array(t.length);
@@ -85,8 +95,8 @@
     return null;
   }
   function syncHead(url) {
-    if (!XHR) return false;
-    try { var x = new XHR(); x.open('HEAD', url, false); x.send(null); return x.status >= 200 && x.status < 300; } catch (e) { return false; }
+    var h = makeXhr(); if (!h) return false;
+    try { h.open('HEAD', url, false); h.send(null); return h.x.status >= 200 && h.x.status < 300; } catch (e) { return false; }
   }
   var manifest = null;
   function getManifest() {
