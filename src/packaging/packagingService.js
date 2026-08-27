@@ -2196,20 +2196,6 @@ StartupWMClass=${appName}
       plugins: { CapacitorHttp: { enabled: true } }
     };
 
-    // MOBİL UYGULAMA MODU (2026-08-28): yayıncı bundle'ı `window.isApp = Boolean(query.app)` — kendi
-    // Android sarmalayıcısı index.html'i `?app=1` ile açıyor. Düz index.html'de masaüstü (Electron)
-    // moduna düşüp `window.require` olmadığı için aktivasyon sonrası tıkanıyordu. Bundle
-    // `location.search`'ü çalışırken okur → ilk script'te replaceState ile `app=1` eklenir.
-    try {
-      const idx = path.join(wwwPath, 'index.html');
-      let html = await fs.readFile(idx, 'utf8');
-      if (!html.includes('empp-app-mode')) {
-        const tag = '<script id="empp-app-mode">(function(){try{var q=new URLSearchParams(location.search);if(!q.has("app")){q.set("app","1");history.replaceState(null,"",location.pathname+"?"+q.toString()+location.hash);}}catch(e){}})();</script>';
-        html = html.includes('<head>') ? html.replace('<head>', '<head>' + tag) : tag + html;
-        await fs.writeFile(idx, html);
-        console.log('✅ app=1 (mobil mod) enjekte edildi: www/index.html');
-      }
-    } catch (e) { console.warn('⚠️ app=1 enjeksiyonu başarısız:', e.message); }
     await fs.writeJson(path.join(webAppPath, 'capacitor.config.json'), capacitorConfig, { spaces: 2 });
     // Eski .ts config kalıntısı varsa temizle (ikisi bir arada olursa .ts kazanır).
     await fs.remove(path.join(webAppPath, 'capacitor.config.ts')).catch(() => {});
@@ -3564,6 +3550,20 @@ if (!window.cordova) {
         'APK üretilemez — gönderilen paketin web build klasörü hatalı.'
       );
     }
+    // MOBİL UYGULAMA MODU (2026-08-28): yayıncı bundle'ı `window.isApp = Boolean(query.app)` — kendi
+    // Android sarmalayıcısı index.html'i `?app=1` ile açıyor. Düz index.html'de masaüstü (Electron)
+    // moduna düşüp `window.require` olmadığı için aktivasyon sonrası tıkanıyordu. Bundle
+    // `location.search`'ü çalışırken okur → ilk script'te replaceState ile `app=1` eklenir.
+    try {
+      const idx = path.join(wwwPath, 'index.html');
+      let html = await fs.readFile(idx, 'utf8');
+      if (!html.includes('empp-app-mode')) {
+        const tag = '<script id="empp-app-mode">(function(){try{var q=new URLSearchParams(location.search);if(!q.has("app")){q.set("app","1");history.replaceState(null,"",location.pathname+"?"+q.toString()+location.hash);}}catch(e){}})();</script>';
+        html = html.includes('<head>') ? html.replace('<head>', '<head>' + tag) : tag + html;
+        await fs.writeFile(idx, html);
+        console.log('✅ app=1 (mobil mod) enjekte edildi: www/index.html');
+      }
+    } catch (e) { console.warn('⚠️ app=1 enjeksiyonu başarısız:', e.message); }
     
     // Android platform ekle. Hata YUTULMAZ (2026-08-04 dersi): `cap add android`
     // sessizce başarısız olunca android/ klasörü hiç oluşmuyor, ardından
