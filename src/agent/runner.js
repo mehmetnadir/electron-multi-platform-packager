@@ -217,6 +217,13 @@ function cachedZipIsStale(zipPath) {
   } catch (e) { return false; }
 }
 
+
+/** Ağ/geçici hata mı? (kesinti, DNS, 5xx, R2 complete/presign) — kalıcı hata değil, yeniden denenir. */
+function isTransientNetworkError(err) {
+  const m = String((err && err.message) || err || '');
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|socket hang up|network|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(m);
+}
+
 const MULTIPART_THRESHOLD = Number(process.env.AGENT_MULTIPART_THRESHOLD || 300 * 1024 * 1024);
 const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 * 1024 * 1024);
 
@@ -243,8 +250,12 @@ async function uploadMultipart(auth, job, artifactPath, size) {
       const offsetMB = ((partNumber - 1) * partSize) / (1024 * 1024);
       const countMB = Math.ceil(Math.min(partSize, size - (partNumber - 1) * partSize) / (1024 * 1024));
       let etag = null;
-      for (let attempt = 1; attempt <= 4 && !etag; attempt++) {
+      // Kesinti dayanıklılığı (2026-08-27): ev/yavaş hat ve gece koşusu — parça başına 30 deneme,
+      // başarısızlıkta 30 sn bekle (~15 dk ağ kesintisini yerinde bekler; presigned URL'ler 1 saat).
+      const PART_ATTEMPTS = Number(process.env.AGENT_UPLOAD_PART_ATTEMPTS || 30);
+      for (let attempt = 1; attempt <= PART_ATTEMPTS && !etag; attempt++) {
         if (stopping) throw new Error('shutting down');
+        if (attempt > 1) await sleep(30000);
         await run('dd', [`if=${artifactPath}`, `of=${partFile}`, 'bs=1M', `skip=${offsetMB}`, `count=${countMB}`, 'status=none']);
         const res = await run('curl', [
           '-sS', '-4', '--fail', '-X', 'PUT', '-D', '-', '-o', '/dev/null',
@@ -890,6 +901,13 @@ async function main() {
     try {
       await processJob(auth, job);
     } catch (e) {
+      if (isTransientNetworkError(e)) {
+        // Ağ/geçici hata: 'failed' YAZMA — lease süresi dolunca API satırı yeniden kuyruğa alır,
+        // ajan önbellekten yeniden paketleyip yüklemeyi dener (internet gelince kendiliğinden biter).
+        warn('job geçici hata (failed yazılmadı, lease dolunca yeniden denenecek):', job.bookId, job.platform, '-', e.message);
+        await sleep(120000);
+        continue;
+      }
       errlog('job failed:', job.bookId, job.platform, '-', e.message);
       await postResultFailure(auth, job, e.message);
     }

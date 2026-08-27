@@ -137,3 +137,9 @@ test('runner: complete-multipart 5xx için yeniden deneme var (sentinel, 2026-08
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'runner.js'), 'utf8');
   require('node:assert').ok(/attempt <= 3[\s\S]{0,600}complete-multipart/.test(src), 'complete-multipart 3 deneme döngüsü olmalı');
 });
+
+test('runner: geçici ağ hatasında failed yazılmaz, parça yükleme 30 deneme (sentinel, 2026-08-27)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'runner.js'), 'utf8');
+  const assert = require('node:assert');
+  assert.ok(src.includes('isTransientNetworkError(e)') && src.includes('AGENT_UPLOAD_PART_ATTEMPTS'));
+});
