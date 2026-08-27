@@ -252,12 +252,24 @@ async function uploadMultipart(auth, job, artifactPath, size) {
     await fsp.rm(partFile, { force: true }).catch(() => {});
   }
 
-  const done = await axios.post(
-    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
-    { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
-    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
-  );
-  if (done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done.status} ${JSON.stringify(done.data)}`);
+  // complete-multipart: R2/Cloudflare 5xx geçici olabiliyor (2026-08-27: 40 dk'lık noterli build
+  // HTTP 502 ile kaybedildi). Parçalar zaten yüklü — yalnız bu çağrı 3 kez denenir.
+  let done = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    done = await axios.post(
+      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
+      { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
+      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+    ).catch((err) => ({ status: 0, data: { error: err.message } }));
+    if (done.status === 200) break;
+    if (done.status >= 500 || done.status === 0) {
+      warn(`complete-multipart HTTP ${done.status} (deneme ${attempt}/3) — ${attempt < 3 ? '15 sn sonra tekrar' : 'vazgeçildi'}`);
+      if (attempt < 3) await sleep(15000);
+      continue;
+    }
+    break; // 4xx: tekrar anlamsız
+  }
+  if (!done || done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done && done.status} ${JSON.stringify(done && done.data)}`);
   log('artifact uploaded to R2 (multipart) — reporting result...');
   return { r2ObjectKey, publicUrl: done.data.publicUrl };
 }

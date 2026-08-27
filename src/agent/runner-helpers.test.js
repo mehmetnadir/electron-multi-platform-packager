@@ -132,3 +132,8 @@ test('parseNextJob publisherName tasir', () => {
   const j = parseNextJob(200, { bookId: '1', platform: 'mac', downloadUrl: 'https://x/a.exe', publisherName: 'YDS Publishing' });
   assert.strictEqual(j.publisherName, 'YDS Publishing');
 });
+
+test('runner: complete-multipart 5xx için yeniden deneme var (sentinel, 2026-08-27)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'runner.js'), 'utf8');
+  require('node:assert').ok(/attempt <= 3[\s\S]{0,600}complete-multipart/.test(src), 'complete-multipart 3 deneme döngüsü olmalı');
+});
