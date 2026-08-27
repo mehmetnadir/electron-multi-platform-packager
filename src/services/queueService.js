@@ -772,11 +772,24 @@ Electron Paketleyici ile oluşturuldu
       if (zipJobs.length === 0 && packagingJobs.length === 0) {
         console.log('🧹 Kuyruk tamamen boş! Tüm temp ve uploads temizleniyor...');
         
-        // Tüm temp klasörünü temizle (korunacak dosya olmadan)
+        // Temp klasörünü temizle — AMA tamamlanmış ve henüz alınmamış (delete-job çağrılmamış)
+        // işlerin çıktısı KORUNUR (2026-08-27: dmg outputPath temp/<job>/macos altında; ajan
+        // indirmeden önce burası boşaltılınca /api/download 404 verdi, 40 dk'lık noterli build kayboldu).
         const tempPath = path.join(process.cwd(), 'temp');
         if (await fs.pathExists(tempPath)) {
-          await fs.emptyDir(tempPath);
-          console.log('🗑️ Temp klasörü tamamen temizlendi');
+          const protectedIds = new Set(
+            activeJobs.packagingJobs
+              .filter(job => job.status === 'completed' || job.jobId === excludeJobId)
+              .map(job => job.jobId)
+          );
+          const entries = await fs.readdir(tempPath);
+          let removed = 0;
+          for (const entry of entries) {
+            if (protectedIds.has(entry)) continue;
+            await fs.remove(path.join(tempPath, entry));
+            removed += 1;
+          }
+          console.log(`🗑️ Temp klasörü temizlendi (${removed} silindi, ${protectedIds.size} tamamlanmış iş korundu)`);
         }
         
         // Tüm uploads klasörünü temizle
