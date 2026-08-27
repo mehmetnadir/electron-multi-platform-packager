@@ -5,6 +5,7 @@ const archiver = require('archiver');
 const crypto = require('crypto');
 const pwaConfigManager = require('../server/pwa-config-manager');
 const { macSigningConfig } = require('../platforms/macos/mac-signing');
+const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-layout');
 
 class PackagingService {
   constructor() {
@@ -1583,7 +1584,9 @@ function closeSplashScreen() {
       },
       dmg: {
         title: `${appName} ${appVersion}`,
-        icon: validIcon ? path.resolve(validIcon) : undefined
+        icon: validIcon ? path.resolve(validIcon) : undefined,
+        // Sürükle → Applications düzeni + Türkçe yönerge (2026-08-27)
+        ...dmgLayoutConfig(await writeDmgBackground(tempPath, appName)),
       }
     };
 
