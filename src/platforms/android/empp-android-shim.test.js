@@ -102,6 +102,22 @@ test('CapacitorHttp yamalı XHR: orijinal open/send (CapacitorWebXMLHttpRequest)
   assert.strictEqual(win.require('fs').readFileSync('/kurum.txt', 'utf8'), '60');
 });
 
+test('uygulamanın kendi senkron XHR HEAD\'i (pages2x kontrolü) gerçek statüyü görür', () => {
+  const win = fakeWindow({ 'assets/1/pages/1.png': 'PNG' });
+  const RealXHR = win.XMLHttpRequest;
+  function Patched() { this.status = 0; this.responseText = ''; }
+  Patched.prototype.open = function () {}; Patched.prototype.send = function () { this.status = 0; };
+  win.XMLHttpRequest = Patched;
+  win.CapacitorWebXMLHttpRequest = { open: RealXHR.prototype.open, send: RealXHR.prototype.send };
+  load(win);
+  const x = new win.XMLHttpRequest(); x.open('HEAD', 'assets/1/pages2x/1.png', false); x.send();
+  assert.strictEqual(x.status, 404, 'olmayan retina klasörü 404 olmalı (0 değil)');
+  const y = new win.XMLHttpRequest(); y.open('HEAD', 'assets/1/pages/1.png', false); y.send();
+  assert.strictEqual(y.status, 200);
+  const z = new win.XMLHttpRequest(); z.open('GET', 'https://x', true); z.send();
+  assert.strictEqual(z.status, 0, 'async istek yamalı (native) yolda kalır');
+});
+
 test('gerçek Node ortamında (window.require varsa) kurulmaz', () => {
   const win = fakeWindow({});
   win.require = () => 'node';

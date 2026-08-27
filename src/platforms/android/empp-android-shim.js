@@ -234,6 +234,19 @@
     win.fetch = wrapped;
   }
 
+  // CapacitorHttp, XMLHttpRequest.prototype.open/send'i yamalar; SENKRON isteklerde status 0
+  // döner. Yayıncı bundle'ı `pages2x/` var mı diye senkron HEAD atıp `404 != status` diye bakıyor
+  // → 0 ≠ 404 → "var" sanıp retina klasörüne gidiyor → gerçek 404 → sayfa boş (2026-08-28 telefon).
+  // Çözüm: sync (async=false) isteklerde orijinal open/send (CapacitorWebXMLHttpRequest) kullanılır.
+  function installSyncXhr() {
+    var X = win.XMLHttpRequest, o = win.CapacitorWebXMLHttpRequest;
+    if (!X || !o || typeof o.open !== 'function' || typeof o.send !== 'function' || X.prototype.__emppSyncPatched) return;
+    var patchedOpen = X.prototype.open, patchedSend = X.prototype.send;
+    X.prototype.open = function (m, u, a) { this.__emppSync = (a === false); return (this.__emppSync ? o.open : patchedOpen).apply(this, arguments); };
+    X.prototype.send = function () { return (this.__emppSync ? o.send : patchedSend).apply(this, arguments); };
+    X.prototype.__emppSyncPatched = true;
+  }
+
   function install() {
     if (!isBrowser) return null;
     if (typeof win.require === 'function' && !win.__emppAndroidShim) return null; // gercek Node (Electron) — dokunma
@@ -243,6 +256,7 @@
     if (typeof win.__dirname === 'undefined') win.__dirname = '';
     if (typeof win.process === 'undefined') win.process = { env: {}, platform: 'android', versions: {} };
     installFetch();
+    installSyncXhr();
     return win.__emppAndroidShim;
   }
 
