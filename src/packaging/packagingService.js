@@ -871,18 +871,34 @@ app.on('activate', () => {
           }
         }
         
-        // EMPP ÇALIŞMA DİZİNİ AYNASI (2026-08-27): yayıncı uygulaması anahtar/temp dosyalarını
-        // CWD'ye göreli yazıyor (remote modülü yok → exe yolu boş). macOS/Linux'ta CWD "/" ve
-        // paket salt-okunur → anahtar kaydedilmiyordu. userData altında yazılabilir ayna + chdir.
-        if (!mainJsContent.includes('empp-work-mirror')) {
-          await fs.copy(path.join(__dirname, '../platforms/common/work-mirror.js'), path.join(appPath, 'empp-work-mirror.js'));
+        // EMPP FS SHIM (2026-08-27): yayıncı uygulaması anahtar/temp dosyalarını CWD'ye göreli
+        // fs ile yazıyor (remote modülü yok → exe yolu boş). macOS/Linux'ta CWD "/" ve paket
+        // salt-okunur → anahtar kaydedilmiyordu. Renderer'da fs sarılır: yazma userData/work'e,
+        // okuma önce work sonra paket. main EMPP_WORK_DIR'i verir. asar AÇIK kalır.
+        if (!mainJsContent.includes('EMPP_WORK_DIR')) {
           const readyRegex = /(app\.whenReady\(\))/;
           if (readyRegex.test(mainJsContent)) {
             mainJsContent = mainJsContent.replace(readyRegex,
-              "require('./empp-work-mirror').activate(app, __dirname);\n$1");
+              "process.env.EMPP_WORK_DIR = require('path').join(app.getPath('userData'), 'work');\n$1");
           } else {
-            console.warn('⚠️ app.whenReady bulunamadı — work-mirror enjekte edilemedi');
+            console.warn('⚠️ app.whenReady bulunamadı — EMPP_WORK_DIR enjekte edilemedi');
           }
+        }
+        try {
+          await fs.copy(path.join(__dirname, '../platforms/common/fs-shim.js'), path.join(appPath, 'empp-fs-shim.js'));
+          const indexPath = path.join(appPath, 'index.html');
+          if (await fs.pathExists(indexPath)) {
+            let html = await fs.readFile(indexPath, 'utf8');
+            if (!html.includes('empp-fs-shim.js')) {
+              html = html.includes('<head>')
+                ? html.replace('<head>', '<head><script src="empp-fs-shim.js"></script>')
+                : '<script src="empp-fs-shim.js"></script>' + html;
+              await fs.writeFile(indexPath, html);
+              console.log('✅ empp-fs-shim.js index.html\'e enjekte edildi');
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ fs-shim enjeksiyonu başarısız:', e.message);
         }
         // PARDUS UYUMLULUĞU: --no-sandbox parametresi ekle
         // Environment variable kullanarak sandbox'ı devre dışı bırak
@@ -1584,9 +1600,6 @@ function closeSplashScreen() {
         "!temp",
         "!uploads"
       ],
-      // asar KAPALI (2026-08-27): uygulama anahtar/temp dosyalarını fs ile yazıyor; work-mirror
-      // symlink'leri app.asar içine işaret edemez. Gerçek dosyalar Contents/Resources/app altında.
-      asar: false,
       mac: {
         target: {
           target: "dmg",
