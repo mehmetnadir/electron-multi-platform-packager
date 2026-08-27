@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createShim, makeResolver, install } = require('./fs-shim');
+const { createShim, makeResolver, install, installFetch, workPathForUrl } = require('./fs-shim');
 
 function fixture() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-base-'));
@@ -59,6 +59,7 @@ test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR ve
   const src = fs.readFileSync(path.join(__dirname, '../../packaging/packagingService.js'), 'utf8');
   assert.ok(src.includes('empp-fs-shim.js'));
   assert.ok(src.includes("process.env.EMPP_WORK_DIR"));
+  assert.ok(src.includes('EMPP_QUIT_ON_CLOSE'), 'macOS pencere kapanınca çıkış enjeksiyonu');
   assert.ok(!/asar: false/.test(src), 'asar kapatılmamalı (10k dosya imzası saatler sürer)');
   assert.ok(!/\} else \{\s*\n\s*\/\/ Mevcut main\.js/.test(src), 'main.js düzenleme bloğu else dalında kalmamalı (electron.js kopyalanınca atlanıyordu)');
 });
@@ -80,4 +81,20 @@ test('readdir: work + paket birleşimi, tekrarsız', () => {
   assert.deepStrictEqual(shim.readdirSync('assets/book1').sort(), ['data']);
   assert.throws(() => shim.readdirSync('assets/yok'));
   shim.readdir('assets', (err, list) => { assert.ifError(err); assert.strictEqual(list.length, 2); });
+});
+
+test('fetch: work\'te varsa oradan servis, yoksa gerçek fetch (anahtar deposu ImWin32.dll)', async () => {
+  const { base, work, shim } = fixture();
+  shim.writeFileSync('/classlibraries/ImWin32.dll', 'ENCRYPTED-KEYS');
+  const calls = [];
+  const win = { fetch: (u) => { calls.push(u); return Promise.resolve({ status: 200, real: true }); }, Response: class { constructor(body, init) { this.body = body; this.status = init.status; this.headers = init.headers; } } };
+  installFetch(win, fs, path, work, base);
+  const r = await win.fetch('classlibraries/ImWin32.dll');
+  assert.strictEqual(r.status, 200); assert.strictEqual(r.headers['X-EMPP-Source'], 'work');
+  assert.strictEqual(Buffer.from(r.body).toString(), 'ENCRYPTED-KEYS');
+  const r2 = await win.fetch('assets/book1/data/BookContent.xml'); // work'te yok → gerçek fetch
+  assert.strictEqual(r2.real, true);
+  const r3 = await win.fetch('https://sorucoz.tv/x'); assert.strictEqual(r3.real, true);
+  assert.deepStrictEqual(calls, ['assets/book1/data/BookContent.xml', 'https://sorucoz.tv/x']);
+  assert.strictEqual(workPathForUrl('file://' + base + '/classlibraries/ImWin32.dll', path, fs, work, base), path.join(work, 'classlibraries/ImWin32.dll'));
 });

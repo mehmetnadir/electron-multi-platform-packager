@@ -888,6 +888,12 @@ app.on('activate', () => {
             console.warn('⚠️ app.whenReady bulunamadı — EMPP_WORK_DIR enjekte edilemedi');
           }
         }
+        // macOS: pencere kapanınca uygulama arka planda kalıyor, yayıncı kodundaki `activate`
+        // handler'ı hatalı (`mainWindow.getAllWindows` yok) → Dock'tan pencere geri gelmiyor
+        // (2026-08-27). Tüm platformlarda son pencere kapanınca çık.
+        if (!mainJsContent.includes('EMPP_QUIT_ON_CLOSE')) {
+          mainJsContent += "\n// EMPP_QUIT_ON_CLOSE: son pencere kapanınca uygulamadan çık (macOS dahil)\napp.on('window-all-closed', () => { app.quit(); });\n";
+        }
         try {
           await fs.copy(path.join(__dirname, '../platforms/common/fs-shim.js'), path.join(appPath, 'empp-fs-shim.js'));
           const indexPath = path.join(appPath, 'index.html');

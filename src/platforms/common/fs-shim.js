@@ -95,6 +95,50 @@
     return shim;
   }
 
+  /**
+   * fetch() yönlendirmesi: uygulama anahtar deposunu (classlibraries/ImWin32.dll) fs ile YAZIP
+   * fetch ile OKUYOR (Windows'ta aynı klasör). Göreli / paket-içi URL'ler önce WORK'te aranır;
+   * varsa dosya oradan servis edilir, yoksa gerçek fetch. (2026-08-27 canlı: anahtar yazıldı ama
+   * açılışta paketteki boş dosya okunup kod tekrar soruldu.)
+   */
+  function workPathForUrl(url, pathMod, realFs, WORK, BASE) {
+    try {
+      if (typeof url !== 'string' || !url) return null;
+      var u = url.split(/[?#]/)[0];
+      if (/^(https?|data|blob|ws|wss):/i.test(u)) return null;
+      var rel = null;
+      if (/^file:/i.test(u)) {
+        var fsPath = decodeURIComponent(u.replace(/^file:\/\//i, ''));
+        var r = pathMod.relative(BASE, fsPath);
+        if (r && !r.startsWith('..') && !pathMod.isAbsolute(r)) rel = r;
+      } else {
+        rel = decodeURIComponent(u).replace(/^\.\//, '').replace(/^\/+/, '');
+      }
+      if (!rel) return null;
+      var w = pathMod.join(WORK, rel);
+      return realFs.existsSync(w) && realFs.statSync(w).isFile() ? w : null;
+    } catch (e) { return null; }
+  }
+
+  function installFetch(win, realFs, pathMod, WORK, BASE) {
+    var realFetch = win.fetch;
+    if (typeof realFetch !== 'function' || realFetch.__empp) return;
+    var wrapped = function (input, init) {
+      var url = (input && typeof input === 'object' && 'url' in input) ? input.url : input;
+      var w = workPathForUrl(url, pathMod, realFs, WORK, BASE);
+      if (w) {
+        try {
+          var buf = realFs.readFileSync(w);
+          var body = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+          return Promise.resolve(new win.Response(body, { status: 200, headers: { 'Content-Type': 'application/octet-stream', 'X-EMPP-Source': 'work' } }));
+        } catch (e) { /* düş */ }
+      }
+      return realFetch.apply(this, arguments);
+    };
+    wrapped.__empp = true;
+    win.fetch = wrapped;
+  }
+
   function install(win) {
     try {
       if (!win || typeof win.require !== 'function') return null; // web/Capacitor: shim gereksiz
@@ -112,6 +156,7 @@
       }
       var shim = createShim(realFs, pathMod, WORK, BASE);
       win.require = function (name) { return name === 'fs' ? shim : realRequire.apply(this, arguments); };
+      installFetch(win, realFs, pathMod, WORK, BASE);
       Object.keys(realRequire).forEach(function (k) { try { win.require[k] = realRequire[k]; } catch (e) {} });
       win.__emppFsShim = shim;
       return shim;
@@ -121,6 +166,6 @@
     }
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl };
   if (isRenderer) install(window);
 })();
