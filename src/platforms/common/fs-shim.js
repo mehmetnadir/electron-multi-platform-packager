@@ -11,7 +11,10 @@
  * Paket dosyalarına dokunulmaz (imza bozulmaz), asar açılmaz (imza süresi uzamaz).
  */
 (function () {
-  var isNode = typeof module !== 'undefined' && module.exports;
+  // Renderer'da (nodeIntegration) `module` de tanımlıdır — bu yüzden ayrım `window/document` ile
+  // yapılır; `module` varlığına bakmak shim'i sessizce devre dışı bırakıyordu (2026-08-27 canlı).
+  var isRenderer = typeof window !== 'undefined' && typeof document !== 'undefined';
+  var isNode = !isRenderer && typeof module !== 'undefined' && module.exports;
 
   var WRITE_ALL = ['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'mkdir', 'mkdirSync',
     'createWriteStream', 'unlink', 'unlinkSync', 'rm', 'rmSync', 'rmdir', 'rmdirSync', 'truncate', 'truncateSync',
@@ -27,7 +30,16 @@
       if (pathMod.isAbsolute(p)) {
         var r = pathMod.relative(BASE, p);
         if (r && !r.startsWith('..') && !pathMod.isAbsolute(r)) return r;
-        return null; // paket dışı mutlak yol: dokunma
+        var w = pathMod.relative(WORK, p);
+        if (w && !w.startsWith('..') && !pathMod.isAbsolute(w)) return w;
+        // Uygulama getFilePath("/classlibraries/ImWin32.dll") gibi KÖK-mutlak yollar üretir
+        // (exe yolu boş → join("", "/x") = "/x"). Gerçek kök dizini değilse (/Users, /Applications,
+        // /private...) paket-göreli say. Gerçek sistem yolu ise dokunma.
+        var first = p.split('/').filter(Boolean)[0];
+        var rootExists = false;
+        try { rootExists = !!first && realFs.existsSync('/' + first); } catch (e) {}
+        if (first && !rootExists) return p.replace(/^\/+/, '');
+        return null;
       }
       return p.replace(/^\.\//, '');
     }
@@ -52,6 +64,21 @@
       else if (WRITE_TWO.indexOf(k) !== -1) shim[k] = function () { var a = Array.prototype.slice.call(arguments); a[0] = R.toRead(a[0]); a[1] = R.toWork(a[1]); return v.apply(realFs, a); };
       else if (COPY.indexOf(k) !== -1) shim[k] = function () { var a = Array.prototype.slice.call(arguments); a[0] = R.toRead(a[0]); a[1] = R.toWork(a[1]); return v.apply(realFs, a); };
       else if (OPEN.indexOf(k) !== -1) shim[k] = function () { var a = Array.prototype.slice.call(arguments); var f = String(a[1] || 'r'); a[0] = /[wa+]/.test(f) ? R.toWork(a[0]) : R.toRead(a[0]); return v.apply(realFs, a); };
+      else if (k === 'readdirSync') shim[k] = function (p, opts) {
+        // Dizin listesi: work + paket BİRLEŞİMİ (yalnız work'e bakınca paket içerikleri kayboluyordu)
+        var r = R.rel(p); if (r == null) return v.call(realFs, p, opts);
+        var seen = {}, out = [];
+        [pathMod.join(WORK, r), pathMod.join(BASE, r)].forEach(function (d) {
+          var list = []; try { list = v.call(realFs, d, opts); } catch (e) {}
+          list.forEach(function (ent) { var name = typeof ent === 'string' ? ent : ent.name; if (!seen[name]) { seen[name] = 1; out.push(ent); } });
+        });
+        if (!out.length) return v.call(realFs, pathMod.join(BASE, r), opts); // ENOENT'i gerçek fs fırlatsın
+        return out;
+      };
+      else if (k === 'readdir') shim[k] = function (p, opts, cb) {
+        if (typeof opts === 'function') { cb = opts; opts = undefined; }
+        try { var res = shim.readdirSync(p, opts); if (cb) cb(null, res); } catch (e) { if (cb) cb(e); }
+      };
       else shim[k] = function () { var a = Array.prototype.slice.call(arguments); if (typeof a[0] === 'string') a[0] = R.toRead(a[0]); return v.apply(realFs, a); };
     });
     if (realFs.promises) {
@@ -94,6 +121,6 @@
     }
   }
 
-  if (isNode) module.exports = { createShim, makeResolver, install };
-  else install(typeof window !== 'undefined' ? window : null);
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install };
+  if (isRenderer) install(window);
 })();

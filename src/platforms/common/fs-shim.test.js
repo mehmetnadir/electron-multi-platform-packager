@@ -62,3 +62,22 @@ test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR ve
   assert.ok(!/asar: false/.test(src), 'asar kapatılmamalı (10k dosya imzası saatler sürer)');
   assert.ok(!/\} else \{\s*\n\s*\/\/ Mevcut main\.js/.test(src), 'main.js düzenleme bloğu else dalında kalmamalı (electron.js kopyalanınca atlanıyordu)');
 });
+
+test('kök-mutlak sahte yollar (/classlibraries/...) paket-göreli sayılır; gerçek kök (/Users) dokunulmaz', () => {
+  const { base, work, shim } = fixture();
+  const R = makeResolver(path, fs, work, base);
+  assert.strictEqual(R.rel('/classlibraries/ImWin32.dll'), 'classlibraries/ImWin32.dll');
+  assert.strictEqual(R.rel('/Users/x/y.txt'), null);
+  shim.writeFileSync('/classlibraries/ImWin32.dll', '<keys/>');
+  assert.ok(fs.existsSync(path.join(work, 'classlibraries/ImWin32.dll')));
+  assert.strictEqual(shim.readFileSync('/classlibraries/ImWin32.dll', 'utf8'), '<keys/>');
+});
+
+test('readdir: work + paket birleşimi, tekrarsız', () => {
+  const { work, shim } = fixture();
+  shim.writeFileSync('assets/book2/imKeys.dll', 'k');
+  assert.deepStrictEqual(shim.readdirSync('assets').sort(), ['book1', 'book2']);
+  assert.deepStrictEqual(shim.readdirSync('assets/book1').sort(), ['data']);
+  assert.throws(() => shim.readdirSync('assets/yok'));
+  shim.readdir('assets', (err, list) => { assert.ifError(err); assert.strictEqual(list.length, 2); });
+});
