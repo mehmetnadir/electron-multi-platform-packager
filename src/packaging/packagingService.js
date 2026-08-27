@@ -2189,7 +2189,11 @@ StartupWMClass=${appName}
       appName: appName,
       webDir: 'www',
       server: { androidScheme: 'https' },
-      android: { allowMixedContent: true }
+      android: { allowMixedContent: true },
+      // CORS (2026-08-27): WebView kökeni https://localhost; yayıncı API'si (akillitahta.ydspublishing.com,
+      // sorucoz.tv) CORS başlığı vermiyor → aktivasyon (KullaniciNewKeySet) ve katalog istekleri
+      // tarayıcıda engelleniyordu ("kod kabul edilmedi"). CapacitorHttp fetch/XHR'ı native'e taşır.
+      plugins: { CapacitorHttp: { enabled: true } }
     };
 
     await fs.writeJson(path.join(webAppPath, 'capacitor.config.json'), capacitorConfig, { spaces: 2 });
