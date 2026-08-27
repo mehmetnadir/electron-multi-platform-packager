@@ -199,6 +199,24 @@ async function presignUpload(auth, job) {
  * bağlantılar: reset olursa yalnız o parça yeniden gider.
  * Sunucu eski sürümdeyse (uç 404) çağıran taraf tek-parça yola düşer.
  */
+const { applyPublisherUpdate, latestLocalUpdate, isNewer } = require('./publisher-update');
+/**
+ * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
+ * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
+ */
+function cachedZipIsStale(zipPath) {
+  try {
+    const { spawnSync } = require('child_process');
+    const read = (f) => { const r = spawnSync('unzip', ['-p', zipPath, f], { encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : ''; };
+    const kurum = read('kurum.txt').replace(/\r|\n/g, '');
+    const version = read('version.txt') || '1';
+    const upd = latestLocalUpdate(kurum ? kurum.padStart(3, '0') : null);
+    const stale = !!upd && isNewer(version, upd.version);
+    if (stale) log(`source cache STALE — yayıncı güncellemesi ${version} → ${upd.version}`);
+    return stale;
+  } catch (e) { return false; }
+}
+
 const MULTIPART_THRESHOLD = Number(process.env.AGENT_MULTIPART_THRESHOLD || 300 * 1024 * 1024);
 const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 * 1024 * 1024);
 
@@ -757,6 +775,7 @@ async function processJob(auth, job) {
     let cacheHit = false;
     try {
       await fsp.access(cachedZip);
+      if (cachedZipIsStale(cachedZip)) throw new Error('cache stale (publisher update)');
       await fsp.copyFile(cachedZip, zipPath);
       const mb = ((await fsp.stat(zipPath)).size / 1e6).toFixed(0);
       log(`source cache HIT (${mb}MB) — skip download:`, cachedZip);
@@ -780,6 +799,12 @@ async function processJob(auth, job) {
       const buildDir = await findBuildDir(extractDir);
       log('build dir:', buildDir);
 
+      // Yayıncı güncellemesi (version.html/zip) paketleme anında uygulanır — macOS'ta
+      // çalışma zamanında uygulanamaz (asar salt-okunur), bkz. publisher-update.js.
+      try {
+        const upd = applyPublisherUpdate(buildDir);
+        log(`publisher update: ${upd.reason} (${upd.from} → ${upd.to || '-'}, kurum ${upd.companyId || '?'})`);
+      } catch (e) { warn('publisher update uygulanamadı:', e.message); }
       await zipDir(buildDir, zipPath);
 
       // Populate the shared cache atomically (tmp + rename). Non-fatal on error.

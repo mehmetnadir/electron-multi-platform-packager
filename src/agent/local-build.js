@@ -58,12 +58,15 @@ function normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g
   const cacheRoot = process.env.EMPP_SOURCE_CACHE || path.join(os.homedir(), '.empp-agent', 'cache');
   const cachedZip = path.join(cacheRoot, BOOK_ID, path.basename(EXE), 'build.zip');
   const zipPath = path.join(work, 'build.zip');
-  if (fs.existsSync(cachedZip)) { log('önbellek HIT:', cachedZip); await fsp.copyFile(cachedZip, zipPath); }
+  const { latestLocalUpdate, isNewer } = require('./publisher-update');
+  const zipStale = () => { try { const rd=(f)=>{const r=require('child_process').spawnSync('unzip',['-p',cachedZip,f],{encoding:'utf8'});return r.status===0?r.stdout.trim():''}; const k=rd('kurum.txt').replace(/\r|\n/g,''); const u=latestLocalUpdate(k?k.padStart(3,'0'):null); return !!u && isNewer(rd('version.txt')||'1', u.version); } catch(e){ return false; } };
+  if (fs.existsSync(cachedZip) && !zipStale()) { log('önbellek HIT:', cachedZip); await fsp.copyFile(cachedZip, zipPath); }
   else {
     const ex = path.join(work, 'extracted'); await fsp.mkdir(ex, { recursive: true });
     log('unrar ile açılıyor...'); const r = await run('unrar', ['x', '-y', '-o+', EXE, ex + '/']);
     if (r.code !== 0) throw new Error('unrar başarısız: ' + r.err.slice(-300));
     const buildDir = findBuildDir(ex); log('build dizini:', buildDir);
+    const upd = require('./publisher-update').applyPublisherUpdate(buildDir); log(`publisher update: ${upd.reason} (${upd.from} → ${upd.to || '-'})`);
     log('build.zip yazılıyor...'); await zipDir(buildDir, zipPath);
     await fsp.mkdir(path.dirname(cachedZip), { recursive: true }); await fsp.copyFile(zipPath, cachedZip); log('önbelleğe yazıldı:', cachedZip);
   }
