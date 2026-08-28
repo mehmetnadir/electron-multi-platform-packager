@@ -143,3 +143,11 @@ test('runner: geçici ağ hatasında failed yazılmaz, parça yükleme 30 deneme
   const assert = require('node:assert');
   assert.ok(src.includes('isTransientNetworkError(e)') && src.includes('AGENT_UPLOAD_PART_ATTEMPTS'));
 });
+
+test('asciiAppName: Türkçe harfler ASCII, yasak karakter boşluk (45496 "YKS-DİL Dergi Seti" dersi)', () => {
+  const { asciiAppName } = require('./runner-helpers');
+  const assert = require('node:assert');
+  assert.strictEqual(asciiAppName('YKS-DİL Dergi Seti'), 'YKS-DIL Dergi Seti');
+  assert.strictEqual(asciiAppName('Shall We?! 5 Set / 2024'), 'Shall We 5 Set 2024');
+  assert.strictEqual(asciiAppName('', 'book-1'), 'book-1');
+});

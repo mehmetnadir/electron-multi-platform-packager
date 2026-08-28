@@ -155,7 +155,23 @@ function joinUrl(base, p) {
   return `${String(base).replace(/\/+$/, '')}/${String(p).replace(/^\/+/, '')}`;
 }
 
+
+/**
+ * Paketleyiciye gönderilen uygulama adı ASCII olmalı (2026-08-28): "YKS-DİL Dergi Seti" gibi
+ * Türkçe harfli adlarda paketleyici çıktıyı üretti ama /api/download 500 verdi (45496 mac+android).
+ * R2'deki nihai ad zaten API'de (artifactFileName) kuruluyor; burası yalnız paketleyici iç adı.
+ */
+const TR_MAP = { 'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S', 'ü': 'u', 'Ü': 'U' };
+function asciiAppName(name, fallback = 'book') {
+  const s = String(name || '')
+    .replace(/[çÇğĞıİöÖşŞüÜ]/g, (ch) => TR_MAP[ch] || ch)
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9 ()._-]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s || fallback;
+}
+
 module.exports = {
+  asciiAppName,
   pickLogoId,
   mapPlatform,
   backoffMs,

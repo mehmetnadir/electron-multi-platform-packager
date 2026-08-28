@@ -39,8 +39,7 @@ const {
   packageStatusOf,
   artifactExtension,
   joinUrl,
-  pickLogoId,
-} = require('./runner-helpers');
+  pickLogoId, asciiAppName } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -830,7 +829,7 @@ async function processJob(auth, job) {
         warn('source cache populate failed (non-fatal):', e.message);
       }
     }
-    const appName = job.bookTitle || `book-${job.bookId}`;
+    const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     const appVersion = '1.0.0';
     log('uploading build to packager...');
     const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
