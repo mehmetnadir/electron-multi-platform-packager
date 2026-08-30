@@ -1037,6 +1037,40 @@ app.get('/api/queue-status', (req, res) => {
   }
 });
 
+/**
+ * Bayat output süpürücü (BACKSTOP — 2026-08-30).
+ * Agent modunda her build R2'ye yüklendikten sonra `delete-job` output'u siler;
+ * ama packager build ile silme arasında yeniden başlarsa job kaydı (packagingJobs)
+ * uçar → outputPath çözülemez → klasör sonsuza kadar kalır. 98 GB / 98 klasör bu
+ * yolla birikti. Yaş-tabanlı süpürme bunu yakalar: R2'ye yükleme dakikalar sürer,
+ * OUTPUT_TTL_HOURS (varsayılan 72s) devasa güven payı. mtime kullanılır (atime
+ * `du`/yedek taramasıyla tazelenir — 2026-08-18 dersi). Hata yutulur.
+ */
+const OUTPUT_TTL_HOURS = Number(process.env.OUTPUT_TTL_HOURS || 72);
+async function sweepStaleOutputs() {
+  try {
+    const base = serverConfigManager.getOutputDir();
+    if (!(await fs.pathExists(base))) return 0;
+    const cutoff = Date.now() - OUTPUT_TTL_HOURS * 3600 * 1000;
+    let removed = 0;
+    for (const name of await fs.readdir(base)) {
+      const dir = path.join(base, name);
+      try {
+        const st = await fs.stat(dir);
+        if (!st.isDirectory() || st.mtimeMs >= cutoff) continue;
+        await fs.remove(dir);
+        removed++;
+        console.log(`🧹 Bayat output silindi (${OUTPUT_TTL_HOURS}s+): ${dir}`);
+      } catch (_) { /* yarış/erişim — atla */ }
+    }
+    if (removed) console.log(`🧹 sweepStaleOutputs: ${removed} klasör silindi`);
+    return removed;
+  } catch (e) {
+    console.error('sweepStaleOutputs hata (önemsiz):', e.message);
+    return 0;
+  }
+}
+
 // Tek bir işi sil (paketler dahil)
 // Output klasörünü GÜVENLE sil — yalnızca yapılandırılmış output dizini İÇİNDEyse.
 // Yanlış/zararlı yol ile output dışındaki bir klasörün silinmesini engeller.
@@ -1093,8 +1127,19 @@ app.delete('/api/delete-job/:jobId', async (req, res) => {
       console.log(`⚠️ İş temp klasörü bulunamadı: ${jobId}`);
     }
 
-    // Gerçek paketleri output klasöründen sil (frontend outputPath gönderir)
-    const outputDeleted = await safeRemoveOutputDir(req.body && req.body.outputPath);
+    // Gerçek paketleri output klasöründen sil. Frontend outputPath'i body ile
+    // gönderir; AJAN göndermiyordu → agent modunda output hiç silinmiyor ve
+    // ~/.electron-packager-tool/config/output 98 GB'a şişmişti (2026-08-30).
+    // Body yoksa job kaydından (packagingJobs) çöz — ajanın body'siz çağrısı da
+    // artık output'u siler. (Backstop: sweepStaleOutputs yaş-tabanlı süpürür.)
+    const bodyOutputPath = req.body && req.body.outputPath;
+    // outputPath OTORİTER kaynağı queueService.packagingQueue (moveToOutputDirectory
+    // orayı yazar); packagingJobs aynı referansı paylaşır ama kimlikten bağımsız
+    // olması için ikisini de dene.
+    const regJob = packagingJobs.get(jobId);
+    const qJob = queueService.getPackagingStatus(jobId);
+    const jobOutputPath = (regJob && regJob.outputPath) || (qJob && qJob.outputPath);
+    const outputDeleted = await safeRemoveOutputDir(bodyOutputPath || jobOutputPath);
 
     res.json({ success: true, deleted, outputDeleted, jobId });
   } catch (error) {
@@ -1319,6 +1364,9 @@ server.listen(PORT, () => {
   console.log('📁 Upload klasörü: uploads/');
   console.log('🎨 Logo klasörü: logos/');
   console.log('📦 Temp klasörü: temp/');
+  // Backstop: başlangıçta + saatlik bayat output süpürmesi (disk şişmesini önler).
+  sweepStaleOutputs();
+  setInterval(sweepStaleOutputs, 60 * 60 * 1000).unref();
 });
 
 module.exports = { app, server, io, packagingJobs };

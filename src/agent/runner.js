@@ -711,6 +711,26 @@ async function touchCacheEntry(dir) {
   }
 }
 
+/**
+ * Aynı kitabın ESKİ sürüm cache'lerini siler (yalnız `keepVersion` kalır).
+ * Yayıncı exe'yi güncelleyip adındaki sürümü yükseltince (…-v63→v64) eski
+ * `{bookId}/{v63.exe}/build.zip` ölü kalıyordu; TTL (14 gün) geç davranıyor ve
+ * `/var/empp-cache` şişiyordu (2026-08-29'da 9 ölü dizin = 6.9 GB elle silindi).
+ * Yeni sürüm indirilir indirilmez kardeş sürümleri buduyoruz — her iki makinede
+ * (S21 + Mac) otomatik, anında, kesin. Hata yutulur; budama üretimi durdurmaz.
+ */
+async function pruneSiblingVersions(bookDir, keepVersion) {
+  try {
+    const entries = await fsp.readdir(bookDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === keepVersion) continue;
+      const dead = path.join(bookDir, e.name);
+      await fsp.rm(dead, { recursive: true, force: true });
+      log('cache prune — eski sürüm silindi:', dead);
+    }
+  } catch (_) { /* dizin yok / yarış — önemsiz */ }
+}
+
 // ---------------------------------------------------------------------------
 // macOS signing (best-effort).
 // ---------------------------------------------------------------------------
@@ -794,6 +814,8 @@ async function processJob(auth, job) {
       // atime kullanılamaz — herhangi bir `du`/yedekleme taraması onu tazeler
       // ve ölü cache sonsuza kadar taze görünür (2026-08-18 tespiti).
       await touchCacheEntry(path.dirname(cachedZip));
+      // HIT'te de buda: önceki job populate ederken budamışsa no-op; değilse yakalar.
+      await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
     } catch (_) {
       /* cache miss — fall through to download */
     }
@@ -825,6 +847,8 @@ async function processJob(auth, job) {
         await fsp.rename(tmp, cachedZip);
         await touchCacheEntry(path.dirname(cachedZip));
         log('source cached for reuse:', cachedZip);
+        // Yeni sürüm cache'e girdi → aynı kitabın eski sürümlerini hemen buda.
+        await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
       } catch (e) {
         warn('source cache populate failed (non-fatal):', e.message);
       }

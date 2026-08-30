@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-08-30 — Disk şişmesi kökten önlendi (agent-mode output + kaynak-cache sızıntısı)
+
+S21 diski %89'a dayanmıştı; iki bağımsız sızıntı bulundu ve kapatıldı:
+
+- **Paketleyici output (98 GB / 98 klasör):** `delete-job` output klasörünü YALNIZ
+  `req.body.outputPath` verilirse siliyordu (frontend gönderir). **Ajan body
+  göndermiyordu** → agent modunda `~/.electron-packager-tool/config/output/{name}`
+  HİÇ silinmiyordu; her yeniden-build yeni tarihli 1-1.8 GB klasör bırakıyordu.
+  Fix: `delete-job` outputPath'i job kaydından çözer (`packagingJobs` +
+  otoriter `queueService.getPackagingStatus`), ajanın body'siz çağrısı da siler.
+  Backstop: `sweepStaleOutputs` (başlangıç + saatlik, mtime > `OUTPUT_TTL_HOURS`=72s)
+  packager build↔silme arasında restart olup job kaydı uçarsa yakalar. İlk sweep
+  S21'de 50 klasör/51 GB, Mac'te 8 klasör temizledi (S21 disk %89→%82).
+- **Kaynak cache (6.9 GB):** yayıncı exe adındaki sürüm bump'ında (…-v63→v64) eski
+  `/var/empp-cache/{book}/{v63}/build.zip` ölü kalıyordu. Fix: `pruneSiblingVersions`
+  — ajan yeni sürümü indirir indirmez aynı kitabın eski sürüm cache'lerini siler
+  (populate + HIT sonrası; S21 + Mac otomatik). TTL janitor (14 gün) backstop.
+
+Not: pipeline worker (windows/pardus) `/var/empp-cache` kullanmaz (`.pipeline-work`,
+per-job temizlenir) → empp-cache tamamen ajanın (android+mac), self-prune hepsini kapsar.
+Testler: runner sentinel (21) + app sentinel (3), 75/75.
+
 ## 2026-06-15 — Android paketleme + WebView uyumluluk + UI düzeltmeleri
 
 Bu oturum baştan sona Android APK üretimini ve birkaç UI/sunucu hatasını düzeltti.

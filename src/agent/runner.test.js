@@ -242,3 +242,15 @@ test('cache HIT te kullanım işareti konur (ölü cache taze görünmesin)', ()
   // atime a güvenilmediği gerekçesi kodda kayıtlı kalsın
   assert.match(hit, /atime kullanılamaz/);
 });
+
+test('eski sürüm cache leri budanır (yayıncı bump sonrası disk şişmesin)', () => {
+  // Helper tanımlı ve keep-version dışındaki kardeş dizinleri recursive siliyor.
+  const fn = SRC.slice(SRC.indexOf('async function pruneSiblingVersions'),
+    SRC.indexOf('async function pruneSiblingVersions') + 700);
+  assert.match(fn, /readdir\(bookDir/);
+  assert.match(fn, /e\.name === keepVersion/);        // mevcut sürümü koru
+  assert.match(fn, /fsp\.rm\([^)]*recursive: true, force: true/); // gerisini sil
+  // Hem populate hem HIT sonrası çağrılıyor; keep = srcVersion, kök = bookId dizini.
+  const calls = SRC.match(/pruneSiblingVersions\(path\.join\(cacheRoot, String\(job\.bookId\)\), srcVersion\)/g) || [];
+  assert.ok(calls.length >= 2, `prune çağrısı populate+HIT te olmalı (bulundu: ${calls.length})`);
+});
