@@ -2176,8 +2176,16 @@ StartupWMClass=${appName}
     
     await fs.writeJson(path.join(webAppPath, 'package.json'), packageJson, { spaces: 2 });
     
-    // Capacitor config oluştur
-    const packageId = `com.dijitap.${appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    // Capacitor config oluştur.
+    // KRİTİK (2026-09-03, 72612 "6-SINIF-MATEMATIK-SORU-BANKASI" vakası): Capacitor
+    // her App ID segmentinin HARFLE başlamasını şart koşuyor. Rakamla başlayan başlık
+    // (ör. "6 Sınıf") → "com.dijitap.6sinif..." → `cap add android` "Invalid App ID"
+    // ile patlıyordu (hata paketlemeyi komple düşürüyor). Segment rakamla başlıyorsa
+    // 'a' ön eki ekle; slug boş kalırsa 'app' kullan (id daima geçerli olsun).
+    let appSlug = appName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!appSlug) appSlug = 'app';
+    if (/^[0-9]/.test(appSlug)) appSlug = `a${appSlug}`;
+    const packageId = `com.dijitap.${appSlug}`;
     // KRİTİK (2026-08-04): config JSON olarak yazılır, .ts DEĞİL.
     // Capacitor, capacitor.config.ts okumak için projede TypeScript kurulu olmasını
     // ŞART koşuyor; kurulu olmadığı için `cap add android` ve `cap sync android`
