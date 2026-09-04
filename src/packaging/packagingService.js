@@ -1026,28 +1026,38 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       // 4. appimagetool ile yeniden paketle
       console.log('📦 Yeniden paketleniyor...');
       
-      // appimagetool'u indir (eğer yoksa)
-      const appimagetoolPath = path.join(outputPath, 'appimagetool-x86_64.AppImage');
+      // appimagetool: önce sistemde kurulu olanı kullan — dış indirmeye BAĞIMLI KALMA.
+      // (GitHub 'continuous' indirmesi sunucuda düşüyordu → dosya oluşmuyor → spawn ENOENT →
+      //  job sert çöküyordu. /usr/local/bin/appimagetool sunucuda zaten kurulu.)
+      let appimagetoolPath = '/usr/local/bin/appimagetool';
+      let appimagetoolDownloaded = false;
       if (!await fs.pathExists(appimagetoolPath)) {
-        console.log('⬇️ appimagetool indiriliyor...');
-        const https = require('https');
-        const file = fs.createWriteStream(appimagetoolPath);
-        
-        await new Promise((resolve, reject) => {
-          https.get('https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage', (response) => {
-            response.pipe(file);
-            file.on('finish', () => {
-              file.close();
-              fs.chmod(appimagetoolPath, 0o755);
-              resolve();
-            });
-          }).on('error', reject);
-        });
+        // Kurulu değilse job dizinine indir (fallback).
+        appimagetoolPath = path.join(outputPath, 'appimagetool-x86_64.AppImage');
+        if (!await fs.pathExists(appimagetoolPath)) {
+          console.log('⬇️ appimagetool indiriliyor (sistemde kurulu değil)...');
+          const https = require('https');
+          const file = fs.createWriteStream(appimagetoolPath);
+
+          await new Promise((resolve, reject) => {
+            https.get('https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage', (response) => {
+              response.pipe(file);
+              file.on('finish', () => {
+                file.close();
+                fs.chmod(appimagetoolPath, 0o755);
+                resolve();
+              });
+            }).on('error', reject);
+          });
+          appimagetoolDownloaded = true;
+        }
       }
       
       // Yeni AppImage oluştur (.impark uzantısı ile)
       const imparkName = `${appName.replace(/\s+/g, '-')}-${appVersion}.impark`;
-      const imparkPath = path.join(outputPath, imparkName);
+      // MUTLAK yol şart: cwd=outputPath ile göreli hedef verilirse mksquashfs
+      // temp/<job>/linux/temp/<job>/linux/... çözüp "Could not create destination file" verir.
+      const imparkPath = path.resolve(outputPath, imparkName);
       
       await new Promise((resolve, reject) => {
         const pack = require('child_process').spawn(appimagetoolPath, [extractDir, imparkPath], {
@@ -1059,7 +1069,11 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
         let output = '';
         pack.stdout.on('data', data => output += data.toString());
         pack.stderr.on('data', data => output += data.toString());
-        
+
+        // KRİTİK: spawn 'error' (ör. ENOENT) dinlenmezse Node unhandled-error atıp
+        // job'ı sert çökertir (status→undefined). Yakala ve reject et.
+        pack.on('error', err => reject(err));
+
         pack.on('close', code => {
           if (code === 0) {
             console.log('✅ .impark dosyası oluşturuldu');
@@ -1074,7 +1088,8 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       // 5. Eski AppImage'ı sil, extract klasörünü temizle
       await fs.remove(appImagePath);
       await fs.remove(extractDir);
-      await fs.remove(appimagetoolPath);
+      // Sadece BİZ indirdiysek sil — sistemde kurulu /usr/local/bin/appimagetool'a DOKUNMA.
+      if (appimagetoolDownloaded) await fs.remove(appimagetoolPath);
       
       console.log('✅ Özel AppImage oluşturuldu:', imparkName);
       
@@ -1796,18 +1811,23 @@ function closeSplashScreen() {
         description: options.description || appName,
         vendor: options.vendor || "Dijitap",
         maintainer: options.maintainer || `${appName} Team`,
-        // DEB paket ayarları
+        // DEB/AppImage .desktop girdileri.
+        // KRİTİK (2026-09-04): electron-builder 26.x `linux.desktop`'u DÜZ nesne
+        // olarak KABUL ETMİYOR — girdiler `entry` altına taşındı; düz form
+        // "configuration.linux.desktop should be one of these / linux should be
+        // null" ile TÜM linux build'i düşürüyordu (Tudem pardus vakası; T1-build
+        // yolu nadir tetiklendiği için latent kaldı). entry ile sarıldı.
         desktop: {
-          Name: appName,
-          Comment: `${appName} - ${companyInfo}`,
-          Categories: "Education;Teaching;X-Education;", // Eğitim kategorisi için
-          StartupNotify: "true",
-          // Pardus uyumluluğu için ek ayarlar
-          Keywords: `${appName};Electron;${companyInfo};Education;Eğitim;`,
-          MimeType: "application/x-electron;",
-          // Eğitim uygulaması olduğunu belirt
-          GenericName: "Eğitim Uygulaması",
-          Type: "Application"
+          entry: {
+            Name: appName,
+            Comment: `${appName} - ${companyInfo}`,
+            Categories: "Education;Teaching;X-Education;",
+            StartupNotify: "true",
+            Keywords: `${appName};Electron;${companyInfo};Education;Eğitim;`,
+            MimeType: "application/x-electron;",
+            GenericName: "Eğitim Uygulaması",
+            Type: "Application"
+          }
         },
         // AppImage kurulum mesajı
         executableName: appName.toLowerCase().replace(/\s+/g, '-'),
@@ -2028,9 +2048,21 @@ StartupWMClass=${appName}
     const files = await fs.readdir(outputPath);
     const appImageFile = files.find(file => file.endsWith('.AppImage'));
     const debFile = files.find(file => file.endsWith('.deb'));
+    // customizeAppImage başarılıysa .AppImage silinip .impark üretilir → onu da kaydet,
+    // yoksa /api/download ?type=impark 'packages.find' boş döner → 404 (indirilemez).
+    const imparkFile = files.find(file => file.endsWith('.impark'));
 
     const results = [];
-    
+
+    if (imparkFile) {
+      results.push({
+        type: 'impark',
+        filename: imparkFile,
+        path: path.join(outputPath, imparkFile),
+        size: (await fs.stat(path.join(outputPath, imparkFile))).size
+      });
+    }
+
     if (appImageFile) {
       results.push({
         type: 'AppImage',
