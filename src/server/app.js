@@ -63,7 +63,9 @@ const storage = multer.diskStorage({
 const upload = multer({ 
   storage,
   limits: {
-    fileSize: 2048 * 1024 * 1024, // 2GB limit
+    // 6GB (2026-09-04): 2GB YETMİYORDU — büyük kitaplar (Tudem build/ 2.4GB) upload-build'de
+    // LIMIT_FILE_SIZE ile SESSİZCE reddediliyordu; ajan da bu kitaplarda düşerdi.
+    fileSize: 6144 * 1024 * 1024,
     files: 1000 // 1000 dosya limiti
   }
 });
