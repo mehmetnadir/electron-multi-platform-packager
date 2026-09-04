@@ -86,11 +86,10 @@ class QueueService extends EventEmitter {
       const { zipPath, uploadPath, originalName } = jobInfo.zipInfo;
 
       // ZIP dosyasını aç
-      const zip = new AdmZip(zipPath);
       const extractPath = path.join(uploadPath, 'extracted');
-      
+
       await fs.ensureDir(extractPath);
-      
+
       // Progress güncelle
       io.emit('zip-extraction-progress', {
         sessionId,
@@ -98,7 +97,17 @@ class QueueService extends EventEmitter {
         progress: 50
       });
 
-      zip.extractAllTo(extractPath, true);
+      // Streaming unzip (2026-09-04): AdmZip tüm zip'i belleğe (Buffer) alıyor →
+      // >2GB build.zip'te ERR_FS_FILE_TOO_LARGE (Tudem 2.3GB). Shell `unzip` stream
+      // eder, boyut limiti yok (Mac + srv21 ikisinde de mevcut).
+      await new Promise((resolve, reject) => {
+        const { spawn } = require('child_process');
+        const p = spawn('unzip', ['-o', '-q', zipPath, '-d', extractPath], { stdio: ['ignore', 'ignore', 'pipe'] });
+        let err = '';
+        p.stderr.on('data', (d) => { err += d; });
+        p.on('error', reject);
+        p.on('close', (code) => code === 0 ? resolve() : reject(new Error('unzip exit ' + code + ': ' + err.slice(-300))));
+      });
 
       // Progress güncelle
       io.emit('zip-extraction-progress', {
