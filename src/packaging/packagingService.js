@@ -3472,19 +3472,26 @@ if (!window.cordova) {
   }
 
   resolveElectronBuilderBinary() {
+    let base;
     const localBin = path.resolve('node_modules/.bin/electron-builder');
     if (fs.existsSync(localBin)) {
-      return { command: localBin, args: [] };
-    }
-
-    if (process.platform === 'win32') {
+      base = { command: localBin, args: [] };
+    } else if (process.platform === 'win32') {
       const cmd = path.resolve('node_modules/.bin/electron-builder.cmd');
-      if (fs.existsSync(cmd)) {
-        return { command: cmd, args: [] };
-      }
+      base = fs.existsSync(cmd) ? { command: cmd, args: [] } : { command: 'npx', args: ['electron-builder'] };
+    } else {
+      base = { command: 'npx', args: ['electron-builder'] };
     }
 
-    return { command: 'npx', args: ['electron-builder'] };
+    // GENEL KURAL (2026-09-07, Nadir): paylaşılan üretim sunucusunda (Linux/srv21)
+    // build'ler DÜŞÜK öncelikle koşar — canlı siteler CPU/I/O'da HER ZAMAN önce.
+    // nice+ionice çocuk süreçlere (mksquashfs/fpm/dpkg-deb) de miras kalır, o yüzden
+    // tüm ağır I/O boğulmadan yürür. Tek acil durumda EMPP_GENTLE=0 ile kapatılır.
+    // (macOS/win dev makinesinde sarma YOK — ionice Linux'a özgü.)
+    if (process.platform === 'linux' && process.env.EMPP_GENTLE !== '0') {
+      return { command: 'nice', args: ['-n', '19', 'ionice', '-c', '3', base.command, ...base.args] };
+    }
+    return base;
   }
 
   // Install APK to connected Android device
