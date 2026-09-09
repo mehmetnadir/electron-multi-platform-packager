@@ -6,6 +6,11 @@ const crypto = require('crypto');
 const pwaConfigManager = require('../server/pwa-config-manager');
 const { macSigningConfig } = require('../platforms/macos/mac-signing');
 const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-layout');
+const { createWwwCopyFilter } = require('./www-copy-exclude');
+const { ensureSetBookHomeButton } = require('./set-book-home-button');
+const { findSubBookDirs } = require('./sub-book-dirs');
+const { injectFsShimIntoSubBooks } = require('./fs-shim-subbook-inject');
+const { ensureWritableTree } = require('./ensure-writable');
 
 class PackagingService {
   constructor() {
@@ -401,7 +406,42 @@ MimeType=application/x-electron;
       } catch (copyError) {
         throw new Error(`Build dosyaları kopyalanamadı: ${copyError.message}. Session: ${sessionId}`);
       }
-      
+
+      // K9c — NEDEN: ISO-kaynaklı SET yüklemeleri (Tudem) orijinal salt-okunur
+      // (0400) izinleri workingPath'e taşıyabilir; sonraki HİÇBİR enjeksiyon
+      // adımı (setBook, android shim, fs-shim, viewport) buna karşı korumalı
+      // değildi — K9b domino'yu kapattı ama her alt-kitap TEK TEK "izin yok"
+      // diye atlanmaya devam ediyordu (gerçek Bloktest ISO kanıtı: 27/27 shim
+      // DOSYASI, 0/27 script tag). Çalışma kopyası TEK SEFERDE, burada,
+      // sahibine yazılabilir yapılır — orijinal upload (buildPath) DOKUNULMAZ.
+      // BOZARSAN: `ensure-writable.test.js`'teki GERİLEME testi kırılır.
+      try {
+        const fixedCount = await ensureWritableTree(workingPath);
+        if (fixedCount > 0) {
+          console.log(`🔓 ensureWritableTree: ${fixedCount} dosya/dizin yazılabilir yapıldı (kaynak salt-okunurdu)`);
+        }
+      } catch (writableErr) {
+        console.warn('⚠️ ensureWritableTree başarısız (paketleme devam ediyor):', writableErr.message);
+      }
+
+      // SET paketinde her bookN/app.config.js'te setBook.enable=true zorlanır (K5,
+      // 2026-09-09, Nadir talebi) — TEK yerde, platform fan-out'undan (windows/
+      // macos/linux/android/pwa) ÖNCE, hepsi için ortak (kitap 59480 kanıtı:
+      // book3'te setBook.enable=false unutulmuş, "ana sayfa" butonu görünmüyordu).
+      try {
+        const setBookResult = await ensureSetBookHomeButton(workingPath);
+        for (const b of setBookResult.books) {
+          if (b.action === 'patched') console.log(`🏠 setBook.enable=true: ${b.book}/app.config.js`);
+          else if (b.action === 'no-setbook-block' || b.action === 'no-config-file') {
+            console.warn(`⚠️ ${b.book}/app.config.js: setBook bloğu/dosyası bulunamadı (${b.action})`);
+          } else if (b.action === 'error') {
+            console.warn(`⚠️ ${b.book}/app.config.js: setBook.enable kontrolü başarısız (diğer alt-kitaplar ETKİLENMEZ):`, b.error);
+          }
+        }
+      } catch (setBookError) {
+        console.warn('⚠️ setBook.enable kontrolü başarısız (paketleme devam ediyor):', setBookError.message);
+      }
+
       // Electron için gerekli dosyaları oluştur
       await this.prepareElectronFiles(workingPath, appName, appVersion, companyName);
 
@@ -905,6 +945,38 @@ app.on('activate', () => {
                 : '<script src="empp-fs-shim.js"></script>' + html;
               await fs.writeFile(indexPath, html);
               console.log('✅ empp-fs-shim.js index.html\'e enjekte edildi');
+            }
+          }
+
+          // K9 — NEDEN: SET paketlerinde alt-kitap sayfalarının (findSubBookDirs)
+          // Electron renderer'da KENDİ __dirname'i vardır (BASE = sayfanın kendi
+          // dizini, bkz. fs-shim.js install()); shim yalnız KÖK index.html'e
+          // enjekte edildiği için alt-kitabın TÜM fs yazmaları salt-okunur
+          // app.asar'a gidiyordu. BELİRTİ (Pardus/.impark, Docker sanal ekran):
+          // "Kitap Güncelleniyor %10"da takılma, konsol `ENOENT book1/assets/
+          // 56385/update.zip not found in .../app.asar` (createWriteStream),
+          // `ENOENT book3/temp/data/storage.im not found in .../app.asar`.
+          // KANIT: 2026-09-09, kitap 59480 .impark — `.../scratchpad/apk-test/
+          // pardus/` (console-book*.log, kareler).
+          // Çözüm: shim dosyası TEK KOPYA kökte kalır (kopyalanmaz); her
+          // alt-kitap sayfasına derinliğine göre GÖRELİ src ('../', '../../')
+          // ile referans verilir — Electron file:// altında script src sayfanın
+          // kendi konumuna göre çözülür. Ayrıca sayfanın kendi ad-alanını
+          // (`relBookDir`) `window.__emppSubBook`'a yazan bir inline script
+          // enjekte edilir; fs-shim.js install() bunu okuyup WORK dizinini
+          // buna göre önekler (aksi halde K6 sınıfı çapraz-kitap çarpışması:
+          // book1'in yazdığı storage.im'i book3 de görür). Kök sayfada bu
+          // değişken YOK — WORK eski davranışla BİREBİR aynı kalır (regresyon
+          // yok, ayrıca test edilir).
+          // BOZARSAN: `fs-shim-subbook-inject.test.js`'teki GERİLEME testleri kırılır.
+          const subBookInjectResults = await injectFsShimIntoSubBooks(appPath);
+          for (const r of subBookInjectResults) {
+            if (r.action === 'injected') {
+              console.log(`✅ empp-fs-shim.js (göreli: ${r.relShimSrc}) + __emppSubBook='${r.book}': ${r.book}/index.html`);
+            } else if (r.action === 'no-index') {
+              console.warn(`⚠️ ${r.book}: index.html bulunamadı, fs-shim enjekte edilmedi`);
+            } else if (r.action === 'error') {
+              console.warn(`⚠️ ${r.book}: fs-shim enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, r.error);
             }
           }
         } catch (e) {
@@ -2131,8 +2203,10 @@ StartupWMClass=${appName}
 
     try {
       // Web uygulamasını Android için hazırla
+      // node_modules (prepareElectronFiles'ın workingPath köküne kurduğu Electron
+      // devDependency'si) dışlanır — yoksa APK'ya Electron.app sızar (bkz. www-copy-exclude.js).
       const webAppPath = path.join(androidPath, 'webapp');
-      await fs.copy(workingPath, webAppPath);
+      await fs.copy(workingPath, webAppPath, { filter: createWwwCopyFilter(workingPath) });
       
       // Android için gerekli dosyaları oluştur
       await this.generateAndroidFiles(webAppPath, appName, appVersion, logoPath, options);
@@ -3560,15 +3634,60 @@ if (!window.cordova) {
     }
   }
 
+  // K3 — empp-android-shim.js'in fsMod.readdirSync/existsSync'inin okuduğu readdir
+  // manifesti üretir.
+  //
+  // NEDEN: SET paketlerinde bookN/index.html sadece zayıf eski `__webviewCompatShim`
+  // alıyordu (yalnız window.require stub'ı) — process/manifest/sync-XHR fix'i olan
+  // TAM shim (empp-android-shim.js) yalnızca SET KÖKÜNE enjekte ediliyordu.
+  // BELİRTİ: telefonda menü → kitap seçilince sayfa açılmıyordu ("process is not
+  // defined" + pages2x senkron HEAD isteği 404/status-0 karışıyordu).
+  // KANIT: 2026-09-09, kitap 59480 "Flashy Grade 8 Set" — `shim_59480.apk` (ve
+  // sonraki her proof APK) extraction'ında book2/empp-android-shim.js + book2/
+  // empp-manifest.json birebir mevcut.
+  // BOZARSAN: `rootPath` şu KENDİ kökü sayılan bir dizin: www kökü VEYA bir SET
+  // paketinde bookN/ (kitap kendi assets/classlibraries/temp/core'una sahip, kökten
+  // bağımsız). Tek yerden çağrılır — kök ve her bookN AYNI mantığı kullanır, kopya
+  // kod YOK (bkz. initializeCapacitorProject + normalizeBookViewerViewports). Bu
+  // fonksiyonun çağrı sayısını (kök+bookN=2) veya mantığını değiştirirsen
+  // `book-android-shim.test.js`'teki `kaynak-sentinel: buildAndroidManifest tam
+  // olarak 2 yerden cagrilir` ve `(ii) book1/empp-manifest.json...` testleri kırılır.
+  async buildAndroidManifest(rootPath) {
+    const tree = {}; const dirs = [];
+    const listDir = async (rel) => {
+      const abs = path.join(rootPath, rel);
+      const ents = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
+      tree[rel] = ents.map((e) => e.name).filter((n) => n !== 'empp-manifest.json');
+      for (const e of ents) if (e.isDirectory()) dirs.push(rel ? `${rel}/${e.name}` : e.name);
+    };
+    await listDir('');
+    for (const top of ['assets', 'classlibraries', 'temp', 'core']) {
+      if (await fs.pathExists(path.join(rootPath, top))) {
+        await listDir(top);
+        if (top === 'assets') {
+          for (const id of tree.assets || []) {
+            if ((await fs.stat(path.join(rootPath, 'assets', id)).catch(() => null))?.isDirectory()) {
+              await listDir(`assets/${id}`);
+            }
+          }
+        }
+      }
+    }
+    return { tree, dirs };
+  }
+
   // Check connected Android devices
   // Capacitor projesi başlatma (Web arayüzü için)
   async initializeCapacitorProject(webAppPath, appName, appVersion, logoPath, workingPath) {
     console.log('Capacitor projesi hazırlanıyor...');
     
     // Web app'i www klasörüne kopyala
+    // KRİTİK (2026-09-09, kitap 45538 kanıtı): filtresiz kopya node_modules/electron'u
+    // APK'ya gömüyordu (assets/public/node_modules/electron/** — Mac'te 678 MB, Linux'ta
+    // 250 MB). www, Capacitor webDir'i ve doğrudan APK assets'ine gidiyor — dışlama şart.
     const wwwPath = path.join(webAppPath, 'www');
     await fs.ensureDir(wwwPath);
-    await fs.copy(workingPath, wwwPath);
+    await fs.copy(workingPath, wwwPath, { filter: createWwwCopyFilter(workingPath) });
 
     // KRİTİK (2026-08-04): Capacitor `www/index.html`i KÖKTE ister; yoksa
     // `cap sync android` "The web assets directory (./www) must contain an
@@ -3604,21 +3723,8 @@ if (!window.cordova) {
     // mobil mod farklı bir akış; Mac ile aynı masaüstü modu hedeflenir.)
     try {
       await fs.copy(path.join(__dirname, '../platforms/android/empp-android-shim.js'), path.join(wwwPath, 'empp-android-shim.js'));
-      const tree = {}; const dirs = [];
-      const listDir = async (rel) => {
-        const abs = path.join(wwwPath, rel);
-        const ents = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
-        tree[rel] = ents.map((e) => e.name).filter((n) => n !== 'empp-manifest.json');
-        for (const e of ents) if (e.isDirectory()) dirs.push(rel ? `${rel}/${e.name}` : e.name);
-      };
-      await listDir('');
-      for (const top of ['assets', 'classlibraries', 'temp', 'core']) {
-        if (await fs.pathExists(path.join(wwwPath, top))) {
-          await listDir(top);
-          if (top === 'assets') for (const id of tree.assets || []) { if ((await fs.stat(path.join(wwwPath, 'assets', id)).catch(() => null))?.isDirectory()) await listDir(`assets/${id}`); }
-        }
-      }
-      await fs.writeJson(path.join(wwwPath, 'empp-manifest.json'), { tree, dirs }, { spaces: 0 });
+      const manifest = await this.buildAndroidManifest(wwwPath);
+      await fs.writeJson(path.join(wwwPath, 'empp-manifest.json'), manifest, { spaces: 0 });
       const idx = path.join(wwwPath, 'index.html');
       let html = await fs.readFile(idx, 'utf8');
       html = html.replace(/<script id="empp-app-mode">[\s\S]*?<\/script>/, '');
@@ -3814,58 +3920,110 @@ public class MainActivity extends BridgeActivity {
     }
   }
 
-  // Kitap viewer SPA'larını (book*/index.html) WebView'e uyumlu hale getir:
+  // K3 — Kitap viewer SPA'larını (book*/index.html) WebView'e uyumlu hale getir:
   //   1) Viewport normalize (device-width, initial-scale=1.0)
-  //   2) window.require shim enjekte (path/fs/electron stub) — Electron-bağımlı
-  //      butonlar (ana ekrana dön, kapat) WebView'de çökmesin
-  //   3) SPA bundle'da window.isApp=true zorla → kalıcılık localStorage'a döner
+  //   2) TAM empp-android-shim.js (process/fs/manifest) + kitabın KENDİ
+  //      empp-manifest.json'ı
+  //   3) window.require shim (eski, zayıf `__webviewCompatShim`) — android shim'den
+  //      SONRA kalır: require kısmı android shim varken atlanır (`typeof window.require
+  //      === 'function'` guard) ama nav-normalize IIFE'si (home butonu '..' → '/')
+  //      HER ZAMAN çalışır — set kökü dönüşü için şart, kaldırılmaz.
+  //   4) SPA bundle'da window.isApp=true zorla → kalıcılık localStorage'a döner
   //      (tour skip, kalınan sayfa, arka plan ayarları kaydedilir)
   // SADECE book*/ entry sayfa + top-level bundle'a dokunur (deep content'e değil).
+  //
+  // NEDEN: SET paketlerinde kitap kökte değil bookN/ altında olduğu için, kök için
+  // var olan TAM shim SET kökü dışına hiç kopyalanmıyordu — motor Android'de çıplak
+  // kalıyordu. BELİRTİ: telefonda menü → kitap seçilince sayfa açılmıyordu ("process
+  // is not defined", pages2x senkron-XHR sızıntısı status 0 ≠ 404 → sayfa boş).
+  // KANIT: 2026-09-09, `asis_59480.apk` (bulgu) → `shim_59480.apk` (düzeltme kanıtı,
+  // book1/2/3'ün her biri kendi empp-android-shim.js + empp-manifest.json'ıyla).
+  // BOZARSAN: shim enjeksiyon sırasını (android shim ÖNCE, compat shim SONRA) veya
+  // her bookN'e kopyalamayı kaldırırsan `book-android-shim.test.js`'teki
+  // `(i) book1/index.html: android shim compat shim'den ONCE...`, `GERİLEME: shim
+  // tag kaldırılırsa bookN sayfası boş kalır...` ve kaynak-sentinel testleri kırılır.
   async normalizeBookViewerViewports(wwwPath) {
     try {
       const viewportMeta = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">';
+      const androidShimTag = '<script src="empp-android-shim.js"></script>';
       const requireShim = this._buildWebViewRequireShim();
-      const entries = await fs.readdir(wwwPath, { withFileTypes: true });
+      // K8 (2026-09-09, Tudem kaniti): ad deseni (`^book\d*$`) DEGIL, motor imzasi
+      // (index.html + app.config.js) ile bulunur — bkz. sub-book-dirs.js NEDEN bloğu.
+      const subBookDirs = await findSubBookDirs(wwwPath, { maxDepth: 2 });
 
-      for (const e of entries) {
-        if (!e.isDirectory() || !/^book\d*$/i.test(e.name)) continue;
-        const bookDir = path.join(wwwPath, e.name);
+      for (const relBookDir of subBookDirs) {
+        const bookDir = path.join(wwwPath, relBookDir);
 
-        // --- index.html: viewport + require shim ---
-        const idx = path.join(bookDir, 'index.html');
-        if (await fs.pathExists(idx)) {
-          let html = await fs.readFile(idx, 'utf8');
-
-          if (/<meta\s+name=["']viewport["'][^>]*>/i.test(html)) {
-            html = html.replace(/<meta\s+name=["']viewport["'][^>]*>/i, viewportMeta);
-          } else if (/<\/head>/i.test(html)) {
-            html = html.replace(/<\/head>/i, viewportMeta + '</head>');
-          }
-
-          // Shim'i <head>'in HEMEN başına koy (app.config.js ve SPA bundle'larından önce)
-          if (!html.includes('__webviewCompatShim')) {
-            html = html.replace(/<head[^>]*>/i, (m) => m + '\n' + requireShim);
-          }
-
-          await fs.writeFile(idx, html);
-          console.log(`📐 Viewport + require shim: ${e.name}/index.html`);
+        // --- empp-android-shim.js + kitabın kendi empp-manifest.json'ı (K3) ---
+        try {
+          await fs.copy(path.join(__dirname, '../platforms/android/empp-android-shim.js'), path.join(bookDir, 'empp-android-shim.js'));
+          const bookManifest = await this.buildAndroidManifest(bookDir);
+          await fs.writeJson(path.join(bookDir, 'empp-manifest.json'), bookManifest, { spaces: 0 });
+        } catch (shimErr) {
+          console.warn(`⚠️ ${relBookDir}: empp-android-shim/manifest kurulamadı:`, shimErr.message);
         }
 
-        // --- bundle: window.isApp=true zorla (top-level .js dosyalarında) ---
-        let patched = 0;
-        const files = await fs.readdir(bookDir, { withFileTypes: true });
-        for (const f of files) {
-          if (!f.isFile() || !f.name.endsWith('.js')) continue;
-          const jsPath = path.join(bookDir, f.name);
-          let js = await fs.readFile(jsPath, 'utf8');
-          if (js.includes('window.isApp=Boolean(')) {
-            js = js.split('window.isApp=Boolean(').join('window.isApp=true||Boolean(');
-            await fs.writeFile(jsPath, js);
-            patched++;
+        // K9b — NEDEN: tek bir kitabın index.html'i OKUNAMAZ/YAZILAMAZ durumdaysa
+        // (örn. Tudem ISO'larından bsdtar ile chmod'suz çıkarılmış, 0400 salt-okunur
+        // dosyalar — gerçek vaka: tudem-apk-batch 2026-09-09, 27 fasikülden yalnız
+        // 1'i işlenip döngü tamamen durdu) bu try/catch'siz blok EACCES'i for
+        // döngüsünün DIŞINDAKİ tek genel catch'e fırlatıyordu — bu da kalan TÜM
+        // alt-kitapları (bir sonraki relBookDir'den itibaren) hiç işlenmeden
+        // bırakıyordu. BELİRTİ: shim dosyası yalnız kök + ilk alt-kitapta (fs.copy
+        // yeni dosya oluşturur, dizin-yazma yeter); script tag'i HİÇBİR html'de yok
+        // (mevcut dosyaya yazma dosya-izni ister, o da EACCES verir). KANIT: repro
+        // (book2/index.html 0400) → book3 shim dosyası da, tag'i de HİÇ almadı.
+        // BOZARSAN: `book-android-shim.test.js`'teki
+        // `GERİLEME: bir alt-kitabın index.html'i yazılamazsa DİĞER alt-kitaplar da
+        // atlanır (domino etkisi)` testi kırılır.
+        try {
+          // --- index.html: viewport + android shim + require shim ---
+          const idx = path.join(bookDir, 'index.html');
+          if (await fs.pathExists(idx)) {
+            let html = await fs.readFile(idx, 'utf8');
+
+            if (/<meta\s+name=["']viewport["'][^>]*>/i.test(html)) {
+              html = html.replace(/<meta\s+name=["']viewport["'][^>]*>/i, viewportMeta);
+            } else if (/<\/head>/i.test(html)) {
+              html = html.replace(/<\/head>/i, viewportMeta + '</head>');
+            }
+
+            // Kök ile aynı davranış: eski empp-app-mode script kalıntısı temizlenir.
+            html = html.replace(/<script id="empp-app-mode">[\s\S]*?<\/script>/, '');
+
+            // Shim'leri <head>'in HEMEN başına koy (app.config.js ve SPA bundle'larından
+            // önce), SIRAYLA: empp-android-shim.js ÖNCE, __webviewCompatShim SONRA.
+            // Tek regex replace'te BİRLİKTE eklenir ki sıra garanti olsun (iki ayrı
+            // replace çağrısı sondan-başa eklerdi). Her parça kendi başına idempotent.
+            let toInject = '';
+            if (!html.includes('empp-android-shim.js')) toInject += androidShimTag;
+            if (!html.includes('__webviewCompatShim')) toInject += (toInject ? '\n' : '') + requireShim;
+            if (toInject) {
+              html = html.replace(/<head[^>]*>/i, (m) => m + '\n' + toInject);
+            }
+
+            await fs.writeFile(idx, html);
+            console.log(`📐 Viewport + android shim + require shim: ${relBookDir}/index.html`);
           }
-        }
-        if (patched > 0) {
-          console.log(`✅ ${e.name}: window.isApp=true zorlandı (${patched} dosya) — localStorage kalıcılık`);
+
+          // --- bundle: window.isApp=true zorla (top-level .js dosyalarında) ---
+          let patched = 0;
+          const files = await fs.readdir(bookDir, { withFileTypes: true });
+          for (const f of files) {
+            if (!f.isFile() || !f.name.endsWith('.js')) continue;
+            const jsPath = path.join(bookDir, f.name);
+            let js = await fs.readFile(jsPath, 'utf8');
+            if (js.includes('window.isApp=Boolean(')) {
+              js = js.split('window.isApp=Boolean(').join('window.isApp=true||Boolean(');
+              await fs.writeFile(jsPath, js);
+              patched++;
+            }
+          }
+          if (patched > 0) {
+            console.log(`✅ ${relBookDir}: window.isApp=true zorlandı (${patched} dosya) — localStorage kalıcılık`);
+          }
+        } catch (htmlErr) {
+          console.warn(`⚠️ ${relBookDir}: index.html/bundle enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, htmlErr.message);
         }
       }
     } catch (error) {

@@ -55,6 +55,70 @@ test('install: window.require yoksa (web/Capacitor) null; varsa fs sarılır, di
   assert.strictEqual(win.require('path'), path);
 });
 
+// --- K9 (2026-09-09, Pardus/.impark kaniti): window.__emppSubBook WORK'u onekler ---
+test('K9 (a) window.__emppSubBook="book1" -> WORK = WORK_ROOT/book1', () => {
+  if (process.platform === 'win32') return;
+  const win = { require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'book1' };
+  const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = path.join(os.tmpdir(), 'empp-w9');
+  const shim = install(win);
+  process.env.EMPP_WORK_DIR = prevEnv;
+  assert.ok(shim, 'shim kurulmali');
+  assert.strictEqual(shim.__empp.WORK, path.join(os.tmpdir(), 'empp-w9', 'book1'));
+});
+
+test('K9 (b) derinlik-2 window.__emppSubBook="sets/a" -> WORK = WORK_ROOT/sets/a', () => {
+  if (process.platform === 'win32') return;
+  const win = { require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'sets/a' };
+  const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = path.join(os.tmpdir(), 'empp-w9b');
+  const shim = install(win);
+  process.env.EMPP_WORK_DIR = prevEnv;
+  assert.strictEqual(shim.__empp.WORK, path.join(os.tmpdir(), 'empp-w9b', 'sets', 'a'));
+});
+
+test('K9 (c) __emppSubBook YOKSA (kok) WORK = WORK_ROOT, eski davranisla BIREBIR ayni (regresyon)', () => {
+  if (process.platform === 'win32') return;
+  const win = { require: (n) => require(n), location: { pathname: '/tmp/x/index.html' } }; // __emppSubBook YOK
+  const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = path.join(os.tmpdir(), 'empp-w9c');
+  const shim = install(win);
+  process.env.EMPP_WORK_DIR = prevEnv;
+  assert.strictEqual(shim.__empp.WORK, path.join(os.tmpdir(), 'empp-w9c'), 'kok icin onek EKLENMEMELI');
+});
+
+test('K9 (d) book1 ve book3 GERCEKTEN farkli WORK dizinlerine yazar (carpisma yok)', () => {
+  if (process.platform === 'win32') return;
+  const workRoot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'empp-w9d-')), 'work');
+  const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = workRoot;
+
+  const winBook1 = { require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'book1' };
+  const shimBook1 = install(winBook1);
+  const winBook3 = { require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'book3' };
+  const shimBook3 = install(winBook3);
+  process.env.EMPP_WORK_DIR = prevEnv;
+
+  shimBook1.writeFileSync('temp/data/storage.im', 'book1-durumu');
+  shimBook3.writeFileSync('temp/data/storage.im', 'book3-durumu');
+
+  assert.strictEqual(fs.readFileSync(path.join(workRoot, 'book1', 'temp', 'data', 'storage.im'), 'utf8'), 'book1-durumu');
+  assert.strictEqual(fs.readFileSync(path.join(workRoot, 'book3', 'temp', 'data', 'storage.im'), 'utf8'), 'book3-durumu');
+  assert.notStrictEqual(shimBook1.readFileSync('temp/data/storage.im', 'utf8'), shimBook3.readFileSync('temp/data/storage.im', 'utf8'));
+});
+
+// --- Mutasyon kaniti ---
+test('GERİLEME: __emppSubBook onekleme kaldirilirsa book1/book3 AYNI WORK dosyasini paylasir', () => {
+  if (process.platform === 'win32') return;
+  // Bozuk (K9-oncesi) formul: WORK HER ZAMAN WORK_ROOT, subBook onemsenmez.
+  const oldWork = (workRoot) => workRoot;
+  const workRoot = path.join(os.tmpdir(), 'empp-w9-mutasyon');
+  assert.strictEqual(oldWork(workRoot), oldWork(workRoot), 'eski formulde book1/book3 AYNI WORK yolunu paylasiyordu (kanitin gucu)');
+
+  // Gercek (duzeltilmis) davranis bunun onune gecer:
+  const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = workRoot;
+  const shimBook1 = install({ require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'book1' });
+  const shimBook3 = install({ require: (n) => require(n), location: { pathname: '/tmp/x/index.html' }, __emppSubBook: 'book3' });
+  process.env.EMPP_WORK_DIR = prevEnv;
+  assert.notStrictEqual(shimBook1.__empp.WORK, shimBook3.__empp.WORK);
+});
+
 test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR verir, asar açılmaz (sentinel)', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../packaging/packagingService.js'), 'utf8');
   assert.ok(src.includes('empp-fs-shim.js'));

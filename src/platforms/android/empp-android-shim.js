@@ -32,9 +32,51 @@
     }
     return (abs ? '/' : '') + out.join('/');
   }
+  // K4 — NEDEN: kitap motoru "ana sayfa" navigasyonunda
+  // path.join(path.dirname(window.location.href), '../') gibi TAM URL'lerle
+  // calisiyor. Posix-saf `normalize` ardisik '/'leri (segment ayiracidir sanip)
+  // yutuyor -> 'https://localhost/book1/../' -> 'https:/localhost' (origin'in
+  // '//'si bir tek '/' ye dusuyor) -> '/index.html' eklenince WHATWG bunu AYNI
+  // semada goreli cozup 'https://localhost/localhost/index.html' uretiyor.
+  // BELİRTİ: telefonda "ana sayfa" dugmesine basinca ERR_HTTP_RESPONSE_CODE_FAILURE
+  // (WebView bos ekran). KANIT: 2026-09-09, kitap 59480 - `home_59480.apk` (ve
+  // sonraki her proof APK) extraction'inda bu joinOriginAware kodu birebir mevcut.
+  // `_buildWebViewRequireShim` (eski compat shim, packagingService.js) origin'i
+  // (`^scheme://host`) ayirip kalan yolu posix normalize eden, origin'e donen yolda
+  // SONDA SLASH BIRAKMAYAN bir P.join tasiyordu; tam shim bunu kaybetmisti. Ayni
+  // algoritma burada REPLIKE edilir. Origin'siz girdiler (VFS anahtarlari, relUrl,
+  // manifest eslemesi) icin davranis BIREBIR ayni kalir - asagidaki origin dali
+  // yoksa eski koda dokunulmamis gibi dusup dogrudan `normalize` cagrilir.
+  // BOZARSAN: bu fonksiyonu (veya origin-ayristirma dalini) kaldirirsan
+  // `empp-android-shim-path.test.js`'teki `GERİLEME: origin ayrıştırma kaldırılırsa
+  // "ana sayfa" ERR_HTTP_RESPONSE_CODE_FAILURE verir` ve (a)/(a-root)/(b)/(c)
+  // testleri kirilir.
+  var ORIGIN_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\/]*)/;
+  function joinOriginAware(joined) {
+    var m = ORIGIN_RE.exec(joined);
+    if (!m) return normalize(joined) || '.';
+    var origin = m[1];
+    var rest = joined.slice(origin.length);
+    var abs = rest.charAt(0) === '/';
+    var segs = rest.split('/'), out = [];
+    for (var i = 0; i < segs.length; i++) {
+      var s = segs[i];
+      if (s === '' || s === '.') continue;
+      if (s === '..') {
+        if (out.length && out[out.length - 1] !== '..') out.pop();
+        else if (!abs) out.push('..');
+        continue;
+      }
+      out.push(s);
+    }
+    var body = out.join('/');
+    // Origin'e donen yolda body bossa SONDA SLASH BIRAKMA (yoksa '/index.html'
+    // eklenince '//index.html' olusur, Capacitor ham '..' gibi bunu da reddeder).
+    return origin + (body ? '/' + body : '');
+  }
   var pathMod = {
     sep: '/',
-    join: function () { var a = []; for (var i = 0; i < arguments.length; i++) { var s = arguments[i]; if (s === undefined || s === null) s = ''; s = String(s); if (s) a.push(s); } return normalize(a.join('/')) || '.'; },
+    join: function () { var a = []; for (var i = 0; i < arguments.length; i++) { var s = arguments[i]; if (s === undefined || s === null) s = ''; s = String(s); if (s) a.push(s); } return joinOriginAware(a.join('/')); },
     resolve: function () { return pathMod.join.apply(null, arguments); },
     dirname: function (p) { p = String(p); var i = p.lastIndexOf('/'); return i <= 0 ? (i === 0 ? '/' : '.') : p.slice(0, i); },
     basename: function (p, ext) { p = String(p); var b = p.slice(p.lastIndexOf('/') + 1); return ext && b.endsWith(ext) ? b.slice(0, -ext.length) : b; },
@@ -47,7 +89,56 @@
   pathMod.posix = pathMod;
 
   // ---- VFS ----
-  function key(p) { return VFS_PREFIX + normalize('/' + String(p)); }
+  // K6 — NEDEN: SET paketlerinde her bookN AYNI origin'i (https://localhost)
+  // paylasir. Eskiden `key(p)` goreli yollari HER ZAMAN site kokune gore
+  // anahtarliyordu ('/temp/...') - hangi kitaptan cagrildigina BAKMAKSIZIN.
+  // Electron'da her kitabin KENDI temp/ dizini var; bu ad-alani kaybediliyordu.
+  // BELİRTİ: book1 aktivasyon/anahtar durumunu localStorage'a yazdi
+  // ('empp_vfs:/temp/data/storage.im'), book2 AYNI anahtari okudu (kendi 56385
+  // degil book1'in kimligini gordu) -> "Kitap Açılıyor.." ekraninda kaliyordu
+  // (logcat: book2/assets/56385/data/BookContent.xml 404).
+  // Duzeltme: goreli yollar (basinda '/' YOK) sayfanin kendi dizinine gore
+  // ad-alanlanir (`dirname(location.pathname)`). Kokte tek kitapta base='/'
+  // oldugu icin sonuc BIREBIR eski anahtarla ayni (regresyon yok, asagida test
+  // edilir).
+  // KANIT: 2026-09-09, kitap 59480 - `vfs_59480.apk` extraction'inda book2/
+  // empp-android-shim.js icinde bu pageBaseDir/key() kodu birebir mevcut.
+  // BOZARSAN: `empp-android-shim-vfs-key.test.js`'teki `GERİLEME: pageBaseDir
+  // sabitlenirse book1/book2 çarpışır...` ve (a)/(b)/(d) testleri kirilir.
+  function pageBaseDir() {
+    try {
+      var pn = (win && win.location && typeof win.location.pathname === 'string') ? win.location.pathname : '/';
+      return pathMod.dirname(pn) || '/';
+    } catch (e) { return '/'; }
+  }
+  // K6b — NEDEN: motor kalicilik dosyasini (`temp/data/storage.im`,
+  // `classlibraries/ImWin32.dll`) `__dirname + '/...'` string-concat ile yaziyor;
+  // shim `window.__dirname=''` verdigi icin bu MUTLAK ('/temp/...') cikiyor -> K6'nin
+  // "mutlak yol DEGISMEZ" kuraliyla ad-alansiz kaliyor.
+  // BELİRTİ: temiz kurulumda (localStorage.clear SONRASI) book1 -> menü -> book2
+  // döngüsünde kitaplar arasi carpisma (book2 book1'in localStorage kaydini
+  // goruyor) hala mumkundü — ilk K6 kanitinda gizli kaliyordu.
+  // Duzeltme: mutlak yol da (VFS anahtari uretilirken) sayfanin kendi dizinine
+  // oneklenir - TEK istisna: yol zaten o dizinin icindeyse (`base + '/'` ile
+  // basliyorsa) tekrar oneklenmez. Kokte (base==='/') hicbir zaman oneklenmez ->
+  // eski anahtarla BIREBIR ayni (regresyon yok). `relUrl` BILEREK DOKUNULMADI
+  // (asset XHR yollarini '/book3/book3/...' yapardi - denendi, geri alindi).
+  // KANIT: 2026-09-09, kitap 59480 - `vfs2_59480.apk` extraction'inda bu
+  // onekleme kurali (`base !== '/' && norm.indexOf(base + '/') !== 0`) birebir
+  // mevcut; telefonda 3 kitap (1/240, 59475 1/1, 59474 1/1) hepsi kendi kimligiyle
+  // acildi.
+  // BOZARSAN: `empp-android-shim-vfs-key.test.js`'teki `GERİLEME: mutlak-yol
+  // öneklemesi kaldırılırsa storage.im/ImWin32.dll kitaplar arası çarpışır` ve
+  // `K6b (a)/(d)/(e)` testleri + kaynak-sentinel kirilir.
+  function key(p) {
+    p = String(p);
+    var base = pageBaseDir();
+    var norm = normalize(p.charAt(0) === '/' ? p : base + '/' + p);
+    if (base !== '/' && norm.indexOf(base + '/') !== 0) norm = base + norm;
+    return VFS_PREFIX + norm;
+  }
+  // relUrl (XHR yolu) BILEREK DOKUNULMADI: tarayici zaten goreli URL'i sayfanin
+  // kendi konumuna gore cozer (ayni ad-alani sorunu XHR icin zaten yok).
   function relUrl(p) { return normalize('/' + String(p)).replace(/^\/+/, ''); }
   function toText(data) {
     if (data == null) return '';
@@ -234,10 +325,18 @@
     win.fetch = wrapped;
   }
 
-  // CapacitorHttp, XMLHttpRequest.prototype.open/send'i yamalar; SENKRON isteklerde status 0
-  // döner. Yayıncı bundle'ı `pages2x/` var mı diye senkron HEAD atıp `404 != status` diye bakıyor
-  // → 0 ≠ 404 → "var" sanıp retina klasörüne gidiyor → gerçek 404 → sayfa boş (2026-08-28 telefon).
-  // Çözüm: sync (async=false) isteklerde orijinal open/send (CapacitorWebXMLHttpRequest) kullanılır.
+  // (2026-08-28, K3'ten ONCE) — NEDEN: CapacitorHttp, XMLHttpRequest.prototype.open/
+  // send'i yamalar; SENKRON isteklerde status 0 döner (async isteklerde sorun yok).
+  // BELİRTİ: telefonda yayıncı bundle'ı `pages2x/` var mı diye senkron HEAD atıp
+  // `404 != status` diye bakıyor → 0 ≠ 404 → "var" sanıp retina klasörüne gidiyor →
+  // gerçek 404 → sayfa boş.
+  // Çözüm: sync (async=false) isteklerde orijinal open/send (CapacitorWebXMLHttpRequest)
+  // kullanılır; async istekler Capacitor'ın yamalı yoluna bırakılır.
+  // KANIT: her proof APK'da (fixed_45538.apk'tan vfs2_59480.apk'ya) bu kurucu-sarma
+  // kodu birebir mevcut — hiçbir tur bunu geri almadı.
+  // BOZARSAN: `empp-android-shim.test.js`'teki `CapacitorHttp yamalı XHR: orijinal
+  // open/send (CapacitorWebXMLHttpRequest) kullanılır` ve `uygulamanın kendi senkron
+  // XHR HEAD'i (pages2x kontrolü) gerçek statüyü görür` testleri kırılır.
   function installSyncXhr() {
     var Cap = win.XMLHttpRequest, o = win.CapacitorWebXMLHttpRequest;
     if (!Cap || Cap.__emppWrapped || !o || typeof o.open !== 'function' || typeof o.send !== 'function') return;

@@ -149,11 +149,22 @@
       var proc = (typeof process !== 'undefined') ? process : null;
       if (proc && proc.platform === 'win32') return null; // Windows'ta CWD kurulum dizini — dokunma
       var BASE = (typeof __dirname === 'string' && __dirname) ? __dirname : pathMod.dirname((win.location && win.location.pathname) || '/');
-      var WORK = (proc && proc.env && proc.env.EMPP_WORK_DIR) || null;
-      if (!WORK) {
+      var WORK_ROOT = (proc && proc.env && proc.env.EMPP_WORK_DIR) || null;
+      if (!WORK_ROOT) {
         var home = (proc && proc.env && (proc.env.HOME || proc.env.USERPROFILE)) || '';
-        WORK = pathMod.join(home, '.empp-work');
+        WORK_ROOT = pathMod.join(home, '.empp-work');
       }
+      // K9 (2026-09-09, Pardus/.impark kaniti): SET alt-kitaplarinda BASE (=__dirname)
+      // sayfanin KENDI dizinidir (örn. .../app.asar/book1) — ama eskiden WORK HER
+      // ZAMAN tek bir kok dizindi; goreli yazmalar (rel() BASE'e gore hesaplaniyor,
+      // "book1" segmentini KAYBEDIYOR) tum alt-kitaplar icin AYNI WORK/... yoluna
+      // dusuyordu -> book1'in storage.im'ini book3 de goruyordu (K6 sinifi
+      // carpisma). packagingService.js her alt-kitap sayfasina `window.__emppSubBook`
+      // (kendi ad-alani, örn. 'book1') enjekte eder; burada WORK bununla onceklenir.
+      // Kok sayfada bu degisken YOK -> WORK = WORK_ROOT, eski davranisla BIREBIR
+      // ayni (regresyon yok, `fs-shim-subbook.test.js`'te test edilir).
+      var subBook = (typeof win.__emppSubBook === 'string' && win.__emppSubBook) ? win.__emppSubBook : '';
+      var WORK = subBook ? pathMod.join(WORK_ROOT, subBook) : WORK_ROOT;
       var shim = createShim(realFs, pathMod, WORK, BASE);
       win.require = function (name) { return name === 'fs' ? shim : realRequire.apply(this, arguments); };
       installFetch(win, realFs, pathMod, WORK, BASE);

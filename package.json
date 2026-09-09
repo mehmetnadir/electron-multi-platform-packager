@@ -13,7 +13,9 @@
     "build": "electron-builder",
     "dist": "electron-builder --publish=never",
     "agent": "node src/agent/runner.js",
-    "agent:test": "node --test src/agent/runner-helpers.test.js"
+    "agent:test": "node --test src/agent/runner-helpers.test.js",
+    "test": "node --test 'src/**/*.test.js'",
+    "test:set": "node --test src/packaging/www-copy-exclude.test.js src/packaging/sub-book-dirs.test.js src/packaging/book-android-shim.test.js src/packaging/set-book-home-button.test.js src/packaging/set-app-config-kasitli-yok.test.js src/packaging/fs-shim-subbook-inject.test.js src/packaging/ensure-writable.test.js src/platforms/android/empp-android-shim.test.js src/platforms/android/empp-android-shim-path.test.js src/platforms/android/empp-android-shim-vfs-key.test.js src/platforms/common/fs-shim.test.js"
   },
   "keywords": [
     "electron",
@@ -60,9 +62,9 @@
     "socket.io-client": "^4.8.1"
   },
   "dependencies": {
-    "@capacitor/android": "^7.6.6",
-    "@capacitor/cli": "^7.6.6",
-    "@capacitor/core": "^7.6.6",
+    "@capacitor/android": "7.6.7",
+    "@capacitor/cli": "7.6.7",
+    "@capacitor/core": "7.6.7",
     "adm-zip": "^0.5.16",
     "archiver": "^6.0.1",
     "axios": "^1.14.0",
