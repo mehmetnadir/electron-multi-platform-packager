@@ -42,7 +42,18 @@
 - **Sunucu (S21) servisleri:** gerçek Android paketleyici = systemd `empp-packager` (`/opt/empp-packager`, :3091) + systemd `empp-agent`. pm2 `packager-service` (`/opt/electron-packager`) AYRI kopya — güncellemede `/opt/empp-packager`'ı reset'le, `systemctl restart empp-packager empp-agent`. Log: `/var/log/empp-packager.log`, `/var/log/empp-agent.log`.
 - **NAZİK BUILD — GENEL KURAL (2026-09-07, Nadir):** srv21 PAYLAŞILAN üretim sunucusu (yayıncı panelleri, API'ler, video/php işleri orada). Ağır build (electron-builder → mksquashfs/fpm, 2GB+ app'te ~35dk ve 12GB temp I/O) canlı siteleri yavaşlatır. Kural koda gömüldü: `resolveElectronBuilderBinary()` Linux'ta komutu `nice -n 19 ionice -c 3` ile sarar (çocuk süreçlere miras kalır) → canlı trafik CPU/I/O'da HER ZAMAN önce. Acil kapatma: `EMPP_GENTLE=0`. Sentinel: `src/packaging/gentle-build.test.js`. Ek disiplin (toplu işlerde): **tek build**, paralel YASAK; yoğun saatte kaçın. İhlal kanıtı: 2 paralel build load'u 7→9.6'ya çıkardı, siteler yavaşladı (2026-09-07).
 - **Browser modu ≠ Electron:** "Klasörde Göster" tarayıcıda /api/open-folder ile çalışır; electronAPI sadece Electron'da.
-- **Testler:** `node --test 'src/**/*.test.js'` (70; `node --test src/` Node 24'te çalışmaz). Sentinel testler canlı yolları kilitler.
+- **SET paketi (alt-kitap dizinli) know-how (K1-K9d, 2026-09-09):** SET'e dokunan
+  HERHANGİ bir değişiklikten önce `.claude/docs/set-paketi-know-how.md`'yi oku —
+  on kusurun (eksik app.config.js, node_modules sızıntısı, alt-kitaba shim/
+  manifest eksikliği, origin-farkında olmayan path.join, setBook.enable, VFS
+  anahtar çarpışması ×2, ad-desenden bağımsız SET tespiti/Tudem, Electron fs-shim
+  alt-kitap eksikliği, bir alt-kitabın EACCES'inin diğerlerini domino ile
+  durdurması) tablosu, "SET nasıl tanınır" (motor imzası: `index.html`+
+  `app.config.js`, AD DESENİ DEĞİL), yeni platform/adım checklist'i ve telefon
+  test tarifi orada. Testte `GERİLEME:` önekli olanlar regresyon kapılarıdır —
+  kırılırsa DUR, körü körüne geri alma.
+- **İndirme dosya adında Türkçe karakter (K11, 2026-09-09):** `/api/download` ve logo serve route'u dosya adını ham UTF-8 ile `Content-Disposition` header'ına koyarsa Node `ERR_INVALID_CHAR` fırlatıp 500 verir (ı/İ/ğ/Ğ/ş/Ş Latin-1 dışında). `src/server/content-disposition.js` (`buildContentDisposition`) RFC 5987 ile ASCII fallback + `filename*=UTF-8''` üretir — YENİ bir dosya-adı/header noktası eklenirse bunu kullan, ham `filename="${...}"` YAZMA.
+- **Testler:** `node --test 'src/**/*.test.js'` (210; `node --test src/` Node 24'te çalışmaz). Sentinel testler canlı yolları kilitler. SET-özel hızlı kapı: `npm run test:set` (115).
 
 ## İlgili Dosyalar
 | Dosya | Amaç |

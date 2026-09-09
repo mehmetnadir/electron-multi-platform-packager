@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { buildContentDisposition } = require('../server/content-disposition');
 
 class LogoService {
   constructor(configManager = null) {
@@ -320,7 +321,9 @@ class LogoService {
       const contentType = contentTypes[ext] || 'application/octet-stream';
 
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${logo.fileName}"`);
+      // K11 — logo.fileName kullanıcı yüklemesinden gelir, Türkçe karakter
+      // taşıyabilir (bkz. src/server/content-disposition.js NEDEN bloğu).
+      res.setHeader('Content-Disposition', buildContentDisposition(logo.fileName, 'inline'));
       
       const fileStream = fs.createReadStream(logo.filePath);
       fileStream.pipe(res);

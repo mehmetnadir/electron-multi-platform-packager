@@ -13,6 +13,7 @@ const LogoService = require('../utils/logoService');
 const uploadService = require('../services/uploadService');
 const queueService = require('../services/queueService');
 const pwaConfigManager = require('./pwa-config-manager');
+const { buildContentDisposition } = require('./content-disposition');
 
 // logoService daha sonra ConfigManager ile başlatılacak
 let logoService = null;
@@ -865,7 +866,7 @@ app.get('/api/download/:jobId/:platform', async (req, res) => {
           const archiver = require('archiver');
           const zipFileName = `flatpak-files-${jobId}.zip`;
           
-          res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+          res.setHeader('Content-Disposition', buildContentDisposition(zipFileName));
           res.setHeader('Content-Type', 'application/zip');
           
           const archive = archiver('zip', { zlib: { level: 9 } });
@@ -922,8 +923,13 @@ app.get('/api/download/:jobId/:platform', async (req, res) => {
     }
     
     // Download header'ları ekle
+    // K11 — NEDEN: fileName appName'den türetildiği için Türkçe (ı/İ/ğ/Ğ/ş/Ş)
+    // karakter taşıyabilir; bunlar Latin-1 dışında olduğu için Node'un http
+    // header doğrulaması ham UTF-8 değerde TypeError [ERR_INVALID_CHAR] fırlatır
+    // (bkz. content-disposition.js NEDEN bloğu). BOZARSAN:
+    // `content-disposition.test.js`'teki GERİLEME testi kırılır.
     const fileName = path.basename(filePath);
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Disposition', buildContentDisposition(fileName));
     res.setHeader('Content-Type', 'application/octet-stream');
     
     // Dosyayı stream et
