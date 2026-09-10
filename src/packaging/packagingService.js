@@ -11,6 +11,8 @@ const { ensureSetBookHomeButton } = require('./set-book-home-button');
 const { findSubBookDirs } = require('./sub-book-dirs');
 const { injectFsShimIntoSubBooks } = require('./fs-shim-subbook-inject');
 const { ensureWritableTree } = require('./ensure-writable');
+const { checkAndroidGradleHeapPreflight } = require('./android-preflight');
+const { applyPublisherDomainPatch } = require('./yayinci-domain-yamasi');
 
 class PackagingService {
   constructor() {
@@ -430,12 +432,24 @@ MimeType=application/x-electron;
       // book3'te setBook.enable=false unutulmuş, "ana sayfa" butonu görünmüyordu).
       try {
         const setBookResult = await ensureSetBookHomeButton(workingPath);
+        const setBookFailed = [];
         for (const b of setBookResult.books) {
           if (b.action === 'patched') console.log(`🏠 setBook.enable=true: ${b.book}/app.config.js`);
           else if (b.action === 'no-setbook-block' || b.action === 'no-config-file') {
             console.warn(`⚠️ ${b.book}/app.config.js: setBook bloğu/dosyası bulunamadı (${b.action})`);
           } else if (b.action === 'error') {
             console.warn(`⚠️ ${b.book}/app.config.js: setBook.enable kontrolü başarısız (diğer alt-kitaplar ETKİLENMEZ):`, b.error);
+            setBookFailed.push(b.book);
+          }
+        }
+        // K12 (2026-09-09) — toplam sayım: bkz. normalizeBookViewerViewports'taki
+        // aynı-desen yorum bloğu. Tek satır uyarılar sessizce kaybolmasın.
+        if (setBookResult.books.length > 0) {
+          const ok = setBookResult.books.length - setBookFailed.length;
+          if (setBookFailed.length > 0) {
+            console.warn(`⚠️ setBook.enable enjeksiyonu: ${ok}/${setBookResult.books.length} — ${setBookFailed.length} hata: ${setBookFailed.join(', ')}`);
+          } else {
+            console.log(`✅ setBook.enable enjeksiyonu: ${ok}/${setBookResult.books.length} tamam`);
           }
         }
       } catch (setBookError) {
@@ -456,6 +470,27 @@ MimeType=application/x-electron;
         console.log(`✅ Logo kullanılacak: ${logoPath}`);
       } else {
         console.log('⚠️ Logo yok, varsayılan icon kullanılacak');
+      }
+
+      // K16 (2026-09-10, Nadir talebi) — sorucoz.tv -> yayinci domaini URL yeniden
+      // yazimi, TEK NOKTA (fan-out YOK), platform fan-out ONCESINDE, Windows HARIC.
+      // NEDEN Windows'a UYGULANMAZ: Windows kendi electron-builder hattinda ayri
+      // ele alinir (packageWindows), bu adimi cagirmaz — Nadir karari, kapsam
+      // yalnizca Windows-disi platformlar (android/macos/linux). Yayinci host'u
+      // config'ten turetilemezse NO-OP (yayinci-domain-yamasi.js icinde loglanir).
+      // BOZARSAN: `yayinci-domain-yamasi.test.js`'teki cagri-noktasi testleri kirilir.
+      try {
+        const nonWindowsPlatforms = platforms.filter((p) => p !== 'windows');
+        if (nonWindowsPlatforms.length > 0) {
+          const domainResult = await applyPublisherDomainPatch(workingPath, { log: console.log });
+          if (domainResult.publisherHost) {
+            console.log(`🌐 yayinci-domain-yamasi: ${domainResult.filesChangedCount} dosyada ${domainResult.totalReplacements} degisiklik -> ${domainResult.publisherHost}`);
+          } else {
+            console.warn('⚠️ yayinci-domain-yamasi: yayıncı host türetilemedi (NO-OP)');
+          }
+        }
+      } catch (domainErr) {
+        console.warn('⚠️ yayinci-domain-yamasi başarısız (paketleme devam ediyor):', domainErr.message);
       }
 
       // Her platform için paketleme
@@ -970,6 +1005,7 @@ app.on('activate', () => {
           // yok, ayrıca test edilir).
           // BOZARSAN: `fs-shim-subbook-inject.test.js`'teki GERİLEME testleri kırılır.
           const subBookInjectResults = await injectFsShimIntoSubBooks(appPath);
+          const fsShimFailed = [];
           for (const r of subBookInjectResults) {
             if (r.action === 'injected') {
               console.log(`✅ empp-fs-shim.js (göreli: ${r.relShimSrc}) + __emppSubBook='${r.book}': ${r.book}/index.html`);
@@ -977,6 +1013,17 @@ app.on('activate', () => {
               console.warn(`⚠️ ${r.book}: index.html bulunamadı, fs-shim enjekte edilmedi`);
             } else if (r.action === 'error') {
               console.warn(`⚠️ ${r.book}: fs-shim enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, r.error);
+              fsShimFailed.push(r.book);
+            }
+          }
+          // K12 (2026-09-09) — toplam sayım: bkz. normalizeBookViewerViewports'taki
+          // aynı-desen yorum bloğu.
+          if (subBookInjectResults.length > 0) {
+            const ok = subBookInjectResults.length - fsShimFailed.length;
+            if (fsShimFailed.length > 0) {
+              console.warn(`⚠️ fs-shim enjeksiyonu: ${ok}/${subBookInjectResults.length} — ${fsShimFailed.length} hata: ${fsShimFailed.join(', ')}`);
+            } else {
+              console.log(`✅ fs-shim enjeksiyonu: ${ok}/${subBookInjectResults.length} tamam`);
             }
           }
         } catch (e) {
@@ -3950,6 +3997,17 @@ public class MainActivity extends BridgeActivity {
       // K8 (2026-09-09, Tudem kaniti): ad deseni (`^book\d*$`) DEGIL, motor imzasi
       // (index.html + app.config.js) ile bulunur — bkz. sub-book-dirs.js NEDEN bloğu.
       const subBookDirs = await findSubBookDirs(wwwPath, { maxDepth: 2 });
+      // K12 (2026-09-09, tudem-apk-batch/coordinator bulgusu) — NEDEN: K9b/K9d
+      // per-alt-kitap try/catch'i domino'yu (bir kitabın hatası diğerlerini
+      // durdurması) kapattı, ama her hata yalnız TEK SATIR `console.warn` ile
+      // (relBookDir başına) yazılıyordu — 27 alt-kitaplı bir SET'te 5 kitap
+      // sessizce eksik enjeksiyon alsa, log akışında bu 5 satır TEK BİR uyarı
+      // gibi görünüyor, kimse "27'den 5'i eksik" toplamını GÖRMÜYORDU. BELİRTİ:
+      // 0400/ENOENT gibi kısmi izin hataları operatöre "her şey normal" hissi
+      // veriyordu (log'da hata VAR ama toplam/oran YOK). BOZARSAN:
+      // `book-android-shim.test.js`'teki `GERİLEME: kısmi enjeksiyon hatası
+      // toplam X/Y olarak SAYILIR` testi kırılır.
+      const injectFailedBooks = [];
 
       for (const relBookDir of subBookDirs) {
         const bookDir = path.join(wwwPath, relBookDir);
@@ -3961,6 +4019,7 @@ public class MainActivity extends BridgeActivity {
           await fs.writeJson(path.join(bookDir, 'empp-manifest.json'), bookManifest, { spaces: 0 });
         } catch (shimErr) {
           console.warn(`⚠️ ${relBookDir}: empp-android-shim/manifest kurulamadı:`, shimErr.message);
+          injectFailedBooks.push(relBookDir);
         }
 
         // K9b — NEDEN: tek bir kitabın index.html'i OKUNAMAZ/YAZILAMAZ durumdaysa
@@ -4024,6 +4083,19 @@ public class MainActivity extends BridgeActivity {
           }
         } catch (htmlErr) {
           console.warn(`⚠️ ${relBookDir}: index.html/bundle enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, htmlErr.message);
+          if (!injectFailedBooks.includes(relBookDir)) injectFailedBooks.push(relBookDir);
+        }
+      }
+
+      // K12 — toplam sayım: kaç alt-kitaptan kaçının GERÇEKTEN tam enjeksiyon
+      // aldığı tek satırda görünür olsun (yukarıdaki per-kitap uyarılar sessizce
+      // kaybolmasın).
+      if (subBookDirs.length > 0) {
+        const ok = subBookDirs.length - injectFailedBooks.length;
+        if (injectFailedBooks.length > 0) {
+          console.warn(`⚠️ shim enjeksiyonu: ${ok}/${subBookDirs.length} — ${injectFailedBooks.length} hata: ${injectFailedBooks.join(', ')}`);
+        } else {
+          console.log(`✅ shim enjeksiyonu: ${ok}/${subBookDirs.length} tamam`);
         }
       }
     } catch (error) {
@@ -4252,8 +4324,13 @@ public class MainActivity extends BridgeActivity {
     return this._javaHomeCache;
   }
 
+  // K14 (2026-09-09, Tudem 13 ISO batch) — build başlamadan ÖNCE Gradle heap'i
+  // kontrol eder (bkz. android-preflight.js NEDEN bloğu). Dosyaya DOKUNMAZ,
+  // sadece `console.warn` ile açık uyarı verir — OOM olursa operatör bunu build
+  // başlamadan ÖNCE loglarda görür.
   async runGradleBuild(webAppPath, task) {
     const { spawn } = require('child_process');
+    checkAndroidGradleHeapPreflight();
 
     return new Promise(async (resolve, reject) => {
       const androidPath = path.join(webAppPath, 'android');
