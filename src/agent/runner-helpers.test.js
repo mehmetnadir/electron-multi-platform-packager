@@ -9,6 +9,7 @@ const {
   isTerminalStatus,
   packageStatusOf,
   artifactExtension,
+  artifactContentType,
   joinUrl,
 } = require('./runner-helpers');
 
@@ -24,10 +25,15 @@ test('mapPlatform: macos/mac -> macos', () => {
   assert.equal(mapPlatform('MacOS'), 'macos');
 });
 
+test('mapPlatform: pardus -> pardus (Docker + pardus-packager-build.sh dalı, 2026-09-10)', () => {
+  assert.equal(mapPlatform('pardus'), 'pardus');
+  assert.equal(mapPlatform('PARDUS'), 'pardus');
+  assert.equal(mapPlatform(' pardus '), 'pardus');
+});
+
 test('mapPlatform: unsupported -> null', () => {
   assert.equal(mapPlatform('windows'), null);
   assert.equal(mapPlatform('linux'), null);
-  assert.equal(mapPlatform('pardus'), null);
   assert.equal(mapPlatform(''), null);
   assert.equal(mapPlatform(undefined), null);
 });
@@ -106,7 +112,15 @@ test('packageStatusOf: extracts job.status', () => {
 test('artifactExtension', () => {
   assert.equal(artifactExtension('android'), '.apk');
   assert.equal(artifactExtension('macos'), '.dmg');
+  assert.equal(artifactExtension('pardus'), '.impark');
   assert.equal(artifactExtension('windows'), '');
+});
+
+test('artifactContentType', () => {
+  assert.equal(artifactContentType('android'), 'application/vnd.android.package-archive');
+  assert.equal(artifactContentType('macos'), 'application/x-apple-diskimage');
+  assert.equal(artifactContentType('pardus'), 'application/octet-stream');
+  assert.equal(artifactContentType('windows'), 'application/octet-stream'); // bilinmeyen -> güvenli genel tip
 });
 
 test('joinUrl: single slash', () => {

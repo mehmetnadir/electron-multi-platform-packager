@@ -39,7 +39,8 @@ const {
   packageStatusOf,
   artifactExtension,
   joinUrl,
-  pickLogoId, asciiAppName } = require('./runner-helpers');
+  pickLogoId, asciiAppName,
+  packagerResultOf } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -48,7 +49,7 @@ const CONFIG = {
   apiBase: (process.env.BOOKUPDATE_API || 'https://akillitahta.ndr.ist/api/v1').replace(/\/+$/, ''),
   enrollSecret: process.env.AGENT_ENROLL_SECRET || '',
   packagerApi: (process.env.PACKAGER_API || 'http://127.0.0.1:3001').replace(/\/+$/, ''),
-  caps: (process.env.AGENT_CAPS || 'android,macos')
+  caps: (process.env.AGENT_CAPS || 'android,macos,pardus')
     .split(',')
     .map((c) => c.trim().toLowerCase())
     .filter(Boolean),
@@ -63,6 +64,16 @@ const CONFIG = {
   notaryProfile: process.env.APPLE_NOTARY_PROFILE || '', // notarytool keychain profile name
   appleId: process.env.APPLE_ID || '',
   applePassword: process.env.APPLE_PASSWORD || '',
+  // Pardus (.impark) — srv21'in packageLinux'ını Docker'da BİREBİR koşturan betik
+  // (bkz. pardus-packager-build.sh header). Test'ler bu CONFIG alanlarını (packagerApi
+  // gibi) doğrudan üzerine yazıp gerçek spawn ile fake bir betik/binfmt çalıştırır.
+  pardusBuildScript: process.env.PARDUS_BUILD_SCRIPT
+    || path.join(__dirname, '..', '..', 'tools', 'pardus', 'pardus-packager-build.sh'),
+  pardusTimeoutMs: Number(process.env.AGENT_PARDUS_TIMEOUT_MS || 40 * 60 * 1000),
+  dockerReadyTimeoutMs: Number(process.env.AGENT_DOCKER_READY_TIMEOUT_MS || 5 * 60 * 1000),
+  dockerReadyPollMs: Number(process.env.AGENT_DOCKER_READY_POLL_MS || 75000),
+  imparkButunlukPy: process.env.IMPARK_BUTUNLUK_PY
+    || path.join(os.homedir(), '.claude', 'skills', 'pardus-yonetim', 'impark-butunluk.py'),
 };
 
 const log = (...args) => console.log(new Date().toISOString(), '[agent]', ...args);
@@ -170,7 +181,9 @@ async function heartbeat(auth) {
   try {
     await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
-      { heldJobs: currentJob ? [currentJob] : [] },
+      // capabilities: sunucu tarafı build_agents.capabilities'i güncel tutar (2026-09-10,
+      // pardus eklendi) — enroll'da bir kez yazılıp sonra hiç tazelenmiyordu.
+      { heldJobs: currentJob ? [currentJob] : [], capabilities: CONFIG.caps },
       { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
     );
   } catch (e) {
@@ -579,7 +592,7 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
   return res.data.jobId;
 }
 
-async function packagerPoll(jobId) {
+async function packagerPoll(jobId, packagerPlatform) {
   const deadline = Date.now() + CONFIG.packageTimeoutMs;
   while (Date.now() < deadline) {
     if (stopping) throw new Error('shutting down');
@@ -594,7 +607,18 @@ async function packagerPoll(jobId) {
           const msg = (res.data && res.data.job && res.data.job.error) || 'packager reported failed';
           throw new Error(`packager job failed: ${msg}`);
         }
-        return; // completed
+        // status === 'completed' — ama paketleyicide bu SADECE dış try/catch'in
+        // fırlatmadığı anlamına gelir. Platform-bazlı build hatası packagingService
+        // içinde KENDİ try/catch'inde yutulur ve job.results[platform] = {success:false,
+        // error} olarak saklanır; job.status yine 'completed' kalır (2026-09-08 teşhis:
+        // Android "Gradle build failed: ... Java heap space" tam olarak buradan sızdı).
+        // İndirmeye HİÇ gitmeden bu platform için gerçekten paket olduğunu doğrula —
+        // yoksa curl 404 (exit 22) gerçek nedeni gizler.
+        const verdict = packagerResultOf(res.data, packagerPlatform);
+        if (!verdict.ok) {
+          throw new Error(`packager job completed without a usable package: ${verdict.message}`);
+        }
+        return; // completed + doğrulandı
       }
     }
     await sleep(5000);
@@ -658,8 +682,29 @@ async function downloadArtifact(url, destPath) {
   log(`artifact downloaded: ${(size / 1e6).toFixed(0)}MB (valid)`);
 }
 
+/**
+ * Bir önceki `packagerPoll` doğrulaması indirmeye izin verdikten SONRA paketleyici
+ * durumu değişmişse (yarış durumu) diye ikinci savunma hattı: 404 (curl exit 22)
+ * tek başına teşhis için yetersizdi (2026-09-08) — varsa paketleyicinin gerçek
+ * hatasını mesaja ekle.
+ */
+async function packagerErrorSnapshot(jobId, packagerPlatform) {
+  const res = await axios.get(joinUrl(CONFIG.packagerApi, `api/package-status/${jobId}`), {
+    timeout: 15000,
+    validateStatus: () => true,
+  });
+  if (res.status !== 200) return '';
+  const verdict = packagerResultOf(res.data, packagerPlatform);
+  return verdict.ok ? '' : verdict.message;
+}
+
 async function packagerDownload(jobId, packagerPlatform, destPath) {
-  await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
+  try {
+    await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
+  } catch (e) {
+    const extra = await packagerErrorSnapshot(jobId, packagerPlatform).catch(() => '');
+    throw new Error(extra ? `${e.message} — packager: ${extra}` : e.message);
+  }
 }
 
 /**
@@ -778,6 +823,122 @@ async function signAndNotarizeMac(dmgPath) {
 }
 
 // ---------------------------------------------------------------------------
+// Pardus (.impark) — NOT the local HTTP packager (3001). srv21's `packageLinux`
+// is run BİREBİR (identical) inside a Docker container by pardus-packager-build.sh
+// (idempotent image/volumes, single-build lock, disk gate, Rosetta+AppImage binfmt).
+// See that script's header for the full contract this section relies on.
+// ---------------------------------------------------------------------------
+
+/**
+ * Docker Desktop kapalıysa arka planda (odak çalmadan, `open -g -j`) açar, `docker
+ * info` dönene kadar `dockerReadyPollMs` aralıkla yoklar. `dockerReadyTimeoutMs`
+ * içinde hâlâ hazır değilse fırlatır — bu Nadir'in kararı: sunucuya (srv21) kaçış
+ * YOK, sessiz düşürme YASAK, iş net bir sebeple 'failed' raporlanır.
+ */
+async function ensureDockerReady() {
+  const already = await run('docker', ['info']);
+  if (already.code === 0) return;
+  log('pardus: docker hazır değil, arka planda açılıyor (odak çalmadan)...');
+  await run('open', ['-g', '-j', '-a', 'Docker']);
+  const deadline = Date.now() + CONFIG.dockerReadyTimeoutMs;
+  while (Date.now() < deadline) {
+    if (stopping) throw new Error('shutting down');
+    await sleep(CONFIG.dockerReadyPollMs);
+    const check = await run('docker', ['info']);
+    if (check.code === 0) {
+      log('pardus: docker hazır.');
+      return;
+    }
+    log('pardus: docker henüz hazır değil, bekleniyor...');
+  }
+  throw new Error(`docker ${Math.round(CONFIG.dockerReadyTimeoutMs / 1000)}s içinde hazır olmadı — pardus build başlatılamadı`);
+}
+
+/**
+ * pardus-packager-build.sh'ı `nice -n 10` ile, timeout korumalı çalıştırır. Betiğin
+ * kendi stdout/stderr'ini (zaten `[HH:MM:SS] ...` biçiminde, kendi log dosyasına da
+ * yazıyor) satır satır ajan log'una yansıtır — mevcut ilerleme-log stiliyle tutarlı.
+ * Süre `pardusTimeoutMs`'i aşarsa süreç SIGKILL edilir ve timeout olarak işaretlenir.
+ */
+function runPardusScript(args) {
+  return new Promise((resolve) => {
+    const p = spawn('nice', ['-n', '10', CONFIG.pardusBuildScript, ...args]);
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      p.kill('SIGKILL');
+    }, CONFIG.pardusTimeoutMs);
+    timer.unref?.();
+    const pipe = (chunk, isErr) => {
+      const text = chunk.toString();
+      if (isErr) stderr += text; else stdout += text;
+      for (const line of text.split('\n')) {
+        if (line.trim()) log('  [pardus]', line);
+      }
+    };
+    if (p.stdout) p.stdout.on('data', (d) => pipe(d, false));
+    if (p.stderr) p.stderr.on('data', (d) => pipe(d, true));
+    p.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: timedOut ? -1 : (code == null ? -1 : code), stdout, stderr, timedOut });
+    });
+    p.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: String(e && e.message ? e.message : e), timedOut: false });
+    });
+  });
+}
+
+/**
+ * .impark builds via the srv21-identical Docker path, verifies it is not truncated
+ * (impark-butunluk.py, squashfs offset 193728), checks the doğrulama script's
+ * rapor.txt for the AppRun/asar sentinel lines when that tool is available, then
+ * places the finished artifact at `artifactPath` for the shared upload/result flow.
+ */
+async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work) {
+  await ensureDockerReady();
+
+  const outDir = path.join(work, 'pardus-out');
+  log('pardus: build başlıyor —', CONFIG.pardusBuildScript);
+  const res = await runPardusScript([zipPath, appName, outDir, appVersion]);
+  if (res.timedOut) {
+    throw new Error(`pardus build ${Math.round(CONFIG.pardusTimeoutMs / 60000)} dk içinde bitmedi (timeout): ${CONFIG.pardusBuildScript}`);
+  }
+  if (res.code !== 0) {
+    throw new Error(`pardus-packager-build.sh rc=${res.code}: ${(res.stderr || res.stdout).slice(-1500)}`);
+  }
+
+  const entries = await fsp.readdir(outDir).catch(() => []);
+  const builtName = entries.find((f) => f.endsWith('.impark'));
+  if (!builtName) throw new Error('pardus build bitti (rc=0) ama .impark üretilmedi');
+  const builtPath = path.join(outDir, builtName);
+
+  // Bütünlük: kesik squashfs paketi asla yüklenmez (offset 193728, bytes_used).
+  const integrity = await run('/usr/bin/python3', [CONFIG.imparkButunlukPy, builtPath]);
+  if (integrity.code !== 0) {
+    throw new Error(`pardus paket bütünlük denetiminden geçemedi (rc=${integrity.code}):\n${integrity.stdout.slice(-800)}`);
+  }
+  log('pardus: bütünlük OK —', integrity.stdout.trim().split('\n').slice(-1)[0]);
+
+  // Doğrulama raporu (AppRun + asar has satırları) — araç host'ta yoksa (silindiyse/
+  // eksikse) script bunu zaten yutar (`|| log "dogrulama betigi hata verdi"`); burada
+  // sadece kanıtı logla, build'i bu adım yüzünden DÜŞÜRME.
+  const raporPath = path.join(outDir, 'dogrula', 'rapor.txt');
+  const rapor = await fsp.readFile(raporPath, 'utf8').catch(() => '');
+  if (rapor && /AppRun/.test(rapor) && /asar has/.test(rapor)) {
+    log('pardus: dogrula raporu OK —', rapor.split('\n').filter(Boolean).join(' | '));
+  } else {
+    warn('pardus: dogrula/rapor.txt eksik veya AppRun/asar-has satırı yok (araç eksikse beklenir) —', raporPath);
+  }
+
+  await fsp.copyFile(builtPath, artifactPath);
+  const mb = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
+  log(`pardus: impark hazır — ${artifactPath} (${mb}MB)`);
+}
+
+// ---------------------------------------------------------------------------
 // One job, end to end.
 // ---------------------------------------------------------------------------
 async function processJob(auth, job) {
@@ -855,17 +1016,24 @@ async function processJob(auth, job) {
     }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     const appVersion = '1.0.0';
-    log('uploading build to packager...');
-    const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
-    log('packager session:', sessionId, '- starting package...');
-    const logoId = await packagerLogoIdFor(job.publisherName);
-    const jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
-    log('packager jobId:', jobId, '- polling...');
-    await packagerPoll(jobId);
-
     const artifactPath = path.join(work, `artifact${artifactExtension(packagerPlatform)}`);
-    log('downloading artifact...');
-    await packagerDownload(jobId, packagerPlatform, artifactPath);
+    let jobId = null; // pardus dalında yerel HTTP packager hiç devreye girmez — jobId yok
+
+    if (packagerPlatform === 'pardus') {
+      // Docker'da srv21 ile BİREBİR: HTTP paketleyici (3001) YOK, doğrudan script.
+      await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work);
+    } else {
+      log('uploading build to packager...');
+      const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
+      log('packager session:', sessionId, '- starting package...');
+      const logoId = await packagerLogoIdFor(job.publisherName);
+      jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
+      log('packager jobId:', jobId, '- polling...');
+      await packagerPoll(jobId, packagerPlatform);
+
+      log('downloading artifact...');
+      await packagerDownload(jobId, packagerPlatform, artifactPath);
+    }
 
     // 4. macOS: sign + notarize (best-effort).
     if (packagerPlatform === 'macos') {
@@ -963,5 +1131,6 @@ if (require.main === module) {
 module.exports = {
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   packagerReleaseJob,
-  touchCacheEntry
+  touchCacheEntry,
+  ensureDockerReady, runPardusScript, buildPardusArtifact, heartbeat,
 };

@@ -1,0 +1,46 @@
+# Pardus .impark uretimi — srv21'deki paketleyicinin (electron-multi-platform-packager,
+# packageLinux yolu) BIREBIR kopyasini bu Mac'te kosturan Linux konteyneri.
+#
+# Neden amd64 (Rosetta) ve arm64 DEGIL (2026-09-08, olculdu):
+#   packageLinux -> customizeAppImage, electron-builder'in urettigi x86_64 AppImage'i
+#   `<AppImage> --appimage-extract` ile CALISTIRARAK acar ve /usr/local/bin/appimagetool
+#   (x86_64) ile yeniden paketler. arm64 konteynerde binfmt_misc yok:
+#   "Exec format error" (rc=126) — .impark hic uretilmez. amd64 katmani Docker Desktop'ta
+#   Rosetta ile kosar (impark-test imajinda olculdu: yerliye gore 1.28x).
+#   Boylece electron-builder, mksquashfs, fpm ve appimagetool sunucudaki ayni x86_64
+#   ikililerdir; kaynak koda dokunulmaz.
+#
+# Sunucu Node 22.16 -> node:22-bookworm.
+FROM --platform=linux/amd64 node:22-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends \
+      squashfs-tools libarchive-tools zip unzip file git python3 fakeroot rsync \
+      desktop-file-utils ca-certificates curl xz-utils procps \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# appimagetool: sunucuda /usr/local/bin/appimagetool kurulu; kod once onu arar (dis indirme
+# yok). Ayni kaynak (AppImageKit continuous, x86_64). AppImage'i CALISTIRMADAN aciyoruz:
+# Rosetta'nin binfmt eslesmesi ELF basligindaki AppImage sihrini ("AI\x02", ofset 8) kabul
+# etmiyor -> "Exec format error". ELF basligindan squashfs ofsetini hesaplayip unsquashfs ile
+# aciyoruz; sonra AppRun'a sariyoruz (icindeki appimagetool/mksquashfs normal ELF, Rosetta kosar).
+RUN set -e; cd /opt \
+ && curl -fsSL -o appimagetool.AppImage \
+      https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+ && OFF=$(python3 -c 'import struct;h=open("appimagetool.AppImage","rb").read(64);a,=struct.unpack("<Q",h[0x28:0x30]);b,=struct.unpack("<H",h[0x3A:0x3C]);c,=struct.unpack("<H",h[0x3C:0x3E]);print(a+b*c)') \
+ && unsquashfs -q -d appimagetool -o "$OFF" appimagetool.AppImage >/dev/null \
+ && rm appimagetool.AppImage \
+ && printf '#!/bin/sh\nexec /opt/appimagetool/AppRun "$@"\n' > /usr/local/bin/appimagetool \
+ && chmod +x /usr/local/bin/appimagetool \
+ && /usr/local/bin/appimagetool --version 2>&1 | head -2
+
+# Indirme onbellekleri (named volume ile ikinci kosu hizli)
+ENV ELECTRON_CACHE=/cache/electron \
+    ELECTRON_BUILDER_CACHE=/cache/electron-builder \
+    npm_config_cache=/cache/npm \
+    NODE_PATH=/app/node_modules
+RUN mkdir -p /cache /app /out /tools
+
+WORKDIR /app
+ENTRYPOINT ["/tools/packager-entry.sh"]
