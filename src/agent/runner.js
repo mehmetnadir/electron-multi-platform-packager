@@ -39,8 +39,7 @@ const {
   packageStatusOf,
   artifactExtension,
   joinUrl,
-  pickLogoId, asciiAppName,
-  packagerResultOf } = require('./runner-helpers');
+  pickLogoId, asciiAppName } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -592,7 +591,7 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
   return res.data.jobId;
 }
 
-async function packagerPoll(jobId, packagerPlatform) {
+async function packagerPoll(jobId) {
   const deadline = Date.now() + CONFIG.packageTimeoutMs;
   while (Date.now() < deadline) {
     if (stopping) throw new Error('shutting down');
@@ -607,18 +606,7 @@ async function packagerPoll(jobId, packagerPlatform) {
           const msg = (res.data && res.data.job && res.data.job.error) || 'packager reported failed';
           throw new Error(`packager job failed: ${msg}`);
         }
-        // status === 'completed' — ama paketleyicide bu SADECE dış try/catch'in
-        // fırlatmadığı anlamına gelir. Platform-bazlı build hatası packagingService
-        // içinde KENDİ try/catch'inde yutulur ve job.results[platform] = {success:false,
-        // error} olarak saklanır; job.status yine 'completed' kalır (2026-09-08 teşhis:
-        // Android "Gradle build failed: ... Java heap space" tam olarak buradan sızdı).
-        // İndirmeye HİÇ gitmeden bu platform için gerçekten paket olduğunu doğrula —
-        // yoksa curl 404 (exit 22) gerçek nedeni gizler.
-        const verdict = packagerResultOf(res.data, packagerPlatform);
-        if (!verdict.ok) {
-          throw new Error(`packager job completed without a usable package: ${verdict.message}`);
-        }
-        return; // completed + doğrulandı
+        return; // completed
       }
     }
     await sleep(5000);
@@ -682,29 +670,8 @@ async function downloadArtifact(url, destPath) {
   log(`artifact downloaded: ${(size / 1e6).toFixed(0)}MB (valid)`);
 }
 
-/**
- * Bir önceki `packagerPoll` doğrulaması indirmeye izin verdikten SONRA paketleyici
- * durumu değişmişse (yarış durumu) diye ikinci savunma hattı: 404 (curl exit 22)
- * tek başına teşhis için yetersizdi (2026-09-08) — varsa paketleyicinin gerçek
- * hatasını mesaja ekle.
- */
-async function packagerErrorSnapshot(jobId, packagerPlatform) {
-  const res = await axios.get(joinUrl(CONFIG.packagerApi, `api/package-status/${jobId}`), {
-    timeout: 15000,
-    validateStatus: () => true,
-  });
-  if (res.status !== 200) return '';
-  const verdict = packagerResultOf(res.data, packagerPlatform);
-  return verdict.ok ? '' : verdict.message;
-}
-
 async function packagerDownload(jobId, packagerPlatform, destPath) {
-  try {
-    await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
-  } catch (e) {
-    const extra = await packagerErrorSnapshot(jobId, packagerPlatform).catch(() => '');
-    throw new Error(extra ? `${e.message} — packager: ${extra}` : e.message);
-  }
+  await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
 }
 
 /**
@@ -1029,7 +996,7 @@ async function processJob(auth, job) {
       const logoId = await packagerLogoIdFor(job.publisherName);
       jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
       log('packager jobId:', jobId, '- polling...');
-      await packagerPoll(jobId, packagerPlatform);
+      await packagerPoll(jobId);
 
       log('downloading artifact...');
       await packagerDownload(jobId, packagerPlatform, artifactPath);

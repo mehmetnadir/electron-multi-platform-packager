@@ -9,7 +9,6 @@ const {
   isTerminalStatus,
   packageStatusOf,
   artifactExtension,
-  artifactContentType,
   joinUrl,
 } = require('./runner-helpers');
 
@@ -114,13 +113,6 @@ test('artifactExtension', () => {
   assert.equal(artifactExtension('macos'), '.dmg');
   assert.equal(artifactExtension('pardus'), '.impark');
   assert.equal(artifactExtension('windows'), '');
-});
-
-test('artifactContentType', () => {
-  assert.equal(artifactContentType('android'), 'application/vnd.android.package-archive');
-  assert.equal(artifactContentType('macos'), 'application/x-apple-diskimage');
-  assert.equal(artifactContentType('pardus'), 'application/octet-stream');
-  assert.equal(artifactContentType('windows'), 'application/octet-stream'); // bilinmeyen -> güvenli genel tip
 });
 
 test('joinUrl: single slash', () => {
