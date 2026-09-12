@@ -70,6 +70,7 @@ set +e
 nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -v "$REPO":/src:ro \
   -v packager-linux-nm:/app/node_modules -v packager-linux-cache:/cache \
+  -e electron_config_cache=/cache/electron \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?

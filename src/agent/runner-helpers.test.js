@@ -9,7 +9,11 @@ const {
   isTerminalStatus,
   packageStatusOf,
   artifactExtension,
+  artifactContentType,
   joinUrl,
+  addFileToZipRoot,
+  restartRequested,
+  pauseRequested,
 } = require('./runner-helpers');
 
 test('mapPlatform: android -> android', () => {
@@ -115,6 +119,13 @@ test('artifactExtension', () => {
   assert.equal(artifactExtension('windows'), '');
 });
 
+test('artifactContentType', () => {
+  assert.equal(artifactContentType('android'), 'application/vnd.android.package-archive');
+  assert.equal(artifactContentType('macos'), 'application/x-apple-diskimage');
+  assert.equal(artifactContentType('pardus'), 'application/octet-stream');
+  assert.equal(artifactContentType('windows'), 'application/octet-stream'); // bilinmeyen -> güvenli genel tip
+});
+
 test('joinUrl: single slash', () => {
   assert.equal(joinUrl('https://api/v1', 'agents/x'), 'https://api/v1/agents/x');
   assert.equal(joinUrl('https://api/v1/', '/agents/x'), 'https://api/v1/agents/x');
@@ -156,4 +167,79 @@ test('asciiAppName: Türkçe harfler ASCII, yasak karakter boşluk (45496 "YKS-D
   assert.strictEqual(asciiAppName('YKS-DİL Dergi Seti'), 'YKS-DIL Dergi Seti');
   assert.strictEqual(asciiAppName('Shall We?! 5 Set / 2024'), 'Shall We 5 Set 2024');
   assert.strictEqual(asciiAppName('', 'book-1'), 'book-1');
+});
+
+test('addFileToZipRoot: dosya zip köküne yol bilgisi olmadan girer, ikinci ekleme ezer', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { spawnSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zip-root-'));
+  const zipPath = path.join(dir, 'build.zip');
+  fs.mkdirSync(path.join(dir, 'src', 'derin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'derin', 'a.js'), '1');
+  assert.equal(spawnSync('zip', ['-q', '-r', zipPath, 'src'], { cwd: dir }).status, 0);
+  const iconDir = path.join(dir, 'ikon', 'alt');
+  fs.mkdirSync(iconDir, { recursive: true });
+  fs.writeFileSync(path.join(iconDir, 'ico.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  assert.deepEqual(addFileToZipRoot(zipPath, path.join(iconDir, 'ico.png')), { ok: true });
+  const list = spawnSync('unzip', ['-Z1', zipPath], { encoding: 'utf8' }).stdout.split('\n');
+  assert.ok(list.includes('ico.png'), 'ico.png kökte olmalı: ' + list.join(','));
+  assert.ok(!list.some((l) => l.startsWith('ikon/')), 'yol bilgisi taşınmamalı');
+  fs.writeFileSync(path.join(iconDir, 'ico.png'), Buffer.from([1, 2, 3, 4, 5, 6]));
+  assert.deepEqual(addFileToZipRoot(zipPath, path.join(iconDir, 'ico.png')), { ok: true });
+  const size = spawnSync('unzip', ['-Zl', zipPath, 'ico.png'], { encoding: 'utf8' }).stdout;
+  assert.match(size, /\b6\b/, 'ikinci ekleme eskisini ezmeli');
+  assert.equal(addFileToZipRoot(zipPath, path.join(dir, 'yok.png')).ok, false);
+});
+
+test('restartRequested: bayrak yoksa false; varsa true döner ve dosyayı siler (tek kullanımlık)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const flag = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rr-')), 'yeniden-baslat.istek');
+  assert.equal(restartRequested(flag), false);
+  fs.writeFileSync(flag, '');
+  assert.equal(restartRequested(flag), true);
+  assert.equal(fs.existsSync(flag), false, 'bayrak silinmeli');
+  assert.equal(restartRequested(flag), false, 'ikinci okuma false');
+});
+
+test('pauseRequested: bayrak yoksa false; varsa true ve dosya SİLİNMEZ (kalıcı duraklatma)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const flag = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pr-')), 'duraklat.istek');
+  assert.equal(pauseRequested(flag), false);
+  fs.writeFileSync(flag, '');
+  assert.equal(pauseRequested(flag), true);
+  assert.equal(fs.existsSync(flag), true, 'bayrak kalmalı');
+  assert.equal(pauseRequested(flag), true, 'ikinci okuma da true');
+  fs.unlinkSync(flag);
+  assert.equal(pauseRequested(flag), false);
+});
+
+const { etkinYetenekler, agGecidiAyikla } = require('./runner-helpers');
+
+test('etkinYetenekler: evde macos düşer, android/pardus kalır (Nadir kararı 2026-09-12)', () => {
+  assert.deepEqual(etkinYetenekler(['android', 'macos', 'pardus'], { ofiste: false }), ['android', 'pardus']);
+  assert.deepEqual(etkinYetenekler(['android', 'mac'], { ofiste: false }), ['android']);
+});
+
+test('etkinYetenekler: ofiste tam liste; girdi dizisi değişmez', () => {
+  const caps = ['android', 'macos', 'pardus'];
+  assert.deepEqual(etkinYetenekler(caps, { ofiste: true }), ['android', 'macos', 'pardus']);
+  assert.deepEqual(caps, ['android', 'macos', 'pardus']);
+});
+
+test('etkinYetenekler: macos-serbest bayrağı evde de açar; macos-durdur ofiste de keser', () => {
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: false, macSerbest: true }), ['android', 'macos']);
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, macDurdur: true }), ['android']);
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, macSerbest: true, macDurdur: true }), ['android']);
+});
+
+test('agGecidiAyikla: route çıktısından geçit; yoksa null', () => {
+  assert.equal(agGecidiAyikla('   route to: default\ndestination: default\n     gateway: 192.168.1.254\n  interface: en0'), '192.168.1.254');
+  assert.equal(agGecidiAyikla('route: writing to routing socket: not in table'), null);
+  assert.equal(agGecidiAyikla(''), null);
 });

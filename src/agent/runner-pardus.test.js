@@ -49,7 +49,7 @@ test('processJob: pardus da macOS imzalama/noterleme dalına GİRMEZ (yalnız ma
 
 test('heartbeat: capabilities alanı gönderilir (build_agents.capabilities güncel kalsın, 2026-09-10)', () => {
   const fn = SRC.slice(SRC.indexOf('async function heartbeat'), SRC.indexOf('/** Ask the server for a presigned'));
-  assert.match(fn, /capabilities:\s*CONFIG\.caps/);
+  assert.match(fn, /capabilities:\s*guncelYetenekler\(\)/);
 });
 
 test('CONFIG.caps varsayılanı pardus içerir', () => {

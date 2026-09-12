@@ -116,6 +116,72 @@ function pickLogoId(logos, publisherName) {
 }
 
 /**
+ * Bir dosyayı zip'in KÖKÜNE (yol bilgisi olmadan, `zip -j`) ekler; aynı adlı giriş varsa ezer.
+ * Pardus/Linux ikonu için: paketleyici `workingPath/ico.png`'yi okur, yayıncı build.zip'lerinde
+ * bu dosya YOK (2026-09-12 ölçümü: YDS/Flashy/Cambridge zip köklerinde ikon yok → Electron
+ * varsayılan ikonu). Giriş adı = dosyanın kendi adı; çağıran dosyayı istediği adla yazar.
+ * @param {string} zipPath
+ * @param {string} filePath
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function addFileToZipRoot(zipPath, filePath) {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync('zip', ['-j', '-q', zipPath, filePath], { encoding: 'utf8' });
+  if (r.error) return { ok: false, error: String(r.error.message || r.error) };
+  if (r.status !== 0) return { ok: false, error: (r.stderr || r.stdout || `zip rc=${r.status}`).trim().slice(-300) };
+  return { ok: true };
+}
+
+/**
+ * İşler arasında yeniden başlatma isteği var mı? Bayrak dosyası varsa SİLER ve true döner.
+ * Kod güncellemesi sonrası ajanı iş ortasında öldürmeden (kira/paket kaybı) yenilemek için:
+ * `touch ~/.empp-agent/yeniden-baslat.istek` → runner o anki işi bitirir, çıkar, launchd
+ * (KeepAlive) yeni kodla başlatır. Dosya yoksa/silinemezse false (iş sürer).
+ * @param {string} flagPath
+ * @returns {boolean}
+ */
+/**
+ * Duraklatma bayrağı: dosya DURDUKÇA ajan yeni iş almaz (silinmez, kalıcı; kaldıran
+ * çağıran taraftır). Kullanım: bu Mac'te elle/harici bir üretim koşarken paketleyicide
+ * "aynı anda tek build" kuralını korumak (2026-09-12: Vitanova partisi + ajanın Flashy
+ * android işi aynı anda koşunca Gradle R.jar yarışı, android üretimi düştü).
+ */
+function pauseRequested(flagPath) {
+  const fs = require('fs');
+  try { return fs.existsSync(flagPath); } catch (e) { return false; }
+}
+
+/**
+ * Konuma göre etkin yetenekler (2026-09-12, Nadir kararı): macOS (dmg) işi noter için 300-500 MB'ı
+ * Apple'a YÜKLER; ev hattında bu yükleme diğer her şeyi (pardus Electron indirmesi dahil) boğar.
+ * Kural: mac yalnız ofiste ya da `macos-serbest.istek` bayrağıyla; `macos-durdur.istek` her yerde keser.
+ * android/pardus konumdan bağımsız sürer. Sunucu next-job'u heartbeat'teki yeteneklere göre kiralar.
+ */
+function etkinYetenekler(caps, durum) {
+  const d = durum || {};
+  const macMi = (c) => c === 'macos' || c === 'mac';
+  const izin = !d.macDurdur && (Boolean(d.ofiste) || Boolean(d.macSerbest));
+  return izin ? caps.slice() : caps.filter((c) => !macMi(c));
+}
+
+/** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */
+function agGecidiAyikla(routeCiktisi) {
+  const m = /gateway:\s*([0-9.]+)/.exec(String(routeCiktisi || ''));
+  return m ? m[1] : null;
+}
+
+function restartRequested(flagPath) {
+  const fs = require('fs');
+  try {
+    if (!fs.existsSync(flagPath)) return false;
+    fs.unlinkSync(flagPath);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
  * True when a packager job-status response means the job is done (any terminal state).
  * @param {string} status
  */
@@ -156,10 +222,101 @@ function artifactExtension(packagerPlatform) {
   }
 }
 
+/**
+ * Best-effort Content-Type for a built artifact, keyed the same way as
+ * artifactExtension. The R2 upload's REAL Content-Type is always the server's
+ * presigned value (`presigned.contentType` in runner.js) — this map only feeds a
+ * local fallback header when a caller needs one before presigning (defensive; the
+ * agent never invents the signed header). `.impark` is an opaque squashfs/AppImage
+ * blob, so 'application/octet-stream' — same bucket as an unrecognized platform.
+ * @param {('android'|'macos'|'pardus'|string)} packagerPlatform
+ */
+function artifactContentType(packagerPlatform) {
+  switch (String(packagerPlatform || '').trim().toLowerCase()) {
+    case 'android':
+      return 'application/vnd.android.package-archive';
+    case 'macos':
+      return 'application/x-apple-diskimage';
+    case 'pardus':
+    default:
+      return 'application/octet-stream';
+  }
+}
+
 /** Join a base URL and a path safely (single slash). */
 function joinUrl(base, p) {
   return `${String(base).replace(/\/+$/, '')}/${String(p).replace(/^\/+/, '')}`;
 }
+
+/**
+ * Clip a (possibly very long, multi-line) packager error to a reportable size while
+ * keeping the diagnostic core. A Gradle failure puts the real cause under a
+ * "What went wrong" header several lines into the message — a blind slice(0, maxLen)
+ * can cut that off and leave only the generic preamble. When the marker is present,
+ * always keep it plus the following 6 lines, even if that means the head of the
+ * message gets truncated harder to make room.
+ *
+ * @param {string} raw
+ * @param {number} [maxLen=1500]
+ * @returns {string}
+ */
+function clipPackagerError(raw, maxLen = 1500) {
+  const s = String(raw == null ? '' : raw);
+  if (s.length <= maxLen) return s;
+
+  const marker = 'What went wrong';
+  const idx = s.indexOf(marker);
+  if (idx === -1) return s.slice(0, maxLen);
+
+  // marker line + up to 6 following lines.
+  const block = s.slice(idx).split('\n').slice(0, 7).join('\n');
+  if (block.length >= maxLen) return block.slice(0, maxLen);
+
+  const headBudget = maxLen - block.length - 1; // -1 for the joining newline
+  const head = headBudget > 0 ? s.slice(0, headBudget) : '';
+  return (head ? `${head}\n${block}` : block).slice(0, maxLen);
+}
+
+/**
+ * Decide whether a packager `/api/package-status/:jobId` response means "there is a
+ * real, downloadable package for this platform" — and if not, build the failure
+ * message to report upstream.
+ *
+ * Bug this guards against (2026-09-08, book-update agent): `packagingService.startPackaging`
+ * catches each platform's build error internally and stores it as
+ * `job.results[platform] = {success:false, error}`, then RETURNS NORMALLY — so the
+ * packager's overall `job.status` is 'completed' even though the requested platform
+ * has no package. The agent used to treat 'completed' as "go download", hit a 404 on
+ * `/api/download`, and reported `last_error: "artifact download failed: curl exit 22
+ * (404 ...)"` — the real cause ("Gradle build failed: ... Java heap space") never
+ * reached the DB; diagnosis took 20 minutes reading server logs by hand.
+ *
+ * @param {any} body                    parsed `/api/package-status` JSON: {success, jobId, job}
+ * @param {string} packagerPlatform     the single platform this agent requested ('android'|'macos')
+ * @returns {{ok:true}|{ok:false, message:string}}
+ */
+function packagerResultOf(body, packagerPlatform) {
+  const job = body && typeof body === 'object' && body.job && typeof body.job === 'object' ? body.job : null;
+  const results = job && job.results && typeof job.results === 'object' ? job.results : null;
+  const platformResult = results && results[packagerPlatform] && typeof results[packagerPlatform] === 'object'
+    ? results[packagerPlatform]
+    : null;
+
+  if (platformResult && platformResult.success === true) {
+    return { ok: true };
+  }
+
+  // En spesifik olan platform hatasını tercih et (örn. "Android APK üretilemedi: ...
+  // Gradle build failed: ... Java heap space"); yoksa job-seviyesi hataya, o da yoksa
+  // genel "paket yok" mesajına düş.
+  const platformError = platformResult && platformResult.error != null ? String(platformResult.error) : '';
+  const jobError = job && job.error != null ? String(job.error) : '';
+  const raw = platformError || jobError
+    || `paket üretilmedi: '${packagerPlatform}' için başarılı sonuç yok`;
+
+  return { ok: false, message: clipPackagerError(raw) };
+}
+
 
 /**
  * Paketleyiciye gönderilen uygulama adı ASCII olmalı (2026-08-28): "YKS-DİL Dergi Seti" gibi
@@ -176,13 +333,21 @@ function asciiAppName(name, fallback = 'book') {
 }
 
 module.exports = {
+  pauseRequested,
+  etkinYetenekler,
+  agGecidiAyikla,
   asciiAppName,
   pickLogoId,
+  addFileToZipRoot,
+  restartRequested,
   mapPlatform,
   backoffMs,
   parseNextJob,
   isTerminalStatus,
   packageStatusOf,
   artifactExtension,
+  artifactContentType,
   joinUrl,
+  clipPackagerError,
+  packagerResultOf,
 };

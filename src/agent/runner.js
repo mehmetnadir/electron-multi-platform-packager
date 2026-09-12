@@ -39,7 +39,9 @@ const {
   packageStatusOf,
   artifactExtension,
   joinUrl,
-  pickLogoId, asciiAppName } = require('./runner-helpers');
+  pickLogoId, asciiAppName,
+  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla,
+} = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -69,6 +71,14 @@ const CONFIG = {
   pardusBuildScript: process.env.PARDUS_BUILD_SCRIPT
     || path.join(__dirname, '..', '..', 'tools', 'pardus', 'pardus-packager-build.sh'),
   pardusTimeoutMs: Number(process.env.AGENT_PARDUS_TIMEOUT_MS || 40 * 60 * 1000),
+  // İşler arasında okunur; varsa runner temiz çıkar, launchd yeni kodla açar (bkz. restartRequested).
+  restartFlag: process.env.AGENT_RESTART_FLAG || path.join(os.homedir(), '.empp-agent', 'yeniden-baslat.istek'),
+  // Dosya durdukça yeni iş alınmaz (aynı anda tek build; harici üretim koşarken). Kaldıran çağırandır.
+  pauseFlag: process.env.AGENT_PAUSE_FLAG || path.join(os.homedir(), '.empp-agent', 'duraklat.istek'),
+  // macOS işi yalnız ofiste (noter yüklemesi ev hattını boğuyor — 2026-09-12). Bayraklar kalıcıdır.
+  ofisGw: process.env.AGENT_OFIS_GW || '192.168.1.254',
+  macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
+  macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
   dockerReadyTimeoutMs: Number(process.env.AGENT_DOCKER_READY_TIMEOUT_MS || 5 * 60 * 1000),
   dockerReadyPollMs: Number(process.env.AGENT_DOCKER_READY_POLL_MS || 75000),
   imparkButunlukPy: process.env.IMPARK_BUTUNLUK_PY
@@ -167,6 +177,35 @@ function agentHeaders(auth) {
   return { 'X-Agent-Token': auth.token };
 }
 
+// --- Konum + etkin yetenekler -------------------------------------------------------------
+// Varsayılan ağ geçidi ofis FortiGate'i (192.168.1.254) ise ofisteyiz. 60 sn önbellek; hata = ofis değil.
+let _konum = { t: 0, ofiste: false };
+function ofisteMi() {
+  const simdi = Date.now();
+  if (simdi - _konum.t < 60000) return _konum.ofiste;
+  let ofiste = false;
+  try {
+    const out = require('child_process').execFileSync('route', ['-n', 'get', 'default'], { timeout: 3000, encoding: 'utf8' });
+    ofiste = agGecidiAyikla(out) === CONFIG.ofisGw;
+  } catch (e) { ofiste = false; }
+  _konum = { t: simdi, ofiste };
+  return ofiste;
+}
+let _sonYetenek = '';
+function guncelYetenekler() {
+  const caps = etkinYetenekler(CONFIG.caps, {
+    ofiste: ofisteMi(),
+    macSerbest: pauseRequested(CONFIG.macSerbestFlag),
+    macDurdur: pauseRequested(CONFIG.macDurdurFlag),
+  });
+  const imza = caps.join(',');
+  if (imza !== _sonYetenek) {
+    log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste, '| tam:', CONFIG.caps.join(','));
+    _sonYetenek = imza;
+  }
+  return caps;
+}
+
 async function fetchNextJob(auth) {
   const res = await axios.get(joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/next-job`), {
     headers: agentHeaders(auth),
@@ -182,7 +221,7 @@ async function heartbeat(auth) {
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
       // capabilities: sunucu tarafı build_agents.capabilities'i güncel tutar (2026-09-10,
       // pardus eklendi) — enroll'da bir kez yazılıp sonra hiç tazelenmiyordu.
-      { heldJobs: currentJob ? [currentJob] : [], capabilities: CONFIG.caps },
+      { heldJobs: currentJob ? [currentJob] : [], capabilities: guncelYetenekler() },
       { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
     );
   } catch (e) {
@@ -591,7 +630,7 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
   return res.data.jobId;
 }
 
-async function packagerPoll(jobId) {
+async function packagerPoll(jobId, packagerPlatform) {
   const deadline = Date.now() + CONFIG.packageTimeoutMs;
   while (Date.now() < deadline) {
     if (stopping) throw new Error('shutting down');
@@ -606,7 +645,18 @@ async function packagerPoll(jobId) {
           const msg = (res.data && res.data.job && res.data.job.error) || 'packager reported failed';
           throw new Error(`packager job failed: ${msg}`);
         }
-        return; // completed
+        // status === 'completed' — ama paketleyicide bu SADECE dış try/catch'in
+        // fırlatmadığı anlamına gelir. Platform-bazlı build hatası packagingService
+        // içinde KENDİ try/catch'inde yutulur ve job.results[platform] = {success:false,
+        // error} olarak saklanır; job.status yine 'completed' kalır (2026-09-08 teşhis:
+        // Android "Gradle build failed: ... Java heap space" tam olarak buradan sızdı).
+        // İndirmeye HİÇ gitmeden bu platform için gerçekten paket olduğunu doğrula —
+        // yoksa curl 404 (exit 22) gerçek nedeni gizler.
+        const verdict = packagerResultOf(res.data, packagerPlatform);
+        if (!verdict.ok) {
+          throw new Error(`packager job completed without a usable package: ${verdict.message}`);
+        }
+        return; // completed + doğrulandı
       }
     }
     await sleep(5000);
@@ -670,8 +720,29 @@ async function downloadArtifact(url, destPath) {
   log(`artifact downloaded: ${(size / 1e6).toFixed(0)}MB (valid)`);
 }
 
+/**
+ * Bir önceki `packagerPoll` doğrulaması indirmeye izin verdikten SONRA paketleyici
+ * durumu değişmişse (yarış durumu) diye ikinci savunma hattı: 404 (curl exit 22)
+ * tek başına teşhis için yetersizdi (2026-09-08) — varsa paketleyicinin gerçek
+ * hatasını mesaja ekle.
+ */
+async function packagerErrorSnapshot(jobId, packagerPlatform) {
+  const res = await axios.get(joinUrl(CONFIG.packagerApi, `api/package-status/${jobId}`), {
+    timeout: 15000,
+    validateStatus: () => true,
+  });
+  if (res.status !== 200) return '';
+  const verdict = packagerResultOf(res.data, packagerPlatform);
+  return verdict.ok ? '' : verdict.message;
+}
+
 async function packagerDownload(jobId, packagerPlatform, destPath) {
-  await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
+  try {
+    await downloadArtifact(joinUrl(CONFIG.packagerApi, `api/download/${jobId}/${packagerPlatform}`), destPath);
+  } catch (e) {
+    const extra = await packagerErrorSnapshot(jobId, packagerPlatform).catch(() => '');
+    throw new Error(extra ? `${e.message} — packager: ${extra}` : e.message);
+  }
 }
 
 /**
@@ -819,6 +890,35 @@ async function ensureDockerReady() {
     log('pardus: docker henüz hazır değil, bekleniyor...');
   }
   throw new Error(`docker ${Math.round(CONFIG.dockerReadyTimeoutMs / 1000)}s içinde hazır olmadı — pardus build başlatılamadı`);
+}
+
+/**
+ * Pardus (.impark) ikonu: HTTP paketleyicideki kayıtlı yayıncı logosunu indirip build.zip
+ * köküne `ico.png` olarak ekler. Docker'daki packagingService.getValidLinuxIcon
+ * `workingPath/ico.png`'yi okur; yayıncı zip'lerinde bu dosya yok (2026-09-12: tüm .impark'lar
+ * Electron varsayılan ikonuyla çıkıyordu). Logo yoksa/alınamazsa iş SÜRER (varsayılan ikon, uyarı).
+ */
+async function injectPardusIcon(zipPath, publisherName, work) {
+  const logoId = await packagerLogoIdFor(publisherName);
+  if (!logoId) return false;
+  try {
+    const res = await axios.get(joinUrl(CONFIG.packagerApi, `api/logos/${logoId}/file`), {
+      responseType: 'arraybuffer', timeout: 30000, validateStatus: () => true,
+    });
+    if (res.status !== 200 || !res.data || !res.data.length) {
+      warn('pardus ikon: logo dosyası alınamadı (HTTP', res.status + '), varsayılan ikon');
+      return false;
+    }
+    const png = path.join(work, 'ico.png');
+    await fsp.writeFile(png, Buffer.from(res.data));
+    const r = addFileToZipRoot(zipPath, png);
+    if (!r.ok) { warn('pardus ikon: zip köküne eklenemedi, varsayılan ikon —', r.error); return false; }
+    log('pardus ikon: zip köküne ico.png eklendi (logo', logoId + ')');
+    return true;
+  } catch (e) {
+    warn('pardus ikon eklenemedi (varsayılan ikon):', e.message);
+    return false;
+  }
 }
 
 /**
@@ -988,6 +1088,8 @@ async function processJob(auth, job) {
 
     if (packagerPlatform === 'pardus') {
       // Docker'da srv21 ile BİREBİR: HTTP paketleyici (3001) YOK, doğrudan script.
+      // İkon: yayıncı zip'inde ico.png yok → kayıtlı logo zip köküne eklenir (aşağıda).
+      await injectPardusIcon(zipPath, job.publisherName, work);
       await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work);
     } else {
       log('uploading build to packager...');
@@ -996,7 +1098,7 @@ async function processJob(auth, job) {
       const logoId = await packagerLogoIdFor(job.publisherName);
       jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
       log('packager jobId:', jobId, '- polling...');
-      await packagerPoll(jobId);
+      await packagerPoll(jobId, packagerPlatform);
 
       log('downloading artifact...');
       await packagerDownload(jobId, packagerPlatform, artifactPath);
@@ -1030,6 +1132,9 @@ async function processJob(auth, job) {
 async function main() {
   log('starting. API:', CONFIG.apiBase, '| packager:', CONFIG.packagerApi, '| caps:', CONFIG.caps.join(','));
   const auth = await enrollOrLoad();
+  // İlk next-job'dan ÖNCE yetenekleri bildir: sunucu eski listeyle (evde macos dahil) iş kiralamasın.
+  guncelYetenekler();
+  await heartbeat(auth);
 
   // Heartbeat loop (fire-and-forget; never throws into the main loop).
   const hbTimer = setInterval(() => {
@@ -1039,6 +1144,17 @@ async function main() {
 
   let netErrAttempt = 0;
   while (!stopping) {
+    if (restartRequested(CONFIG.restartFlag)) {
+      log('yeniden başlatma isteği (bayrak dosyası) — işler arasında temiz çıkılıyor, launchd yeni kodla açar');
+      clearInterval(hbTimer);
+      process.exit(0);
+    }
+    if (pauseRequested(CONFIG.pauseFlag)) {
+      if (!main._pauseLogged) { log('duraklatma bayrağı var (' + CONFIG.pauseFlag + ') — yeni iş alınmıyor, kaldırılınca sürer'); main._pauseLogged = true; }
+      await sleep(CONFIG.pollMs);
+      continue;
+    }
+    if (main._pauseLogged) { log('duraklatma kalktı — iş almaya devam'); main._pauseLogged = false; }
     let job = null;
     try {
       job = await fetchNextJob(auth);
@@ -1099,5 +1215,5 @@ module.exports = {
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   packagerReleaseJob,
   touchCacheEntry,
-  ensureDockerReady, runPardusScript, buildPardusArtifact, heartbeat,
+  ensureDockerReady, runPardusScript, buildPardusArtifact, heartbeat, injectPardusIcon,
 };
