@@ -16,6 +16,7 @@ const {
   pauseRequested,
   isTransientNetworkError,
   srcVersionTuret,
+  agHatasiOzeti,
 } = require('./runner-helpers');
 
 test('mapPlatform: android -> android', () => {
@@ -437,4 +438,92 @@ test('srcVersionTuret: bos/eksik downloadUrl -> firlatmaz, deterministik yedek d
   assert.equal(srcVersionTuret(''), srcVersionTuret(''));
   assert.match(srcVersionTuret(''), /^src-[a-f0-9]{16}$/);
   assert.equal(srcVersionTuret(undefined), srcVersionTuret(null));
+});
+
+// ---------------------------------------------------------------------------
+// agHatasiOzeti — heartbeat/log kaynağı boş .message kusurunun (2026-09-13 ölçüm:
+// 3930 heartbeat hatasının %52,4'ü boş mesajlıydı) düzeltmesi.
+// ---------------------------------------------------------------------------
+
+test('agHatasiOzeti: bos mesajli AggregateError -> alt hata kodlarinin HER IKISI de gecer', () => {
+  const err = Object.assign(new Error(''), {
+    name: 'AggregateError',
+    errors: [{ code: 'ECONNREFUSED' }, { code: 'ENETUNREACH' }],
+  });
+  const ozet = agHatasiOzeti(err);
+  // Bu iddia "sadece e.message dön" mutasyonunda KIRILMALI: e.message === '' olduğu için
+  // öyle bir mutasyon boş string döner.
+  assert.notEqual(ozet, '');
+  assert.match(ozet, /ECONNREFUSED/);
+  assert.match(ozet, /ENETUNREACH/);
+  assert.equal(ozet, 'AggregateError: ECONNREFUSED, ENETUNREACH');
+});
+
+test('agHatasiOzeti: AggregateError alt hatalari benzersizlestirilir (tekrar eden kod tek gecer)', () => {
+  const err = Object.assign(new Error(''), {
+    errors: [{ code: 'ETIMEDOUT' }, { code: 'ETIMEDOUT' }, { message: 'ETIMEDOUT' }],
+  });
+  const ozet = agHatasiOzeti(err);
+  const adet = ozet.split('ETIMEDOUT').length - 1;
+  assert.equal(adet, 1);
+});
+
+test('agHatasiOzeti: bos mesaj + err.code -> code kullanilir', () => {
+  const err = Object.assign(new Error(''), { code: 'ENOTFOUND' });
+  assert.equal(agHatasiOzeti(err), 'ENOTFOUND');
+});
+
+test('agHatasiOzeti: normal mesajli hata -> mesaj aynen korunur', () => {
+  const err = new Error('presign failed: HTTP 500 {"error":"internal"}');
+  assert.equal(agHatasiOzeti(err), 'presign failed: HTTP 500 {"error":"internal"}');
+});
+
+test('agHatasiOzeti: err.message yok/bos ama err.cause.code var -> cause.code okunur', () => {
+  const err = new Error('');
+  err.cause = { code: 'ETIMEDOUT' };
+  assert.equal(agHatasiOzeti(err), 'ETIMEDOUT');
+});
+
+test('agHatasiOzeti: err.cause.errors dizisinden de AggregateError alt hatalari okunur', () => {
+  const err = new Error('');
+  err.cause = { errors: [{ code: 'EHOSTUNREACH' }, { code: 'ENETUNREACH' }] };
+  const ozet = agHatasiOzeti(err);
+  assert.match(ozet, /EHOSTUNREACH/);
+  assert.match(ozet, /ENETUNREACH/);
+});
+
+test('agHatasiOzeti: hicbir alan yoksa bilinmeyen hata doner', () => {
+  assert.equal(agHatasiOzeti(new Error()), 'bilinmeyen hata');
+  assert.equal(agHatasiOzeti({}), 'bilinmeyen hata');
+});
+
+test('agHatasiOzeti: string girdi kendisini kullanir', () => {
+  assert.equal(agHatasiOzeti('ham hata metni'), 'ham hata metni');
+});
+
+test('agHatasiOzeti: bos string / null / undefined -> bilinmeyen hata', () => {
+  assert.equal(agHatasiOzeti(''), 'bilinmeyen hata');
+  assert.equal(agHatasiOzeti('   '), 'bilinmeyen hata');
+  assert.equal(agHatasiOzeti(null), 'bilinmeyen hata');
+  assert.equal(agHatasiOzeti(undefined), 'bilinmeyen hata');
+});
+
+test('agHatasiOzeti: cok satirli mesaj tek satira cevrilir', () => {
+  const err = new Error('satir1\nsatir2\r\nsatir3\tsekmeli');
+  const ozet = agHatasiOzeti(err);
+  assert.doesNotMatch(ozet, /[\n\r]/);
+  assert.equal(ozet, 'satir1 satir2 satir3 sekmeli');
+});
+
+test('agHatasiOzeti: cok uzun mesaj varsayilan 200 karaktere kirpilir', () => {
+  const err = new Error('x'.repeat(500));
+  const ozet = agHatasiOzeti(err);
+  assert.equal(ozet.length, 200);
+  assert.ok(ozet.endsWith('…'));
+});
+
+test('agHatasiOzeti: maxLen parametresi ile kirpma sinirini ozellestirir', () => {
+  const err = new Error('y'.repeat(50));
+  const ozet = agHatasiOzeti(err, 10);
+  assert.equal(ozet.length, 10);
 });

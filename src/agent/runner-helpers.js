@@ -415,6 +415,79 @@ function isTransientNetworkError(err) {
 }
 
 /**
+ * Bir hata nesnesinden loglanabilir TEK SATIRLIK özet üretir — saf fonksiyon.
+ *
+ * KÖK NEDEN (2026-09-13 ölçüm, 18 günlük heartbeat günlüğü): 3930 heartbeat
+ * hatasının %52,4'ü (2057) BOŞ `.message` ile logluyordu. Sebep: Node 20+
+ * Happy Eyeballs (`autoSelectFamily`) A ve AAAA'yı paralel dener; ikisi de
+ * düşünce fırlatılan `AggregateError`'ın ÜST `.message`'ı boş string'tir —
+ * gerçek bilgi `.code` ve `.errors[]` (ya da `.cause.errors[]`) içindedir.
+ *
+ * Öncelik sırası:
+ *   1. `err.message` doluysa onu kullan.
+ *   2. AggregateError-benzeri (`err.errors` ya da `err.cause?.errors` bir dizi):
+ *      alt hataların code/message'larını benzersizleştirip virgülle birleştirir
+ *      (ör. `AggregateError: ECONNREFUSED, ENETUNREACH`).
+ *   3. `err.code`, yoksa `err.cause?.code`.
+ *   4. Hiçbiri yoksa `'bilinmeyen hata'`.
+ *
+ * String girdi kendi metnini kullanır (boşsa yine `'bilinmeyen hata'`);
+ * null/undefined `'bilinmeyen hata'` döner. Çıktı her zaman tek satırdır
+ * (yeni satırlar boşluğa çevrilir) ve `maxLen` karaktere kırpılır.
+ *
+ * @param {Error|AggregateError|string|null|undefined} err
+ * @param {number} [maxLen=200]
+ * @returns {string}
+ */
+function agHatasiOzeti(err, maxLen = 200) {
+  const sinir = Number.isFinite(maxLen) && maxLen > 0 ? maxLen : 200;
+  const tekSatir = (s) => String(s).replace(/\s+/g, ' ').trim();
+  const kirp = (s) => {
+    const t = tekSatir(s);
+    return t.length > sinir ? `${t.slice(0, sinir - 1)}…` : t;
+  };
+
+  if (err == null) return 'bilinmeyen hata';
+
+  if (typeof err === 'string') {
+    const t = tekSatir(err);
+    return t ? kirp(t) : 'bilinmeyen hata';
+  }
+
+  if (typeof err === 'object') {
+    const msg = typeof err.message === 'string' ? tekSatir(err.message) : '';
+    if (msg) return kirp(msg);
+
+    // AggregateError benzeri: kendi .errors'ı ya da .cause.errors'ı bir dizi.
+    const altHatalar = Array.isArray(err.errors)
+      ? err.errors
+      : (err.cause && Array.isArray(err.cause.errors) ? err.cause.errors : null);
+    if (altHatalar && altHatalar.length > 0) {
+      const gorulen = new Set();
+      const parcalar = [];
+      for (const alt of altHatalar) {
+        let p = null;
+        if (alt && typeof alt === 'object') p = alt.code || alt.message || null;
+        else if (typeof alt === 'string') p = alt;
+        if (p) {
+          p = String(p);
+          if (!gorulen.has(p)) { gorulen.add(p); parcalar.push(p); }
+        }
+      }
+      if (parcalar.length > 0) {
+        const ad = (typeof err.name === 'string' && err.name) || 'AggregateError';
+        return kirp(`${ad}: ${parcalar.join(', ')}`);
+      }
+    }
+
+    const kod = err.code || (err.cause && err.cause.code);
+    if (kod) return kirp(String(kod));
+  }
+
+  return 'bilinmeyen hata';
+}
+
+/**
  * Kaynak cache dizin adını (`<cacheRoot>/<bookId>/<srcVersion>/build.zip`) indirme
  * URL'sinden türetir — saf (IO yok, `crypto` yalnız hash için kullanılır).
  *
@@ -479,4 +552,5 @@ module.exports = {
   packagerResultOf,
   lruSilinecekler,
   isTransientNetworkError,
+  agHatasiOzeti,
 };

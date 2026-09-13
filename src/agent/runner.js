@@ -42,7 +42,7 @@ const {
   joinUrl,
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
-  isTransientNetworkError, srcVersionTuret,
+  isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
 } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,10 @@ const CONFIG = {
   agentName: process.env.AGENT_NAME || os.hostname(),
   pollMs: Number(process.env.AGENT_POLL_MS || 10000),
   heartbeatMs: Number(process.env.AGENT_HEARTBEAT_MS || 15000),
+  // İlk heartbeat POST'u düşerse (Happy Eyeballs/DNS/timeout — çoğu geçici) bu kadar
+  // bekleyip TEK seferlik hızlı bir daha denenir; o da düşerse tek satır loglanır.
+  // Testler CONFIG.heartbeatRetryMs'i 0'a çekip gerçek zaman beklemeden koşabilir.
+  heartbeatRetryMs: Number(process.env.AGENT_HEARTBEAT_RETRY_MS || 2500),
   packageTimeoutMs: Number(process.env.AGENT_PACKAGE_TIMEOUT_MS || 20 * 60 * 1000),
   // macOS signing (all optional — signing is best-effort).
   signIdentity: process.env.APPLE_SIGN_IDENTITY || '',
@@ -235,17 +239,32 @@ async function fetchNextJob(auth) {
   return parseNextJob(res.status, res.data);
 }
 
+/**
+ * heartbeat başarısız olunca eskiden hiç yeniden deneme YOKTU (fire-and-forget
+ * setInterval) — sıradaki tık CONFIG.heartbeatMs (~15sn) sonra gelirdi. İlk POST
+ * düşerse CONFIG.heartbeatRetryMs bekleyip TEK seferlik hızlı bir daha denenir
+ * (gecikme CONFIG'ten okunur — testler CONFIG.heartbeatRetryMs'i 0'a çekip gerçek
+ * zaman beklemeden koşabilir); o da düşerse tek satır loglanır (agHatasiOzeti —
+ * boş `.message` taşıyan AggregateError artık `'bilinmeyen hata'` yerine gerçek
+ * code/alt-hata bilgisini taşır). İkinci deneme başarılıysa hiç log yazılmaz.
+ */
 async function heartbeat(auth) {
+  const postOnce = () => axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
+    // capabilities: sunucu tarafı build_agents.capabilities'i güncel tutar (2026-09-10,
+    // pardus eklendi) — enroll'da bir kez yazılıp sonra hiç tazelenmiyordu.
+    { heldJobs: currentJob ? [currentJob] : [], capabilities: guncelYetenekler() },
+    { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
+  );
   try {
-    await axios.post(
-      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
-      // capabilities: sunucu tarafı build_agents.capabilities'i güncel tutar (2026-09-10,
-      // pardus eklendi) — enroll'da bir kez yazılıp sonra hiç tazelenmiyordu.
-      { heldJobs: currentJob ? [currentJob] : [], capabilities: guncelYetenekler() },
-      { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
-    );
+    await postOnce();
   } catch (e) {
-    warn('heartbeat failed:', e.message);
+    await sleep(CONFIG.heartbeatRetryMs);
+    try {
+      await postOnce();
+    } catch (e2) {
+      warn('heartbeat failed (retry too):', agHatasiOzeti(e2));
+    }
   }
 }
 
@@ -438,7 +457,7 @@ async function postResultFailure(auth, job, errorMessage) {
       { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true },
     );
   } catch (e) {
-    errlog('could not report failure for', job.bookId, job.platform, '-', e.message);
+    errlog('could not report failure for', job.bookId, job.platform, '-', agHatasiOzeti(e));
   }
 }
 
@@ -629,7 +648,7 @@ async function packagerLogoIdFor(publisherName) {
     const id = res.status === 200 ? pickLogoId(res.data, publisherName) : null;
     if (id) log('logo:', publisherName, '->', id); else warn('logo bulunamadi, varsayilan ikon:', publisherName || '(yayinci yok)');
     return id;
-  } catch (e) { warn('logo listesi alinamadi:', e.message); return null; }
+  } catch (e) { warn('logo listesi alinamadi:', agHatasiOzeti(e)); return null; }
 }
 
 async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId) {
@@ -787,7 +806,7 @@ async function packagerReleaseJob(jobId) {
     warn(`packager delete-job HTTP ${res.status} — output bırakılamadı`);
     return false;
   } catch (e) {
-    warn('packager delete-job hatası (iş yine de başarılı):', e.message);
+    warn('packager delete-job hatası (iş yine de başarılı):', agHatasiOzeti(e));
     return false;
   }
 }
@@ -909,7 +928,7 @@ async function cacheTavaniUygula(cacheRoot, korunanBookId) {
           await fsp.rmdir(bookDir).catch(() => {});
         }
       } catch (e) {
-        warn('cache tavan — silinemedi:', girdi.yol, e.message);
+        warn('cache tavan — silinemedi:', girdi.yol, agHatasiOzeti(e));
       }
     }
 
@@ -918,7 +937,7 @@ async function cacheTavaniUygula(cacheRoot, korunanBookId) {
     const tavanGB = (tavanBayt / 1024 ** 3).toFixed(1);
     log(`cache tavan özet: ${toplamGB}/${tavanGB} GB — ${silinecekler.length} girdi silindi`);
   } catch (e) {
-    warn('cacheTavaniUygula başarısız (non-fatal):', e.message);
+    warn('cacheTavaniUygula başarısız (non-fatal):', agHatasiOzeti(e));
   }
 }
 
@@ -1024,7 +1043,7 @@ async function injectPardusIcon(zipPath, publisherName, work) {
     log('pardus ikon: zip köküne ico.png eklendi (logo', logoId + ')');
     return true;
   } catch (e) {
-    warn('pardus ikon eklenemedi (varsayılan ikon):', e.message);
+    warn('pardus ikon eklenemedi (varsayılan ikon):', agHatasiOzeti(e));
     return false;
   }
 }
@@ -1178,7 +1197,7 @@ async function processJob(auth, job) {
       try {
         const upd = applyPublisherUpdate(buildDir);
         log(`publisher update: ${upd.reason} (${upd.from} → ${upd.to || '-'}, kurum ${upd.companyId || '?'})`);
-      } catch (e) { warn('publisher update uygulanamadı:', e.message); }
+      } catch (e) { warn('publisher update uygulanamadı:', agHatasiOzeti(e)); }
       await zipDir(buildDir, zipPath);
 
       // Populate the shared cache atomically (tmp + rename). Non-fatal on error.
@@ -1195,7 +1214,7 @@ async function processJob(auth, job) {
         // başka kitap silinebilir.
         await cacheTavaniUygula(cacheRoot, job.bookId);
       } catch (e) {
-        warn('source cache populate failed (non-fatal):', e.message);
+        warn('source cache populate failed (non-fatal):', agHatasiOzeti(e));
       }
     }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
@@ -1284,7 +1303,7 @@ async function main() {
       netErrAttempt = 0; // a successful poll resets backoff
     } catch (e) {
       const delay = backoffMs(netErrAttempt++, 1000, 30000);
-      warn('next-job poll error, backing off', delay, 'ms:', e.message);
+      warn('next-job poll error, backing off', delay, 'ms:', agHatasiOzeti(e));
       await sleep(delay);
       continue;
     }
@@ -1301,11 +1320,11 @@ async function main() {
       if (isTransientNetworkError(e)) {
         // Ağ/geçici hata: 'failed' YAZMA — lease süresi dolunca API satırı yeniden kuyruğa alır,
         // ajan önbellekten yeniden paketleyip yüklemeyi dener (internet gelince kendiliğinden biter).
-        warn('job geçici hata (failed yazılmadı, lease dolunca yeniden denenecek):', job.bookId, job.platform, '-', e.message);
+        warn('job geçici hata (failed yazılmadı, lease dolunca yeniden denenecek):', job.bookId, job.platform, '-', agHatasiOzeti(e));
         await sleep(120000);
         continue;
       }
-      errlog('job failed:', job.bookId, job.platform, '-', e.message);
+      errlog('job failed:', job.bookId, job.platform, '-', agHatasiOzeti(e));
       await postResultFailure(auth, job, e.message);
     }
   }
@@ -1350,7 +1369,7 @@ function installSignalHandlers() {
 if (require.main === module) {
   installSignalHandlers();
   main().catch((e) => {
-    errlog('fatal:', e && e.message ? e.message : e);
+    errlog('fatal:', agHatasiOzeti(e));
     process.exit(1);
   });
 }
