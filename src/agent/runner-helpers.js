@@ -342,6 +342,54 @@ function asciiAppName(name, fallback = 'book') {
   return s || fallback;
 }
 
+/**
+ * Kaynak cache'i (~/.empp-agent/cache, `<bookId>/<version>/build.zip`) bir toplam
+ * bayt tavanını aşınca hangi girdilerin silineceğine karar verir (saf — IO yok).
+ * `pruneSiblingVersions` yalnız AYNI kitabın eski sürümünü siler; bu fonksiyon
+ * TÜM kitaplar arasında en eski kullanılanı (LRU) seçer — cache 2026-09-13'te
+ * 35 GB'a ulaşınca eklendi.
+ *
+ * En eski `sonKullanim`'dan başlayarak toplam bayt tavanın ALTINA inene kadar
+ * silinecekleri sırayla döndürür. `korunan: true` işaretli girdiler (üzerinde
+ * çalışılan iş) asla listeye girmez — tavanı aşmaya devam etse bile atlanır.
+ * `girdiler` mutasyona UĞRAMAZ (kopya üzerinde sıralanır).
+ *
+ * @param {Array<{yol:string, bayt?:number, sonKullanim?:number, korunan?:boolean}>} girdiler
+ * @param {number} tavanBayt
+ * @returns {Array<{yol:string, bayt:number, sonKullanim:number, korunan?:boolean}>}
+ *   silme sırasıyla
+ */
+function lruSilinecekler(girdiler, tavanBayt) {
+  const liste = Array.isArray(girdiler) ? girdiler : [];
+  const tavan = Number.isFinite(tavanBayt) ? tavanBayt : 0;
+
+  // Normalize edilmiş kopya — girdi dizisini/nesnelerini mutasyona uğratma.
+  const normal = liste.map((g) => ({
+    yol: g && g.yol,
+    bayt: Number.isFinite(g && g.bayt) ? g.bayt : 0,
+    sonKullanim: Number.isFinite(g && g.sonKullanim) ? g.sonKullanim : 0,
+    korunan: !!(g && g.korunan),
+  }));
+
+  let toplam = normal.reduce((acc, g) => acc + g.bayt, 0);
+  if (toplam <= tavan) return [];
+
+  // En eskiden en yeniye sırala (kararlı: eşit sonKullanim'da girdi sırası korunur).
+  const sirali = normal
+    .map((g, i) => ({ g, i }))
+    .sort((a, b) => (a.g.sonKullanim - b.g.sonKullanim) || (a.i - b.i))
+    .map((x) => x.g);
+
+  const silinecekler = [];
+  for (const girdi of sirali) {
+    if (toplam <= tavan) break;
+    if (girdi.korunan) continue;
+    silinecekler.push(girdi);
+    toplam -= girdi.bayt;
+  }
+  return silinecekler;
+}
+
 module.exports = {
   pauseRequested,
   etkinYetenekler,
@@ -361,4 +409,5 @@ module.exports = {
   joinUrl,
   clipPackagerError,
   packagerResultOf,
+  lruSilinecekler,
 };

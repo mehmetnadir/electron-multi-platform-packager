@@ -34,6 +34,7 @@ const FormData = require('form-data');
 const {
   mapPlatform,
   backoffMs,
+  lruSilinecekler,
   parseNextJob,
   isTerminalStatus,
   packageStatusOf,
@@ -832,6 +833,100 @@ async function pruneSiblingVersions(bookDir, keepVersion) {
   } catch (_) { /* dizin yok / yarış — önemsiz */ }
 }
 
+/**
+ * `<dir>` altındaki tüm dosyaları özyinelemeli tarayıp toplam boyutu (bayt) döner.
+ * `du` spawn etmez — saf fs; hata/erişilemeyen alt yol toplamı bozmaz (0 sayılır).
+ */
+async function dizinBoyutuHesapla(dir) {
+  let toplam = 0;
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch (_) {
+    return 0;
+  }
+  for (const e of entries) {
+    const tam = path.join(dir, e.name);
+    try {
+      if (e.isDirectory()) {
+        toplam += await dizinBoyutuHesapla(tam);
+      } else if (e.isFile()) {
+        const st = await fsp.stat(tam);
+        toplam += st.size;
+      }
+    } catch (_) { /* yarış / erişim — bu dalı atla, üretimi durdurma */ }
+  }
+  return toplam;
+}
+
+/**
+ * Kaynak cache'ine (`<cacheRoot>/<bookId>/<version>/build.zip`) toplam bayt
+ * tavanı uygular — cache 2026-09-13'te 35 GB'a ulaştı; `pruneSiblingVersions`
+ * yalnız AYNI kitabın eski sürümünü siliyordu, kitaplar ARASI bir tavan yoktu.
+ *
+ * Tavan: `EMPP_CACHE_CAP_GB` (varsayılan 35 GB). `korunanBookId` = üzerinde
+ * çalışılan iş; LRU seçimi ondan bağımsız aynı kalsa da asla silinmez. Hata
+ * yutulur — cache tavanı üretimi asla durdurmaz.
+ */
+async function cacheTavaniUygula(cacheRoot, korunanBookId) {
+  try {
+    const tavanBayt = Number(process.env.EMPP_CACHE_CAP_GB || 35) * 1024 ** 3;
+    let bookDirs;
+    try {
+      bookDirs = await fsp.readdir(cacheRoot, { withFileTypes: true });
+    } catch (_) {
+      return; // cache kökü henüz yok — tavan uygulanacak bir şey yok
+    }
+
+    const girdiler = [];
+    for (const bd of bookDirs) {
+      if (!bd.isDirectory()) continue;
+      const bookId = bd.name;
+      const bookDir = path.join(cacheRoot, bookId);
+      let versionDirs;
+      try {
+        versionDirs = await fsp.readdir(bookDir, { withFileTypes: true });
+      } catch (_) { continue; }
+      for (const vd of versionDirs) {
+        if (!vd.isDirectory()) continue;
+        const yol = path.join(bookDir, vd.name);
+        const bayt = await dizinBoyutuHesapla(yol);
+        let sonKullanim;
+        try {
+          sonKullanim = (await fsp.stat(yol)).mtimeMs;
+        } catch (_) {
+          sonKullanim = 0;
+        }
+        girdiler.push({ yol, bayt, sonKullanim, korunan: bookId === String(korunanBookId) });
+      }
+    }
+
+    const silinecekler = lruSilinecekler(girdiler, tavanBayt);
+    for (const girdi of silinecekler) {
+      try {
+        await fsp.rm(girdi.yol, { recursive: true, force: true });
+        const mb = (girdi.bayt / 1e6).toFixed(0);
+        log('cache tavan — silindi:', girdi.yol, `(${mb} MB)`);
+        // Boşalan `<bookId>` dizinini de kaldır (yetim boş klasör kalmasın).
+        const bookDir = path.dirname(girdi.yol);
+        const kalan = await fsp.readdir(bookDir).catch(() => null);
+        if (kalan && kalan.length === 0) {
+          await fsp.rmdir(bookDir).catch(() => {});
+        }
+      } catch (e) {
+        warn('cache tavan — silinemedi:', girdi.yol, e.message);
+      }
+    }
+
+    const toplamBayt = girdiler.reduce((acc, g) => acc + g.bayt, 0);
+    const toplamGB = (toplamBayt / 1024 ** 3).toFixed(1);
+    const tavanGB = (tavanBayt / 1024 ** 3).toFixed(1);
+    log(`cache tavan özet: ${toplamGB}/${tavanGB} GB — ${silinecekler.length} girdi silindi`);
+  } catch (e) {
+    warn('cacheTavaniUygula başarısız (non-fatal):', e.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // macOS signing (best-effort).
 // ---------------------------------------------------------------------------
@@ -1062,6 +1157,9 @@ async function processJob(auth, job) {
       await touchCacheEntry(path.dirname(cachedZip));
       // HIT'te de buda: önceki job populate ederken budamışsa no-op; değilse yakalar.
       await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
+      // Kitaplar ARASI toplam bayt tavanı (LRU) — bu iş korunur, en eski kullanılan
+      // başka kitap silinebilir.
+      await cacheTavaniUygula(cacheRoot, job.bookId);
     } catch (_) {
       /* cache miss — fall through to download */
     }
@@ -1095,6 +1193,9 @@ async function processJob(auth, job) {
         log('source cached for reuse:', cachedZip);
         // Yeni sürüm cache'e girdi → aynı kitabın eski sürümlerini hemen buda.
         await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
+        // Kitaplar ARASI toplam bayt tavanı (LRU) — bu iş korunur, en eski kullanılan
+        // başka kitap silinebilir.
+        await cacheTavaniUygula(cacheRoot, job.bookId);
       } catch (e) {
         warn('source cache populate failed (non-fatal):', e.message);
       }
