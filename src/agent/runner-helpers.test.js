@@ -243,3 +243,18 @@ test('agGecidiAyikla: route çıktısından geçit; yoksa null', () => {
   assert.equal(agGecidiAyikla('route: writing to routing socket: not in table'), null);
   assert.equal(agGecidiAyikla(''), null);
 });
+
+const { dusukVeriAyristir } = require('./runner-helpers');
+
+test('dusukVeriAyristir: constrained=1 → true, =0 → false (WiFi Düşük Veri Modu, Nadir 2026-09-13)', () => {
+  assert.equal(dusukVeriAyristir('constrained=1 expensive=0 status=ok'), true);
+  assert.equal(dusukVeriAyristir('constrained=0 expensive=1 status=ok'), false);
+});
+
+test('dusukVeriAyristir: okunamaz/boş/bozuk girdi → false (güvenli varsayılan, üretimi durdurma)', () => {
+  assert.equal(dusukVeriAyristir(''), false);
+  assert.equal(dusukVeriAyristir(null), false);
+  assert.equal(dusukVeriAyristir(undefined), false);
+  assert.equal(dusukVeriAyristir('status=err'), false);
+  assert.equal(dusukVeriAyristir('constrained=x'), false);
+});

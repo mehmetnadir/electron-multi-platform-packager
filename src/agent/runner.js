@@ -40,7 +40,7 @@ const {
   artifactExtension,
   joinUrl,
   pickLogoId, asciiAppName,
-  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla,
+  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
 } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
@@ -79,6 +79,9 @@ const CONFIG = {
   ofisGw: process.env.AGENT_OFIS_GW || '192.168.1.254',
   macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
   macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
+  // WiFi Düşük Veri Modu'nda yükleme/iş alma duraklat (Nadir 2026-09-13). İkili: swift NWPath.isConstrained.
+  dusukVeriIkili: process.env.AGENT_LOWDATA_BIN || path.join(os.homedir(), '.empp-agent', 'dusuk-veri'),
+  dusukVeriYoksayFlag: path.join(os.homedir(), '.empp-agent', 'dusuk-veri-yoksay.istek'),
   dockerReadyTimeoutMs: Number(process.env.AGENT_DOCKER_READY_TIMEOUT_MS || 5 * 60 * 1000),
   dockerReadyPollMs: Number(process.env.AGENT_DOCKER_READY_POLL_MS || 75000),
   imparkButunlukPy: process.env.IMPARK_BUTUNLUK_PY
@@ -191,6 +194,21 @@ function ofisteMi() {
   _konum = { t: simdi, ofiste };
   return ofiste;
 }
+let _dusukVeri = { t: 0, aktif: false };
+function dusukVeriModu() {
+  // Override: yoksay bayrağı varsa asla duraklatma.
+  if (pauseRequested(CONFIG.dusukVeriYoksayFlag)) return false;
+  const simdi = Date.now();
+  if (simdi - _dusukVeri.t < 60000) return _dusukVeri.aktif;
+  let aktif = false;
+  try {
+    const out = require('child_process').execFileSync(CONFIG.dusukVeriIkili, [], { timeout: 8000, encoding: 'utf8' });
+    aktif = dusukVeriAyristir(out);
+  } catch (e) { aktif = false; } // ikili yok/hata = durdurma (güvenli varsayılan)
+  _dusukVeri = { t: simdi, aktif };
+  return aktif;
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   const caps = etkinYetenekler(CONFIG.caps, {
@@ -1155,6 +1173,12 @@ async function main() {
       continue;
     }
     if (main._pauseLogged) { log('duraklatma kalktı — iş almaya devam'); main._pauseLogged = false; }
+    if (dusukVeriModu()) {
+      if (!main._dusukLogged) { log('WiFi Düşük Veri Modu açık — yükleme/iş alımı duraklatıldı (dusuk-veri-yoksay.istek ile aç)'); main._dusukLogged = true; }
+      await sleep(CONFIG.pollMs);
+      continue;
+    }
+    if (main._dusukLogged) { log('Düşük Veri Modu kalktı — iş almaya devam'); main._dusukLogged = false; }
     let job = null;
     try {
       job = await fetchNextJob(auth);

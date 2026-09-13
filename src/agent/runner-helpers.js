@@ -165,6 +165,16 @@ function etkinYetenekler(caps, durum) {
 }
 
 /** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */
+/**
+ * `dusuk-veri` ikilisinin çıktısını yorumlar (Nadir kuralı 2026-09-13): WiFi Düşük Veri Modu
+ * (Network framework: path.isConstrained) açıksa yükleme/iş alımı duraklatılır — yol/hotspot verisini yakmaz.
+ * Girdi ör: "constrained=1 expensive=0 status=ok". Güvenli varsayılan: okunamazsa FALSE (üretimi durdurma).
+ */
+function dusukVeriAyristir(ciktiStr) {
+  const m = /constrained=([01])/.exec(String(ciktiStr || ''));
+  return m ? m[1] === '1' : false;
+}
+
 function agGecidiAyikla(routeCiktisi) {
   const m = /gateway:\s*([0-9.]+)/.exec(String(routeCiktisi || ''));
   return m ? m[1] : null;
@@ -336,6 +346,7 @@ module.exports = {
   pauseRequested,
   etkinYetenekler,
   agGecidiAyikla,
+  dusukVeriAyristir,
   asciiAppName,
   pickLogoId,
   addFileToZipRoot,
