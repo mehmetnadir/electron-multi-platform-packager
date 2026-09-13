@@ -14,6 +14,8 @@ const {
   addFileToZipRoot,
   restartRequested,
   pauseRequested,
+  isTransientNetworkError,
+  srcVersionTuret,
 } = require('./runner-helpers');
 
 test('mapPlatform: android -> android', () => {
@@ -317,4 +319,122 @@ test('lruSilinecekler: girdi dizisi ve nesneleri mutasyona uğramaz', () => {
   const kopya = JSON.parse(JSON.stringify(girdiler));
   lruSilinecekler(girdiler, 5 * GB);
   assert.deepEqual(girdiler, kopya);
+});
+
+// --- isTransientNetworkError ------------------------------------------------
+// 2026-09-13: ajan logunda `heartbeat failed: ` — iki nokta üst üsteden sonra mesaj BOŞ —
+// böyle bir hata regex'e hiç uymadığı için kalıcı sayılıp iş boşuna düşüyordu. Boş/eksik
+// mesajlı hatalar artık GEÇİCİ sayılır (yeniden denenir).
+
+test('isTransientNetworkError: boş/eksik mesaj GEÇİCİ sayılır (2026-09-13 heartbeat kanıtı)', () => {
+  assert.equal(isTransientNetworkError(new Error('')), true);
+  assert.equal(isTransientNetworkError({}), true);            // .message'sız nesne
+  assert.equal(isTransientNetworkError(undefined), true);
+  assert.equal(isTransientNetworkError(null), true);
+  assert.equal(isTransientNetworkError(''), true);             // boş string hata
+});
+
+test('isTransientNetworkError: bilinen geçici ağ desenleri true döner', () => {
+  assert.equal(isTransientNetworkError(new Error('ECONNRESET')), true);
+  assert.equal(isTransientNetworkError(new Error('connect ETIMEDOUT 1.2.3.4:443')), true);
+  assert.equal(isTransientNetworkError(new Error('socket hang up')), true);
+  assert.equal(isTransientNetworkError(new Error('EPIPE')), true);
+  assert.equal(isTransientNetworkError(new Error('getaddrinfo ENOTFOUND api.example.com')), true);
+  assert.equal(isTransientNetworkError(new Error('fetch failed')), true);
+  assert.equal(isTransientNetworkError(new Error('presign-multipart failed: HTTP 503 {}')), true);
+});
+
+test('isTransientNetworkError: kalıcı iş hataları false döner (mutasyon kapanı — "hepsine true dön" burada kırılmalı)', () => {
+  assert.equal(isTransientNetworkError(new Error('lease_not_held')), false);
+  assert.equal(isTransientNetworkError(new Error('401 Unauthorized')), false);
+  assert.equal(isTransientNetworkError(new Error('403 Forbidden')), false);
+  assert.equal(isTransientNetworkError(new Error('invalid token')), false);
+  assert.equal(isTransientNetworkError(new Error('resources/app/build not found in extracted package')), false);
+});
+
+test('isTransientNetworkError: string girdi de doğru çalışır', () => {
+  assert.equal(isTransientNetworkError('ECONNRESET'), true);
+  assert.equal(isTransientNetworkError('lease_not_held'), false);
+  assert.equal(isTransientNetworkError('   '), true); // yalnız boşluk -> boş sayılır
+});
+
+// --- srcVersionTuret ---------------------------------------------------------
+// 2026-09-13 ölçülmüş kusur: kaynak cache dizin adı (`<cacheRoot>/<bookId>/<srcVersion>/
+// build.zip`) presigned R2/S3 URL'lerinde sorgu dizesinin TAMAMINDAN türüyordu (imza/
+// tarih/süre dahil) — her presign'de değiştiği için cache asla HIT olmuyordu. Gerçek
+// bozuk dizin adları: `45449/X-Amz-Algorithm_AWS4-HMAC-SHA256_X-Amz-Content-Sha256_...`.
+
+test('srcVersionTuret: presigned R2/S3 URL -> imzasız, kararlı yol-sonu adı', () => {
+  const url = 'https://acct.r2.cloudflarestorage.com/kitaplar/45449/English-Up-6-v47.exe'
+    + '?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD'
+    + '&X-Amz-Credential=AKIAEXAMPLE%2F20260913%2Fauto%2Fs3%2Faws4_request'
+    + '&X-Amz-Date=20260913T101500Z&X-Amz-Expires=3600'
+    + '&X-Amz-Signature=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+    + '&X-Amz-SignedHeaders=host';
+  const ad = srcVersionTuret(url);
+  assert.equal(ad, 'English-Up-6-v47.exe');
+  assert.ok(!/X-Amz|Algorithm|Signature|Credential/i.test(ad), 'sorgu/imza sızmamalı');
+});
+
+test('srcVersionTuret: aynı URL iki kez cagrilinca aynı adı verir (saf fonksiyon)', () => {
+  const url = 'https://x.example.com/a/b/c/45472/build.exe?X-Amz-Signature=abc123&X-Amz-Date=1';
+  assert.equal(srcVersionTuret(url), srcVersionTuret(url));
+});
+
+test('srcVersionTuret: KÖK NEDENİN TA KENDİSİ — farklı imza + aynı yol -> AYNI ad', () => {
+  // İki "ayrı" presign (farklı imza/tarih/süre) ama aynı R2 nesnesi (aynı yol).
+  // Eski kod bu ikisi için FARKLI dizin üretiyordu (cache MISS garantisi) — bu test
+  // o mutasyonu (sorgu dizesinin ada karışması) çiviler.
+  const yol = 'https://acct.r2.cloudflarestorage.com/kitaplar/45496/SM3v10.exe';
+  const url1 = `${yol}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260913T090000Z`
+    + '&X-Amz-Expires=3600&X-Amz-Signature=1111111111111111111111111111111111111111'
+    + '&X-Amz-SignedHeaders=host&X-Amz-Credential=AKIA1%2F20260913%2Fauto%2Fs3%2Faws4_request';
+  const url2 = `${yol}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260913T113000Z`
+    + '&X-Amz-Expires=900&X-Amz-Signature=2222222222222222222222222222222222222222'
+    + '&X-Amz-SignedHeaders=host&X-Amz-Credential=AKIA2%2F20260913%2Fauto%2Fs3%2Faws4_request';
+  assert.notEqual(url1, url2); // önce test kendi kendini kontrol etsin: girdiler gerçekten farklı
+  assert.equal(srcVersionTuret(url1), srcVersionTuret(url2));
+  assert.equal(srcVersionTuret(url1), 'SM3v10.exe');
+});
+
+test('srcVersionTuret: normal (sorgusuz) dosya adı DEĞİŞMEDEN korunur (geriye dönük HIT)', () => {
+  assert.equal(
+    srcVersionTuret('https://cdn.example.com/uploads/English-Up-6-v47.exe'),
+    'English-Up-6-v47.exe',
+  );
+  assert.equal(
+    srcVersionTuret('https://cdn.example.com/dl/SM2v10.exe'),
+    'SM2v10.exe',
+  );
+});
+
+test('srcVersionTuret: yol yoksa deterministik sha1 yedek üretir (imza içermez)', () => {
+  const ad1 = srcVersionTuret('?X-Amz-Signature=abcabcabcabcabcabcabcabcabcabcabcabcabc');
+  const ad2 = srcVersionTuret('?X-Amz-Signature=abcabcabcabcabcabcabcabcabcabcabcabcabc');
+  assert.match(ad1, /^src-[a-f0-9]{16}$/);
+  assert.equal(ad1, ad2); // deterministik
+  assert.ok(!/Signature|Amz/i.test(ad1));
+});
+
+test('srcVersionTuret: yalnız noktalama (anlamsız) yol parçası -> sha1 yedek', () => {
+  const ad = srcVersionTuret('https://cdn.example.com/kitaplar/45551/...');
+  assert.match(ad, /^src-[a-f0-9]{16}$/);
+});
+
+test('srcVersionTuret: güvensiz karakterler dizin adı için temizlenir', () => {
+  const ad = srcVersionTuret('https://cdn.example.com/dl/Kitap Adı (v2)!.exe');
+  assert.equal(ad, 'Kitap_Ad___v2__.exe');
+  assert.doesNotMatch(ad, /[ ()!]/);
+});
+
+test('srcVersionTuret: maxLen sinirini uygular (varsayilan 80)', () => {
+  const uzunAd = 'a'.repeat(200) + '.exe';
+  const ad = srcVersionTuret(`https://cdn.example.com/dl/${uzunAd}`);
+  assert.equal(ad.length, 80);
+});
+
+test('srcVersionTuret: bos/eksik downloadUrl -> firlatmaz, deterministik yedek doner', () => {
+  assert.equal(srcVersionTuret(''), srcVersionTuret(''));
+  assert.match(srcVersionTuret(''), /^src-[a-f0-9]{16}$/);
+  assert.equal(srcVersionTuret(undefined), srcVersionTuret(null));
 });

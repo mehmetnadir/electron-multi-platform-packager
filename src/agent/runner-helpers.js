@@ -390,9 +390,77 @@ function lruSilinecekler(girdiler, tavanBayt) {
   return silinecekler;
 }
 
+/**
+ * Ağ/geçici hata mı? (kesinti, DNS, 5xx, R2 complete/presign) — kalıcı hata değil, yeniden denenir.
+ *
+ * Boş/eksik mesajlı hatalar (`''`, `undefined`, `null`, `.message`'sız nesne) de GEÇİCİ sayılır:
+ * ağ katmanı hataları (özellikle macOS/undici) sıklıkla mesajsız gelir; bunları kalıcı saymak
+ * gerçek bir ağ kesintisini iş hatası gibi düşürüp yeniden denenmesini engeller (2026-09-13
+ * `heartbeat failed: ` — iki nokta üst üsteden sonra mesaj boş — kanıtı).
+ *
+ * @param {Error|string|*} err
+ * @returns {boolean}
+ */
+function isTransientNetworkError(err) {
+  let raw;
+  if (typeof err === 'string') {
+    raw = err;
+  } else if (err && typeof err === 'object' && typeof err.message === 'string') {
+    raw = err.message;
+  } else {
+    raw = '';
+  }
+  if (raw.trim() === '') return true;
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|socket hang up|network|fetch failed|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(raw);
+}
+
+/**
+ * Kaynak cache dizin adını (`<cacheRoot>/<bookId>/<srcVersion>/build.zip`) indirme
+ * URL'sinden türetir — saf (IO yok, `crypto` yalnız hash için kullanılır).
+ *
+ * KÖK NEDEN (2026-09-13 ölçüm): eski kod `downloadUrl.split(/[/?#]/).filter(Boolean).pop()`
+ * yapıyordu — yani URL'yi `/`, `?`, `#` karakterlerinin HEPSİNDE bölüp SON parçayı
+ * alıyordu. Presigned R2/S3 URL'lerinde sorgu dizesindeki `X-Amz-Credential` değeri
+ * `%2F` (encoded '/') taşır, LİTERAL '/' taşımaz — yani sorgu dizesinin içinde hiç
+ * bölünme noktası olmuyor ve `pop()` doğrudan TÜM sorgu dizesini (imza+tarih+süre
+ * dahil) döndürüyordu. İmza her presign'de değiştiği için aynı dosya için üretilen
+ * ad da her seferinde değişiyor, cache asla HIT olmuyordu (45449/45448/45472/45496/
+ * 45551 dizinleri — hepsi `X-Amz-Algorithm_...` ile başlıyordu).
+ *
+ * DÜZELTME: önce sorgu/hash (`?`, `#` sonrası) tamamen ATILIR, yalnız YOL kısmı
+ * kalır; yoldaki `/`-ayrılmış son parça alınır. Bu son parça boşsa veya sanitize
+ * sonrası hiç alfasayısal karakter içermiyorsa (anlamsız — ör. yalnız noktalama ya
+ * da hiç yol yok), yolun kısa sha1'inden deterministik bir yedek üretilir — ASLA
+ * imza/sorgu içeren bir ad üretilmez. Aynı girdi HER ZAMAN aynı çıktıyı verir
+ * (saf fonksiyon), böylece presigned URL yeniden imzalansa bile (yol aynı kaldığı
+ * sürece) cache HIT korunur.
+ *
+ * Sağlıklı eski adlar (`English-Up-6-v47.exe`, `SM2v10.exe`) davranış olarak
+ * DEĞİŞMEZ — bunlar zaten sorgusuz, güvenli karakterli yol sonlarıdır.
+ *
+ * @param {string} downloadUrl
+ * @param {number} [maxLen=80]
+ * @returns {string} dizin-adı-güvenli, deterministik srcVersion
+ */
+function srcVersionTuret(downloadUrl, maxLen = 80) {
+  const ham = String(downloadUrl == null ? '' : downloadUrl);
+  // Sorgu dizesi + hash ATILIR (presigned imza/tarih/süre burada yaşar).
+  const yolKismi = ham.split(/[?#]/)[0];
+  const parcalar = yolKismi.split('/').filter(Boolean);
+  const sonParca = parcalar.length ? parcalar[parcalar.length - 1] : '';
+  const sinirli = Number.isFinite(maxLen) && maxLen > 0 ? maxLen : 80;
+  const temiz = sonParca.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, sinirli);
+  if (temiz && /[a-zA-Z0-9]/.test(temiz)) return temiz;
+  // Yol parçası yok/anlamsız -> yolun kendisinden deterministik yedek (imza YOK).
+  const crypto = require('crypto');
+  const hash = crypto.createHash('sha1').update(yolKismi).digest('hex').slice(0, 16);
+  return `src-${hash}`;
+}
+
 module.exports = {
   pauseRequested,
   etkinYetenekler,
+  srcVersionTuret,
   agGecidiAyikla,
   dusukVeriAyristir,
   asciiAppName,
@@ -410,4 +478,5 @@ module.exports = {
   clipPackagerError,
   packagerResultOf,
   lruSilinecekler,
+  isTransientNetworkError,
 };

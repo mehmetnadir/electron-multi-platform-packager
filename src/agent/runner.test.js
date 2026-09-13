@@ -254,3 +254,23 @@ test('eski sürüm cache leri budanır (yayıncı bump sonrası disk şişmesin)
   const calls = SRC.match(/pruneSiblingVersions\(path\.join\(cacheRoot, String\(job\.bookId\)\), srcVersion\)/g) || [];
   assert.ok(calls.length >= 2, `prune çağrısı populate+HIT te olmalı (bulundu: ${calls.length})`);
 });
+
+// ÇIKIŞ GÖZCÜSÜ (2026-09-13): ajan üretim işinin ortasında sessizce yeniden başladı
+// ve HİÇBİR iz bırakmadı — hangi yoldan çıkıldığı ölçülemedi. Bu testler kancaların
+// gerçekten kurulduğunu çivileme altına alır; kaldırılırsa kırılırlar.
+test('installSignalHandlers: her çıkış yoluna iz bırakan kancaları kurar', () => {
+  const olaylar = ['exit', 'SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT', 'uncaughtException', 'unhandledRejection'];
+  const oncekiler = new Map(olaylar.map((o) => [o, process.listeners(o).slice()]));
+  try {
+    for (const o of olaylar) process.removeAllListeners(o);
+    require('./runner').installSignalHandlers();
+    for (const o of olaylar) {
+      assert.equal(process.listenerCount(o), 1, `${o} kancası kurulmadı`);
+    }
+  } finally {
+    for (const o of olaylar) {
+      process.removeAllListeners(o);
+      for (const fn of oncekiler.get(o)) process.on(o, fn);
+    }
+  }
+});

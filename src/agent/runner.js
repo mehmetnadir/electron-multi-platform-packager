@@ -42,6 +42,7 @@ const {
   joinUrl,
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
+  isTransientNetworkError, srcVersionTuret,
 } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
@@ -286,12 +287,6 @@ function cachedZipIsStale(zipPath) {
   } catch (e) { return false; }
 }
 
-
-/** Ağ/geçici hata mı? (kesinti, DNS, 5xx, R2 complete/presign) — kalıcı hata değil, yeniden denenir. */
-function isTransientNetworkError(err) {
-  const m = String((err && err.message) || err || '');
-  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|socket hang up|network|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(m);
-}
 
 const MULTIPART_THRESHOLD = Number(process.env.AGENT_MULTIPART_THRESHOLD || 300 * 1024 * 1024);
 const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 * 1024 * 1024);
@@ -1137,9 +1132,12 @@ async function processJob(auth, job) {
     //      SAME web build feeds apk / impark / dmg. This avoids re-downloading
     //      the multi-GB Windows SFX on every job (the slow link is paid once).
     const cacheRoot = process.env.EMPP_SOURCE_CACHE || '/var/empp-cache';
-    const srcVersion = (job.downloadUrl.split(/[/?#]/).filter(Boolean).pop() || 'src')
-      .replace(/[^a-zA-Z0-9._-]/g, '_')
-      .slice(0, 80);
+    // srcVersionTuret: sorgu dizesini (presigned imza/tarih/süre) ATAR, yalnız yol
+    // sonundan türetir — 2026-09-13 ölçümü: eski kod tüm URL'yi bölüp SON parçayı
+    // alıyordu, presigned URL'lerin sorgusunda literal '/' olmadığından bu SON
+    // parça sorgu dizesinin tamamıydı (X-Amz-Algorithm_..._X-Amz-Cre... dizinleri) —
+    // imza her presign'de değiştiği için cache asla HIT olmuyordu (runner-helpers.js).
+    const srcVersion = srcVersionTuret(job.downloadUrl);
     const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
     const zipPath = path.join(work, 'build.zip');
 
@@ -1317,6 +1315,13 @@ async function main() {
 }
 
 // Graceful shutdown.
+//
+// ÇIKIŞ GÖZCÜSÜ (2026-09-13): ajan, süren bir üretim işinin ortasında sessizce
+// yeniden başladı (73768 android, 19:55:44). Ne sinyal handler'ı, ne restart
+// bayrağı yolu, ne de bir hata izi log'a düştü; launchd "exit(0)" gördü. Hangi
+// yoldan çıkıldığı ÖLÇÜLEMEDİ. Aşağıdaki kancalar davranışı değiştirmez —
+// yalnız her çıkışın kodunu ve sebebini log'a yazar ki bir sonraki olayda
+// "harici sonlandırma mı, kendi kodumuz mu" sorusu kanıtla kapansın.
 function installSignalHandlers() {
   const onSignal = (sig) => {
     log(`received ${sig}, finishing current work then exiting...`);
@@ -1326,6 +1331,20 @@ function installSignalHandlers() {
   };
   process.on('SIGTERM', () => onSignal('SIGTERM'));
   process.on('SIGINT', () => onSignal('SIGINT'));
+  // Varsayılanda sessizce öldüren sinyaller — artık iz bırakıyorlar.
+  process.on('SIGHUP', () => onSignal('SIGHUP'));
+  process.on('SIGQUIT', () => onSignal('SIGQUIT'));
+  // Koşulsuz: hangi yoldan çıkarsak çıkalım son satır bu olur.
+  process.on('exit', (code) => log('süreç çıkıyor — çıkış kodu:', code));
+  // Varsayılan davranışı taklit eder (log + aynı çıkış kodu), ama iz bırakır.
+  process.on('uncaughtException', (e) => {
+    errlog('yakalanmamış istisna:', (e && e.stack) || e);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (r) => {
+    errlog('yakalanmamış promise reddi:', (r && r.stack) || r);
+    process.exit(1);
+  });
 }
 
 if (require.main === module) {
@@ -1337,6 +1356,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  installSignalHandlers,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   packagerReleaseJob,
   touchCacheEntry,
