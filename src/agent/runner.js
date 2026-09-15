@@ -1389,6 +1389,10 @@ if (require.main === module) {
 
 module.exports = {
   installSignalHandlers,
+  // downloadFile/zipDir: kaynak ön-ısıtıcısı (kaynak-isitici.js) AYNI adımları
+  // kullansın diye dışa açıldı — ısıtıcı kendi indirme/zip kodunu yazarsa ajanın
+  // ürettiğinden farklı bir build.zip doğar ve paket sessizce bozulur.
+  downloadFile, zipDir,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   packagerReleaseJob,
   touchCacheEntry,
