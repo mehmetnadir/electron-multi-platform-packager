@@ -155,7 +155,11 @@ test('parseNextJob publisherName tasir', () => {
 
 test('runner: complete-multipart 5xx için yeniden deneme var (sentinel, 2026-08-27)', () => {
   const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'runner.js'), 'utf8');
-  require('node:assert').ok(/attempt <= 3[\s\S]{0,600}complete-multipart/.test(src), 'complete-multipart 3 deneme döngüsü olmalı');
+  require('node:assert').ok(/attempt <= COMPLETE_ATTEMPTS[\s\S]{0,600}complete-multipart/.test(src), 'complete-multipart COMPLETE_ATTEMPTS döngüsü olmalı');
+  // 2026-09-15: 3×15 sn 502 dalgasını atlatamadı — en az 8 deneme, artan bekleyiş (tavan 60 sn).
+  require('node:assert').match(src, /AGENT_COMPLETE_ATTEMPTS \|\| 8\)/);
+  require('node:assert').match(src, /Math\.min\(15000 \* attempt, 60000\)/);
+  require('node:assert').match(src, /AGENT_PRESIGN_ATTEMPTS \|\| 5\)/, 'presign-multipart de yeniden denenmeli');
 });
 
 test('runner: geçici ağ hatasında failed yazılmaz, parça yükleme 30 deneme (sentinel, 2026-08-27)', () => {

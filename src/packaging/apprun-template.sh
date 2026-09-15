@@ -5,7 +5,7 @@
 
 SELF=$(readlink -f "$0")
 HERE=${SELF%/*}
-export PATH=$PATH:"$HERE/usr/bin/zenity"
+export PATH=$PATH:"$HERE/usr/bin"   # gömülü zenity (2026-09-15: eski satır dosyayı dizin sanıyordu)
 
 # Zenity komutunu belirle
 zenityCmd="$HERE/usr/bin/zenity"

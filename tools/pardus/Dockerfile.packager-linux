@@ -11,6 +11,9 @@
 #   ikililerdir; kaynak koda dokunulmaz.
 #
 # Sunucu Node 22.16 -> node:22-bookworm.
+#
+# zenity (2026-09-15, Nadir kurali): .impark'a GOMULU zenity ZORUNLU; customizeAppImage
+# /usr/bin/zenity'yi AppDir/usr/bin'e kopyalar, yoksa paket URETILMEZ. Imaj etiketi :2.
 FROM --platform=linux/amd64 node:22-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -18,6 +21,7 @@ RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
       squashfs-tools libarchive-tools zip unzip file git python3 fakeroot rsync \
       desktop-file-utils ca-certificates curl xz-utils procps \
+      zenity \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # appimagetool: sunucuda /usr/local/bin/appimagetool kurulu; kod once onu arar (dis indirme

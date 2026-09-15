@@ -28,6 +28,7 @@ grep -E "^(Name|Exec|Icon)=" appdir/*.desktop | sed 's/^/desktop: /' | tee -a ra
 say "AppRun resolve_executable: $(grep -c 'resolve_executable' appdir/AppRun 2>/dev/null || echo 0) eslesme"
 say "AppRun PUBLISHER: $(grep -E '^PUBLISHER_NAME=' appdir/AppRun)"
 say "usr/bin: $(ls appdir/usr/bin 2>/dev/null | tr '\n' ' ')"
+if [ -s appdir/usr/bin/zenity ] && [ -x appdir/usr/bin/zenity ]; then say "zenity: VAR ($(stat -c %s appdir/usr/bin/zenity) bayt, $(file -b appdir/usr/bin/zenity | cut -c1-40))"; else say "zenity: YOK"; fi
 say "app.asar: $(stat -c %s appdir/resources/app.asar 2>/dev/null) bayt"
 
 # asar kok listesi

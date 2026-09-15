@@ -1109,6 +1109,13 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       await fs.writeFile(appRunPath, appRunContent);
       await fs.chmod(appRunPath, 0o755);
       console.log('✅ Özel AppRun kaydedildi');
+
+      // 2b. ZENITY ZORUNLU (Nadir, 2026-09-15): açılış çubuğu pakete GÖMÜLÜ olmalı; gömülemiyorsa
+      // .impark ÜRETİLMEZ (fırlatır → iş başarısız). 15 Eylül'e kadar 100/100 pakette usr/bin boştu.
+      // Kaynak: derleme makinesinin /usr/bin/zenity (Docker imajı packager-linux:2 apt ile kurar).
+      const { zenityGom } = require('./zenity-gom');
+      const zenity = await zenityGom(extractDir);
+      console.log(`✅ zenity gömüldü: ${zenity.bin} (${zenity.boyut} bayt)`);
       
       // 3. Logo'yu kopyala (eğer varsa)
       if (logoPath && await fs.pathExists(logoPath)) {

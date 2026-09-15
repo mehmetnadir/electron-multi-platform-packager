@@ -313,11 +313,21 @@ const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 *
 async function uploadMultipart(auth, job, artifactPath, size) {
   const partSize = MULTIPART_PART_SIZE;
   const partCount = Math.ceil(size / partSize);
-  const start = await axios.post(
-    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-multipart`),
-    { bookId: job.bookId, platform: job.platform, partCount },
-    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
-  );
+  // presign-multipart: API/Cloudflare 502 dalgaları kısa sürüyor (2026-09-15: günde 15 geçici hata,
+  // her biri 10-20 dk'lık derlemeyi baştan yaptırıyordu). 5xx/ağ hatasında bekleyip yeniden dene.
+  const PRESIGN_ATTEMPTS = Number(process.env.AGENT_PRESIGN_ATTEMPTS || 5);
+  let start = null;
+  for (let attempt = 1; attempt <= PRESIGN_ATTEMPTS; attempt++) {
+    start = await axios.post(
+      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-multipart`),
+      { bookId: job.bookId, platform: job.platform, partCount },
+      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+    ).catch((err) => ({ status: 0, data: { error: err.message } }));
+    if (!(start.status >= 500 || start.status === 0) || attempt === PRESIGN_ATTEMPTS) break;
+    const bekle = Math.min(15000 * attempt, 60000);
+    warn(`presign-multipart HTTP ${start.status} (deneme ${attempt}/${PRESIGN_ATTEMPTS}) — ${bekle / 1000} sn sonra tekrar`);
+    await sleep(bekle);
+  }
   if (start.status === 404) return null;             // eski sunucu → tek parça yola düş
   if (start.status !== 200 || !start.data?.uploadId) {
     throw new Error(`presign-multipart failed: HTTP ${start.status} ${JSON.stringify(start.data)}`);
@@ -365,9 +375,11 @@ async function uploadMultipart(auth, job, artifactPath, size) {
   }
 
   // complete-multipart: R2/Cloudflare 5xx geçici olabiliyor (2026-08-27: 40 dk'lık noterli build
-  // HTTP 502 ile kaybedildi). Parçalar zaten yüklü — yalnız bu çağrı 3 kez denenir.
+  // HTTP 502 ile kaybedildi; 2026-09-15: 3×15 sn yetmedi, 502 dalgası ~1 dk sürüyor). Parçalar
+  // zaten yüklü ve presigned URL'ler 1 saat geçerli — bu çağrı 8 kez, artan bekleyişle denenir (~6 dk).
+  const COMPLETE_ATTEMPTS = Number(process.env.AGENT_COMPLETE_ATTEMPTS || 8);
   let done = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt++) {
     done = await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
       { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
@@ -375,8 +387,9 @@ async function uploadMultipart(auth, job, artifactPath, size) {
     ).catch((err) => ({ status: 0, data: { error: err.message } }));
     if (done.status === 200) break;
     if (done.status >= 500 || done.status === 0) {
-      warn(`complete-multipart HTTP ${done.status} (deneme ${attempt}/3) — ${attempt < 3 ? '15 sn sonra tekrar' : 'vazgeçildi'}`);
-      if (attempt < 3) await sleep(15000);
+      const bekle = Math.min(15000 * attempt, 60000);
+      warn(`complete-multipart HTTP ${done.status} (deneme ${attempt}/${COMPLETE_ATTEMPTS}) — ${attempt < COMPLETE_ATTEMPTS ? `${bekle / 1000} sn sonra tekrar` : 'vazgeçildi'}`);
+      if (attempt < COMPLETE_ATTEMPTS) await sleep(bekle);
       continue;
     }
     break; // 4xx: tekrar anlamsız

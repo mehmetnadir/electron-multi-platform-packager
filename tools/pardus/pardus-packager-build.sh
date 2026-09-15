@@ -13,7 +13,7 @@
 set -euo pipefail
 TOOLS="${PARDUS_TOOLS:-$(cd "$(dirname "$0")" && pwd)}"
 REPO="${PACKAGER_REPO:-$(cd "$TOOLS/../.." && pwd)}"
-IMG="packager-linux:1"
+IMG="packager-linux:2"   # :2 = zenity gomulu (2026-09-15)
 LOCK="/tmp/f1-pardus/.pardus-packager.lock"
 MIN_FREE_GB="${PARDUS_MIN_FREE_GB:-20}"   # test/istisna icin ortamdan dusurulebilir
 log(){ printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "${LOGF:-/dev/null}"; }
@@ -86,5 +86,12 @@ log "impark: $IMPARK ($(du -h "$IMPARK" | cut -f1))"
 # --- dogrulama (kanit) ---
 docker run --rm --platform linux/amd64 --entrypoint /tools/impark-dogrula.sh \
   -v "$OUT":/o -v "$TOOLS":/tools:ro "$IMG" "/o/$(basename "$IMPARK")" /tools/ref-bloktest-asar-root.txt /o/dogrula >> "$LOGF" 2>&1 || log "dogrulama betigi hata verdi"
-grep -E "^(file|elf-offset|magic|squashfs|appdir-root|desktop|AppRun|asar has|package.json)" "$OUT/dogrula/rapor.txt" 2>/dev/null | sed 's/^/  /' | tee -a "$LOGF"
+grep -E "^(file|elf-offset|magic|squashfs|appdir-root|desktop|AppRun|zenity|usr/bin|asar has|package.json)" "$OUT/dogrula/rapor.txt" 2>/dev/null | sed 's/^/  /' | tee -a "$LOGF"
+
+# ZENITY KAPISI (Nadir, 2026-09-15): gomulu zenity yoksa paket REDDEDILIR — cikti silinir, rc=1.
+if ! grep -q "^zenity: VAR" "$OUT/dogrula/rapor.txt" 2>/dev/null; then
+  rm -f "$IMPARK"
+  die "ZENITY YOK — .impark reddedildi ve silindi (usr/bin/zenity gomulu degil). Imaj packager-linux:2 ve customizeAppImage zenityGom sart."
+fi
+log "zenity kapisi: GECTI (usr/bin/zenity gomulu)"
 log "bitti: $(( $(date +%s) - T0 )) sn"
