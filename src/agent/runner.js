@@ -43,7 +43,9 @@ const {
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
+  pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
 } = require('./runner-helpers');
+const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -77,6 +79,17 @@ const CONFIG = {
   pardusBuildScript: process.env.PARDUS_BUILD_SCRIPT
     || path.join(__dirname, '..', '..', 'tools', 'pardus', 'pardus-packager-build.sh'),
   pardusTimeoutMs: Number(process.env.AGENT_PARDUS_TIMEOUT_MS || 40 * 60 * 1000),
+  // ProBook KABUL KAPISI (Nadir, 2026-09-17): üretilen .impark gerçek Pardus makinesinde
+  // KURULUP AÇILMADAN yüklenmez. Kapalıysa (varsayılan) davranış eskisiyle birebir aynıdır.
+  // srv21 (ya da başka bir şerit) ÖNCEDEN ürettiği .impark'ı buraya bırakır; ajan o işe
+  // geldiğinde Docker derlemesini ATLAR, yalnız kabul kapısı + yükleme yapar (2026-09-17,
+  // Nadir: "srv21'i kullanıp paralelliği yükseltebilirsin"). Dosya adı: <bookId>.impark
+  // ve yanındaki <bookId>.json içinde {srcVersion} — kaynak sürümü tutmazsa KULLANILMAZ.
+  pardusHazirDir: process.env.EMPP_PARDUS_HAZIR_DIR || '',
+  pardusKabul: process.env.EMPP_PARDUS_KABUL === '1',
+  pardusKabulScript: process.env.PARDUS_KABUL_SCRIPT
+    || path.join(__dirname, '..', '..', 'tools', 'pardus', 'probook-kabul.sh'),
+  pardusKabulTimeoutMs: Number(process.env.AGENT_PARDUS_KABUL_TIMEOUT_MS || 8 * 60 * 1000),
   // İşler arasında okunur; varsa runner temiz çıkar, launchd yeni kodla açar (bkz. restartRequested).
   restartFlag: process.env.AGENT_RESTART_FLAG || path.join(os.homedir(), '.empp-agent', 'yeniden-baslat.istek'),
   // Dosya durdukça yeni iş alınmaz (aynı anda tek build; harici üretim koşarken). Kaldıran çağırandır.
@@ -215,16 +228,57 @@ function dusukVeriModu() {
   return aktif;
 }
 
+// Apple araç zinciri sağlık probu (5 dk önbellek).
+//
+// NEDEN VAR (2026-09-16, ölçülmüş arıza): Xcode 27.0 otomatik güncellemesi lisans
+// onayını sıfırladı. O andan itibaren `xcrun`'a bağlı her şey rc=69 verdi —
+// notarytool dahil, yani imza/noter zinciri komple öldü. Ajan bunu bilmediği için
+// mac işi kiralamaya devam etti: 73768 ve 72378 için ~730 MB kaynak indirildi,
+// electron-builder 35 saniyede düştü, satırlara sahte `failed` yazıldı. Kurtarma
+// insana bağlıydı (elle `macos-durdur.istek`).
+//
+// Prob olarak `xcrun --find notarytool` seçildi: hem xcrun kapısını hem noter
+// aracının varlığını tek çağrıda sınar ve ölçülen maliyeti ~0,1 sn (araç ayaktayken
+// yalnız yol basar, aracı ÇALIŞTIRMAZ). Hata/zaman aşımı = BOZUK sayılır; yanlış
+// pozitifin bedeli 5 dk mac beklemesi, yanlış negatifin bedeli 730 MB + sahte hata.
+let _macArac = { t: 0, saglam: null, sebep: '' };
+function macAraciSaglamMi() {
+  const simdi = Date.now();
+  if (_macArac.saglam !== null && simdi - _macArac.t < 300000) return _macArac.saglam;
+  let saglam = false;
+  let sebep = '';
+  try {
+    require('child_process').execFileSync('xcrun', ['--find', 'notarytool'], { timeout: 15000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    saglam = true;
+  } catch (e) {
+    // Lisans mesajı stderr'e düşer; sebebi SAKLA — arızanın adı log'da görünsün,
+    // yoksa "mac neden durdu" sorusu yine elle kazı gerektirir.
+    const ham = String((e && e.stderr) || (e && e.message) || '').trim();
+    sebep = ham.split('\n')[0].slice(0, 200) || 'xcrun çalıştırılamadı';
+  }
+  if (_macArac.saglam !== saglam) {
+    if (saglam) log('mac araç zinciri SAĞLAM (xcrun+notarytool) — macos yeteneği geri açılıyor');
+    else errlog('mac araç zinciri BOZUK — macos yeteneği düşürüldü. Sebep:', sebep);
+  }
+  _macArac = { t: simdi, saglam, sebep };
+  return saglam;
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   const caps = etkinYetenekler(CONFIG.caps, {
     ofiste: ofisteMi(),
     macSerbest: pauseRequested(CONFIG.macSerbestFlag),
     macDurdur: pauseRequested(CONFIG.macDurdurFlag),
+    // Araç zinciri yalnız mac istenen durumlarda ölçülür — pardus/android koşarken
+    // boşuna xcrun çağırmayalım.
+    macAraci: CONFIG.caps.some((c) => c === 'macos' || c === 'mac') ? macAraciSaglamMi() : undefined,
   });
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
-    log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste, '| tam:', CONFIG.caps.join(','));
+    log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,
+      '| macAraç=' + (_macArac.saglam === null ? 'ölçülmedi' : (_macArac.saglam ? 'sağlam' : 'BOZUK')),
+      '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
   return caps;
@@ -503,15 +557,26 @@ async function downloadFile(url, destPath) {
   for (let attempt = 1; attempt <= MAX; attempt++) {
     if (stopping) throw new Error('shutting down');
     await fsp.rm(destPath, { force: true }).catch(() => {});
-    // Steady throttled pass. NO --speed-time (it tripped a bad -C - resume that this
-    // server mis-answers → appended → oversized). --retry handles a genuine reset.
+    // Steady throttled pass.
     // NO -C - : resume on this server appends the FULL file after a reset (origin
     // mis-answers the Range) → oversized/corrupt. Each attempt is a FRESH download;
     // the throttle prevents most resets, and an invalid result is caught + retried.
+    //
+    // DURGUNLUK KAPISI (2026-09-15, ölçüldü): Mac uykuya girip uyanınca TCP akışı
+    // ölüyor ama bağlantı KOPMUYOR — curl sonsuza kadar bekliyor. Ölçüm: 45485'in
+    // indirmesi 19:10'da başladı, iki uyku sonrası dosya 19.210.240 baytta ÇAKILDI,
+    // 40 dk boyunca tek bayt gelmedi, ajan kirayı uzatıp partiyi durdurdu (pid 24960
+    // elle öldürülünce hat açıldı). `--retry*` bunu yakalamaz: yeniden deneme için
+    // isteğin BİTMESİ gerekir, asılı transfer hiç bitmez.
+    // Eski yorum "--speed-time YASAK" diyordu; gerekçesi `-C -` ile bozuk devam
+    // almaktı — `-C -` artık KULLANILMIYOR (her deneme sıfırdan), dolayısıyla yasak
+    // düştü. 120 sn boyunca 1 KB/s altına inen transfer kesilir ve temiz yeniden
+    // deneme başlar. Eşik, evdeki 4M kısıtın bile çok altında: yanlış kesme yapmaz.
     const res = await run('curl', [
       '-sS', '-4', '-L', '--fail',
       '--retry', '300', '--retry-delay', '3', '--retry-all-errors',
       '--retry-max-time', String(retryMax),
+      '--speed-limit', '1024', '--speed-time', '120',
       ...(rate ? ['--limit-rate', rate] : []),
       '-o', destPath,
       url,
@@ -1099,15 +1164,83 @@ function runPardusScript(args) {
 }
 
 /**
+ * ProBook kabul betiğini koşturur — kendi süreç GRUBUNDA.
+ *
+ * NEDEN kendi grubu: betik `ssh`/`scp`/`sleep` çocukları doğurur. spawn'ın `timeout`
+ * seçeneği yalnız bash'i öldürür; çocuklar stdout borusunu açık tuttuğu için `close`
+ * olayı gelmez ve kapı ASILI kalır (2026-09-17'de testle ölçüldü: 400 ms timeout,
+ * 30 sn bekleme). `detached: true` + `kill(-pid)` bütün grubu keser; `exit` olayında
+ * çözülür, `close` beklenmez.
+ */
+function runKabulBetigi(args, ekEnv = {}) {
+  return new Promise((resolve) => {
+    const p = spawn('bash', args, { detached: true, env: { ...process.env, ...ekEnv } });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const grubuOldur = () => {
+      try { process.kill(-p.pid, 'SIGKILL'); } catch (_) { try { p.kill('SIGKILL'); } catch (__) { /* bitti */ } }
+    };
+    const timer = setTimeout(() => { timedOut = true; grubuOldur(); }, CONFIG.pardusKabulTimeoutMs);
+    timer.unref?.();
+    if (p.stdout) p.stdout.on('data', (d) => (stdout += d.toString()));
+    if (p.stderr) p.stderr.on('data', (d) => (stderr += d.toString()));
+    p.on('exit', (code) => {
+      clearTimeout(timer);
+      if (timedOut) grubuOldur();
+      resolve({ code: timedOut ? -1 : (code == null ? -1 : code), stdout, stderr, timedOut });
+    });
+    p.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: String(e && e.message ? e.message : e), timedOut: false });
+    });
+  });
+}
+
+/**
  * .impark builds via the srv21-identical Docker path, verifies it is not truncated
  * (impark-butunluk.py, squashfs offset 193728), checks the doğrulama script's
  * rapor.txt for the AppRun/asar sentinel lines when that tool is available, then
  * places the finished artifact at `artifactPath` for the shared upload/result flow.
  */
-async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work) {
-  await ensureDockerReady();
-
+async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, kimlik = {}) {
   const outDir = path.join(work, 'pardus-out');
+
+  // HAZIR PAKET ŞERİDİ (2026-09-17): srv21 aynı kaynaktan .impark'ı ÖNCEDEN üretip
+  // `EMPP_PARDUS_HAZIR_DIR`'e bırakır. Ölçüm: derleme kritik yolun %47'si ve konteyner
+  // 8 çekirdeğin 8'ini yiyor — ikinci derlemeyi AYNI makinede koşturmak kazanç vermez;
+  // başka makinede koşturmak verir. Ajan burada yalnız devralır: bütünlük + kabul kapısı
+  // + yükleme yine BU makinede yapılır (kapı atlanmaz).
+  const hazir = await hazirPardusPaketi(kimlik);
+  if (hazir) {
+    await fsp.mkdir(outDir, { recursive: true });
+    log(`pardus: HAZIR paket devralındı (${(hazir.boyut / 1e6).toFixed(0)} MB) — derleme atlandı:`, hazir.dosya);
+    const bt = imparkDenetle(hazir.dosya);
+    if (bt.durum !== 'TAM') {
+      throw new Error(`hazır pardus paketi bütünlük denetiminden geçemedi: ${imparkOzet(hazir.dosya, bt)}`);
+    }
+    log('pardus: bütünlük OK —', imparkOzet(hazir.dosya, bt));
+    // Kopya yerine SERT BAĞ: aynı birimdeyse paket iki kez yer kaplamaz. Ölçüm
+    // 2026-09-17: Mac diski 824 MB'a düştü, 1,5 GB'lık ikinci kopya üretimi durduruyordu.
+    // Farklı birimdeyse (veya bağ kurulamazsa) eski davranışa, kopyalamaya düşülür.
+    try {
+      await fsp.link(hazir.dosya, artifactPath);
+      log('pardus: hazır paket sert bağ ile devralındı (ikinci kopya YOK)');
+    } catch (e) {
+      await fsp.copyFile(hazir.dosya, artifactPath);
+    }
+    const mbH = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
+    log(`pardus: impark hazır — ${artifactPath} (${mbH}MB)`);
+    await pardusKabulKapisi(artifactPath, outDir, appName);
+    // Hazır kaynağı ANCAK kapı geçtikten sonra sil. Ölçüm 2026-09-17 (45695):
+    // kopyalar kopyalanmaz siliniyordu; kapı düşünce srv21'deki iş dizini de
+    // temizlenmiş olduğu için paket TAMAMEN kayboldu ve baştan üretildi.
+    await fsp.rm(hazir.dosya, { force: true }).catch(() => {});
+    await fsp.rm(`${hazir.dosya.replace(/\.impark$/, '')}.json`, { force: true }).catch(() => {});
+    return;
+  }
+
+  await ensureDockerReady();
   log('pardus: build başlıyor —', CONFIG.pardusBuildScript);
   const res = await runPardusScript([zipPath, appName, outDir, appVersion]);
   if (res.timedOut) {
@@ -1123,11 +1256,20 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
   const builtPath = path.join(outDir, builtName);
 
   // Bütünlük: kesik squashfs paketi asla yüklenmez (offset 193728, bytes_used).
-  const integrity = await run('/usr/bin/python3', [CONFIG.imparkButunlukPy, builtPath]);
-  if (integrity.code !== 0) {
-    throw new Error(`pardus paket bütünlük denetiminden geçemedi (rc=${integrity.code}):\n${integrity.stdout.slice(-800)}`);
+  //
+  // 2026-09-16: bu denetim eskiden `/usr/bin/python3 impark-butunluk.py` ile
+  // koşuyordu. Xcode güncellemesi lisans onayını sıfırlayınca o shim tek satır
+  // Python çalıştırmadan rc=69 döndürmeye başladı ("You have not agreed to the
+  // Xcode license agreements" — stderr'e, stdout BOŞ). Betik yalnız 0/1/2
+  // döndürebildiği için 69 paketle ilgili değildi; yine de sapasağlam bir paket
+  // (45480 Marvel Grade 11, zenity kapısı GEÇTİ, tüm asar denetimleri EVET)
+  // "bütünlük denetiminden geçemedi" diye düştü. Üretim kapısı artık dış
+  // yorumlayıcıya/lisansa/TCC iznine bağlı DEĞİL — saf Node bayt okuması.
+  const integrity = imparkDenetle(builtPath);
+  if (integrity.durum !== 'TAM') {
+    throw new Error(`pardus paket bütünlük denetiminden geçemedi: ${imparkOzet(builtPath, integrity)}`);
   }
-  log('pardus: bütünlük OK —', integrity.stdout.trim().split('\n').slice(-1)[0]);
+  log('pardus: bütünlük OK —', imparkOzet(builtPath, integrity));
 
   // Doğrulama raporu (AppRun + asar has satırları) — araç host'ta yoksa (silindiyse/
   // eksikse) script bunu zaten yutar (`|| log "dogrulama betigi hata verdi"`); burada
@@ -1143,11 +1285,133 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
   await fsp.copyFile(builtPath, artifactPath);
   const mb = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
   log(`pardus: impark hazır — ${artifactPath} (${mb}MB)`);
+
+  await pardusKabulKapisi(artifactPath, outDir, appName);
+}
+
+/**
+ * ProBook kabul kapısı — "her yaptığını Pardus'ta aç, doğrulayıp öyle yükle"
+ * (Nadir, 2026-09-17). 14 SET paketi aylarca beyaz ekran açtı; zenity + bütünlük +
+ * asar denetimlerinin HEPSİ geçiyordu, çünkü hiçbiri uygulamayı AÇMIYORDU.
+ * Kapı paketi gerçek ProBook'ta kurar, açar, süreç/pencere/piksel kanıtı toplar;
+ * geçmezse HATA fırlatır → yükleme YOK. Hazır (srv21) paket de bu kapıdan geçer.
+ */
+async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
+  if (!CONFIG.pardusKabul) return;
+  const aktivasyon = aktivasyonBeklenir(bookTitle);
+  log('pardus: ProBook kabul kapısı başlıyor —', CONFIG.pardusKabulScript,
+      aktivasyon ? '(aktivasyon kodlu seri — renk eşiği aranmaz)' : '');
+  const kanitDir = path.join(outDir, 'probook-kabul');
+  const kabul = await runKabulBetigi([CONFIG.pardusKabulScript, artifactPath, kanitDir],
+    { EMPP_AKTIVASYON_BEKLENIR: aktivasyon ? '1' : '0' });
+  for (const satir of String(kabul.stdout || '').split('\n').filter(Boolean)) log('  [kabul]', satir);
+  if (kabul.code !== 0) {
+    const sebep = kabul.timedOut
+      ? `kapı ${Math.round(CONFIG.pardusKabulTimeoutMs / 60000)} dk içinde bitmedi (ProBook yanıt vermiyor olabilir)`
+      : String(kabul.stdout || kabul.stderr || '').split('\n').filter(Boolean).slice(-2).join(' | ');
+    throw new Error(`pardus paketi ProBook kabul kapısından geçemedi (rc=${kabul.code}): ${sebep}`);
+  }
+  log('pardus: ProBook kabul kapısı GEÇTİ — kanıt:', kanitDir);
+}
+
+/**
+ * Hazır (başka şeritte üretilmiş) .impark'ı bulur: `<HAZIR_DIR>/<bookId>.impark`
+ * ve yanındaki `<bookId>.json` içindeki `srcVersion` ajanın kaynak sürümüyle AYNI
+ * olmalı — yoksa BAŞKA bir kaynaktan üretilmiş paketi yüklemiş oluruz (sessiz
+ * sürüm karışması). Eşleşmezse hazır paket yok sayılır, normal derleme koşar.
+ */
+/** Verilen yolun bulunduğu birimde boş alan (GB, tam sayı); ölçülemezse null. */
+function diskBosGb(yol) {
+  try {
+    const st = fs.statfsSync(yol);
+    return Math.floor((st.bavail * st.bsize) / 1e9);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Kaynağın SIKIŞTIRILMIŞ boyutunu indirmeden öğrenir: önce yerel önbellek (bedava),
+ * olmazsa yayıncı bağlantısına HEAD (tek istek, gövde yok).
+ *
+ * Ölçülemezse `null` döner — kapı o zaman yalnız tabana bakar; tahmin ÜRETİLMEZ.
+ * (Yayıncı hattı kararsız: HEAD düşerse indirmeyi engellemek yanlış olur.)
+ *
+ * @param {{cachedZip: string, downloadUrl?: string}} p
+ * @returns {Promise<number|null>} bayt
+ */
+async function kaynakBoyutuTahmin({ cachedZip, downloadUrl }) {
+  try {
+    const st = await fsp.stat(cachedZip);
+    if (st.size > 0) return st.size;
+  } catch (_) { /* önbellekte yok — HEAD'e düş */ }
+  if (!downloadUrl) return null;
+  try {
+    const r = await axios.head(downloadUrl, { timeout: 20000, validateStatus: () => true });
+    const len = Number(r.headers && r.headers['content-length']);
+    if (Number.isFinite(len) && len > 0) return len;
+  } catch (_) { /* HEAD düştü — ölçülemedi */ }
+  return null;
+}
+
+async function hazirPardusPaketi({ bookId, srcVersion } = {}) {
+  const dir = CONFIG.pardusHazirDir;
+  if (!dir || !bookId) return null;
+  const dosya = path.join(dir, `${bookId}.impark`);
+  let st;
+  try { st = await fsp.stat(dosya); } catch (_) { return null; }
+  if (!st.isFile() || st.size < 100000) return null;
+  try {
+    const bilgi = JSON.parse(await fsp.readFile(path.join(dir, `${bookId}.json`), 'utf8'));
+    if (srcVersion && bilgi.srcVersion && bilgi.srcVersion !== srcVersion) {
+      warn(`pardus: hazır paket ATLANDI — kaynak sürümü tutmuyor (hazır=${bilgi.srcVersion}, iş=${srcVersion})`);
+      return null;
+    }
+  } catch (_) {
+    warn('pardus: hazır paketin .json bilgisi okunamadı — güvenli tarafta kalıp normal derleme yapılacak');
+    return null;
+  }
+  return { dosya, boyut: st.size };
 }
 
 // ---------------------------------------------------------------------------
 // One job, end to end.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// TELEFON BİLDİRİMİ (ntfy, 2026-09-18 — Nadir talebi: "yapılan ve yapılamayan
+// paketlerin bildirimleri bana gelsin"). Sessiz başarısızlık YASAK ama bildirim
+// üretimi ASLA düşürmez: hata yalnız log'a yazılır. Kanal: `paket`.
+// Kapatmak için EMPP_BILDIRIM=0.
+// ---------------------------------------------------------------------------
+function bildirGonder({ basarili, bookId, platform, ayrinti = '', boyutMb = null }) {
+  if (process.env.EMPP_BILDIRIM === '0') return;
+  const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
+  const baslik = basarili ? `✅ ${platform} üretildi` : `❌ ${platform} ÜRETİLEMEDİ`;
+  const govde = basarili
+    ? `${bookId} — ${boyutMb ? boyutMb + ' MB, ' : ''}kapıdan geçti ve yüklendi`
+    : `${bookId} — ${String(ayrinti || '').slice(0, 300)}`;
+  const args = ['paket', govde, '-b', baslik, '-p', basarili ? 'normal' : 'yuksek',
+    '-e', basarili ? 'white_check_mark' : 'warning'];
+  try {
+    const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
+    ps.on('error', (e) => warn('bildirim gönderilemedi:', e.message));
+    ps.unref();
+  } catch (e) {
+    warn('bildirim gönderilemedi:', e.message);
+  }
+}
+
+// AKTİVASYON KODLU SERİLER (Nadir kuralı 2026-09-18): Privilege · Marvel · Impact ·
+// Influence · Power ve YKS-DİL dergileri açılışta aktivasyon kodu ister — bu ARIZA DEĞİL,
+// motorun çalıştığının kanıtıdır. ProBook kapısı bu kitaplarda renk-zenginliği eşiğini
+// aramaz (diyalog az renk içerir); boş/beyaz ekran yine reddedilir.
+// Defterdeki kalıcı kayıt: pipeline_book_summaries.notes → [aktivasyon-kodlu] (12 kitap).
+const AKTIVASYON_SERILERI = /(privilege|marvel|impact|influence|power|ydt|yks)/i;
+/** Bu kitapta aktivasyon ekranı BEKLENİR mi? */
+function aktivasyonBeklenir(baslik) {
+  return AKTIVASYON_SERILERI.test(String(baslik || ''));
+}
+
 async function processJob(auth, job) {
   const packagerPlatform = mapPlatform(job.platform);
   if (!packagerPlatform) {
@@ -1173,7 +1437,45 @@ async function processJob(auth, job) {
     const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
     const zipPath = path.join(work, 'build.zip');
 
+    // HAZIR paket (srv21 şeridi) varsa KAYNAĞI HİÇ İNDİRME: paket zaten bitmiş,
+    // Mac'e yalnız kabul kapısı + R2 yüklemesi kalıyor. Ölçüm 2026-09-17: kontrol
+    // indirmeden SONRA yapıldığı için her devralınan kitapta ~1,5 GB boşuna iniyor,
+    // dar diskte (20 GB kapısı) gereksiz yer yiyordu.
+    const hazirDevir = packagerPlatform === 'pardus'
+      ? await hazirPardusPaketi({ bookId: job.bookId, srcVersion })
+      : null;
+    if (hazirDevir) log('pardus: HAZIR paket bulundu — kaynak indirme ATLANIYOR:', hazirDevir.impark || hazirDevir);
+
+    // ERKEN DİSK KAPISI (2026-09-18, ölçümle): hazır paket YOKSA pardus işi bu makinede
+    // derlenecek demektir; derleme betiğinin disk kapısı ancak kaynak indirildikten SONRA
+    // konuşuyordu. Gece 11 pardus işi bu yüzden ~1,5 GB'lık kaynağı indirip kapıda düştü
+    // (45472/45487/45551/45481/72379/11845/11811/45541/45100/45549/72411). Kapıyı indirmeden
+    // ÖNCE sorunca hat da disk de boşa harcanmıyor; paket srv21 şeridinde üretilir.
+    // BOYUT ORANTILI (2026-09-19): eşik artık sabit DEĞİL. Kaynağın sıkıştırılmış
+    // boyutundan türetilir (ölçüm ve gerekçe: runner-helpers `pardusGerekliDiskGb`).
+    // Kapı düşerse bu bir PAKET KUSURU DEĞİLDİR — hata işaretlenir, satıra `failed`
+    // yazılmaz, iş kirası dolunca kuyruğa döner ve ajan sıradakine geçer.
+    if (packagerPlatform === 'pardus' && !hazirDevir) {
+      const kaynakBayt = await kaynakBoyutuTahmin({ cachedZip, downloadUrl: job.downloadUrl });
+      const gerekliGb = pardusGerekliDiskGb({
+        kaynakBayt,
+        kat: Number(process.env.PARDUS_DISK_KAT || 5),
+        tabanGb: Number(process.env.PARDUS_DISK_TABAN_GB || 15),
+        elleGb: process.env.PARDUS_MIN_FREE_GB ? Number(process.env.PARDUS_MIN_FREE_GB) : null,
+      });
+      const bosGb = diskBosGb(os.tmpdir());
+      const kaynakMb = kaynakBayt ? `${(kaynakBayt / 1e6).toFixed(0)} MB` : 'bilinmiyor';
+      if (bosGb !== null && bosGb < gerekliGb) {
+        throw new Error(
+          `${DISK_KAPISI_ISARETI} pardus disk kapısı — ${bosGb} GB boş < ${gerekliGb} GB gerekli `
+          + `(kaynak ${kaynakMb}); kaynak İNDİRİLMEDİ, iş ertelendi, paket şeritte üretilmeli`,
+        );
+      }
+      log(`pardus disk kapısı geçildi: ${bosGb} GB boş >= ${gerekliGb} GB gerekli (kaynak ${kaynakMb})`);
+    }
+
     let cacheHit = false;
+    if (!hazirDevir) {
     try {
       await fsp.access(cachedZip);
       if (cachedZipIsStale(cachedZip)) throw new Error('cache stale (publisher update)');
@@ -1230,6 +1532,7 @@ async function processJob(auth, job) {
         warn('source cache populate failed (non-fatal):', agHatasiOzeti(e));
       }
     }
+    } // if (!hazirDevir) — hazır paketde kaynak indirme/çıkarma/zip adımları atlanır
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     const appVersion = '1.0.0';
     const artifactPath = path.join(work, `artifact${artifactExtension(packagerPlatform)}`);
@@ -1238,8 +1541,8 @@ async function processJob(auth, job) {
     if (packagerPlatform === 'pardus') {
       // Docker'da srv21 ile BİREBİR: HTTP paketleyici (3001) YOK, doğrudan script.
       // İkon: yayıncı zip'inde ico.png yok → kayıtlı logo zip köküne eklenir (aşağıda).
-      await injectPardusIcon(zipPath, job.publisherName, work);
-      await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work);
+      if (!hazirDevir) await injectPardusIcon(zipPath, job.publisherName, work);
+      await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, { bookId: job.bookId, srcVersion });
     } else {
       log('uploading build to packager...');
       const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
@@ -1269,6 +1572,9 @@ async function processJob(auth, job) {
     await packagerReleaseJob(jobId);
 
     log('job done:', job.bookId, job.platform);
+    let boyutMb = null;
+    try { boyutMb = Math.round(fs.statSync(artifactPath).size / 1e6); } catch (_) {}
+    bildirGonder({ basarili: true, bookId: job.bookTitle || job.bookId, platform: job.platform, boyutMb });
   } finally {
     currentJob = null; // idle again — stop extending the lease
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
@@ -1330,6 +1636,16 @@ async function main() {
     try {
       await processJob(auth, job);
     } catch (e) {
+      if (ertelenebilirKaynakHatasi(e)) {
+        // Disk darlığı PAKET KUSURU DEĞİLDİR: 'failed' YAZMA. Kira dolunca satır
+        // kuyruğa döner; bu arada ajan beklemeden sıradaki işe geçer (android/mac
+        // işleri aynı diske sığabilir, pardus sırası srv21 şeridinde üretilir).
+        // Eski davranış satıra 'failed' yazıyordu — panelde "PARDUS HATALI" görünen
+        // 8 iş (2026-09-19) bozuk paket değil, dolu diskti (Nadir tespiti).
+        warn('job ertelendi (failed YAZILMADI, kira dolunca kuyruğa döner):', job.bookId, job.platform, '-', agHatasiOzeti(e));
+        await sleep(15000);
+        continue;
+      }
       if (isTransientNetworkError(e)) {
         // Ağ/geçici hata: 'failed' YAZMA — lease süresi dolunca API satırı yeniden kuyruğa alır,
         // ajan önbellekten yeniden paketleyip yüklemeyi dener (internet gelince kendiliğinden biter).
@@ -1338,6 +1654,7 @@ async function main() {
         continue;
       }
       errlog('job failed:', job.bookId, job.platform, '-', agHatasiOzeti(e));
+      bildirGonder({ basarili: false, bookId: job.bookTitle || job.bookId, platform: job.platform, ayrinti: agHatasiOzeti(e) });
       await postResultFailure(auth, job, e.message);
     }
   }
@@ -1396,5 +1713,5 @@ module.exports = {
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   packagerReleaseJob,
   touchCacheEntry,
-  ensureDockerReady, runPardusScript, buildPardusArtifact, heartbeat, injectPardusIcon,
+  ensureDockerReady, runPardusScript, runKabulBetigi, buildPardusArtifact, hazirPardusPaketi, pardusKabulKapisi, heartbeat, injectPardusIcon,
 };

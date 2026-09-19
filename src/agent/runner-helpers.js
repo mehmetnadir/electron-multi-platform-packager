@@ -160,7 +160,21 @@ function pauseRequested(flagPath) {
 function etkinYetenekler(caps, durum) {
   const d = durum || {};
   const macMi = (c) => c === 'macos' || c === 'mac';
-  const izin = !d.macDurdur && (Boolean(d.ofiste) || Boolean(d.macSerbest));
+  // `macAraci`: Apple araç zinciri (xcrun/notarytool) ayakta mı.
+  //
+  // 2026-09-16: Xcode 27.0 otomatik güncellemesi lisans onayını sıfırladı; xcrun'a
+  // bağlı HER ŞEY rc=69 vermeye başladı (notarytool dahil). Ajan bunu bilmediği için
+  // mac işi kiralamaya devam etti: her iş ~730 MB kaynak indirdi, 35 saniyede
+  // `Electron Builder mac build failed (exit code 1)` aldı ve satıra sahte bir
+  // `failed` yazdı (73768, 72378). Yeteneği elle `macos-durdur.istek` ile kapatmak
+  // zorunda kaldık — yani kurtarma İNSANA bağlıydı.
+  //
+  // Artık araç zinciri yetenek kapısının parçası: bozuksa mac kendiliğinden düşer,
+  // lisans kabul edilince kendiliğinden geri gelir. `undefined` = ölçülmedi
+  // (saf fonksiyon kendi başına prob çalıştırmaz) → engellemez; ajan her zaman
+  // kesin bir boolean geçer.
+  const aracKirik = d.macAraci === false;
+  const izin = !d.macDurdur && !aracKirik && (Boolean(d.ofiste) || Boolean(d.macSerbest));
   return izin ? caps.slice() : caps.filter((c) => !macMi(c));
 }
 
@@ -411,7 +425,87 @@ function isTransientNetworkError(err) {
     raw = '';
   }
   if (raw.trim() === '') return true;
-  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|socket hang up|network|fetch failed|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(raw);
+  // `lease_not_held` (HTTP 409): kira, iş sürerken doldu. Bu bir PAKET kusuru
+  // değildir — makine uyuduğu/ağı gittiği için kalp atışı duramadı demektir.
+  // 2026-09-16 ölçümü: dizüstü evden ofise taşınırken iki kez uyudu (10 + 28 dk),
+  // DNS ~55 dk çözmedi; 45480 pardus paketi derlendi (bütünlük TAM), TÜM parçalar
+  // yüklendi, yalnız son `complete-multipart` 409 aldı. Ajan satıra `failed` yazdı.
+  // (Satır API'nin "agent lease expired - otomatik recovery" mekanizmasıyla kendi
+  // kendine `queued`'a döndü — KİLİTLENMEDİ.) Yine de yazmak iki kez yanlıştı:
+  // kira artık bizde değil, yani sahibi olmadığımız bir kaydı eziyoruz; ve paket
+  // sağlam olduğu hâlde partiye sahte bir başarısızlık düşüyor. Doğrusu diğer
+  // geçici hatalarla aynı: `failed` YAZMA, satırı normal claim akışına bırak.
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|socket hang up|network|fetch failed|lease_not_held|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(raw);
+}
+
+// ---------------------------------------------------------------------------
+// Pardus disk kapısı — BOYUT ORANTILI (2026-09-19, ölçümle).
+// ---------------------------------------------------------------------------
+/**
+ * Bir pardus derlemesinin gerektirdiği boş disk alanını kaynağın SIKIŞTIRILMIŞ
+ * boyutundan türetir.
+ *
+ * Neden: eski kapı düz bir sabitti (`PARDUS_MIN_FREE_GB`, ajan başlatıcısında 45,
+ * kodda 20) ve paketin boyutuna HİÇ bakmıyordu — 111 MB'lık kitap da 1,1 GB'lık
+ * kitap da aynı 45 GB'ı istiyordu. Nadir'in sorusu ("3 GB boş varken 1,5 GB'lık
+ * dosya neden reddediliyor?") bu sabitin ölçülmemiş olduğunu açığa çıkardı.
+ *
+ * Ölçüm (2026-09-19, açmadan — `zipfile` ile dizin okunarak):
+ *   59834 build.zip 931 MB → açılmış 1085 MB (1,17×), 5612 dosya
+ *   73581 build.zip 713 MB → açılmış  857 MB (1,20×), 3983 dosya
+ * Eşzamanlı tepe zinciri: zip + açılmış build + app.asar (asar sıkıştırmaz) +
+ * Electron linux-unpacked (~250 MB) + .impark çıktısı ≈ kaynak × 5.
+ * 931 MB'lık kaynak için ≈ 4,4 GB; kapı 45 GB istiyordu (10 katı).
+ *
+ * TABAN NEDEN 15 GB? 45 sayısı keyfi değildi: 2026-09-17'de 20 GB kapısını kıl payı
+ * geçen bir derleme SESSİZCE bozuk paket üretmişti (59834 → V8 snapshot FATAL).
+ * Sebep eşiğin düşüklüğü değil, kapının TEK ANLIK olması: paketleyici 4 paralel iş
+ * kabul ediyor ve ~35 dakikalık derleme boyunca android/mac işleri aynı diski yiyor,
+ * yani başlangıçtaki boşluk bitişte kalan boşluk değil. Taban bu eşzamanlı tüketim
+ * için ayrılan paydır; orantılı terim ise YALNIZ bu işin kendi tepesini karşılar.
+ * Asıl emniyet ağı aşağıda değil ileride: K18 ProBook kabul kapısı + bütünlük ölçümü
+ * bozuk paketi yüklenmeden yakalar (11811 bugün tam da oradan döndü).
+ *
+ * SAF fonksiyon — ölçüm (stat/HEAD) çağırana aittir, burada I/O yok.
+ *
+ * @param {object} p
+ * @param {number|null} p.kaynakBayt Kaynağın sıkıştırılmış boyutu; bilinmiyorsa null.
+ * @param {number} [p.kat]      Tepe/kaynak oranı (ölçülen ≈5).
+ * @param {number} [p.tabanGb]  Eşzamanlı işler için ayrılan taban (varsayılan 15).
+ * @param {number|null} [p.elleGb] Açık override (`PARDUS_MIN_FREE_GB`); verilirse tek söz sahibi.
+ * @returns {number} Gereken boş GB (tam sayı).
+ */
+function pardusGerekliDiskGb({ kaynakBayt, kat = 5, tabanGb = 15, elleGb = null } = {}) {
+  if (Number.isFinite(elleGb) && elleGb > 0) return Math.ceil(elleGb);
+  const taban = Number.isFinite(tabanGb) && tabanGb > 0 ? Math.ceil(tabanGb) : 15;
+  if (!Number.isFinite(kaynakBayt)) return taban; // ölçülemedi — tahmin üretme
+  const k = Number.isFinite(kat) && kat > 0 ? kat : 5;
+  // Sıfır/negatif boyut ayrıca elenmez: orantılı terim 0'ın altına düşse bile taban
+  // (her zaman ≥ 1) kazanır. Ayrı bir koruma yazmak ölçülemeyen ölü dal üretirdi
+  // (mutasyon testinde hayatta kalan tek mutant buydu, 2026-09-19).
+  const orantili = Math.ceil((kaynakBayt / 1e9) * k);
+  return Math.max(orantili, taban);
+}
+
+/** Disk kapısı hatalarını diğerlerinden ayıran işaret (mesaja gömülür). */
+const DISK_KAPISI_ISARETI = '[ertelenebilir-kaynak-darligi]';
+
+/**
+ * Hata, paketin kusuru DEĞİL de makinenin o anki kaynak darlığı mı?
+ *
+ * Böyle bir hatada satıra `failed` YAZILMAZ: kira dolunca API satırı kuyruğa geri
+ * alır ve paket ya disk boşalınca ya da srv21 şeridinde üretilir. Eski davranış
+ * `status:'failed'` yazıyordu; panelde "PARDUS HATALI" görünen 8 iş (2026-09-19)
+ * aslında bozuk paket değil, dolu diskti — yanlış teşhis defterde kalıyordu.
+ *
+ * @param {Error|string|*} err
+ * @returns {boolean}
+ */
+function ertelenebilirKaynakHatasi(err) {
+  const raw = typeof err === 'string' ? err
+    : (err && typeof err === 'object' && typeof err.message === 'string') ? err.message
+      : '';
+  return raw.includes(DISK_KAPISI_ISARETI);
 }
 
 /**
@@ -553,4 +647,7 @@ module.exports = {
   lruSilinecekler,
   isTransientNetworkError,
   agHatasiOzeti,
+  pardusGerekliDiskGb,
+  ertelenebilirKaynakHatasi,
+  DISK_KAPISI_ISARETI,
 };

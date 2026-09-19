@@ -59,6 +59,28 @@
 - **Android Gradle heap ön-kontrolü (K14, 2026-09-09):** `runGradleBuild` başlamadan `src/packaging/android-preflight.js` `~/.gradle/gradle.properties`'teki `org.gradle.jvmargs` Xmx'i kontrol eder (<6g veya dosya yoksa `console.warn`) — dosyaya DOKUNMAZ. Büyük kitap build'i OOM veriyorsa ÖNCE bu uyarıya bak.
 - **Testler:** `node --test 'src/**/*.test.js'` (223; `node --test src/` Node 24'te çalışmaz). Sentinel testler canlı yolları kilitler. SET-özel hızlı kapı: `npm run test:set` (122). 4 test (3 chmod-domino + 1 graveyard) root/uid=0 veya `_graveyard/` eksikse KENDİNİ `t.skip` eder (K15) — Mac'te normal kullanıcı olarak 0 skip beklenir.
 
+- **SET kökünde menü yoksa paket BEYAZ EKRAN (K17, 2026-09-17, Pardus'ta ölçüldü):** yayıncının
+  otomatik exe'sinden çıkan SET build'inin kökü motorun tek-kitap `index.html` kopyasıdır;
+  kökte `assets/`+`classlibraries/` yoktur → `assets not found in app.asar` +
+  `ImWin32.dll okunamadı` → sonsuz "…". Kurulumdaki **boş `resources/app/build` klasörü
+  SAHTE izdir** (AppRun her kurulumda `mkdir -p` yapar, doldurmaz; içerik `app.asar`'da —
+  çalışan kurulumlarda da boştur). Çözüm `src/packaging/set-menu.js` `ensureSetMenu()`;
+  kapı `EMPP_SET_MENU=1` (pardus yolunda varsayılan AÇIK, android/macOS için Nadir kararı +
+  3001 restart'ı gerekir). Özel menüsü olan SET'e (Flashy 59480) DOKUNMAZ. 14 set etkilendi
+  (bkz. `.claude/docs/set-paketi-know-how.md` K17).
+
+- **Paket AÇILMADAN yüklenmez (K18, 2026-09-17 — Nadir kuralı):** pardus işinde ajan,
+  `.impark`'ı R2'ye yüklemeden ÖNCE `tools/pardus/probook-kabul.sh` ile gerçek ProBook'ta
+  (etapadmin@192.168.1.55) kurup açar; düşerse iş hata verir, yükleme olmaz
+  (`EMPP_PARDUS_KABUL=1`, `src/agent/runner.js` → `buildPardusArtifact` sonu).
+  **"Süreç var" açılma kanıtı DEĞİLDİR:** `pgrep -f DijiTap/DijiTap` AppRun'ın kurulum
+  çocuklarını (cp/rsync) sayar — ilk sürüm surec=6 görüp kabul verdi, ekranda Chrome vardı.
+  Geçerli kanıt: `/proc/<pid>/exe` kurulum dizininde + görünür X penceresi + içerik ölçümü
+  (sapma ≥ 0.05, koyu piksel ≥ 0.005, renk ≥ 500 — kırık paket: 0.020/0.00047/10,
+  sağlam: 0.198/0.51/93750). Motor hataları stdout'a DÜŞMEZ (renderer devtools) — konsol
+  denetimine güvenme. AppRun `.empp-version` önbelleği için kapı eski kurulumları geçici
+  yeniden adlandırır, sonunda geri koyar.
+
 ## İlgili Dosyalar
 | Dosya | Amaç |
 |---|---|
@@ -72,4 +94,34 @@ Son Güncelleme: 2026-09-09 (K11b-K16 — 2. res.download, kısmi-hata özet say
 - **Ajan logo/ikon (2026-09-12):** `pickLogoId` yayıncı ADINI `/api/logos` kayıtlarıyla eşler — kayıt yoksa/ad farklıysa sessizce varsayılan ikon. Pardus için zip kökünde `ico.png` şart → `injectPardusIcon` (runner.js) kayıtlı logoyu ekler. Yeniden başlatma: `touch ~/.empp-agent/yeniden-baslat.istek` (işler arasında temiz çıkış).
 - **Ajan duraklatma bayrağı (2026-09-12):** `~/.empp-agent/duraklat.istek` durdukça ajan yeni iş almaz (süren iş biter); kaldıran çağırandır. Bu Mac'te elle üretim koşarken (paketleyici 4 paralel iş kabul ediyor, iki Gradle aynı `@capacitor/android` build dizinini paylaşıp R.jar yarışıyla düşüyor) bayrağı koy, paketleyici boşalınca üret, sonra kaldır. `yeniden-baslat.istek` ise tek kullanımlık restart.
 - **macOS yalnız ofiste (2026-09-12, Nadir kararı):** noter yüklemesi (300-500 MB) ev hattını boğuyor. Ajan heartbeat'te `guncelYetenekler()` bildirir: geçit 192.168.1.254 değilse `macos` düşer (`android,pardus` kalır), sunucu next-job'u buna göre kiralar. Bayraklar `~/.empp-agent/macos-serbest.istek` (evde de aç) / `macos-durdur.istek` (ofiste de kes), kalıcı. Aynı gece: pardus aracı Electron ikilisini her derlemede GitHub'dan indiriyordu → `electron_config_cache=/cache/electron` (volume) eklendi.
+- **TUZAK — açık .dmg mac üretimini düşürür (2026-09-16, ölçüldü):** electron-builder dmg'yi `/Volumes/<dmg.title>` (= `"<appName> <version>"`) altına bağlar. Daha önce üretilmiş aynı adlı bir `.dmg` Finder'da açıksa `hdiutil detach -quiet` rc=2 verir, electron-builder 5 kez dener ve build `exit code 1` ile düşer — mesaj imzayı/derlemeyi suçlar, **yalan söyler**. Kanıt: 72378 mac, Downloads'taki `…(1).dmg` bağlıyken. Kalıcı çare kodda: `src/packaging/dmg-birim-kapisi.js` build'den ÖNCE çakışan birimi `hdiutil detach` (+ gerekirse `-force`) ile bırakır, bırakamazsa build'i başlatmadan anlaşılır hata verir. Sentinel: `dmg-birim-kapisi.test.js` (10 test, mutasyonla doğrulandı).
 - **TUZAK — `yeniden-baslat.istek` paketleyiciyi de öldürür (2026-09-12 17:54, ölçüldü):** paketleyici (3001) `run-agent.sh` içinden nohup çocuk olarak açılıyor; runner bayrakla çıkınca launchd süreç grubunu (AbandonProcessGroup yok) kapatıyor → paketleyici yeniden başlıyor, süren TÜM işler kayboluyor (Vitanova 7. sınıf job'u yok oldu, `packager.log` sıfırlandı). Bayrağı yalnız `/api/queue-status` boşken ve ajan işsizken koy; kalıcı çare plist'e `AbandonProcessGroup=true`.
+
+- **Electron verimliliği (2026-09-18, ölçüldü):** `.claude/docs/yukleyici-arastirma-2026-09-18.md`
+  §E-F. Paketin **%91'i app.asar**, onun %97'si `assets/` — motor ve içerik TEK blokta, yani
+  tek sayfa düzeltmesi 1 GB yeniden indirme. Üç değişiklik yapıldı: (a) `electronLanguages:
+  ["tr","en-US"]` win/mac/linux (−9 MB); (b) `src/packaging/acilis-yamasi.js` — üretilen
+  kitaba `show:false`+`ready-to-show`+8 sn emniyet, **atomik** (pencere değişkeni ya da
+  `loadFile/loadURL` yoksa `show:false` DA konmaz; yalnız başına konursa pencere HİÇ açılmaz);
+  (c) `src/packaging/sayfa-webp.js` — sayfa PNG'leri WebP'ye, **dosya adı `.png` kalır**
+  (motor uzantıyı sabitliyor ama Chromium içeriğe bakıyor — ölçüldü). mod1 = ilk 100 bayt
+  `256−x`, involutif. Kapı **VARSAYILAN KAPALI** `EMPP_SAYFA_WEBP=1`; ProBook kabul kapısından
+  (sayfa+büyüteç+canvas) geçmeden üretimde AÇILMAZ. Ölçülen: 14 MB → 7 MB (%50), 20 sayfa/sn.
+
+- **Pardus disk kapısı BOYUT ORANTILI (2026-09-19, ölçümle):** eşik artık sabit DEĞİL.
+  `runner-helpers.pardusGerekliDiskGb` = `max(kaynakGb × PARDUS_DISK_KAT, PARDUS_DISK_TABAN_GB)`
+  (varsayılan 5 ve 15). Kaynak boyutu **indirmeden** ölçülür (`kaynakBoyutuTahmin`: önce
+  ajan önbelleği, olmazsa `HEAD`; ölçülemezse tahmin ÜRETİLMEZ, taban uygulanır).
+  Ölçüm: zip → açılmış build **1,17-1,20×**; eşzamanlı tepe ≈ kaynak × 5 (zip + açılmış +
+  app.asar + Electron runtime + .impark). Eski düz sabit `PARDUS_MIN_FREE_GB=45` 1,1 GB'lık
+  en büyük kitapta bile **10 kat** fazlaydı. Sabit hâlâ **açık override** olarak çalışır ama
+  `~/.empp-agent/run-agent.sh`'tan kaldırıldı — geri koymak kapıyı yine düz sabite çevirir.
+  **Taban 15 neden:** kapı tek anlıktır, paketleyici 4 paralel iş kabul eder ve ~35 dk'lık
+  derleme boyunca başka işler aynı diski yer (20 GB'ı kıl payı geçen 59834 derlemesi
+  2026-09-17'de sessizce bozuk paket üretmişti). Asıl emniyet ağı K18 ProBook kabul kapısı.
+- **Disk darlığı PAKET KUSURU DEĞİLDİR (2026-09-19):** kapı hatası `DISK_KAPISI_ISARETI`
+  ile işaretlenir; `ertelenebilirKaynakHatasi` dalı satıra `failed` **YAZMAZ**, 15 sn
+  bekleyip sıradaki işe geçer (kira dolunca satır kuyruğa döner). Eskiden `failed`
+  yazılıyordu — panelde "PARDUS HATALI" görünen 8 iş (19 Eylül) bozuk paket değil, dolu
+  diskti. Yeni bir kaynak kapısı eklerken aynı ayrımı kur: *eşik* ve *reddetme biçimi*
+  iki ayrı karardır.
