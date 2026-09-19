@@ -9,9 +9,16 @@ const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-
 const { createWwwCopyFilter } = require('./www-copy-exclude');
 const { ensureSetBookHomeButton } = require('./set-book-home-button');
 const { findSubBookDirs } = require('./sub-book-dirs');
+const { ensureSetMenu } = require('./set-menu');
 const { injectFsShimIntoSubBooks } = require('./fs-shim-subbook-inject');
 const { ensureWritableTree } = require('./ensure-writable');
+const { checkAndroidGradleHeapPreflight } = require('./android-preflight');
 const { applyPublisherDomainPatch } = require('./yayinci-domain-yamasi');
+const { readyToShowEkle } = require('./acilis-yamasi');
+const sayfaWebp = require('./sayfa-webp');
+const oluMotor = require('./olu-motor-temizligi');
+const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
+const agPolitikasi = require('./ag-politikasi-yamasi');
 
 class PackagingService {
   constructor() {
@@ -431,16 +438,110 @@ MimeType=application/x-electron;
       // book3'te setBook.enable=false unutulmuş, "ana sayfa" butonu görünmüyordu).
       try {
         const setBookResult = await ensureSetBookHomeButton(workingPath);
+        const setBookFailed = [];
         for (const b of setBookResult.books) {
           if (b.action === 'patched') console.log(`🏠 setBook.enable=true: ${b.book}/app.config.js`);
           else if (b.action === 'no-setbook-block' || b.action === 'no-config-file') {
             console.warn(`⚠️ ${b.book}/app.config.js: setBook bloğu/dosyası bulunamadı (${b.action})`);
           } else if (b.action === 'error') {
             console.warn(`⚠️ ${b.book}/app.config.js: setBook.enable kontrolü başarısız (diğer alt-kitaplar ETKİLENMEZ):`, b.error);
+            setBookFailed.push(b.book);
+          }
+        }
+        // K12 (2026-09-09) — toplam sayım: bkz. normalizeBookViewerViewports'taki
+        // aynı-desen yorum bloğu. Tek satır uyarılar sessizce kaybolmasın.
+        if (setBookResult.books.length > 0) {
+          const ok = setBookResult.books.length - setBookFailed.length;
+          if (setBookFailed.length > 0) {
+            console.warn(`⚠️ setBook.enable enjeksiyonu: ${ok}/${setBookResult.books.length} — ${setBookFailed.length} hata: ${setBookFailed.join(', ')}`);
+          } else {
+            console.log(`✅ setBook.enable enjeksiyonu: ${ok}/${setBookResult.books.length} tamam`);
           }
         }
       } catch (setBookError) {
         console.warn('⚠️ setBook.enable kontrolü başarısız (paketleme devam ediyor):', setBookError.message);
+      }
+
+      // K17 (2026-09-17, Pardus ölçümü) — SET kökünde menü sayfası YOKSA üretilir.
+      // NEDEN: yayıncının otomatik exe'sinden çıkan SET build'inin kökü motorun
+      // tek-kitap sayfasının kopyası; kökte assets/ ve classlibraries/ olmadığı için
+      // motor "assets not found" + "ImWin32.dll okunamadı" verip beyaz ekranda kalıyor
+      // (sf425 ve Super Monsters 2 Set, ProBook'ta kanıtlı). Kapı VARSAYILAN KAPALI
+      // (`EMPP_SET_MENU=1`) — üretim davranışını değiştirmek Nadir'in kararı (K1).
+      // Özel menüsü olan SET'lere (Flashy 59480) DOKUNULMAZ; orijinal sayfa yedeklenir.
+      try {
+        const menuResult = await ensureSetMenu(workingPath, { appName });
+        if (menuResult.action === 'generated' || menuResult.action === 'no-root-index') {
+          console.log(`🧭 SET menüsü üretildi (${menuResult.mode}): ${menuResult.books.join(', ')}`);
+        } else if (menuResult.action === 'custom-menu-kept') {
+          console.log('🧭 SET kökünde özel menü var — dokunulmadı');
+        }
+      } catch (menuError) {
+        console.warn('⚠️ SET menüsü kontrolü başarısız (paketleme devam ediyor):', menuError.message);
+      }
+
+      // ÖLÜ MOTOR TEMİZLİĞİ (2026-09-19) — KAPI VARSAYILAN AÇIK (`EMPP_OLU_TEMIZLIK=0` kapatır).
+      // sm4 ölçümü: her alt-kitabın kökünde 39–43 MB js/css var, index.html'den
+      // ulaşılan yalnız ~2,5 MB. Webpack içerik-hash'li çıktı yıllarca aynı klasöre
+      // üst üste yazılmış (her kitapta 13 ayrı *.main.js). Gerçek pakette 826 dosya
+      // / 191,8 MB atıldı; book1/book4/book5 Electron'da AÇILDI (#root dolu, sayfa
+      // 1/10, 5 görsel + 4 canvas). WebP'den ÖNCE koşar — atacağımız dosyayı
+      // dönüştürmenin anlamı yok.
+      if (oluMotor.acikMi()) {
+        try {
+          await oluMotor.paketiTemizle(workingPath, { log: (s) => console.log(s) });
+        } catch (temizlikError) {
+          console.warn('⚠️ Ölü motor temizliği başarısız (paketleme devam ediyor):', temizlikError.message);
+        }
+      }
+
+      // K20 ANA EKRAN YOLU (2026-09-19, saha arızası) — SET'te "ana ekran" butonu
+      // Windows'ta beyaz ekran bırakıyordu. Motor `path.join`'i bir URL üzerinde
+      // çağırıyor; Windows'ta ".\\file:\\C:\\…" gibi GEÇERSİZ adres üretiyor
+      // (Linux/mac'te "file:/…" çıkıyor ve Chromium kabul ettiği için arıza gizli
+      // kalmış). Düzeltme `URL` tabanlı — platformdan bağımsız. Ölü temizlikten
+      // SONRA koşar: atılacak dosyayı yamalamanın anlamı yok.
+      try {
+        await anaEkranYolu.paketiDuzelt(workingPath, { log: (s) => console.log(s) });
+      } catch (k20Error) {
+        console.warn('⚠️ K20 ana ekran yolu yaması başarısız (paketleme devam ediyor):', k20Error.message);
+      }
+
+      // K21 AÇILIŞ AĞ POLİTİKASI (2026-09-19, sm4/book1'de ölçüldü) — 3 nokta
+      // ekranının ~%91'i ağ beklemesi (1048 ms'in ~950 ms'i). Aynı paket ağ
+      // kapalıyken 318 ms'de ve BİREBİR aynı ekranla açılıyor. Enjekte edilen
+      // politika motorun kodunu DEĞİŞTİRMEZ, yalnız `window.fetch`i sarar ve
+      // İKİ TARTIŞMASIZ israfı keser:
+      //   (a) sorgusunda `undefined` DEĞERİ olan istek — sunucu determinist
+      //       HTTP 500 + HTML döner, motor zaten .json()'da patlayıp catch'e
+      //       düşüyor; 111 ms erken düşürülüyor, davranış aynı.
+      //   (b) çıplak köke atılan canlılık probu — motorun kendi kodu
+      //       `{method:HEAD, timeout:5e3}` yazıyor ama `timeout` fetch'te
+      //       BİR SEÇENEK DEĞİL, sessizce yok sayılıyor. Karadelik ağda (okul
+      //       filtresi, kopuk VPN) açılış TCP zaman aşımına kadar asılır.
+      //       AbortController ile motorun KENDİ beyan ettiği 5000 ms uygulanır.
+      // Ürün uçlarına (HasZKitapKey / IsZKitapKurumAktif / GetKitapGuncellemeBilgi)
+      // DOKUNMAZ — onlar ölçüm değil, Nadir'in kararı.
+      if (agPolitikasi.acikMi()) {
+        try {
+          await agPolitikasi.paketeUygula(workingPath, { gunluk: (s) => console.log(s) });
+        } catch (k21Error) {
+          console.warn('⚠️ K21 ağ politikası enjeksiyonu başarısız (paketleme devam ediyor):', k21Error.message);
+        }
+      }
+
+      // SAYFA GÖRSELLERİ → WebP (2026-09-18) — dosya adları `.png` KALIR.
+      // Paketin %91'i app.asar, onun %97'si assets/ (sayfa PNG'leri). 40 sayfalık
+      // temsili örneklemde WebP q82 %52 boyut veriyor, gözle ayırt edilemiyor.
+      // Motor uzantıyı sabitliyor ama Chromium <img> için İÇERİĞE bakar (ölçüldü).
+      // KAPI VARSAYILAN KAPALI (`EMPP_SAYFA_WEBP=1`) — ProBook kabul kapısından
+      // (sayfa + büyüteç + canvas yolu) geçmeden üretimde açılmaz.
+      if (sayfaWebp.acikMi()) {
+        try {
+          await sayfaWebp.klasoruDonustur(workingPath, { log: (s) => console.log(s) });
+        } catch (webpError) {
+          console.warn('⚠️ Sayfa WebP dönüşümü başarısız (paketleme devam ediyor):', webpError.message);
+        }
       }
 
       // Electron için gerekli dosyaları oluştur
@@ -459,22 +560,26 @@ MimeType=application/x-electron;
         console.log('⚠️ Logo yok, varsayılan icon kullanılacak');
       }
 
-      // K16 (2026-09-10, Nadir talebi) — sorucoz.tv -> yayinci domaini URL yeniden
-      // yazimi, TEK NOKTA (fan-out YOK), platform fan-out ONCESINDE, Windows HARIC.
-      // NEDEN Windows'a UYGULANMAZ: Windows kendi electron-builder hattinda ayri
-      // ele alinir (packageWindows), bu adimi cagirmaz — Nadir karari, kapsam
-      // yalnizca Windows-disi platformlar (android/macos/linux). Yayinci host'u
-      // config'ten turetilemezse NO-OP (yayinci-domain-yamasi.js icinde loglanir).
+      // K16 (2026-09-10) — sorucoz.tv -> yayinci domaini URL yeniden yazimi,
+      // TEK NOKTA (fan-out YOK), platform fan-out ONCESINDE.
+      //
+      // WINDOWS KAPISI KALDIRILDI (2026-09-18, Nadir karari). Eski kural Windows'u
+      // haric tutuyordu ("Windows ayri hatta ele alinir"). Artik TUM platformlara
+      // uygulanir, cunku:
+      //   - `updateBookEndPoint` (motorun guncelleme kapisi) bu yamayla bizim host'a
+      //     tasiniyor; Windows disarida kalirsa Windows paketlerinde ertelemeli
+      //     guncelleme KURULAMAZ — Nadir once Windows'u cozmek istiyor.
+      //   - Yama ayni `workingPath` uzerinde calisir; Windows + Pardus birlikte
+      //     paketlendiginde zaten Windows'a da uygulaniyordu. Kapi yalnizca
+      //     YALNIZ-WINDOWS derlemelerini yamasiz birakiyordu — tutarsizlik.
+      // Yayinci host'u config'ten turetilemezse NO-OP (yayinci-domain-yamasi.js loglar).
       // BOZARSAN: `yayinci-domain-yamasi.test.js`'teki cagri-noktasi testleri kirilir.
       try {
-        const nonWindowsPlatforms = platforms.filter((p) => p !== 'windows');
-        if (nonWindowsPlatforms.length > 0) {
-          const domainResult = await applyPublisherDomainPatch(workingPath, { log: console.log });
-          if (domainResult.publisherHost) {
-            console.log(`🌐 yayinci-domain-yamasi: ${domainResult.filesChangedCount} dosyada ${domainResult.totalReplacements} degisiklik -> ${domainResult.publisherHost}`);
-          } else {
-            console.warn('⚠️ yayinci-domain-yamasi: yayıncı host türetilemedi (NO-OP)');
-          }
+        const domainResult = await applyPublisherDomainPatch(workingPath, { log: console.log });
+        if (domainResult.publisherHost) {
+          console.log(`🌐 yayinci-domain-yamasi: ${domainResult.filesChangedCount} dosyada ${domainResult.totalReplacements} degisiklik -> ${domainResult.publisherHost}`);
+        } else {
+          console.warn('⚠️ yayinci-domain-yamasi: yayıncı host türetilemedi (NO-OP)');
         }
       } catch (domainErr) {
         console.warn('⚠️ yayinci-domain-yamasi başarısız (paketleme devam ediyor):', domainErr.message);
@@ -918,6 +1023,19 @@ app.on('activate', () => {
           mainJsContent = mainJsContent.replace(/fullscreen:\s*false/g, 'fullscreen: true');
         }
         
+        // AÇILIŞ ÇAKMASI (2026-09-18, ölçüldü): `show:false` + `ready-to-show` +
+        // emniyet zamanlayıcısı. Gerekçe, güvenlik kuralı ve atomiklik şartı
+        // `src/packaging/acilis-yamasi.js` başında; testleri acilis-yamasi.test.js.
+        {
+          const yama = readyToShowEkle(mainJsContent);
+          mainJsContent = yama.icerik;
+          if (yama.uygulandi) {
+            console.log('✅ EMPP_READY_TO_SHOW enjekte edildi (pencere:', yama.pencere + ')');
+          } else if (yama.sebep !== 'zaten-var' && yama.sebep !== 'show-zaten-tanimli') {
+            console.warn('⚠️ EMPP_READY_TO_SHOW atlandı —', yama.sebep);
+          }
+        }
+
         // Menu import ekle (eğer yoksa)
         if (!mainJsContent.includes('Menu')) {
           mainJsContent = mainJsContent.replace(
@@ -992,6 +1110,7 @@ app.on('activate', () => {
           // yok, ayrıca test edilir).
           // BOZARSAN: `fs-shim-subbook-inject.test.js`'teki GERİLEME testleri kırılır.
           const subBookInjectResults = await injectFsShimIntoSubBooks(appPath);
+          const fsShimFailed = [];
           for (const r of subBookInjectResults) {
             if (r.action === 'injected') {
               console.log(`✅ empp-fs-shim.js (göreli: ${r.relShimSrc}) + __emppSubBook='${r.book}': ${r.book}/index.html`);
@@ -999,6 +1118,17 @@ app.on('activate', () => {
               console.warn(`⚠️ ${r.book}: index.html bulunamadı, fs-shim enjekte edilmedi`);
             } else if (r.action === 'error') {
               console.warn(`⚠️ ${r.book}: fs-shim enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, r.error);
+              fsShimFailed.push(r.book);
+            }
+          }
+          // K12 (2026-09-09) — toplam sayım: bkz. normalizeBookViewerViewports'taki
+          // aynı-desen yorum bloğu.
+          if (subBookInjectResults.length > 0) {
+            const ok = subBookInjectResults.length - fsShimFailed.length;
+            if (fsShimFailed.length > 0) {
+              console.warn(`⚠️ fs-shim enjeksiyonu: ${ok}/${subBookInjectResults.length} — ${fsShimFailed.length} hata: ${fsShimFailed.join(', ')}`);
+            } else {
+              console.log(`✅ fs-shim enjeksiyonu: ${ok}/${subBookInjectResults.length} tamam`);
             }
           }
         } catch (e) {
@@ -1581,12 +1711,28 @@ function closeSplashScreen() {
           arch: ["x64"]
         },
         icon: validIcon ? path.resolve(validIcon) : undefined, // ICO dosyası (mutlak yol)
-        publisherName: options.publisherName || "Dijitap",
-        requestedExecutionLevel: "asInvoker"
+        // K19 (2026-09-19, ölçüldü): electron-builder 26 `win.publisherName`'i
+        // KALDIRDI → "Invalid configuration object … unknown property 'publisherName'"
+        // ve win derlemesi exit 1 ile düşüyordu (sm4 kontrol koşusu). Seçenek
+        // `win.signtoolOptions.publisherName` altına taşındı. Bu yol ajanda
+        // koşmadığı için (yetenekler android,pardus) sessizce çürümüştü.
+        signtoolOptions: {
+          publisherName: options.publisherName || "Dijitap",
+        },
+        requestedExecutionLevel: "asInvoker",
+        // DİL BUDAMA (2026-09-18, ölçüldü): Electron 55 dil paketi taşıyor
+        // (locales/ — 45472.impark'ta 9,0 MB sıkışmış). Hintçe/Tamilce/Tayca…
+        // hiçbir kitapta kullanılmıyor. Yalnız tr + en-US bırakılır.
+        // electron-builder PlatformSpecificBuildOptions → win/mac/linux üçünde de geçerli.
+        electronLanguages: ["tr", "en-US"],
       },
       nsis: {
         oneClick: true, // Tek tıklamayla otomatik kurulum
-        allowElevation: true, // Yönetici izinlerini otomatik al
+        // KARAR (2026-09-18): per-user %LOCALAPPDATA% kurulum, **UAC YOK**.
+        // Kodda `true` kalmıştı — karar ile kod ayrışmıştı (2026-09-19'da hizalandı).
+        // `perMachine:false` + `allowElevation:false` = okul makinesinde yönetici
+        // parolası sorulmaz; kurulum kullanıcı profiline yazılır.
+        allowElevation: false,
         allowToChangeInstallationDirectory: false, // Kullanıcı dizin seçemez
         createDesktopShortcut: true, // Masaüstü kısayolu otomatik oluştur
         createStartMenuShortcut: true, // Başlat menüsü kısayolu
@@ -1736,6 +1882,11 @@ function closeSplashScreen() {
         // İMZA (2026-08-26): canlı /api/package yolu BURASI — MacOSPackagingService değil.
         // Sabit identity:null ad-hoc .app üretiyordu (Gatekeeper reddi). Kimlik env'den.
         ...macSigningConfig(),
+        // DİL BUDAMA (2026-09-18, ölçüldü): Electron 55 dil paketi taşıyor
+        // (locales/ — 45472.impark'ta 9,0 MB sıkışmış). Hintçe/Tamilce/Tayca…
+        // hiçbir kitapta kullanılmıyor. Yalnız tr + en-US bırakılır.
+        // electron-builder PlatformSpecificBuildOptions → win/mac/linux üçünde de geçerli.
+        electronLanguages: ["tr", "en-US"],
       },
       dmg: {
         title: `${appName} ${appVersion}`,
@@ -1897,18 +2048,29 @@ function closeSplashScreen() {
         "!uploads"
       ],
       linux: {
-        target: [
-          {
-            target: "AppImage",
-            arch: ["x64"]
-          },
-          {
-            target: "deb",
-            arch: ["x64"]
-          }
-        ],
+        // .impark yalnız AppImage'dan türetilir; deb 1,5 GB gövdede tek çekirdekli
+        // xz ile 30+ dakika yer (ölçüm 2026-09-17, srv21 45695: AppImage 3 dk,
+        // deb hâlâ 11+ dk). Üretim şeridinde EMPP_LINUX_DEB=0 ile kapatılır;
+        // varsayılan davranış (deb açık) değişmez.
+        target: process.env.EMPP_LINUX_DEB === '0'
+          ? [{ target: "AppImage", arch: ["x64"] }]
+          : [
+            {
+              target: "AppImage",
+              arch: ["x64"]
+            },
+            {
+              target: "deb",
+              arch: ["x64"]
+            }
+          ],
         icon: validIcon ? path.resolve(validIcon) : undefined,
         category: "Development",
+        // DİL BUDAMA (2026-09-18, ölçüldü): Electron 55 dil paketi taşıyor
+        // (locales/ — 45472.impark'ta 9,0 MB sıkışmış). Hintçe/Tamilce/Tayca…
+        // hiçbir kitapta kullanılmıyor. Yalnız tr + en-US bırakılır.
+        // electron-builder PlatformSpecificBuildOptions → win/mac/linux üçünde de geçerli.
+        electronLanguages: ["tr", "en-US"],
         description: options.description || appName,
         vendor: options.vendor || "Dijitap",
         maintainer: options.maintainer || `${appName} Team`,
@@ -3499,6 +3661,13 @@ if (!window.cordova) {
   }
 
   async runElectronBuilder(configPath, platform, outputPath) {
+    // DMG birim çakışması kapısı (2026-09-16): aynı adlı bir .dmg zaten bağlıysa
+    // electron-builder kendi `hdiutil detach` denemesinde rc=2 alır ve build düşer.
+    // Gerekçe + ölçülen kanıt: src/packaging/dmg-birim-kapisi.js dosya başlığı.
+    if (platform === "mac") {
+      const { kapiyiUygula } = require("./dmg-birim-kapisi");
+      kapiyiUygula(await fs.readJson(path.resolve(configPath)));
+    }
     return new Promise((resolve, reject) => {
       const absoluteConfigPath = path.resolve(configPath);
       const args = ['--config', absoluteConfigPath, '--publish', 'never'];
@@ -3979,6 +4148,17 @@ public class MainActivity extends BridgeActivity {
       // K8 (2026-09-09, Tudem kaniti): ad deseni (`^book\d*$`) DEGIL, motor imzasi
       // (index.html + app.config.js) ile bulunur — bkz. sub-book-dirs.js NEDEN bloğu.
       const subBookDirs = await findSubBookDirs(wwwPath, { maxDepth: 2 });
+      // K12 (2026-09-09, tudem-apk-batch/coordinator bulgusu) — NEDEN: K9b/K9d
+      // per-alt-kitap try/catch'i domino'yu (bir kitabın hatası diğerlerini
+      // durdurması) kapattı, ama her hata yalnız TEK SATIR `console.warn` ile
+      // (relBookDir başına) yazılıyordu — 27 alt-kitaplı bir SET'te 5 kitap
+      // sessizce eksik enjeksiyon alsa, log akışında bu 5 satır TEK BİR uyarı
+      // gibi görünüyor, kimse "27'den 5'i eksik" toplamını GÖRMÜYORDU. BELİRTİ:
+      // 0400/ENOENT gibi kısmi izin hataları operatöre "her şey normal" hissi
+      // veriyordu (log'da hata VAR ama toplam/oran YOK). BOZARSAN:
+      // `book-android-shim.test.js`'teki `GERİLEME: kısmi enjeksiyon hatası
+      // toplam X/Y olarak SAYILIR` testi kırılır.
+      const injectFailedBooks = [];
 
       for (const relBookDir of subBookDirs) {
         const bookDir = path.join(wwwPath, relBookDir);
@@ -3990,6 +4170,7 @@ public class MainActivity extends BridgeActivity {
           await fs.writeJson(path.join(bookDir, 'empp-manifest.json'), bookManifest, { spaces: 0 });
         } catch (shimErr) {
           console.warn(`⚠️ ${relBookDir}: empp-android-shim/manifest kurulamadı:`, shimErr.message);
+          injectFailedBooks.push(relBookDir);
         }
 
         // K9b — NEDEN: tek bir kitabın index.html'i OKUNAMAZ/YAZILAMAZ durumdaysa
@@ -4053,6 +4234,19 @@ public class MainActivity extends BridgeActivity {
           }
         } catch (htmlErr) {
           console.warn(`⚠️ ${relBookDir}: index.html/bundle enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, htmlErr.message);
+          if (!injectFailedBooks.includes(relBookDir)) injectFailedBooks.push(relBookDir);
+        }
+      }
+
+      // K12 — toplam sayım: kaç alt-kitaptan kaçının GERÇEKTEN tam enjeksiyon
+      // aldığı tek satırda görünür olsun (yukarıdaki per-kitap uyarılar sessizce
+      // kaybolmasın).
+      if (subBookDirs.length > 0) {
+        const ok = subBookDirs.length - injectFailedBooks.length;
+        if (injectFailedBooks.length > 0) {
+          console.warn(`⚠️ shim enjeksiyonu: ${ok}/${subBookDirs.length} — ${injectFailedBooks.length} hata: ${injectFailedBooks.join(', ')}`);
+        } else {
+          console.log(`✅ shim enjeksiyonu: ${ok}/${subBookDirs.length} tamam`);
         }
       }
     } catch (error) {
@@ -4281,8 +4475,13 @@ public class MainActivity extends BridgeActivity {
     return this._javaHomeCache;
   }
 
+  // K14 (2026-09-09, Tudem 13 ISO batch) — build başlamadan ÖNCE Gradle heap'i
+  // kontrol eder (bkz. android-preflight.js NEDEN bloğu). Dosyaya DOKUNMAZ,
+  // sadece `console.warn` ile açık uyarı verir — OOM olursa operatör bunu build
+  // başlamadan ÖNCE loglarda görür.
   async runGradleBuild(webAppPath, task) {
     const { spawn } = require('child_process');
+    checkAndroidGradleHeapPreflight();
 
     return new Promise(async (resolve, reject) => {
       const androidPath = path.join(webAppPath, 'android');
@@ -4492,20 +4691,15 @@ public class MainActivity extends BridgeActivity {
     // Update bilgisine gore detayli mesajlari hazirla
     const companyText = companyName ? companyName : 'Dijitap';
     let installationMessages = '';
-    let speedMessage = '';
     let updateTypeMessage = 'Yeni kurulum yapiliyor...';
     
     if (updateInfo && updateInfo.hasExistingInstallation) {
       if (updateInfo.updateType === 'identical') {
         // Identical dosyalar - quick launch mode
         installationMessages = `
-  DetailPrint "HIZLI BASLAT MODU - Tum dosyalar ayni!"
-  DetailPrint "Onceki kurulum: v${updateInfo.previousVersion} -> v${updateInfo.currentVersion}"
-  DetailPrint "Degisiklik yok - direkt aciliyor..."
-  DetailPrint "Normal kurulum: ~30 saniye | Hizli: ~1 saniye"
-  Sleep 800`;
-        speedMessage = 'Hiz Kazanci: 30x daha hizli!';
-        updateTypeMessage = 'Ayni dosyalar tespit edildi - Hizli acilis!';
+  DetailPrint "Sürüm ${updateInfo.previousVersion} → ${updateInfo.currentVersion}"
+  DetailPrint "Dosyaların tamamı aynı; yeniden kopyalanmayacak."`;
+        updateTypeMessage = 'Kitap zaten güncel';
       } else if (updateInfo.updateType === 'incremental') {
         // Incremental update
         const totalFiles = updateInfo.changedFiles.length + updateInfo.newFiles.length + updateInfo.unchangedFiles.length;
@@ -4513,77 +4707,44 @@ public class MainActivity extends BridgeActivity {
         const skipPercent = Math.round((updateInfo.unchangedFiles.length / totalFiles) * 100);
         
         installationMessages = `
-  DetailPrint "ARTIMSAL GUNCELLEME MODU"
-  DetailPrint "Onceki kurulum: v${updateInfo.previousVersion} -> v${updateInfo.currentVersion}"
-  DetailPrint "Toplam dosya: ${totalFiles}"
-  DetailPrint "- Degisen: ${updateInfo.changedFiles.length} (${changedPercent}%)"
-  DetailPrint "- Yeni: ${updateInfo.newFiles.length}"
-  DetailPrint "- Atlanacak: ${updateInfo.unchangedFiles.length} (${skipPercent}%)"
-  ${updateInfo.deletedFiles && updateInfo.deletedFiles.length > 0 ? `DetailPrint "- Silinecek: ${updateInfo.deletedFiles.length}"` : ''}
-  DetailPrint "Sadece degisen dosyalar guncelleniyor..."
-  Sleep 2000`;
-        speedMessage = updateInfo.speedImprovement || '3x daha hizli!';
-        updateTypeMessage = `Artimsal guncelleme - ${updateInfo.unchangedFiles.length} dosya atlanacak`;
+  DetailPrint "Sürüm ${updateInfo.previousVersion} → ${updateInfo.currentVersion}"
+  DetailPrint "Toplam ${totalFiles} dosyanın ${updateInfo.changedFiles.length + updateInfo.newFiles.length} tanesi değişti (%${changedPercent})."
+  DetailPrint "Değişmeyen ${updateInfo.unchangedFiles.length} dosya yeniden kopyalanmayacak (%${skipPercent})."
+  ${updateInfo.deletedFiles && updateInfo.deletedFiles.length > 0 ? `DetailPrint "Kaldırılacak dosya: ${updateInfo.deletedFiles.length}"` : ''}`;
+        updateTypeMessage = 'Güncelleme';
       }
     } else {
       // Fresh installation
       installationMessages = `
-  DetailPrint "YENI KURULUM - Ilk kez yukleniyor"
-  DetailPrint "Tum dosyalar kopyalanacak"
-  DetailPrint "Masaustu kisayolu olusturulacak"
-  Sleep 1500`;
-      updateTypeMessage = 'Ilk kurulum - Tum dosyalar kopyalaniyor';
+  DetailPrint "Kitap ilk kez kuruluyor; dosyaların tamamı kopyalanacak."`;
+      updateTypeMessage = 'İlk kurulum';
     }
     
     // Gelismis NSIS script - Detayli bilgiler ve abartisiz animasyon
+    // KURULUM BİLGİLENDİRMESİ (2026-09-19, Nadir: "yayınevi logosu ve daha anlaşılır
+    // bilgilendirmeler istiyorum").
+    //
+    // Üç kusur ölçülerek düzeltildi:
+    //  1) Metinler ASCII yazılmıştı ("Dosyalar isleniye basliyor") — kullanıcı bunu
+    //     bozuk karakter sanıyordu. Kodlama sorunu DEĞİLDİ: makensis (NSIS 3 Unicode)
+    //     UTF-8 kaynağı BOM'suz doğru okuyor ve Türkçe karakterler derlenmiş exe'ye
+    //     UTF-16 olarak birebir giriyor (2026-09-19'da makensis ile ölçüldü).
+    //  2) Sahte ilerleme: "[10%]…[95%]" satırları gerçek ilerlemeyi göstermiyordu,
+    //     aralarındaki `Sleep` çağrıları kurulumu boşuna 3,6-5,6 sn uzatıyordu.
+    //  3) Yanlış bağlanma noktası: metinler ayrı bir `Section` içindeydi. Tek tıkla
+    //     kurulumda electron-builder'ın kendi bölümü ayrıdır; doğru uç `customInstall`
+    //     (app-builder-lib/templates/nsis/installSection.nsh içinde insert edilir).
+    //     `customFinishPageAction` ise şablonda HİÇ referansı olmayan ölü bir makroydu.
     const nsisScript = `
-# ${appName} - Gelismis Kurulum Script
-# Artimsal guncelleme destegi ve detayli bilgiler
+# ${appName} — kurulum bilgilendirmesi
+# electron-multi-platform-packager tarafından üretildi
 
-# Ana kurulum bolumu - Detayli progress tracking
-Section "MainInstall" SEC01
+!macro customInstall
   SetDetailsPrint both
-  
-  DetailPrint "==========================================="
-  DetailPrint "    ${appName} - ${updateTypeMessage}"
-  DetailPrint "==========================================="
+  DetailPrint "${appName} — ${updateTypeMessage}"
+  DetailPrint "Yayınevi: ${companyText}"
   ${installationMessages}
-  
-  DetailPrint "[10%] Kurulum hazirliklari yapiliyor..."
-  Sleep 500
-  
-  DetailPrint "[30%] Dosyalar isleniye basliyor..."
-  Sleep 800
-  
-  DetailPrint "[50%] Ana uygulama dosyalari kopyalaniyor..."
-  Sleep 1000
-  
-  DetailPrint "[70%] Yapilandirma dosyalari guncelleniyor..."
-  Sleep 600
-  
-  DetailPrint "[85%] Masaustu kisayolu olusturuluyor..."
-  Sleep 400
-  
-  DetailPrint "[95%] Son kontroller ve temizlik..."
-  Sleep 300
-  
-  DetailPrint "==========================================="
-  DetailPrint "    KURULUM TAMAMLANDI! ✓"
-  DetailPrint "==========================================="
-  DetailPrint "${appName} basariyla kuruldu!"
-  DetailPrint "Kurum: ${companyText}"
-  ${speedMessage ? `DetailPrint "${speedMessage}"` : ''}
-  DetailPrint "Masaustu kisayolu eklendi."
-  DetailPrint "Uygulama simdi otomatik acilacak..."
-  
-  # Etkileşimsiz kurulum - MessageBox yok
-  # DetailPrint mesajları yeterli
-SectionEnd
-
-# Opsiyonel: Kurulum sonrasi bilgi gosterimi
-!macro customFinishPageAction
-  DetailPrint "Kurulum sureci tamamlandi - ${new Date().toLocaleString('tr-TR')}"
-  ${updateInfo && updateInfo.hasExistingInstallation ? 'DetailPrint "Onceki kurulum uzerine guncelleme yapildi"' : 'DetailPrint "Yeni kurulum basariyla tamamlandi"'}
+  DetailPrint "Kurulum dizini: $INSTDIR"
 !macroend
 `;
     
@@ -4595,7 +4756,7 @@ SectionEnd
     console.log(`  - Logo: ${logoFileName}`);
     console.log(`  - NSIS Script: installer.nsh`);
     console.log(`  - Update Type: ${updateInfo ? updateInfo.updateType : 'fresh'}`);
-    console.log(`  - Features: Detayli progress, artimsal guncelleme, Turkce mesajlar`);
+    console.log(`  - Bilgilendirme: customInstall makrosu, gerçek Türkçe metin, sahte ilerleme yok`);
     
     // Kurulum rehberi dosyasi olustur
     const installGuide = `# ${appName} - Kurulum Rehberi
@@ -4606,15 +4767,15 @@ SectionEnd
 - **Platform**: Windows (NSIS)
 - **Kurulum Tipi**: ${updateInfo ? updateInfo.updateType : 'fresh'}
 ${updateInfo && updateInfo.hasExistingInstallation ? `- **Onceki Versiyon**: ${updateInfo.previousVersion}` : ''}
-${speedMessage ? `- **Hiz Kazanci**: ${speedMessage}` : ''}
 
-## Ozellikler
-- ✅ Tek tiklamayla otomatik kurulum
-- ✅ Yonetici izni otomatik alinir
-- ✅ Masaustu kisayolu otomatik olusur
-- ✅ Kurulum sonrasi otomatik acilir
-- ✅ Artimsal guncelleme destegi
-${updateInfo && updateInfo.unchangedFiles && updateInfo.unchangedFiles.length > 0 ? `- ✅ ${updateInfo.unchangedFiles.length} dosya atlanarak hizlandirildi` : ''}
+## Özellikler
+- Tek tıklamayla kurulum
+- **Yönetici parolası sorulmaz** — kurulum kullanıcı profiline yapılır
+  (\`perMachine:false\` + \`allowElevation:false\`, 2026-09-18 kararı)
+- Masaüstü ve Başlat menüsü kısayolu oluşturulur
+- Kurulum bitince kitap otomatik açılır
+- Artımsal güncelleme: değişmeyen dosyalar yeniden kopyalanmaz
+${updateInfo && updateInfo.unchangedFiles && updateInfo.unchangedFiles.length > 0 ? `- Bu kurulumda ${updateInfo.unchangedFiles.length} dosya atlandı` : ''}
 
 ## Kurulum Konumu
 \`\`\`

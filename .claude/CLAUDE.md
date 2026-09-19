@@ -125,3 +125,23 @@ Son Güncelleme: 2026-09-09 (K11b-K16 — 2. res.download, kısmi-hata özet say
   yazılıyordu — panelde "PARDUS HATALI" görünen 8 iş (19 Eylül) bozuk paket değil, dolu
   diskti. Yeni bir kaynak kapısı eklerken aynı ayrımı kur: *eşik* ve *reddetme biçimi*
   iki ayrı karardır.
+
+- **Kurulum bilgilendirmesi — ASCII kırpması KODLAMA SORUNU DEĞİL (2026-09-19, ölçüldü):**
+  "Dosyalar isleniye basliyor" gibi metinler `createCustomInstallationFiles` içinde
+  düpedüz ASCII yazılmıştı. makensis (NSIS 3 Unicode, `~/Library/Caches/electron-builder/
+  nsis/nsis-3.0.4.1/mac/makensis`, `NSISDIR` verilerek Mac'te koşar) UTF-8 kaynağı
+  **BOM'suz doğru okuyor**; Türkçe karakterler derlenmiş exe'ye UTF-16 olarak birebir
+  giriyor (bayt düzeyinde doğrulandı). Yani çözüm kodlama değil, metni düzgün yazmak.
+  Ayrıca kaldırıldı: sahte "[10%]…[95%]" satırları ve aralarındaki `Sleep` (kurulumu
+  boşuna 3,6-5,6 sn uzatıyordu). Bağlanma noktası `Section` DEĞİL **`customInstall`**
+  makrosudur (`app-builder-lib/templates/nsis/installSection.nsh` onu insert eder);
+  `customFinishPageAction` şablonda **hiç referansı olmayan ölü makroydu**. Sentinel:
+  `src/packaging/installer-bilgilendirme.test.js` (6 test, 4 mutantla doğrulandı).
+- **"<Uygulama> kapatılamaz" diyaloğu nereden gelir (2026-09-19, kaynak okundu):**
+  electron-builder'ın `allowOnlyOneInstallerInstance.nsh` makrosu. Per-user kurulumda
+  (`perMachine:false`) süreç `tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq
+  <exe>"` ile aranır, `taskkill` (önce normal, sonra `/f`) ile kapatılmaya çalışılır;
+  **ikinci turda hâlâ ayaktaysa** `appCannotBeClosed` kutusu çıkar. Yani diyalog bir
+  paketleme kusuru değil, "süreç iki zorlamalı taskkill'e rağmen ölmedi" demektir.
+  Override noktası **`customCheckAppRunning`** makrosudur (aynı dosyada `!ifmacrodef`
+  ile aranır). Teşhis için Windows'ta üreme şart — Mac'ten ölçülemez.
