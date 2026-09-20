@@ -26,6 +26,7 @@ const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
 const paketManifesti = require('./paket-manifesti');
 const windowsMimari = require('./windows-mimari');
+const ikonSaydamlik = require('./ikon-saydamlik');
 
 class PackagingService {
   constructor() {
@@ -1583,6 +1584,31 @@ function closeSplashScreen() {
     }
   }
 
+  /**
+   * Logonun ETRAFINDAKI duz zemini saydama cevirir (beyaz kutu sorunu).
+   * Dokunulmadiysa kaynak yolu aynen doner. Kapi: EMPP_IKON_SAYDAM bayragi 0 ise kapatir.
+   */
+  async hazirlaSaydamLogo(workingPath, kaynakYolu) {
+    if (!kaynakYolu || !ikonSaydamlik.acikMi(process.env)) return kaynakYolu;
+    try {
+      const sharp = require('sharp');
+      const { tampon, sonuc } = await ikonSaydamlik.logoyuSaydamlastir(sharp, kaynakYolu);
+      if (!tampon) {
+        console.log(`\u{1F5BC}\uFE0F Logo zemini korundu (${sonuc.sebep})`);
+        return kaynakYolu;
+      }
+      const hedef = path.join(workingPath, 'ico-saydam.png');
+      await fs.ensureDir(path.dirname(hedef));
+      await fs.writeFile(hedef, tampon);
+      const yuzde = (sonuc.oran * 100).toFixed(1);
+      console.log(`\u2705 Logo zemini saydamlastirildi: %${yuzde} (zemin rgb ${sonuc.zemin.join(',')})`);
+      return hedef;
+    } catch (hata) {
+      console.warn('\u26A0\uFE0F Logo saydamlastirilamadi, kaynak aynen kullanilacak:', hata.message);
+      return kaynakYolu;
+    }
+  }
+
   async ensureDefaultIcons(appPath) {
     // Basit 256x256 PNG icon oluştur (eğer yoksa)
     const iconPath = path.join(appPath, 'ico.png');
@@ -1627,6 +1653,9 @@ function closeSplashScreen() {
         await this.ensureDefaultIcons(workingPath);
       }
       
+      // Logonun etrafindaki duz zemini (beyaz kutu) saydama cevir
+      iconToCheck = await this.hazirlaSaydamLogo(workingPath, iconToCheck);
+
       // Icon boyutunu kontrol et
       const metadata = await sharp(iconToCheck).metadata();
       
@@ -1679,7 +1708,10 @@ function closeSplashScreen() {
       }
       
       console.log(`✅ Logo bulundu: ${sourceLogo}`);
-      
+
+      // Logonun etrafindaki duz zemini (beyaz kutu) saydama cevir
+      sourceLogo = await this.hazirlaSaydamLogo(workingPath, sourceLogo);
+
       // ICO dosyası oluştur (256x256, 128x128, 64x64, 48x48, 32x32, 16x16)
       const icoPath = path.join(workingPath, 'build', 'icon.ico');
       await fs.ensureDir(path.dirname(icoPath));
@@ -1731,6 +1763,9 @@ function closeSplashScreen() {
         await this.ensureDefaultIcons(workingPath);
       }
       
+      // Logonun etrafindaki duz zemini (beyaz kutu) saydama cevir
+      iconToCheck = await this.hazirlaSaydamLogo(workingPath, iconToCheck);
+
       // Icon boyutunu kontrol et
       const metadata = await sharp(iconToCheck).metadata();
       
