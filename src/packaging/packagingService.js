@@ -4914,6 +4914,12 @@ public class MainActivity extends BridgeActivity {
   StrCmp $R8 "\${VERSION}" 0 empp_kurulum_bitir
   ; SORU SORULMAZ (2026-09-20, Nadir: "bu ekrana bence gerek yok — güncelleme
   ; varsa zaten içeride güncelleniyor"). Aynı sürüm kuruluysa kitap DOĞRUDAN açılır.
+  ;
+  ; SetOutPath SART (2026-09-20, gercek x64 makinede olculdu): NSIS'te Exec
+  ; calisma dizini olarak OUTDIR'i verir; .onInit icinde OUTDIR BOSTUR, bu
+  ; yuzden CreateProcess sessizce dusuyordu: yukleyici cikiyor, kitap acilmiyordu
+  ; (iz dosyasi testi: kurulum dali kosmadi ama uygulama sureci de 0'di).
+  SetOutPath "$R7"
   Exec '"$R7\\\${APP_EXECUTABLE_FILENAME}"'
   Pop $R8
   Pop $R7
@@ -4925,9 +4931,25 @@ public class MainActivity extends BridgeActivity {
 !macroend
 `;
 
+    // ÖN TARAMA KAPATILDI (2026-09-20, Nadir: "ilk ekran gelene kadar oluşan bekleme
+    // ... o anda bir bilgi kutusu olmaması tekrar tekrar çift tıklama ihtiyacı doğuruyor").
+    //
+    // NSIS varsayılanı CRCCheck on: yükleyici, HİÇBİR pencere göstermeden önce kendi
+    // 1,3 GB'lik gövdesini baştan sona okuyup sağlama hesaplar. Ölçüm (x64, dosya
+    // önbellekte SICAK): 1,3 sn'de "verifying installer: 35%" başlıklı küçük pencere,
+    // 3,4 sn'de biter. Soğuk diskte ve VM'de bu çok daha uzun — ekranda anlamlı hiçbir
+    // şey yokken geçen bu süre kullanıcıyı tekrar tekrar çift tıklamaya itiyor.
+    //
+    // Kapatınca bütünlük denetimi KAYBOLMAZ, yalnız YERİ değişir: bozuk/yarım inmiş
+    // bir yükleyicide LZMA çözme kurulum sırasında hata verir. Yani doğrulama
+    // "kurulum başlamadan önce" değil, "kurulum sırasında" yapılır — istenen buydu.
+    const onTaramaKapali = 'CRCCheck off';
+
     const nsisScript = `
 # ${appName} — kurulum bilgilendirmesi
 # electron-multi-platform-packager tarafından üretildi
+
+${onTaramaKapali}
 ${zatenKuruluMakro}
 !macro customInstall
   SetDetailsPrint both

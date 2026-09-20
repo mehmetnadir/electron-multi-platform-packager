@@ -176,3 +176,29 @@ test('kurulum betiğinin tamamı gerçek Türkçe karakterlerle yazılır', asyn
   assert.match(s, /[çğıöşüÇĞİÖŞÜ]/, 'ASCII fallback kullanılmış');
   assert.ok(!/isleniye|basliyor|Kurulum dizini: \$INSTDIR[^"]*basliyor/.test(s), 'ASCII kalıntısı');
 });
+
+test('GERİLEME: kitabı açmadan önce SetOutPath verilir (Exec cwd tuzağı)', async () => {
+  // Gerçek x64 makinede ölçüldü: .onInit içinde $OUTDIR boş olduğu için `Exec`
+  // CreateProcess'e geçersiz çalışma dizini veriyor ve süreç SESSİZCE başlamıyor.
+  // Yükleyici çıkıyor, kitap açılmıyor — kullanıcı için "hiçbir şey olmadı".
+  const s = await uret(null);
+  const init = s.slice(s.indexOf('!macro customInit'), s.indexOf('!macro customInstall'));
+  const setOut = init.indexOf('SetOutPath');
+  const exec = init.indexOf('Exec');
+  assert.ok(setOut > -1, 'SetOutPath yok — Exec sessizce düşer');
+  assert.ok(setOut < exec, 'SetOutPath, Exec\'ten ÖNCE gelmeli');
+  assert.match(init, /SetOutPath "\$\w+"/, 'SetOutPath kurulum dizinini almalı');
+});
+
+test('ön tarama kapalı: CRCCheck off verilir (boş bekleme ekranı kalkar)', async () => {
+  // Ölçüm: ön tarama 3,4 sn (sıcak önbellek) ve o sürede ekranda yalnız İngilizce
+  // "verifying installer: %" başlıklı boş bir kutu var. Bütünlük kaybolmaz —
+  // bozuk yükleyici kurulum sırasında LZMA hatası verir.
+  for (const bilgi of [null, GUNCELLEME]) {
+    const s = await uret(bilgi);
+    assert.match(s, /^CRCCheck off$/m, 'CRCCheck off yok — boş bekleme ekranı geri gelir');
+    const crcIdx = s.indexOf('CRCCheck off');
+    const makroIdx = s.indexOf('!macro');
+    assert.ok(crcIdx > -1 && crcIdx < makroIdx, 'CRCCheck betik başında, makrolardan önce olmalı');
+  }
+});
