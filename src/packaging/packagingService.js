@@ -20,6 +20,7 @@ const oluMotor = require('./olu-motor-temizligi');
 const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
 const agPolitikasi = require('./ag-politikasi-yamasi');
 const sayfaOnGetirme = require('./sayfa-on-getirme');
+const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 
 class PackagingService {
   constructor() {
@@ -563,6 +564,32 @@ MimeType=application/x-electron;
         } catch (onGetirmeError) {
           console.warn('⚠️ Sayfa ön-getirme enjeksiyonu başarısız (paketleme devam ediyor):',
             onGetirmeError.message);
+        }
+      }
+
+      // AÇILIŞ GÜNCELLEME ÖTELEMESİ (2026-09-20, Nadir önceliği) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_GUNCELLEME_OTELEME=0` kapatır). Yayıncı motoru `createWindow()`'u
+      // `await checkForUpdates()` ARKASINDA çağırıyordu: güncelleme sorgusu bitmeden
+      // hiçbir pencere — splash dahil — açılmıyor, kullanıcı boş ekran görüyordu.
+      // Yama pencereyi öne alır, güncellemeyi ateşle-unut olarak arkaya atar ve
+      // `https.get` çağrılarına gerçek zaman aşımı takar (yanıtsız sunucu artık
+      // açılışı süresiz askıda bırakamaz). Güncelleme İPTAL EDİLMEZ, yalnız ötelenir.
+      // prepareElectronFiles'tan ÖNCE koşar: o adım electron.js'i main.js olarak
+      // kopyalar, kopya da yamalı doğsun.
+      if (guncellemeOteleme.acikMi()) {
+        try {
+          const oteleme = await guncellemeOteleme.paketeUygula(workingPath, {
+            log: (s) => console.log(s),
+          });
+          const yamali = oteleme.filter((x) => x.uygulandi);
+          if (yamali.length) {
+            const asim = yamali.reduce((a, x) => a + x.zamanAsimi, 0);
+            console.log(`⏱️  Açılış güncelleme ötelemesi: ${yamali.length} dosya, `
+              + `${asim} isteğe zaman aşımı`);
+          }
+        } catch (otelemeError) {
+          console.warn('⚠️ Güncelleme ötelemesi başarısız (paketleme devam ediyor):',
+            otelemeError.message);
         }
       }
 
