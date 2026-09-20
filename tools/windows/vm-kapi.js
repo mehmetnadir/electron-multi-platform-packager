@@ -227,13 +227,25 @@ async function ana() {
 
   if (komut === 'kur') {
     kapiBekcisi('kur');
-    const exe = process.argv[3];
-    if (!exe || !fs.existsSync(exe)) { console.error('kurulum dosyası bulunamadı'); process.exit(2); }
+    const kaynak = process.argv[3];
     dizinleriKur();
-    const ad = path.basename(exe);
-    fs.copyFileSync(exe, path.join(KOK, ad));          // dosya deposu TÜM makinelerde ortak
-    const kimlik = gorevYaz({ tur: 'kur', dosya: ad, surecAdi: bayrak('surec', 'Super Monsters 4'), bekleSn: 25 });
-    console.log(`görev ${kimlik} — kuruluyor (${(fs.statSync(exe).size / 1e6).toFixed(0)} MB)`);
+    let govde;
+    let aciklama;
+    if (/^https?:\/\//i.test(kaynak || '')) {
+      // DOĞRUDAN İNDİRME: bayt Mac'ten geçmez, makine kaynaktan kendisi çeker.
+      // Nadir kuralı: ofis makinelerinin hattı bu Mac'ten hızlı.
+      const ad = bayrak('ad', path.basename(new URL(kaynak).pathname) || 'kurulum.exe');
+      govde = { tur: 'kur', dosya: ad, dosyaUrl: kaynak, surecAdi: bayrak('surec', 'Super Monsters 4'), bekleSn: 25 };
+      aciklama = `doğrudan indirme: ${kaynak.slice(0, 80)}…`;
+    } else {
+      if (!kaynak || !fs.existsSync(kaynak)) { console.error('kurulum dosyası bulunamadı (yol ya da http adresi ver)'); process.exit(2); }
+      const ad = path.basename(kaynak);
+      fs.copyFileSync(kaynak, path.join(KOK, ad));      // dosya deposu TÜM makinelerde ortak
+      govde = { tur: 'kur', dosya: ad, surecAdi: bayrak('surec', 'Super Monsters 4'), bekleSn: 25 };
+      aciklama = `${(fs.statSync(kaynak).size / 1e6).toFixed(0)} MB köprüden`;
+    }
+    const kimlik = gorevYaz(govde);
+    console.log(`görev ${kimlik} [${MAKINE}] — kuruluyor (${aciklama})`);
     const k = await bekle(kimlik, Number(bayrak('zaman-asimi', '1800')));
     console.log(JSON.stringify(k, null, 2));
     process.exit(k.durum === 'gecti' ? 0 : 1);
@@ -251,7 +263,8 @@ async function ana() {
 
   console.error('bayraklar: --zorla (koruma aş) · --gizle (baslat ile)\n' +
     'işaret: touch ~/vm-kapi/BENDE → kapı VM durumuna dokunmaz\n' +
-    'komut: baslat | uyut | gizle | hazir | kur <exe> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>');
+    'komut: baslat | uyut | gizle | hazir | kur <exe|http-adres> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>\n' +
+    'makine: --makine <ad> (varsayılan vm) — gerçek makineler için ör. --makine windows-kasa');
   process.exit(2);
 }
 

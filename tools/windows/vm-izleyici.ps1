@@ -106,7 +106,23 @@ function Gorev-Al {
   } catch { Remove-Item -Force $ilk.FullName -ErrorAction SilentlyContinue; return $null }
 }
 
-function Dosya-Getir([string]$ad) {
+function Dosya-Getir([string]$ad, [string]$dogrudanUrl) {
+  # NADİR KURALI (2026-09-20): "ofisteki makinelerin interneti benden hızlı, buraya
+  # uğramadan orada yapılabilecekleri değerlendir." Kurulum dosyası R2/panel gibi
+  # bir adresten geliyorsa Mac'in yükleme hattını hiç kullanmayız: misafir dosyayı
+  # DOĞRUDAN kaynaktan çeker. dogrudanUrl yoksa eski yol (köprüden) işler.
+  if ($dogrudanUrl) {
+    $hedef = Join-Path $Calisma $ad
+    $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+    if ($curl) {
+      & $curl.Source -sS -L --fail --retry 5 --retry-delay 3 -o $hedef $dogrudanUrl
+      if ($LASTEXITCODE -ne 0) { throw "dogrudan indirme basarisiz (curl rc=$LASTEXITCODE)" }
+    } else {
+      Invoke-WebRequest -Uri $dogrudanUrl -OutFile $hedef -TimeoutSec 7200 -UseBasicParsing
+    }
+    if (-not (Test-Path $hedef)) { throw "indirilen dosya yok: $hedef" }
+    return $hedef
+  }
   # HTTP modunda kurulum dosyası host'tan indirilir; klasör modunda zaten yanımızda.
   if (-not $HttpModu) { return (Join-Path $Kok $ad) }
   $hedef = Join-Path $Calisma $ad
@@ -155,7 +171,7 @@ while ($true) {
     try {
       switch ($g.tur) {
         'kur' {
-          $exe = Dosya-Getir $g.dosya
+          $exe = Dosya-Getir $g.dosya $g.dosyaUrl
           if (-not (Test-Path $exe)) { throw "kurulum dosyasi yok: $exe" }
           # NSIS oneClick per-user: /S sessiz kurar, UAC istemez.
           $p = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru -Wait
