@@ -45,6 +45,47 @@ const D = {
   durum: path.join(KOK, 'durum'),
 };
 
+// ÇOK MAKİNELİ KUYRUK (2026-09-20). Başta tek misafir vardı; artık VM + gerçek
+// Windows makinesi (windows-kasa) + ileride Pardus aynı köprüye bağlanıyor. TEK
+// kuyruk ve TEK kalp dosyası ile hangi makinenin ne yaptığı belirsizleşir ve
+// görevi rastgele biri kapar — sessiz yanlış sonuç sınıfı. Bu yüzden her makine
+// kendi kuyruğunu, kendi kalbini ve kendi sonuç dizinini kullanır.
+//
+// Yol: /<belirtec>/<makine>/<eylem>...   (eski /<belirtec>/<eylem> yolu, henüz
+// güncellenmemiş izleyiciler kopmasın diye "vm" makinesine eşlenir.)
+const VARSAYILAN_MAKINE = 'vm';
+const MAKINE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
+const EYLEMLER = new Set(['gorev', 'kalp', 'sonuc', 'ekran', 'dosya']);
+
+/** Yolu makine + eylem + kalan parçalara ayırır. */
+function yoluCoz(parcalar) {
+  // parcalar: belirteçten SONRAKİ parçalar
+  if (parcalar.length && EYLEMLER.has(parcalar[0])) {
+    return { makine: VARSAYILAN_MAKINE, eylem: parcalar[0], kalan: parcalar.slice(1), eski: true };
+  }
+  if (parcalar.length >= 2 && MAKINE_RE.test(parcalar[0]) && EYLEMLER.has(parcalar[1])) {
+    return { makine: parcalar[0], eylem: parcalar[1], kalan: parcalar.slice(2), eski: false };
+  }
+  return null;
+}
+
+/**
+ * Bir makinenin dizinleri. `dosya` paylaşılır (kurulum dosyaları ortak).
+ * VARSAYILAN makine ("vm") KÖK dizinleri kullanır: eski sürücü/izleyici ve
+ * yazılmış görevler hiç dokunulmadan çalışmaya devam etsin. Yeni makineler alt
+ * dizine iner. Yani geçiş kırılgan değil — tek makinelik kurulum aynen sürer.
+ */
+function makineDizinleri(makine) {
+  if (makine === VARSAYILAN_MAKINE) {
+    return { gorev: D.gorev, sonuc: D.sonuc, kalp: path.join(D.durum, 'kalp.txt') };
+  }
+  return {
+    gorev: path.join(D.gorev, makine),
+    sonuc: path.join(D.sonuc, makine),
+    kalp: path.join(D.durum, `kalp-${makine}.txt`),
+  };
+}
+
 /** VMware'in host tarafı adresleri — yalnız bunlara bağlanılır, 0.0.0.0'a ASLA. */
 // Tailscale, 100.64.0.0/10 (CGNAT) bloğunu kullanır. Bu bloğa bağlanmak köprüyü
 // TAILNET'e açar: gerçek bir Windows makinesi (ofisteki x64 tahta/PC) ya da uzaktaki
@@ -92,11 +133,11 @@ function belirtecAl() {
 }
 
 /** Sıradaki görevi al ve dizinden KALDIR (ikinci kez dağıtılmasın). */
-function siradakiGorev() {
+function siradakiGorev(dizin = D.gorev) {
   let adlar = [];
-  try { adlar = fs.readdirSync(D.gorev).filter((f) => f.endsWith('.json')).sort(); } catch { return null; }
+  try { adlar = fs.readdirSync(dizin).filter((f) => f.endsWith('.json')).sort(); } catch { return null; }
   if (!adlar.length) return null;
-  const tam = path.join(D.gorev, adlar[0]);
+  const tam = path.join(dizin, adlar[0]);
   let govde;
   try { govde = JSON.parse(fs.readFileSync(tam, 'utf8')); } catch { fs.unlinkSync(tam); return null; }
   govde.kimlik = path.basename(adlar[0], '.json');
@@ -130,37 +171,42 @@ function sunucuKur(belirtec) {
       const u = new URL(istek.url, 'http://yerel');
       const parca = u.pathname.split('/').filter(Boolean);
       if (parca[0] !== belirtec) { yanit.writeHead(404).end(); return; }
-      const eylem = parca[1];
+      const yol = yoluCoz(parca.slice(1));
+      if (!yol) { yanit.writeHead(404).end(); return; }
+      const { makine, eylem } = yol;
       for (const d of Object.values(D)) fs.mkdirSync(d, { recursive: true });
+      const M = makineDizinleri(makine);
+      fs.mkdirSync(M.gorev, { recursive: true });
+      fs.mkdirSync(M.sonuc, { recursive: true });
 
       if (istek.method === 'GET' && eylem === 'gorev') {
-        const g = siradakiGorev();
+        const g = siradakiGorev(M.gorev);
         if (!g) { yanit.writeHead(204).end(); return; }
         yanit.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(g));
-        kayit(`→ görev verildi: ${g.kimlik} (${g.tur})`);
+        kayit(`→ [${makine}] görev verildi: ${g.kimlik} (${g.tur})`);
         return;
       }
       if (istek.method === 'POST' && eylem === 'kalp') {
-        atomikYaz(path.join(D.durum, 'kalp.txt'), new Date().toISOString());
+        atomikYaz(M.kalp, new Date().toISOString());
         yanit.writeHead(204).end();
         return;
       }
-      if (istek.method === 'POST' && eylem === 'sonuc' && parca[2]) {
+      if (istek.method === 'POST' && eylem === 'sonuc' && yol.kalan[0]) {
         const govde = await govdeTopla(istek);
-        atomikYaz(path.join(D.sonuc, `${path.basename(parca[2])}.json`), govde);
+        atomikYaz(path.join(M.sonuc, `${path.basename(yol.kalan[0])}.json`), govde);
         yanit.writeHead(204).end();
-        kayit(`← sonuç alındı: ${parca[2]}`);
+        kayit(`← [${makine}] sonuç alındı: ${yol.kalan[0]}`);
         return;
       }
-      if (istek.method === 'POST' && eylem === 'ekran' && parca[2]) {
+      if (istek.method === 'POST' && eylem === 'ekran' && yol.kalan[0]) {
         const govde = await govdeTopla(istek);
-        atomikYaz(path.join(D.sonuc, `${path.basename(parca[2])}.png`), govde);
+        atomikYaz(path.join(M.sonuc, `${path.basename(yol.kalan[0])}.png`), govde);
         yanit.writeHead(204).end();
-        kayit(`← ekran alındı: ${parca[2]} (${(govde.length / 1024).toFixed(0)} KB)`);
+        kayit(`← [${makine}] ekran alındı: ${yol.kalan[0]} (${(govde.length / 1024).toFixed(0)} KB)`);
         return;
       }
-      if (istek.method === 'GET' && eylem === 'dosya' && parca[2]) {
-        const ad = path.basename(decodeURIComponent(parca[2]));
+      if (istek.method === 'GET' && eylem === 'dosya' && yol.kalan[0]) {
+        const ad = path.basename(decodeURIComponent(yol.kalan[0]));
         const tam = path.join(KOK, ad);
         if (!fs.existsSync(tam)) { yanit.writeHead(404).end(); return; }
         yanit.writeHead(200, {
@@ -195,4 +241,7 @@ async function ana() {
 }
 
 if (require.main === module) ana().catch((e) => { kayit('HATA:', e.message); process.exit(1); });
-module.exports = { sunucuKur, belirtecAl, siradakiGorev, vmAdresleri, KOK, D, PORT };
+module.exports = {
+  sunucuKur, belirtecAl, siradakiGorev, vmAdresleri, yoluCoz, makineDizinleri,
+  KOK, D, PORT, VARSAYILAN_MAKINE,
+};

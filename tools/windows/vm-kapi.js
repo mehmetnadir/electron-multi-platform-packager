@@ -27,11 +27,23 @@ const karar = require('../../src/windows/vm-kapi-karar');
 
 const VMRUN = '/Applications/VMware Fusion.app/Contents/Public/vmrun';
 const KOK = process.env.EMPP_VM_KOK || path.join(os.homedir(), 'vm-kapi');
+
+// HANGİ MAKİNE: `--makine <ad>` (varsayılan "vm" = VMware misafiri). Gerçek
+// makineler (windows-kasa gibi) kendi alt dizinlerini kullanır; varsayılan makine
+// KÖK dizinlerde kalır ki eski kurulum hiç değişmesin.
+const MAKINE = (() => {
+  const i = process.argv.indexOf('--makine');
+  return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : (process.env.EMPP_VM_MAKINE || 'vm');
+})();
+const altDizin = (ad) => (MAKINE === 'vm' ? path.join(KOK, ad) : path.join(KOK, ad, MAKINE));
 const D = {
-  gorev: path.join(KOK, 'gorev'),
-  sonuc: path.join(KOK, 'sonuc'),
+  gorev: altDizin('gorev'),
+  sonuc: altDizin('sonuc'),
   durum: path.join(KOK, 'durum'),
 };
+const KALP_DOSYASI = MAKINE === 'vm'
+  ? path.join(KOK, 'durum', 'kalp.txt')
+  : path.join(KOK, 'durum', `kalp-${MAKINE}.txt`);
 
 function dizinleriKur() {
   for (const d of Object.values(D)) fs.mkdirSync(d, { recursive: true });
@@ -63,7 +75,7 @@ function vmx() {
 
 function kalpMs() {
   try {
-    const ham = fs.readFileSync(path.join(D.durum, 'kalp.txt'), 'utf8').trim();
+    const ham = fs.readFileSync(KALP_DOSYASI, 'utf8').trim();
     const t = Date.parse(ham);
     return Number.isFinite(t) ? t : null;
   } catch { return null; }
@@ -219,7 +231,7 @@ async function ana() {
     if (!exe || !fs.existsSync(exe)) { console.error('kurulum dosyası bulunamadı'); process.exit(2); }
     dizinleriKur();
     const ad = path.basename(exe);
-    fs.copyFileSync(exe, path.join(KOK, ad));          // paylaşılan klasöre koy
+    fs.copyFileSync(exe, path.join(KOK, ad));          // dosya deposu TÜM makinelerde ortak
     const kimlik = gorevYaz({ tur: 'kur', dosya: ad, surecAdi: bayrak('surec', 'Super Monsters 4'), bekleSn: 25 });
     console.log(`görev ${kimlik} — kuruluyor (${(fs.statSync(exe).size / 1e6).toFixed(0)} MB)`);
     const k = await bekle(kimlik, Number(bayrak('zaman-asimi', '1800')));

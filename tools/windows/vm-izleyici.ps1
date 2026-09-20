@@ -18,13 +18,19 @@
 param(
   [string]$Adres,
   [string]$Belirtec,
-  [string]$Kok
+  [string]$Kok,
+  # MAKİNE ADI: artık birden çok makine aynı köprüye bağlanıyor (VM + gerçek
+  # Windows + ileride Pardus). Her makinenin kendi kuyruğu ve kalbi olmalı;
+  # yoksa görevi rastgele biri kapar ve hangi makinenin ne yaptığı belirsizleşir.
+  # Varsayılan "vm" — eski kurulum hiç değişmeden çalışsın diye.
+  [string]$Makine = 'vm'
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest ilerleme çubuğu büyük indirmede çok yavaşlatıyor
 
 $HttpModu = -not [string]::IsNullOrWhiteSpace($Adres)
+$Taban = "$Adres/$Belirtec/$Makine"
 if (-not $HttpModu -and [string]::IsNullOrWhiteSpace($Kok)) {
   $Kok = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
@@ -63,10 +69,10 @@ function Kalp-Isini-Baslat {
     Start-Job -Name 'vm-kalp' -ScriptBlock {
       param($a, $b)
       while ($true) {
-        try { Invoke-RestMethod -Method Post -Uri "$a/$b/kalp" -TimeoutSec 10 | Out-Null } catch { }
+        try { Invoke-RestMethod -Method Post -Uri "$a/kalp" -TimeoutSec 10 | Out-Null } catch { }
         Start-Sleep -Seconds 5
       }
-    } -ArgumentList $Adres, $Belirtec | Out-Null
+    } -ArgumentList $Taban, $Belirtec | Out-Null
   } else {
     Start-Job -Name 'vm-kalp' -ScriptBlock {
       param($d)
@@ -85,7 +91,7 @@ function Kalp-Isini-Durdur {
 function Gorev-Al {
   if ($HttpModu) {
     try {
-      $y = Invoke-WebRequest -Method Get -Uri "$Adres/$Belirtec/gorev" -TimeoutSec 20 -UseBasicParsing
+      $y = Invoke-WebRequest -Method Get -Uri "$Taban/gorev" -TimeoutSec 20 -UseBasicParsing
       if ($y.StatusCode -eq 204 -or -not $y.Content) { return $null }
       return ($y.Content | ConvertFrom-Json)
     } catch { return $null }
@@ -104,7 +110,7 @@ function Dosya-Getir([string]$ad) {
   # HTTP modunda kurulum dosyası host'tan indirilir; klasör modunda zaten yanımızda.
   if (-not $HttpModu) { return (Join-Path $Kok $ad) }
   $hedef = Join-Path $Calisma $ad
-  $kaynak = "$Adres/$Belirtec/dosya/$([uri]::EscapeDataString($ad))"
+  $kaynak = "$Taban/dosya/$([uri]::EscapeDataString($ad))"
   # curl.exe Windows 10 1803+ ile geliyor ve büyük dosyada Invoke-WebRequest'ten
   # belirgin hızlı (IWR yanıtı belleğe tamponluyor). Yoksa IWR'ye düşülür.
   $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
@@ -121,10 +127,10 @@ function Dosya-Getir([string]$ad) {
 function Sonuc-Gonder($kimlik, $nesne, $ekranYolu) {
   if ($HttpModu) {
     if ($ekranYolu -and (Test-Path $ekranYolu)) {
-      Invoke-WebRequest -Method Post -Uri "$Adres/$Belirtec/ekran/$kimlik" `
+      Invoke-WebRequest -Method Post -Uri "$Taban/ekran/$kimlik" `
         -InFile $ekranYolu -ContentType 'image/png' -TimeoutSec 120 -UseBasicParsing | Out-Null
     }
-    Invoke-WebRequest -Method Post -Uri "$Adres/$Belirtec/sonuc/$kimlik" `
+    Invoke-WebRequest -Method Post -Uri "$Taban/sonuc/$kimlik" `
       -Body ($nesne | ConvertTo-Json -Depth 4) -ContentType 'application/json' -TimeoutSec 60 -UseBasicParsing | Out-Null
     return
   }
@@ -135,7 +141,7 @@ function Sonuc-Gonder($kimlik, $nesne, $ekranYolu) {
   Move-Item -Force $gecici (Join-Path $Sonuc "$kimlik.json")
 }
 
-Write-Host ("VM izleyici calisiyor - mod: " + $(if ($HttpModu) { "HTTP ($Adres)" } else { "KLASOR ($Kok)" }))
+Write-Host ("VM izleyici calisiyor - makine: $Makine - mod: " + $(if ($HttpModu) { "HTTP ($Adres)" } else { "KLASOR ($Kok)" }))
 Write-Host "Kapatmak icin Ctrl+C. Kalp atisi AYRI iste, her 5 sn (uzun is sirasinda da surer)."
 Kalp-Isini-Durdur      # onceki calistirmadan kalan is varsa
 Kalp-Isini-Baslat

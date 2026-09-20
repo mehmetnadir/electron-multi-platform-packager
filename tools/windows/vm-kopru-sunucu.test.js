@@ -183,3 +183,62 @@ test('EMPP_VM_ADRES verilirse YALNIZ o adrese bağlanılır', () => {
 test('EMPP_VM_ADRES=0.0.0.0 REDDEDİLİR (dış ağa açılmaz)', () => {
   assert.throws(() => kopru.vmAdresleri({ EMPP_VM_ADRES: '0.0.0.0' }, {}), /0\.0\.0\.0/);
 });
+
+// ——— Çok makineli kuyruk ————————————————————————————————————————————
+test('yol çözümü: eski yol "vm" makinesine eşlenir (eski izleyici kopmaz)', () => {
+  const r = kopru.yoluCoz(['gorev']);
+  assert.strictEqual(r.makine, 'vm');
+  assert.strictEqual(r.eylem, 'gorev');
+  assert.strictEqual(r.eski, true);
+});
+
+test('yol çözümü: makine adı verilirse o makine', () => {
+  const r = kopru.yoluCoz(['windows-kasa', 'sonuc', '20260920-1']);
+  assert.strictEqual(r.makine, 'windows-kasa');
+  assert.strictEqual(r.eylem, 'sonuc');
+  assert.deepStrictEqual(r.kalan, ['20260920-1']);
+});
+
+test('yol çözümü: geçersiz makine adı ve bilinmeyen eylem REDDEDİLİR', () => {
+  assert.strictEqual(kopru.yoluCoz(['../kacak', 'gorev']), null);
+  assert.strictEqual(kopru.yoluCoz(['makine', 'silsin']), null);
+  assert.strictEqual(kopru.yoluCoz([]), null);
+  assert.strictEqual(kopru.yoluCoz(['a'.repeat(40), 'gorev']), null);
+});
+
+test('makine dizinleri ayrışır — kuyruk ve kalp paylaşılmaz', () => {
+  const a = kopru.makineDizinleri('vm');
+  const b = kopru.makineDizinleri('windows-kasa');
+  assert.notStrictEqual(a.gorev, b.gorev);
+  assert.notStrictEqual(a.sonuc, b.sonuc);
+  assert.notStrictEqual(a.kalp, b.kalp);
+  assert.match(b.kalp, /kalp-windows-kasa\.txt$/);
+  assert.match(a.kalp, /kalp\.txt$/, 'varsayılan makine KÖK dizinleri kullanır (geçiş kırılmasın)');
+});
+
+test('İKİ MAKİNE birbirinin görevini KAPAMAZ (gerçek HTTP)', async (t) => {
+  const { kok, mod } = ortam();
+  const { taban } = await ayagaKaldir(mod, t);
+  const fsx = require('fs');
+  for (const [m, kimlik] of [['vm', '20260920-100000-0001'], ['windows-kasa', '20260920-100000-0002']]) {
+    const d = m === 'vm' ? path.join(kok, 'gorev') : path.join(kok, 'gorev', m);
+    fsx.mkdirSync(d, { recursive: true });
+    fsx.writeFileSync(path.join(d, `${kimlik}.json`), JSON.stringify({ tur: 'ekran', makine: m }));
+  }
+  const a = await (await fetch(`${taban}/vm/gorev`)).json();
+  const b = await (await fetch(`${taban}/windows-kasa/gorev`)).json();
+  assert.strictEqual(a.makine, 'vm');
+  assert.strictEqual(b.makine, 'windows-kasa');
+  // ikisi de tükendi, tekrar istenirse 204
+  assert.strictEqual((await fetch(`${taban}/vm/gorev`)).status, 204);
+  assert.strictEqual((await fetch(`${taban}/windows-kasa/gorev`)).status, 204);
+});
+
+test('kalp atışları ayrı dosyalara yazılır', async (t) => {
+  const { kok, mod } = ortam();
+  const { taban } = await ayagaKaldir(mod, t);
+  await fetch(`${taban}/windows-kasa/kalp`, { method: 'POST' });
+  const fsx = require('fs');
+  assert.ok(fsx.existsSync(path.join(kok, 'durum', 'kalp-windows-kasa.txt')));
+  assert.ok(!fsx.existsSync(path.join(kok, 'durum', 'kalp.txt')), 'başka makinenin kalbi yazılmamalı');
+});
