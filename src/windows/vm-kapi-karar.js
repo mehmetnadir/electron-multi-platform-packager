@@ -154,8 +154,18 @@ function calistirGovdesi(satir) {
   return { govde: { tur: 'komut', komut: s } };
 }
 
+// ——— "EL DEĞMİŞ" İŞARETİ MAKİNE BAZLIDIR ————————————————————————————————
+// Ölçülen kusur (2026-09-20): tek bir ~/vm-kapi/BENDE dosyası vardı; Nadir VM'i
+// kullanırken konan işaret, BAŞKA bir makineye (windows-kasa) gönderilen kurulumu
+// da reddetti. İşaret "şu makineye dokunma" demektir, "hiçbir makineye dokunma"
+// değil. Varsayılan makine eski adı korur ki mevcut alışkanlık bozulmasın.
+function bendeYolu(kok, makine = 'vm') {
+  const ad = !makine || makine === 'vm' ? 'BENDE' : `BENDE-${makine}`;
+  return `${kok}/${ad}`;
+}
+
 module.exports = {
-  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi,
+  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi, bendeYolu,
   KOMUT_AZAMI,
   KALP_TAZE_SN, KALP_MESGUL_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
 };

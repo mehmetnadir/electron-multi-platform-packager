@@ -133,7 +133,9 @@ async function bekle(kimlik, zamanAsimiSn) {
 //   VM penceresi açık → muhtemelen o kullanıyor; durum değiştiren hamle reddedilir.
 // Karar saf modülde (src/windows/vm-kapi-karar.js → mudahaleKarari), burada yalnız
 // işaretler okunur.
-const BENDE = path.join(KOK, 'BENDE');
+// İŞARET MAKİNE BAZLI (2026-09-20 kusuru): VM'e konan işaret windows-kasa'ya
+// gönderilen kurulumu da reddediyordu. Yol kararı saf modülde (bendeYolu).
+const BENDE = karar.bendeYolu(KOK, MAKINE);
 
 function bendeMi() { return fs.existsSync(BENDE); }
 
@@ -150,14 +152,17 @@ function pencereAcikMi() {
 
 function kapiBekcisi(komut) {
   const zorla = process.argv.includes('--zorla');
-  let vmCalisiyor = true;
-  try { vmCalisiyor = calisanVmx().includes(vmx()); } catch { vmCalisiyor = false; }
+  // Fusion sinyalleri YALNIZ misafir VM için anlamlıdır; gerçek makinede
+  // "pencere açık"/"vmrun listesinde" diye bir şey yoktur.
+  const misafir = MAKINE === 'vm';
+  let vmCalisiyor = misafir;
+  if (misafir) { try { vmCalisiyor = calisanVmx().includes(vmx()); } catch { vmCalisiyor = false; } }
   const k = karar.mudahaleKarari({
-    komut, bendeBayragi: bendeMi(), pencereAcik: pencereAcikMi(), vmCalisiyor, zorla,
+    komut, bendeBayragi: bendeMi(), pencereAcik: misafir ? pencereAcikMi() : false, vmCalisiyor, zorla,
   });
   if (k.izin) return;
   const aciklama = {
-    'nadir-kullaniyor': `~/vm-kapi/BENDE işareti duruyor — VM Nadir'de. Bitince: rm ~/vm-kapi/BENDE`,
+    'nadir-kullaniyor': `${BENDE} işareti duruyor — ${MAKINE} Nadir'de. Bitince o dosya kaldırılır.`,
     'pencere-acik': 'VM penceresi ekranda açık — birisi kullanıyor olabilir. Yine de isteniyorsa --zorla',
     'yikici-el-degmis': 'GERİ DÖNÜLMEZ: anlık görüntüye dönmek, o tarihten sonra yapılan HER ŞEYİ siler. El değmiş bir VM\'de --zorla ile bile yapılmaz; önce Nadir\'e sor',
   }[k.sebep] || k.sebep;

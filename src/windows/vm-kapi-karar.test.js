@@ -223,3 +223,18 @@ test('calistirGovdesi: azami uzunluk sınırı vardır', () => {
   assert.equal(m.calistirGovdesi(tam).govde.komut.length, m.KOMUT_AZAMI);
   assert.equal(m.calistirGovdesi(`${tam}a`).hata, 'komut-uzun');
 });
+
+// ——— MAKİNE BAZLI "EL DEĞMİŞ" İŞARETİ ——————————————————————————————————
+test('bendeYolu: varsayılan makine eski BENDE adını korur', () => {
+  assert.equal(m.bendeYolu('/k', 'vm'), '/k/BENDE');
+  assert.equal(m.bendeYolu('/k'), '/k/BENDE');
+  assert.equal(m.bendeYolu('/k', undefined), '/k/BENDE');
+});
+
+test('bendeYolu: her gerçek makinenin işareti AYRI dosyadır', () => {
+  assert.equal(m.bendeYolu('/k', 'windows-kasa'), '/k/BENDE-windows-kasa');
+  assert.equal(m.bendeYolu('/k', 'yds-can'), '/k/BENDE-yds-can');
+  // kusurun kendisi: iki makinenin işareti aynı dosyaya düşerse biri diğerini kilitler
+  assert.notEqual(m.bendeYolu('/k', 'windows-kasa'), m.bendeYolu('/k', 'vm'));
+  assert.notEqual(m.bendeYolu('/k', 'windows-kasa'), m.bendeYolu('/k', 'yds-can'));
+});
