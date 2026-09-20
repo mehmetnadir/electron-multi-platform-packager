@@ -22,6 +22,7 @@ const agPolitikasi = require('./ag-politikasi-yamasi');
 const sayfaOnGetirme = require('./sayfa-on-getirme');
 const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 const ilkSayfa = require('./acilis-ilk-sayfa');
+const splashBeklemesi = require('./acilis-splash-beklemesi');
 
 class PackagingService {
   constructor() {
@@ -587,6 +588,28 @@ MimeType=application/x-electron;
         } catch (ilkSayfaError) {
           console.warn('⚠️ İlk sayfa yaması başarısız (paketleme devam ediyor):',
             ilkSayfaError.message);
+        }
+      }
+
+      // K26 SABİT SPLASH BEKLEMESİ (2026-09-20, Nadir: "ölme eşşeğim ölme") — KAPI AÇIK
+      // (`EMPP_SPLASH_BEKLEMESI=0` kapatır, `EMPP_SPLASH_MS` süreyi ayarlar).
+      // Kitap açılırken üç gösterge arka arkaya geliyordu: 3 nokta → logo splash →
+      // "Kitap Açılıyor..". Ortadaki SAF yapay bekleme: logo GÖRSELİ zaten yüklendikten
+      // sonra sabit 1500 ms daha ekranda tutuluyordu. Süre 0'a çekilir; çağrı ve efekt
+      // koşulları aynen korunur (splash iptal edilmez, yalnız oyalanmaz).
+      if (splashBeklemesi.acikMi()) {
+        try {
+          const splash = await splashBeklemesi.paketeUygula(workingPath, {
+            log: (s) => console.log(s), ms: splashBeklemesi.sure(),
+          });
+          if (splash.length) {
+            const cagri = splash.reduce((a, x) => a + x.cagri, 0);
+            console.log(`⏳ Splash beklemesi: ${splash.length} kitap, ${cagri} sabit bekleme `
+              + `kaldırıldı (1500 ms → ${splashBeklemesi.sure()} ms)`);
+          }
+        } catch (splashError) {
+          console.warn('⚠️ Splash beklemesi yaması başarısız (paketleme devam ediyor):',
+            splashError.message);
         }
       }
 
