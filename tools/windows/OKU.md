@@ -74,6 +74,17 @@ Güvenlik sınırları (kod kilitli, `vm-kopru-sunucu.test.js` 12 testle çivili
 Paylaşılan klasörün çalıştığı bir kurulumda (x64 misafir) izleyici `-Kok <paylaşım yolu>`
 ile de koşar; köprü sunucusuna gerek kalmaz. İki mod da aynı dosya düzenini kullanır.
 
+## Köprüyü doğrulama (Mac'te, ölçülmüş)
+
+```bash
+node -e "require('http').get({host:'192.168.11.1',port:8791,path:'/<belirtec>/gorev'},y=>console.log(y.statusCode))"
+# 204 = köprü ayakta, kuyruk boş · 404 = belirteç yanlış
+```
+
+**Neden `curl` değil:** bu Mac'te kabuk üzerinden `curl` VMware arayüzüne çıkarken
+`000` döndü (sunucu kusuru değil — aynı anda node istemcisi 204/200 aldı). Ölçümü
+node ile yap; misafirdeki `curl.exe` bu kısıttan etkilenmiyor.
+
 ## Kullanım
 
 ```bash
