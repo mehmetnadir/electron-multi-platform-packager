@@ -222,10 +222,35 @@ Windows paketinde de güncelleme adresi bizim/yayıncının çalışan host'una 
 (K16'nın Windows istisnası yeniden değerlendirilmeli) — yoksa exe Cloudflare challenge'ına
 soruyor.
 
+## 3.5 KARARLAR (Nadir, 2026-09-20 — uygulanacak)
+
+### K-a · Üçüncü açılış göstergesi kalkar  ✅ UYGULANDI
+"Kitap Açılıyor.." kalksın, kitap hemen açılsın. `src/packaging/acilis-gostergesi.js`
+(K27): güvence zamanlayıcısı 5000 → 0 ms, metin boşaltılır, "Kitap Güncelleniyor %N"
+dalı korunur. Commit 623aa23.
+
+### K-c · setId'yi PANEL üretir, alan ELLE de girilebilir
+> Nadir: "setid sisteme kitabı eklerken girdiğim ya da eğer girmiyorsam otomatik üretilsin."
+
+Sözleşme:
+- Panelde SET/paket kaydı açılırken **`set_id` alanı** bulunur. Kullanıcı isterse kendi
+  değerini yazar (yayıncının kendi kodlamasını sürdürebilmesi için).
+- **Boş bırakılırsa sistem üretir.** Üretim kuralı: `<kurumKodu>-<kısaKod>-<sayaç>`
+  biçiminde, **global tekil** (bkz. memory `zid-sayaci-kurum-bazli-tekillik-global` —
+  kurum bazlı sayaç tekrar eden kimlik üretir, o hataya düşülmeyecek).
+- Elle girilen değer de **tekillik denetiminden** geçer; çakışırsa kayıt reddedilir,
+  sessizce ikinci bir kayıt AÇILMAZ.
+- `set_id` bir kez yazıldıktan sonra **DEĞİŞMEZ** (kurulu exe'ler onunla soruyor).
+  Ad/sürüm/kitap sayısı değişebilir; kimlik değişmez.
+- Bugünkü üç ayrı kavram (`paket_id`, `SetKitapId`, `short_code`) yerine geçmez,
+  onlara **eşlenir**: paket kaydında üçü de saklanır, dışarıya `set_id` verilir.
+
+Uygulama yeri: Katman 0 (panelde kalıcı paket kaydı) + Katman 1 (manifest'e `setId` yazılır).
+
 ## 4. Nadir'e açık sorular (karar noktaları)
 
-1. **setId'yi kim üretir?** Panel mi yeni bir kimlik mintler, yoksa yayıncı defterindeki
-   mevcut kavram mı kullanılır (zid / seri / kitap kodu)?
+1. ~~**setId'yi kim üretir?**~~ **KARARLAŞTI** → §3.5 K-c: panel üretir, alan elle de
+   girilebilir, global tekil, sonradan değişmez.
 2. **Güncelleme paketi neyi taşısın?** Tüm set mi, yalnız değişen alt kitap mı? (1,5 GB'lık
    sette fark büyük.)
 3. **Hat A kapatılsın mı?** (Öneri: evet.)
