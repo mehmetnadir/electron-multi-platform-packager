@@ -104,8 +104,10 @@ async function bekle(kimlik, zamanAsimiSn) {
     const gecen = Math.floor((Date.now() - bas) / 1000);
     const k = karar.gorevKarari(sonucOku(kimlik), gecen, zamanAsimiSn);
     if (k.durum !== 'bekleniyor') return k;
-    // İzleyici bu sırada ölürse sessizce beklemeyelim.
-    const i = karar.izleyiciDurumu(kalpMs(), Date.now());
+    // İzleyici bu sırada ölürse sessizce beklemeyelim. Ama görev UÇUŞTA:
+    // uzun bir indirme/kurulum sırasında susması normaldir (eşik 300 sn).
+    const i = karar.izleyiciDurumu(kalpMs(), Date.now(), { gorevUcusta: true });
+    if (i.uyari) console.log(`   … ${i.uyari}`);
     if (i.durum !== 'ayakta') {
       return { durum: 'bozuk', sebep: `izleyici ${i.durum}: ${i.sebep || ''}`.trim() };
     }
@@ -136,7 +138,11 @@ function pencereAcikMi() {
 
 function kapiBekcisi(komut) {
   const zorla = process.argv.includes('--zorla');
-  const k = karar.mudahaleKarari({ komut, bendeBayragi: bendeMi(), pencereAcik: pencereAcikMi(), zorla });
+  let vmCalisiyor = true;
+  try { vmCalisiyor = calisanVmx().includes(vmx()); } catch { vmCalisiyor = false; }
+  const k = karar.mudahaleKarari({
+    komut, bendeBayragi: bendeMi(), pencereAcik: pencereAcikMi(), vmCalisiyor, zorla,
+  });
   if (k.izin) return;
   const aciklama = {
     'nadir-kullaniyor': `~/vm-kapi/BENDE işareti duruyor — VM Nadir'de. Bitince: rm ~/vm-kapi/BENDE`,

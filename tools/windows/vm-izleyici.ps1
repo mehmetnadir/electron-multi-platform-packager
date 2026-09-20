@@ -53,11 +53,33 @@ function Surec-Say([string]$ad) {
   try { @(Get-Process -Name $ad -ErrorAction SilentlyContinue).Count } catch { 0 }
 }
 
-function Kalp-At {
-  try {
-    if ($HttpModu) { Invoke-RestMethod -Method Post -Uri "$Adres/$Belirtec/kalp" -TimeoutSec 10 | Out-Null }
-    else { (Get-Date).ToUniversalTime().ToString('o') | Set-Content -Path (Join-Path $Durum 'kalp.txt') -Encoding UTF8 }
-  } catch { }
+# KALP ATIŞI AYRI İŞTE ÇALIŞIR — SAHA ARIZASI (2026-09-20, ölçüldü):
+# kalp atışı ana döngüdeydi; izleyici 1,3 GB'lık kurulum dosyasını indirirken
+# (tek blok, dakikalarca) hiç atış göndermedi, host 31. saniyede "izleyici ölü"
+# deyip görevi BOZUK saydı — oysa iş sapasağlam sürüyordu. Kalp "süreç yaşıyor mu"
+# sorusunun cevabıdır; uzun işin ARKASINDA durmamalı.
+function Kalp-Isini-Baslat {
+  if ($HttpModu) {
+    Start-Job -Name 'vm-kalp' -ScriptBlock {
+      param($a, $b)
+      while ($true) {
+        try { Invoke-RestMethod -Method Post -Uri "$a/$b/kalp" -TimeoutSec 10 | Out-Null } catch { }
+        Start-Sleep -Seconds 5
+      }
+    } -ArgumentList $Adres, $Belirtec | Out-Null
+  } else {
+    Start-Job -Name 'vm-kalp' -ScriptBlock {
+      param($d)
+      while ($true) {
+        try { (Get-Date).ToUniversalTime().ToString('o') | Set-Content -Path (Join-Path $d 'kalp.txt') -Encoding UTF8 } catch { }
+        Start-Sleep -Seconds 5
+      }
+    } -ArgumentList $Durum | Out-Null
+  }
+}
+
+function Kalp-Isini-Durdur {
+  Get-Job -Name 'vm-kalp' -ErrorAction SilentlyContinue | Stop-Job -PassThru -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
 }
 
 function Gorev-Al {
@@ -82,7 +104,17 @@ function Dosya-Getir([string]$ad) {
   # HTTP modunda kurulum dosyası host'tan indirilir; klasör modunda zaten yanımızda.
   if (-not $HttpModu) { return (Join-Path $Kok $ad) }
   $hedef = Join-Path $Calisma $ad
-  Invoke-WebRequest -Uri "$Adres/$Belirtec/dosya/$([uri]::EscapeDataString($ad))" -OutFile $hedef -TimeoutSec 3600 -UseBasicParsing
+  $kaynak = "$Adres/$Belirtec/dosya/$([uri]::EscapeDataString($ad))"
+  # curl.exe Windows 10 1803+ ile geliyor ve büyük dosyada Invoke-WebRequest'ten
+  # belirgin hızlı (IWR yanıtı belleğe tamponluyor). Yoksa IWR'ye düşülür.
+  $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+  if ($curl) {
+    & $curl.Source -sS -L --fail --retry 3 --retry-delay 2 -o $hedef $kaynak
+    if ($LASTEXITCODE -ne 0) { throw "indirme basarisiz (curl rc=$LASTEXITCODE): $ad" }
+  } else {
+    Invoke-WebRequest -Uri $kaynak -OutFile $hedef -TimeoutSec 3600 -UseBasicParsing
+  }
+  if (-not (Test-Path $hedef)) { throw "indirilen dosya yok: $hedef" }
   return $hedef
 }
 
@@ -104,10 +136,12 @@ function Sonuc-Gonder($kimlik, $nesne, $ekranYolu) {
 }
 
 Write-Host ("VM izleyici calisiyor - mod: " + $(if ($HttpModu) { "HTTP ($Adres)" } else { "KLASOR ($Kok)" }))
-Write-Host "Kapatmak icin Ctrl+C. Her 5 sn kalp atisi gonderiliyor."
+Write-Host "Kapatmak icin Ctrl+C. Kalp atisi AYRI iste, her 5 sn (uzun is sirasinda da surer)."
+Kalp-Isini-Durdur      # onceki calistirmadan kalan is varsa
+Kalp-Isini-Baslat
 
+try {
 while ($true) {
-  Kalp-At
   $g = Gorev-Al
   if ($g) {
     $kimlik = $g.kimlik
@@ -163,4 +197,7 @@ while ($true) {
     Write-Host "gorev $kimlik bitti (cikis=$cikis)"
   }
   Start-Sleep -Seconds 5
+}
+} finally {
+  Kalp-Isini-Durdur
 }

@@ -21,7 +21,16 @@
  * Bu modül YALNIZ kararı üretir; dosya sistemine ve VM'e dokunmaz (sürücü betik yapar).
  */
 
-const KALP_TAZE_SN = 30;      // izleyici bu süreden eski kalp attıysa ölü sayılır
+const KALP_TAZE_SN = 30;
+// GÖREV UÇUŞTAYKEN eşik gevşer. SAHA ARIZASI (2026-09-20, ölçüldü): izleyici
+// 1,3 GB'lık kurulumu indirirken ve "aç + 40 sn bekle" görevini koşarken kalp
+// atışı gönderemiyordu (atış ana döngüdeydi). Host 31. saniyede "izleyici ölü"
+// deyip görevi BOZUK saydı — oysa iş iki seferde de BAŞARIYLA bitti
+// (kurulum çıkış 0, açılış surec=4 + ekran görüntüsü). Yani kararın kendisi
+// yanlış alarmdı. İzleyici tarafı düzeltildi (atış ayrı işte), ama host da
+// tek başına dayanıklı olmalı: elinde iş olan bir izleyicinin susması normaldir,
+// SÜRESİZ susması değil.
+const KALP_MESGUL_SN = 300;      // izleyici bu süreden eski kalp attıysa ölü sayılır
 const VARSAYILAN_ZAMAN_ASIMI_SN = 900;
 
 /**
@@ -29,7 +38,7 @@ const VARSAYILAN_ZAMAN_ASIMI_SN = 900;
  * @param {number|null} kalpMs kalp dosyasının damgası (ms) — okunamadıysa null
  * @param {number} simdiMs
  */
-function izleyiciDurumu(kalpMs, simdiMs) {
+function izleyiciDurumu(kalpMs, simdiMs, secenek) {
   if (kalpMs == null || !Number.isFinite(kalpMs)) {
     return { durum: 'yok', sebep: 'kalp atışı bulunamadı — izleyici hiç başlatılmamış' };
   }
@@ -38,8 +47,14 @@ function izleyiciDurumu(kalpMs, simdiMs) {
     // Guest saati ileri — köprü yine çalışır ama yaş ölçülemez.
     return { durum: 'ayakta', yasSn: 0, uyari: 'guest saati host\'tan ileri' };
   }
-  if (yasSn > KALP_TAZE_SN) {
-    return { durum: 'olu', yasSn, sebep: `son kalp ${yasSn} sn önce (eşik ${KALP_TAZE_SN})` };
+  const mesgul = !!(secenek && secenek.gorevUcusta);
+  const esik = mesgul ? KALP_MESGUL_SN : KALP_TAZE_SN;
+  if (yasSn > esik) {
+    return { durum: 'olu', yasSn, sebep: `son kalp ${yasSn} sn önce (eşik ${esik})` };
+  }
+  // Susmuş ama eşiği aşmamış meşgul izleyici: ayakta sayılır, sessizlik BİLDİRİLİR.
+  if (mesgul && yasSn > KALP_TAZE_SN) {
+    return { durum: 'ayakta', yasSn, uyari: `izleyici ${yasSn} sn sessiz — uzun iş sürüyor olmalı` };
   }
   return { durum: 'ayakta', yasSn };
 }
@@ -109,15 +124,19 @@ const YIKICI = new Set(['geri-don']);
  * @param {{komut:string, bendeBayragi:boolean, pencereAcik:boolean, zorla:boolean}} g
  * @returns {{izin:boolean, sebep:string}}
  */
-function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, zorla = false } = {}) {
+function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, vmCalisiyor = true, zorla = false } = {}) {
+  // DURMUŞ bir VM'in Fusion penceresi ekranda KALIR (ölçüldü 2026-09-20: uyut
+  // sonrası pencere duruyordu ve baslat reddedildi). Kapalı VM kimse tarafından
+  // "kullanılıyor" olamaz — pencere sinyali yalnız VM ÇALIŞIRKEN anlamlıdır.
+  const kullaniliyor = pencereAcik && vmCalisiyor;
   // YIKICI hamle hiçbir bayrakla otomatikleşmez: --zorla bile geçmez.
-  if (YIKICI.has(komut) && (bendeBayragi || pencereAcik)) {
+  if (YIKICI.has(komut) && (bendeBayragi || kullaniliyor)) {
     return { izin: false, sebep: 'yikici-el-degmis' };
   }
   if (bendeBayragi && DURUM_DEGISTIREN.has(komut)) {
     return { izin: zorla ? true : false, sebep: zorla ? 'zorlandi' : 'nadir-kullaniyor' };
   }
-  if (pencereAcik && DURUM_DEGISTIREN.has(komut)) {
+  if (kullaniliyor && DURUM_DEGISTIREN.has(komut)) {
     return { izin: zorla ? true : false, sebep: zorla ? 'zorlandi' : 'pencere-acik' };
   }
   return { izin: true, sebep: 'serbest' };
@@ -125,5 +144,5 @@ function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, zorl
 
 module.exports = {
   izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi,
-  KALP_TAZE_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
+  KALP_TAZE_SN, KALP_MESGUL_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
 };

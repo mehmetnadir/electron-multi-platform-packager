@@ -160,3 +160,45 @@ test('geri-don EL DEĞMİŞSE --zorla ile bile açılmaz (geri dönülmez veri k
 test('geri-don temiz VM\'de serbest', () => {
   assert.strictEqual(mudahaleKarari({ komut: 'geri-don' }).izin, true);
 });
+
+// ——— Meşgul izleyici: uzun iş sırasında susma ölüm sayılmaz ———————————
+const { KALP_MESGUL_SN, KALP_TAZE_SN, izleyiciDurumu } = require('./vm-kapi-karar');
+
+test('GERİLEME: görev uçuştayken 31 sn sessizlik ÖLÜM sayılmaz', () => {
+  const simdi = Date.UTC(2026, 8, 20, 12, 0, 31);
+  const kalp = Date.UTC(2026, 8, 20, 12, 0, 0);
+  assert.strictEqual(izleyiciDurumu(kalp, simdi).durum, 'olu', 'boştayken eşik 30 sn kalmalı');
+  const mesgul = izleyiciDurumu(kalp, simdi, { gorevUcusta: true });
+  assert.strictEqual(mesgul.durum, 'ayakta');
+  assert.match(mesgul.uyari, /sessiz/);
+});
+
+test('meşgul izleyici de SÜRESİZ susamaz (300 sn tavanı)', () => {
+  const kalp = 0;
+  assert.strictEqual(izleyiciDurumu(kalp, (KALP_MESGUL_SN + 1) * 1000, { gorevUcusta: true }).durum, 'olu');
+  assert.strictEqual(izleyiciDurumu(kalp, (KALP_MESGUL_SN - 5) * 1000, { gorevUcusta: true }).durum, 'ayakta');
+});
+
+test('meşgul eşiği boş eşikten büyük olmalı (yoksa düzeltme anlamsız)', () => {
+  assert.ok(KALP_MESGUL_SN > KALP_TAZE_SN);
+});
+
+test('taze kalp meşgulken uyarı ÜRETMEZ', () => {
+  const r = izleyiciDurumu(1000 * 10, 1000 * 15, { gorevUcusta: true });
+  assert.strictEqual(r.durum, 'ayakta');
+  assert.strictEqual(r.uyari, undefined);
+});
+
+test('GERİLEME: VM KAPALIYKEN kalan pencere baslat\'ı engellemez', () => {
+  const r = mudahaleKarari({ komut: 'baslat', pencereAcik: true, vmCalisiyor: false });
+  assert.strictEqual(r.izin, true, 'durmuş VM kimse tarafından kullanılıyor olamaz');
+});
+
+test('VM ÇALIŞIRKEN açık pencere hâlâ engeller', () => {
+  assert.strictEqual(mudahaleKarari({ komut: 'uyut', pencereAcik: true, vmCalisiyor: true }).izin, false);
+});
+
+test('kapalı VM\'de geri-don yalnız BENDE ile engellenir', () => {
+  assert.strictEqual(mudahaleKarari({ komut: 'geri-don', pencereAcik: true, vmCalisiyor: false }).izin, true);
+  assert.strictEqual(mudahaleKarari({ komut: 'geri-don', bendeBayragi: true, vmCalisiyor: false }).izin, false);
+});
