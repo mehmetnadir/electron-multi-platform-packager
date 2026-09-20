@@ -5,7 +5,7 @@
 > açıp `app.asar` içindeki işaretleri saymak. Bu, yamaların **pakette** olduğunu
 > kanıtlar; uygulamanın **açıldığını** kanıtlamaz. K18 kuralının Windows boşluğu buydu.
 
-## Neden paylaşılan klasör, neden `vmrun` değil
+## Neden `vmrun` değil
 
 `vmrun`'un guest işlemleri (kurulum, ekran görüntüsü, dosya okuma) guest kullanıcı adı
 **ve parola** ister; `vmrun` bunu yalnız komut satırı argümanı olarak alır, yani parola
@@ -18,28 +18,61 @@
 | VM başlat/durdur, **snapshot al/geri dön/listele** | hayır |
 | `captureScreen`, `runProgramInGuest`, dosya kopyalama | **evet** |
 
-Bu yüzden köprü dosya tabanlı: host `gorev/` içine JSON yazar, guest'teki izleyici işi
-yapıp `sonuc/` içine JSON + PNG bırakır. Parola hiçbir yerde geçmez. Kimlik
+Bu yüzden köprü **iş kuyruğu** biçiminde: host `gorev/` içine JSON yazar, guest'teki
+izleyici işi yapıp `sonuc/` içine JSON + PNG bırakır. Parola hiçbir yerde geçmez. Kimlik
 gerektirmeyen snapshot yeteneği de kullanılır — her kurulum temiz zeminde koşar.
+
+## Taşıma: HTTP (bu Mac'te zorunlu) — paylaşılan klasör YOK
+
+Kuyruğun taşıyıcısı normalde paylaşılan klasör olurdu. **Bu makinede o yol yok:**
+
+> Apple Silicon + **Windows 11 ARM** misafir birleşiminde VMware Fusion 13
+> paylaşılan klasörleri desteklemiyor — VM Ayarları penceresinde "Sharing" paneli
+> hiç görünmez. Ölçüldü (2026-09-20): Fusion 13.6.4, `.vmx` içinde tek bir
+> `sharedFolder*`/`hgfs*` satırı yok; Broadcom belgeleri de bu birleşimi dışarıda
+> bırakıyor. **Eksik ayar değil, olmayan özellik** — aramaya devam etme.
+
+Yerine **HTTP köprüsü** kullanılıyor: `tools/windows/vm-kopru-sunucu.js` aynı
+`~/vm-kapi/{gorev,sonuc,durum}` dizinlerini VMware ağı üzerinden yayınlar. Karar katmanı
+(`src/windows/vm-kapi-karar.js`) ve sürücü (`tools/windows/vm-kapi.js`) **hiç değişmedi**;
+ikisi de dosyaları görmeye devam ediyor.
+
+Güvenlik sınırları (kod kilitli, `vm-kopru-sunucu.test.js` 12 testle çivili):
+
+- Sunucu **yalnız `bridge*` arayüzlerine** bağlanır (ölçülen: `192.168.11.1` NAT,
+  `192.168.225.1` host-only). `0.0.0.0` asla. Ev/ofis ağı bu portu görmez.
+- Her yol bir **belirteç** ile başlar (24 hex, ilk açılışta üretilir,
+  `~/vm-kapi/durum/belirtec.txt`, 0600). Belirteci bilmeyen 404 alır.
+- Dosya servisi tek dizinle sınırlı, yol gezinmesi (`..`, ayraç) reddedilir.
+- Kimlik/parola yok, guest'e hiçbir sır gitmez.
 
 ## Kurulum (bir kez, ~3 dakika)
 
-1. **Mac'te klasörü oluştur:**
+1. **Mac'te köprüyü başlat:**
    ```bash
    mkdir -p ~/vm-kapi
    cp tools/windows/vm-izleyici.ps1 ~/vm-kapi/
+   node tools/windows/vm-kopru-sunucu.js
+   # Çıktı: dinlenen adresler + izleyici komutunun tamamı (belirteç dahil)
    ```
-2. **Fusion'da paylaşımı aç:** VM Ayarları → Paylaşım → "Paylaşılan Klasörleri Etkinleştir"
-   → `+` → `~/vm-kapi` (ad: `vm-kapi`), yazma izniyle.
-3. **VM içinde izleyiciyi başlat** (normal kullanıcı, **yönetici gerekmez**):
+2. **VM içinde izleyiciyi başlat** (normal kullanıcı, **yönetici gerekmez**) — köprünün
+   bastığı komutu olduğu gibi yapıştır:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File "\\vmware-host\Shared Folders\vm-kapi\vm-izleyici.ps1"
+   powershell -ExecutionPolicy Bypass -File C:\vm-kapi\vm-izleyici.ps1 `
+       -Adres http://192.168.11.1:8791 -Belirtec <belirtec>
    ```
-   Pencereyi açık bırak. Kapatırsan host "izleyici ölü" der — sessizce yanlış sonuç vermez.
-4. **Mac'te doğrula:**
+   `vm-izleyici.ps1`'i VM'e bir kez kopyalaman gerekir (paylaşılan klasör olmadığı için):
+   köprü ayaktayken misafirde
+   `curl.exe -o C:\vm-kapi\vm-izleyici.ps1 http://192.168.11.1:8791/<belirtec>/dosya/vm-izleyici.ps1`
+   yeterli. Pencereyi açık bırak; kapatırsan host "izleyici ölü" der, sessizce yanlış
+   sonuç vermez.
+3. **Mac'te doğrula:**
    ```bash
    node tools/windows/vm-kapi.js hazir     # {"durum":"ayakta","yasSn":3}
    ```
+
+Paylaşılan klasörün çalıştığı bir kurulumda (x64 misafir) izleyici `-Kok <paylaşım yolu>`
+ile de koşar; köprü sunucusuna gerek kalmaz. İki mod da aynı dosya düzenini kullanır.
 
 ## Kullanım
 
@@ -52,7 +85,9 @@ node tools/windows/vm-kapi.js ekran --surec "Super Monsters 4"
 node tools/windows/vm-kapi.js geri-don temiz            # VM'i temize döndür
 ```
 
-Ekran görüntüleri `~/vm-kapi/sonuc/<kimlik>.png`.
+Ekran görüntüleri `~/vm-kapi/sonuc/<kimlik>.png`. HTTP modunda kurulum exe'sini guest
+köprüden çeker (`/dosya/<ad>`), yani exe'yi elle kopyalaman gerekmez — `kur` komutu
+dosyayı `~/vm-kapi/` altına koyar.
 
 ## Kapı neyi "geçti" sayar
 
