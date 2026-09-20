@@ -115,3 +115,48 @@ test('görev kimliği damga + sıfır dolgulu sonek', () => {
 test('aynı anda iki görev ÇAKIŞMAZ', () => {
   assert.notStrictEqual(m.gorevKimligi(SIMDI, 1), m.gorevKimligi(SIMDI, 2));
 });
+
+// ——— Çakışma koruması (Nadir aynı VM'i elle kullanıyor) ———————————————
+const { mudahaleKarari } = require('./vm-kapi-karar');
+
+test('serbest VM: her komut geçer', () => {
+  for (const k of ['baslat', 'uyut', 'kur', 'ekran', 'hazir']) {
+    assert.strictEqual(mudahaleKarari({ komut: k }).izin, true, k);
+  }
+});
+
+test('BENDE bayrağı: durum değiştiren komutlar reddedilir', () => {
+  for (const k of ['baslat', 'uyut', 'kur', 'kapat']) {
+    const r = mudahaleKarari({ komut: k, bendeBayragi: true });
+    assert.strictEqual(r.izin, false, k);
+    assert.strictEqual(r.sebep, 'nadir-kullaniyor');
+  }
+});
+
+test('BENDE bayrağı: ÖLÇÜM komutları yine de geçer (ekran/hazir)', () => {
+  for (const k of ['ekran', 'hazir', 'anlik-al']) {
+    assert.strictEqual(mudahaleKarari({ komut: k, bendeBayragi: true }).izin, true, k);
+  }
+});
+
+test('pencere açıkken uyut/kur reddedilir — ekranını dondurmayız', () => {
+  assert.strictEqual(mudahaleKarari({ komut: 'uyut', pencereAcik: true }).izin, false);
+  assert.strictEqual(mudahaleKarari({ komut: 'kur', pencereAcik: true }).sebep, 'pencere-acik');
+});
+
+test('--zorla yalnız YIKICI OLMAYAN hamleyi açar', () => {
+  assert.strictEqual(mudahaleKarari({ komut: 'uyut', pencereAcik: true, zorla: true }).izin, true);
+  assert.strictEqual(mudahaleKarari({ komut: 'kur', bendeBayragi: true, zorla: true }).izin, true);
+});
+
+test('geri-don EL DEĞMİŞSE --zorla ile bile açılmaz (geri dönülmez veri kaybı)', () => {
+  for (const d of [{ bendeBayragi: true }, { pencereAcik: true }]) {
+    const r = mudahaleKarari({ komut: 'geri-don', ...d, zorla: true });
+    assert.strictEqual(r.izin, false);
+    assert.strictEqual(r.sebep, 'yikici-el-degmis');
+  }
+});
+
+test('geri-don temiz VM\'de serbest', () => {
+  assert.strictEqual(mudahaleKarari({ komut: 'geri-don' }).izin, true);
+});

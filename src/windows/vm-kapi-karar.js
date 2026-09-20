@@ -88,7 +88,42 @@ function gorevKimligi(simdiMs, rastgele) {
   return `${gun}-${saat}-${String(rastgele).padStart(4, '0')}`;
 }
 
+
+// ——— NADİR'LE ÇAKIŞMA KORUMASI (2026-09-20) ———————————————————————————
+// Nadir aynı VM'i elle de kullanıyor ("arada bir ben de exe yüklemesi yapmak
+// istiyorum"). Aynı makinede iki kullanıcı olduğunda kapının üç hamlesi onun
+// işini GERİ DÖNÜLMEZ biçimde bozar:
+//   • geri-don (revertToSnapshot) — anlık görüntüden sonra yaptığı HER ŞEY silinir
+//   • uyut (suspend)              — ekranı ortasında donar
+//   • kur                          — aynı uygulamayı o da kuruyorsa NSIS çakışır
+// Bu yüzden karar burada verilir, sürücüde değil (ölçülebilir ve testli olsun).
+//
+// İki işaret var:
+//   BENDE  → Nadir koyar (`touch ~/vm-kapi/BENDE`): kapı VM'e HİÇ dokunmaz.
+//   pencere açık → VM'in Fusion penceresi ekranda: muhtemelen o kullanıyor;
+//                  durumu değiştiren hamleler reddedilir, ölçüm hamleleri geçer.
+const DURUM_DEGISTIREN = new Set(['baslat', 'uyut', 'geri-don', 'kur', 'kapat']);
+const YIKICI = new Set(['geri-don']);
+
+/**
+ * @param {{komut:string, bendeBayragi:boolean, pencereAcik:boolean, zorla:boolean}} g
+ * @returns {{izin:boolean, sebep:string}}
+ */
+function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, zorla = false } = {}) {
+  // YIKICI hamle hiçbir bayrakla otomatikleşmez: --zorla bile geçmez.
+  if (YIKICI.has(komut) && (bendeBayragi || pencereAcik)) {
+    return { izin: false, sebep: 'yikici-el-degmis' };
+  }
+  if (bendeBayragi && DURUM_DEGISTIREN.has(komut)) {
+    return { izin: zorla ? true : false, sebep: zorla ? 'zorlandi' : 'nadir-kullaniyor' };
+  }
+  if (pencereAcik && DURUM_DEGISTIREN.has(komut)) {
+    return { izin: zorla ? true : false, sebep: zorla ? 'zorlandi' : 'pencere-acik' };
+  }
+  return { izin: true, sebep: 'serbest' };
+}
+
 module.exports = {
-  izleyiciDurumu, gorevKarari, alarmliMi, gorevKimligi,
+  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi,
   KALP_TAZE_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
 };

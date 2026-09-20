@@ -22,10 +22,21 @@ const svc = require('./packagingService');
 //     `customFinishPageAction` ise şablonda HİÇ referansı olmayan ölü makroydu.
 // ---------------------------------------------------------------------------
 
+// createCustomInstallationFiles paketleyici günlüğünü STDOUT'a basıyor. `node --test`
+// çocuk süreçle V8-serileştirilmiş mesajları FD 1 üzerinden konuştuğu için bu satırlar
+// çerçevenin ortasına girip "Unable to deserialize cloned data" ile DOSYANIN TAMAMINI
+// düşürüyor (tam pakette 1/667 hata; dosya tek başına koşarken 3/3 geçiyordu — yarış).
+// Ölçüm 2026-09-20. Kütüphane günlüğü susturulur; çıktı zaten test edilmiyor.
+async function sessizce(fn) {
+  const yedek = { log: console.log, info: console.info, warn: console.warn };
+  console.log = console.info = console.warn = () => {};
+  try { return await fn(); } finally { Object.assign(console, yedek); }
+}
+
 async function uret(updateInfo) {
   const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'empp-nsh-'));
   await fs.ensureDir(path.join(kok, 'build'));
-  await svc.createCustomInstallationFiles(kok, 'Super Monsters 4', 'YDS Publishing', null, updateInfo);
+  await sessizce(() => svc.createCustomInstallationFiles(kok, 'Super Monsters 4', 'YDS Publishing', null, updateInfo));
   const metin = await fs.readFile(path.join(kok, 'build', 'installer.nsh'), 'utf8');
   await fs.remove(kok);
   return metin;

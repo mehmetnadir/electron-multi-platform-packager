@@ -113,6 +113,40 @@ async function bekle(kimlik, zamanAsimiSn) {
   }
 }
 
+// ——— ÇAKIŞMA KORUMASI ———————————————————————————————————————————————
+// Nadir aynı VM'i elle kullanıyor. İki işaret:
+//   ~/vm-kapi/BENDE  → o koyar; kapı VM durumuna DOKUNMAZ (ölçüm komutları serbest).
+//   VM penceresi açık → muhtemelen o kullanıyor; durum değiştiren hamle reddedilir.
+// Karar saf modülde (src/windows/vm-kapi-karar.js → mudahaleKarari), burada yalnız
+// işaretler okunur.
+const BENDE = path.join(KOK, 'BENDE');
+
+function bendeMi() { return fs.existsSync(BENDE); }
+
+// Fusion'da VM'in KENDİ penceresi açık mı? ("Virtual Machine Library" sayılmaz.)
+function pencereAcikMi() {
+  try {
+    const c = execFileSync('osascript',
+      ['-e', 'tell application "System Events" to get name of every window of application process "VMware Fusion"'],
+      { encoding: 'utf8', timeout: 10000 });
+    return c.split(',').map((x) => x.trim()).filter(Boolean)
+      .some((ad) => ad && ad !== 'Virtual Machine Library');
+  } catch { return false; }        // Fusion arayüzü kapalıysa pencere de yoktur
+}
+
+function kapiBekcisi(komut) {
+  const zorla = process.argv.includes('--zorla');
+  const k = karar.mudahaleKarari({ komut, bendeBayragi: bendeMi(), pencereAcik: pencereAcikMi(), zorla });
+  if (k.izin) return;
+  const aciklama = {
+    'nadir-kullaniyor': `~/vm-kapi/BENDE işareti duruyor — VM Nadir'de. Bitince: rm ~/vm-kapi/BENDE`,
+    'pencere-acik': 'VM penceresi ekranda açık — birisi kullanıyor olabilir. Yine de isteniyorsa --zorla',
+    'yikici-el-degmis': 'GERİ DÖNÜLMEZ: anlık görüntüye dönmek, o tarihten sonra yapılan HER ŞEYİ siler. El değmiş bir VM\'de --zorla ile bile yapılmaz; önce Nadir\'e sor',
+  }[k.sebep] || k.sebep;
+  console.error(`REDDEDİLDİ (${komut}): ${aciklama}`);
+  process.exit(4);
+}
+
 // BAŞSIZ ÇALIŞTIRMA (Nadir kuralı: "benden odak çalmasın").
 // Ölçüldü 2026-09-20: `start ... nogui` ön plana GEÇMİYOR (öndeki uygulama değişmedi),
 // ama Fusion arayüzü zaten açıksa VM için bir pencere oluşturuyor. Bu yüzden başlattıktan
@@ -127,9 +161,13 @@ function fusionGizle() {
 
 function baslat() {
   const yol = vmx();
-  if (calisanVmx().includes(yol)) { console.log('VM zaten çalışıyor'); fusionGizle(); return; }
+  const gizleIstendi = process.argv.includes('--gizle');
+  if (calisanVmx().includes(yol)) { console.log('VM zaten çalışıyor'); if (gizleIstendi) fusionGizle(); return; }
+  // nogui = pencere açılmaz, odak çalınmaz (ölçüldü). Fusion arayüzü açıksa
+  // kütüphane penceresi görünür kalır — GİZLEME ARTIK OTOMATİK DEĞİL: Nadir
+  // pencereyi bulamayınca "VM'imi ele geçirdin" demişti, sessiz gizleme yanlış.
   execFileSync(VMRUN, ['-T', 'fusion', 'start', yol, 'nogui'], { stdio: 'inherit' });
-  fusionGizle();
+  if (gizleIstendi) fusionGizle();
   console.log('VM başsız başlatıldı:', path.basename(yol));
 }
 
@@ -157,8 +195,8 @@ async function ana() {
     console.log(JSON.stringify(r, null, 2));
     process.exit(r.durum === 'ayakta' ? 0 : 3);
   }
-  if (komut === 'baslat') { baslat(); return; }
-  if (komut === 'uyut') { uyut(); return; }
+  if (komut === 'baslat') { kapiBekcisi('baslat'); baslat(); return; }
+  if (komut === 'uyut') { kapiBekcisi('uyut'); uyut(); return; }
   if (komut === 'gizle') { fusionGizle(); return; }
 
   const i = hazirMi();
@@ -170,6 +208,7 @@ async function ana() {
   }
 
   if (komut === 'kur') {
+    kapiBekcisi('kur');
     const exe = process.argv[3];
     if (!exe || !fs.existsSync(exe)) { console.error('kurulum dosyası bulunamadı'); process.exit(2); }
     dizinleriKur();
@@ -190,9 +229,11 @@ async function ana() {
     process.exit(k.durum === 'gecti' ? 0 : 1);
   }
   if (komut === 'anlik-al') { anlikAl(process.argv[3] || 'kapi-oncesi'); return; }
-  if (komut === 'geri-don') { geriDon(process.argv[3] || 'kapi-oncesi'); return; }
+  if (komut === 'geri-don') { kapiBekcisi('geri-don'); geriDon(process.argv[3] || 'kapi-oncesi'); return; }
 
-  console.error('komut: baslat | uyut | gizle | hazir | kur <exe> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>');
+  console.error('bayraklar: --zorla (koruma aş) · --gizle (baslat ile)\n' +
+    'işaret: touch ~/vm-kapi/BENDE → kapı VM durumuna dokunmaz\n' +
+    'komut: baslat | uyut | gizle | hazir | kur <exe> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>');
   process.exit(2);
 }
 
