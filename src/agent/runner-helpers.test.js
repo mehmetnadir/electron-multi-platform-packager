@@ -245,6 +245,43 @@ test('etkinYetenekler: macos-serbest bayrağı evde de açar; macos-durdur ofist
   assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, macSerbest: true, macDurdur: true }), ['android']);
 });
 
+// --- mac araç zinciri kapısı -------------------------------------------------
+// 2026-09-16 arızası: Xcode 27.0 otomatik güncellemesi lisans onayını sıfırladı,
+// xcrun+notarytool rc=69 vermeye başladı. Ajan bunu BİLMEDİĞİ için mac işi
+// kiralamayı sürdürdü: 73768 ve 72378 için ~730 MB kaynak indirildi, build 35 sn'de
+// düştü, satırlara sahte `failed` yazıldı, ve kurtarma insana kaldı (elle bayrak).
+// Bu testler kapının hem DÜŞÜRDÜĞÜNÜ hem de KENDİLİĞİNDEN GERİ GELDİĞİNİ çiviler.
+
+test('etkinYetenekler: araç zinciri bozuksa macos ofiste bile düşer (730 MB boşa indirme kapanı)', () => {
+  assert.deepEqual(
+    etkinYetenekler(['android', 'macos', 'pardus'], { ofiste: true, macAraci: false }),
+    ['android', 'pardus'],
+  );
+  // macos-serbest bayrağı bile bozuk araç zincirini AŞAMAZ — imzasız/notersiz
+  // paket üretmek, hiç üretmemekten kötüdür.
+  assert.deepEqual(
+    etkinYetenekler(['android', 'mac'], { ofiste: false, macSerbest: true, macAraci: false }),
+    ['android'],
+  );
+});
+
+test('etkinYetenekler: araç zinciri düzelince macos KENDİLİĞİNDEN geri gelir (elle bayrak gerekmez)', () => {
+  assert.deepEqual(
+    etkinYetenekler(['android', 'macos'], { ofiste: true, macAraci: true }),
+    ['android', 'macos'],
+  );
+});
+
+// MUTASYON KAPANI: `d.macAraci === false` yerine `!d.macAraci` yazılırsa, ölçüm
+// yapmayan her çağıran (eski testler, başka giriş noktaları) mac'i sessizce kaybeder.
+test('etkinYetenekler: macAraci ölçülmediyse (undefined) kapı engellemez', () => {
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true }), ['android', 'macos']);
+  assert.deepEqual(
+    etkinYetenekler(['android', 'macos'], { ofiste: true, macAraci: undefined }),
+    ['android', 'macos'],
+  );
+});
+
 test('agGecidiAyikla: route çıktısından geçit; yoksa null', () => {
   assert.equal(agGecidiAyikla('   route to: default\ndestination: default\n     gateway: 192.168.1.254\n  interface: en0'), '192.168.1.254');
   assert.equal(agGecidiAyikla('route: writing to routing socket: not in table'), null);
@@ -350,7 +387,6 @@ test('isTransientNetworkError: bilinen geçici ağ desenleri true döner', () =>
 });
 
 test('isTransientNetworkError: kalıcı iş hataları false döner (mutasyon kapanı — "hepsine true dön" burada kırılmalı)', () => {
-  assert.equal(isTransientNetworkError(new Error('lease_not_held')), false);
   assert.equal(isTransientNetworkError(new Error('401 Unauthorized')), false);
   assert.equal(isTransientNetworkError(new Error('403 Forbidden')), false);
   assert.equal(isTransientNetworkError(new Error('invalid token')), false);
@@ -359,8 +395,35 @@ test('isTransientNetworkError: kalıcı iş hataları false döner (mutasyon kap
 
 test('isTransientNetworkError: string girdi de doğru çalışır', () => {
   assert.equal(isTransientNetworkError('ECONNRESET'), true);
-  assert.equal(isTransientNetworkError('lease_not_held'), false);
+  assert.equal(isTransientNetworkError('401 Unauthorized'), false);
   assert.equal(isTransientNetworkError('   '), true); // yalnız boşluk -> boş sayılır
+});
+
+// 2026-09-16 — ÖNCEKİ KARAR DEĞİŞTİ (kanıtla). `lease_not_held` eskiden "kalıcı iş
+// hatası" sayılıyordu; ölçüm bunun yanlış olduğunu gösterdi:
+//
+//   dizüstü evden ofise taşınırken iki kez uyudu (10 + 28 dk), DNS ~55 dk çözmedi
+//   → kalp atışı duramadı → kira doldu. 45480 pardus paketi DERLENDİ (bütünlük TAM,
+//   696.6 MB), TÜM parçalar R2'ye yüklendi, yalnız son `complete-multipart` 409
+//   lease_not_held aldı. Ajan satıra `failed` yazdı. Satır KİLİTLENMEDİ — API'nin
+//   "agent lease expired - otomatik recovery" mekanizması onu `queued`'a geri
+//   döndürdü. Kayıp, 3 dk derleme + 55 dk yükleme ve partiye düşen sahte hata.
+//
+// İki ayrı gerekçe aynı yeri gösteriyor:
+//  1. Kira artık bizde DEĞİL — o satıra sonuç yazmak, sahibi olmadığımız bir kaydı
+//     ezmektir (başka bir ajan onu çoktan almış olabilir).
+//  2. Paketin kendisinde kusur YOK; engel geçiciydi (uyku/ağ). Kalıcı işaretlemek
+//     sağlam bir işi sahte başarısızlık olarak raporlar.
+// Doğru davranış diğer geçici hatalarla aynı: `failed` yazma, satır kira dolunca
+// normal claim akışıyla yeniden dağıtılsın.
+test('isTransientNetworkError: lease_not_held GEÇİCİ sayılır (uyku kirayı yakar, paket sağlam)', () => {
+  assert.equal(isTransientNetworkError(new Error('lease_not_held')), true);
+  assert.equal(
+    isTransientNetworkError(new Error(
+      'complete-multipart failed: HTTP 409 {"error":"lease_not_held","message":"Agent does not hold a lease for this job"}',
+    )),
+    true,
+  );
 });
 
 // --- srcVersionTuret ---------------------------------------------------------

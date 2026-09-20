@@ -50,6 +50,21 @@ test('downloadFile: throttled fresh-fetch + archive-validity retry (inconsistent
   assert.match(SRC, /NOT a valid archive/);
 });
 
+// MUTASYON KAPANI (2026-09-15, ölçülmüş arıza): Mac uyuyup uyanınca TCP akışı ölür
+// ama bağlantı KOPMAZ — curl sonsuza kadar bekler. 45485'in indirmesi 19.210.240
+// baytta çakıldı, 40 dk tek bayt gelmedi, ajan kirayı uzatıp partiyi durdurdu.
+// `--retry*` bunu yakalamaz: yeniden deneme için isteğin BİTMESİ gerekir.
+test('downloadFile: durgun transfer kesilir (uyku sonrası sonsuz asılma kapanı)', () => {
+  const fn = SRC.slice(SRC.indexOf('async function downloadFile'), SRC.indexOf('async function downloadArtifact'));
+  assert.match(fn, /'--speed-limit',\s*'1024'/);
+  assert.match(fn, /'--speed-time',\s*'120'/);
+  // Eşik evdeki throttle'ın (4M) çok altında olmalı, yoksa yavaş hatta yanlış kesme yapar.
+  const esik = Number((fn.match(/'--speed-limit',\s*'(\d+)'/) || [])[1]);
+  assert.ok(esik > 0 && esik <= 64 * 1024, `eşik makul değil: ${esik}`);
+  // `-C -` geri gelirse durgunluk kesmesi bozuk devam indirmesi üretir (eski yasağın sebebi).
+  assert.doesNotMatch(fn, /'-C',\s*'-'/);
+});
+
 test('downloadArtifact (LOCAL packager): no throttle, no 7z gate, ZIP64-safe unzip check', () => {
   // The built APK is a multi-GB ZIP64 archive with an APK Signing Block that p7zip's
   // `7z l` mis-parses as invalid — a false negative that looped the download forever.
