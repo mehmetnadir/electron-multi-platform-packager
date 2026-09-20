@@ -142,7 +142,20 @@ function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, vmCa
   return { izin: true, sebep: 'serbest' };
 }
 
+// ——— UZAK KOMUT ————————————————————————————————————————————————————————
+// Makine yönetimi (disk ölçümü/temizliği, sürüm sorgusu) için izleyicinin
+// 'komut' dalına gövde üretir. Boş/aşırı uzun satır GÖREV YAZILMADAN reddedilir —
+// kuyruğa çöp girmesin, izleyici 99 ile dönüp kalp atışını meşgul etmesin.
+const KOMUT_AZAMI = 2000;
+function calistirGovdesi(satir) {
+  const s = typeof satir === 'string' ? satir.trim() : '';
+  if (!s) return { hata: 'bos-komut' };
+  if (s.length > KOMUT_AZAMI) return { hata: 'komut-uzun' };
+  return { govde: { tur: 'komut', komut: s } };
+}
+
 module.exports = {
-  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi,
+  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi,
+  KOMUT_AZAMI,
   KALP_TAZE_SN, KALP_MESGUL_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
 };

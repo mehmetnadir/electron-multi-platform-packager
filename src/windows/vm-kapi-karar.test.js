@@ -202,3 +202,24 @@ test('kapalı VM\'de geri-don yalnız BENDE ile engellenir', () => {
   assert.strictEqual(mudahaleKarari({ komut: 'geri-don', pencereAcik: true, vmCalisiyor: false }).izin, true);
   assert.strictEqual(mudahaleKarari({ komut: 'geri-don', bendeBayragi: true, vmCalisiyor: false }).izin, false);
 });
+
+// ——— UZAK KOMUT GÖVDESİ ————————————————————————————————————————————————
+test('calistirGovdesi: normal satır izleyicinin komut dalına gövde üretir', () => {
+  const r = m.calistirGovdesi('  wmic logicaldisk get freespace  ');
+  assert.equal(r.hata, undefined);
+  assert.deepEqual(r.govde, { tur: 'komut', komut: 'wmic logicaldisk get freespace' });
+});
+
+test('calistirGovdesi: boş/boşluk satırı görev YAZILMADAN reddedilir', () => {
+  for (const g of ['', '   ', '\t\n', undefined, null, 42]) {
+    assert.equal(m.calistirGovdesi(g).hata, 'bos-komut', `girdi: ${JSON.stringify(g)}`);
+    assert.equal(m.calistirGovdesi(g).govde, undefined);
+  }
+});
+
+test('calistirGovdesi: azami uzunluk sınırı vardır', () => {
+  const tam = 'a'.repeat(m.KOMUT_AZAMI);
+  assert.equal(m.calistirGovdesi(tam).hata, undefined);
+  assert.equal(m.calistirGovdesi(tam).govde.komut.length, m.KOMUT_AZAMI);
+  assert.equal(m.calistirGovdesi(`${tam}a`).hata, 'komut-uzun');
+});

@@ -258,12 +258,27 @@ async function ana() {
     console.log(JSON.stringify(k, null, 2));
     process.exit(k.durum === 'gecti' ? 0 : 1);
   }
+  if (komut === 'calistir') {
+    // UZAK KOMUT: makine yönetimi (disk ölçümü/temizliği, sürüm sorgusu).
+    // Ekran/süreç kanıtı BEKLENMEZ — izleyici bu dalda beklenenKanit=false döner.
+    // Komut TEK argüman olarak gelir (tırnak içinde). Kalan argv bayraklara aittir —
+    // 'hostname --zaman-asimi 90' kazası (değer komuta yapışıp `hostname 90` oldu) bu yüzden.
+    const { govde, hata } = karar.calistirGovdesi(process.argv[3]);
+    if (hata) { console.error(`komut reddedildi: ${hata}`); process.exit(2); }
+    const kimlik = gorevYaz(govde);
+    console.log(`görev ${kimlik} [${MAKINE}] — ${govde.komut.slice(0, 120)}`);
+    const k = await bekle(kimlik, Number(bayrak('zaman-asimi', '600')));
+    const s = sonucOku(kimlik);
+    if (s) console.log(`çıkış ${s.cikis}\n${s.cikti || ''}`);
+    else console.log(JSON.stringify(k, null, 2));
+    process.exit(k.durum === 'gecti' ? 0 : 1);
+  }
   if (komut === 'anlik-al') { anlikAl(process.argv[3] || 'kapi-oncesi'); return; }
   if (komut === 'geri-don') { kapiBekcisi('geri-don'); geriDon(process.argv[3] || 'kapi-oncesi'); return; }
 
   console.error('bayraklar: --zorla (koruma aş) · --gizle (baslat ile)\n' +
     'işaret: touch ~/vm-kapi/BENDE → kapı VM durumuna dokunmaz\n' +
-    'komut: baslat | uyut | gizle | hazir | kur <exe|http-adres> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>\n' +
+    'komut: baslat | uyut | gizle | hazir | kur <exe|http-adres> | ac | ekran | kapat | calistir <cmd…> | anlik-al <ad> | geri-don <ad>\n' +
     'makine: --makine <ad> (varsayılan vm) — gerçek makineler için ör. --makine windows-kasa');
   process.exit(2);
 }
