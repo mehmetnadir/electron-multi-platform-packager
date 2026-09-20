@@ -54,7 +54,41 @@ Sızan bir `node --test` süreci (vm-kopru testinden kalma) bulundu ve kapatıld
 electron-builder yok** (pgrep 0). Mac ajanı uyuduğu için bu şeritlerin çıktısı
 ancak Mac uyanınca devralınır — srv21 tarafında veri kaybı olmaz.
 
+## Web-Z performans ajanı — BİTTİ, CANLIDA (ara sırasında tamamlandı)
+
+Commit `ca2c863`, `origin/faz0-packaging-integration`'a push edildi, iki hesapta
+`wrangler deploy` (Version `4a4933b6`), `/health` 200. Tek dosya:
+`services/cloudflare-worker/src/set-ui-templates.ts`. Görünüş değişmedi.
+
+Ölçüm (CPU 6x + Slow 4G, n=6, **serpiştirmeli A/B** medyanı):
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| LCP | 5782 ms | **4356 ms (-%24,7)** |
+| DOMContentLoaded | 1719 ms | 1404 ms (-%18,3) |
+| Boşta ana iş parçacığı | 1799 ms | 1419 ms (-%21,1) |
+| Sonsuz CSS animasyonu | 4 | 2 |
+| CLS | 0 | 0 |
+
+Kök neden: kapaklar **7 ardışık gidiş-dönüşten sonra** isteniyordu
+(settings → tr.json → en.json → 4× BookContent.xml). Düzeltmeler: ölü Google Fonts
+bağlantısı (HTTP 400 dönüyordu) kaldırıldı, dil dosyaları paralel, BookContent'ler
+ön-ısıtıldı, sayfa ön-yükleyici kapakların arkasına alındı, görünmez örtüdeki
+sonsuz animasyonlar durduruldu. **Geri alınan:** kapak `&lt;img&gt;` `decoding/fetchpriority`
+denemesi — LCP kazandırmadı, CLS'i 0 → 0,0315 yaptı.
+
+### İKİ AÇIK KONU (Nadir kararı)
+1. **Canlı worker, commitlenmemiş işten deploy edilmiş.** `pwa.ts`'teki `ayristir`
+   404 kısa devresi canlı `sw.js`'te var ama hiçbir commit'te yok. Ajan temiz bir
+   worktree'den deploy etmeyi denedi; bu, o işi **geri alacaktı** — bu yüzden gerçek
+   çalışma ağacından deploy etti. Kalıcı çözüm: o değişikliğin sahibi commitlemeli,
+   yoksa bir sonraki temiz deploy canlıyı bozar.
+2. **Ölçüm takımı depoya alınamadı (commit gate'i).**
+   `services/cloudflare-worker/scripts/` altına kopyalandı
+   (`perf-olcum.mjs`, `sirali-ab.sh`, `PERF-OKU.md`) ama **commitlenmedi**:
+   commit-test-gate "test dosyası yok" diye blokladı ve gate bypass'ı Nadir'in açık
+   onayını ister. Dosyalar diskte duruyor, **stage edilmedi** (paylaşılan ağaçta
+   yabancı stage bırakmamak için). Nadir "commitle" derse tek adım.
+
 ## Açık ajan
-`webz-performans` (Web-Z set sayfası performans ölçümü) — güvenli noktada durması
-ve raporlaması istendi. Kendi deposunda (`book-update/services/cloudflare-worker`)
-çalışıyor; bu depoya dokunmuyor.
+Yok — `webz-performans` işini bitirip raporladı (yukarıda). Açık ajan kalmadı.
