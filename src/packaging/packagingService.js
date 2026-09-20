@@ -4885,10 +4885,49 @@ public class MainActivity extends BridgeActivity {
     //     kurulumda electron-builder'ın kendi bölümü ayrıdır; doğru uç `customInstall`
     //     (app-builder-lib/templates/nsis/installSection.nsh içinde insert edilir).
     //     `customFinishPageAction` ise şablonda HİÇ referansı olmayan ölü bir makroydu.
+    // ZATEN KURULU İSE YENİDEN KURMA (2026-09-20, Nadir: "öğretmenler o kadar acemi
+    // ki her seferinde kurulum dosyasına tekrar tıklayıp açmaya çalışanlar çok fazla").
+    //
+    // ÖLÇÜM (Windows-Kasa, x64, dosya önbellekte sıcak): çift tıkla → 1,3 sn'de
+    // "verifying installer: 35%" başlıklı küçük pencere (NSIS CRCCheck), 3,4 sn'de
+    // doğrulama biter, 3,8 sn'de gerçek kurulum penceresi, 70,7 sn'de biter.
+    // Yani kurulu bir kitabı yeniden kurmak ~87 saniye ve sonunda HİÇBİR ŞEY değişmiyor.
+    //
+    // Bağlanma noktası `customInit`: installer.nsi'nin `.onInit` fonksiyonu onu
+    // initMultiUser'dan SONRA çağırır (yani SHELL_CONTEXT ve kayıt anahtarları hazır),
+    // kurulum bölümünden ÖNCE — bu yüzden buradan Quit etmek kurulumu hiç başlatmaz.
+    //
+    // İki şey bilinçli:
+    //  - `IfSilent` ile sessiz kurulumda (/S) soru SORULMAZ: kabul kapısı ve toplu
+    //    kurulum insansız koşar, MessageBox orada süreci sonsuza kadar bekletirdi.
+    //  - Yalnız sürüm AYNI ise sorulur. Kurulu sürüm eskiyse soru yok, doğrudan
+    //    güncellenir — "bayat kurulum" kendiliğinden tazelenir.
+    const zatenKuruluMakro = `
+!macro customInit
+  IfSilent empp_kurulum_devam
+  Push $R7
+  Push $R8
+  ReadRegStr $R7 SHELL_CONTEXT "\${INSTALL_REGISTRY_KEY}" InstallLocation
+  StrCmp $R7 "" empp_kurulum_bitir
+  IfFileExists "$R7\\\${APP_EXECUTABLE_FILENAME}" 0 empp_kurulum_bitir
+  ReadRegStr $R8 SHELL_CONTEXT "\${UNINSTALL_REGISTRY_KEY}" DisplayVersion
+  StrCmp $R8 "\${VERSION}" 0 empp_kurulum_bitir
+  MessageBox MB_YESNO|MB_ICONQUESTION "${appName} bu bilgisayarda zaten kurulu.$\\n$\\nKitabı açmak için Evet'e basın.$\\nYeniden kurmak için Hayır'a basın." IDNO empp_kurulum_bitir
+  Exec '"$R7\\\${APP_EXECUTABLE_FILENAME}"'
+  Pop $R8
+  Pop $R7
+  Quit
+  empp_kurulum_bitir:
+  Pop $R8
+  Pop $R7
+  empp_kurulum_devam:
+!macroend
+`;
+
     const nsisScript = `
 # ${appName} — kurulum bilgilendirmesi
 # electron-multi-platform-packager tarafından üretildi
-
+${zatenKuruluMakro}
 !macro customInstall
   SetDetailsPrint both
   DetailPrint "${appName} — ${updateTypeMessage}"
