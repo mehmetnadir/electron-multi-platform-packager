@@ -19,6 +19,7 @@ const sayfaWebp = require('./sayfa-webp');
 const oluMotor = require('./olu-motor-temizligi');
 const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
 const agPolitikasi = require('./ag-politikasi-yamasi');
+const sayfaOnGetirme = require('./sayfa-on-getirme');
 
 class PackagingService {
   constructor() {
@@ -541,6 +542,27 @@ MimeType=application/x-electron;
           await sayfaWebp.klasoruDonustur(workingPath, { log: (s) => console.log(s) });
         } catch (webpError) {
           console.warn('⚠️ Sayfa WebP dönüşümü başarısız (paketleme devam ediyor):', webpError.message);
+        }
+      }
+
+      // SAYFA ÖN-GETİRME (2026-09-20, Nadir talebi) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_ON_GETIRME=0` kapatır). Kitap açıldıktan sonra tüm sayfalar SIRAYLA
+      // okunup işletim sistemi dosya önbelleği ısıtılır; sayfa geçişindeki bekleme
+      // buradan gelir. Ölçüm: sayfanın gizlemesini çözmek 0,0655 ms (yalnız ilk 100
+      // bayt) — bekleten şey diskten ilk okuma + 4,38 megapiksel görselin çözülmesi.
+      // WebP dönüşümünden SONRA koşar ki listeye son hâlindeki dosyalar girsin.
+      if (sayfaOnGetirme.acikMi()) {
+        try {
+          const onGetirme = await sayfaOnGetirme.paketeUygula(workingPath, {
+            log: (s) => console.log(s),
+          });
+          const toplam = onGetirme.reduce((a, x) => a + x.sayfa, 0);
+          if (onGetirme.length) {
+            console.log(`⏭️  Sayfa ön-getirme: ${onGetirme.length} kitap, ${toplam} sayfa`);
+          }
+        } catch (onGetirmeError) {
+          console.warn('⚠️ Sayfa ön-getirme enjeksiyonu başarısız (paketleme devam ediyor):',
+            onGetirmeError.message);
         }
       }
 
