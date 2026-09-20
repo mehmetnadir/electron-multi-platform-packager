@@ -763,6 +763,21 @@ Electron Paketleyici ile oluşturuldu
     }
   }
 
+  // KNOW-HOW (K16, 2026-09-09, Tudem 13 ISO batch dersi) — bu fonksiyon `temp/`
+  // toplu temizliğini YALNIZ kuyruk TAMAMEN boşaldığında çalıştırır (aktif zip/
+  // packaging işi kalmayınca). NEDEN: tamamlanmış ama ajanın henüz İNDİRMEDİĞİ
+  // bir işin çıktısı (bkz. yukarıdaki 2026-08-27 yorumu — dmg outputPath
+  // `temp/<job>/macos` altında) erken silinirse `/api/download` 404 verir, saatler
+  // süren bir build (örn. 40 dk noterli imza) kaybolur. BELİRTİ (2026-09-09,
+  // Tudem 13 ISO batch): kuyruk ARDI ARDINA (boşalmadan) 13 iş aldığı için bu
+  // temizlik ÇOK SEYREK tetiklendi — disk 29.8 GB'a kadar indi, ayrı bir disk
+  // guard (agent runner tarafında; bu dosyada DEĞİL) devreye girdi. KARAR
+  // (Nadir, henüz karar verilmedi — bu YALNIZCA MEVCUT davranışın kaydı):
+  // "tamamlanan işin temp'i, indirme tamamlandıktan SONRA da (kuyruk dolu olsa
+  // bile) temizlenebilir" davranışı BU HALİYLE YOK — davranış değişikliği
+  // Nadir'in kararına bağlı, burada UYGULANMADI. Detay: `.claude/docs/set-paketi-know-how.md`
+  // "Temp temizliği" bölümü. Disk eşiği sabiti bu dosyada değil — `src/agent/runner.js`
+  // içinde (bu oturumda DOKUNULMASI YASAK bir dosya, başka oturumun bitmemiş işi).
   // Kuyruk boşsa tam temizlik yap
   async checkAndCleanIfQueueEmpty(excludeJobId) {
     try {
@@ -801,11 +816,28 @@ Electron Paketleyici ile oluşturuldu
           console.log(`🗑️ Temp klasörü temizlendi (${removed} silindi, ${protectedIds.size} tamamlanmış iş korundu)`);
         }
         
-        // Tüm uploads klasörünü temizle
+        // Uploads: "kuyruk boş" kontrolünden SONRA gelen yükleme olabilir.
+        // ÖLÇÜM 2026-09-17 (srv21 şeridi, kitap 45792): emptyDir yeni gelen build.zip'i
+        // sildi, unzip "cannot find or open uploads/<id>/build.zip" ile düştü ve
+        // paketleme işi sonsuza dek "ZIP bekleniyor" durumunda asılı kaldı (40 dk).
+        // Bu yüzden SON 10 DAKİKADA dokunulmuş dizinler KORUNUR.
         const uploadsPath = path.join(process.cwd(), 'uploads');
         if (await fs.pathExists(uploadsPath)) {
-          await fs.emptyDir(uploadsPath);
-          console.log('🗑️ Uploads klasörü tamamen temizlendi');
+          const TAZE_MS = 10 * 60 * 1000;
+          const simdi = Date.now();
+          const girdiler = await fs.readdir(uploadsPath);
+          let silinen = 0;
+          let korunan = 0;
+          for (const girdi of girdiler) {
+            const yol = path.join(uploadsPath, girdi);
+            try {
+              const st = await fs.stat(yol);
+              if (simdi - st.mtimeMs < TAZE_MS) { korunan += 1; continue; }
+            } catch (e) { continue; }
+            await fs.remove(yol);
+            silinen += 1;
+          }
+          console.log(`🗑️ Uploads temizlendi (${silinen} silindi, ${korunan} taze dizin korundu)`);
         }
         
         console.log('✅ Tam temizlik tamamlandı - Kuyruk boş');
@@ -977,8 +1009,10 @@ Electron Paketleyici ile oluşturuldu
 const queueService = new QueueService();
 
 // Otomatik temizlik - her 30 dakikada bir
+// unref: bu zamanlayıcı süreci AYAKTA TUTMAZ (sunucuyu HTTP dinleyicisi tutar).
+// Aksi hâlde modülü require eden test süreci hiç bitmez (ölçüldü 2026-09-17).
 setInterval(() => {
   queueService.cleanup();
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
 
 module.exports = queueService;
