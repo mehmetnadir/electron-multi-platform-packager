@@ -18,6 +18,15 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fs-shim-subbook-test-'));
 }
 
+// K15 (2026-09-09, coordinator srv21 bulgusu) — bkz. book-android-shim.test.js
+// AYNI yorum bloğu: root altında (srv21 empp-packager systemd unit'i root
+// çalışır) 0400 yazmayı ENGELLEMEZ, EACCES hiç oluşmaz — chmod tabanlı
+// GERİLEME testi root'ta ANLAMSIZ hâle gelir (test varsayımı geçersiz, kod
+// hatası değil). Mac'te (normal kullanıcı) hâlâ GERÇEKTEN çalışmalı.
+function isRootProcess() {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
 async function makeBookDir(root, relPath) {
   const abs = path.join(root, relPath);
   await fs.ensureDir(abs);
@@ -122,7 +131,11 @@ test('(g) Tudem olcegi (8 alt-kitap) HEPSI enjekte edilir - TAM sayi, "≥1" deg
 });
 
 // --- K9d (2026-09-09, tudem-apk-batch domino kaniti) ---
-test('GERİLEME: bir alt-kitabın index.html\'i EACCES verirse DİĞERLERİ yine de enjekte edilir (domino etkisi)', async () => {
+test('GERİLEME: bir alt-kitabın index.html\'i EACCES verirse DİĞERLERİ yine de enjekte edilir (domino etkisi)', async (t) => {
+  if (isRootProcess()) {
+    t.skip('root altında 0400 yazmayı engellemez (EACCES oluşmaz) — chmod tabanlı test anlamsız, atlanıyor');
+    return;
+  }
   const root = tempDir();
   for (let i = 1; i <= 4; i++) {
     await makeBookDir(root, 'book' + i);

@@ -32,6 +32,17 @@ const shimInternals = require('../platforms/android/empp-android-shim.js')._inte
 
 const ANDROID_SHIM_TAG = '<script src="empp-android-shim.js"></script>';
 
+// K15 (2026-09-09, coordinator srv21 bulgusu) — chmod(0o400)-tabanli GERILEME
+// testleri root altinda calisan bir servis surecinde (srv21: empp-packager
+// systemd unit'i root olarak kosuyor) ANLAMSIZDIR: root icin dosya izin bitleri
+// (0400 dahil) yazmayi ENGELLEMEZ - EACCES hic olusmaz, "book1 tag ALMADI"
+// beklentisi (izin engellendigi icin) YANLIS CIKAR, test root altinda YANLIŞLIKLA
+// KIRILIR (davranis hatasi degil, test varsayiminin gecersizligi). Mac'te
+// (normal kullanici) test GERCEKTEN kosmali - o yuzden atlama SADECE root'ta.
+function isRootProcess() {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
 function tempWwwDir() {
   return fsExtra.mkdtempSync(path.join(os.tmpdir(), 'book-shim-test-'));
 }
@@ -291,7 +302,11 @@ test('GERİLEME: shim tag kaldırılırsa bookN sayfası boş kalır ("process i
 // for dongusunun DISINDAKI genel catch'e kacip TUM kalan alt-kitaplarin islenmesini
 // durduruyordu (27 fasikulden yalniz kok + ilk 1'i shim DOSYASI aldi, HICBIRI script
 // tag'i almadi). Bu test o domino etkisini simule eder ve kapatir.
-test('GERİLEME: bir alt-kitabın index.html\'i yazılamazsa DİĞER alt-kitaplar da atlanır (domino etkisi)', async () => {
+test('GERİLEME: bir alt-kitabın index.html\'i yazılamazsa DİĞER alt-kitaplar da atlanır (domino etkisi)', async (t) => {
+  if (isRootProcess()) {
+    t.skip('root altında 0400 yazmayı engellemez (EACCES oluşmaz) — chmod tabanlı test anlamsız, atlanıyor');
+    return;
+  }
   const www = tempWwwDir();
   await buildFakeSet(www);
   const book1Idx = path.join(www, 'book1', 'index.html');
@@ -310,6 +325,59 @@ test('GERİLEME: bir alt-kitabın index.html\'i yazılamazsa DİĞER alt-kitapla
   const book2Html = fs.readFileSync(path.join(www, 'book2', 'index.html'), 'utf8');
   assert.ok(book2Html.includes('empp-android-shim.js'), 'book2 book1 EACCES\'inden ETKILENMEMELI (duzeltmenin kaniti)');
   assert.ok(fs.existsSync(path.join(www, 'book2', 'empp-android-shim.js')), 'book2 shim dosyasini da almali');
+});
+
+// --- K12 (2026-09-09, tudem-apk-batch/coordinator bulgusu): sessiz kismi hata ---
+// K9b/K9d domino'yu kapatti (bir kitabin hatasi digerlerini durdurmuyor) ama her
+// hata TEK SATIR console.warn olarak (relBookDir basina) yaziliyordu - operator
+// "27 kitaptan 5'i eksik enjeksiyon aldi" TOPLAMINI hicbir yerde GORMUYORDU. Bu
+// test normalizeBookViewerViewports'un kismi hatada TOPLAM/ORAN iceren TEK bir
+// ozet uyari yazdigini dogrular (mutasyon: ozet satiri kaldirilirsa bu test kirilir).
+test('GERİLEME (K12): kısmi enjeksiyon hatası TOPLAM olarak (X/Y — Z hata) SAYILIR', async (t) => {
+  if (isRootProcess()) {
+    t.skip('root altında 0400 yazmayı engellemez (EACCES oluşmaz) — chmod tabanlı test anlamsız, atlanıyor');
+    return;
+  }
+  const www = tempWwwDir();
+  await buildFakeSet(www);
+  const book1Idx = path.join(www, 'book1', 'index.html');
+  fs.chmodSync(book1Idx, 0o400);
+
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  const warnLines = [];
+  const logLines = [];
+  console.warn = (...args) => { warnLines.push(args.join(' ')); };
+  console.log = (...args) => { logLines.push(args.join(' ')); };
+  try {
+    await packagingService.normalizeBookViewerViewports(www);
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+    fs.chmodSync(book1Idx, 0o644);
+  }
+
+  const summaryLine = warnLines.find((l) => l.includes('shim enjeksiyonu:') && l.includes('hata'));
+  assert.ok(summaryLine, `bir ozet uyari satiri bulunmali (alinan warn satirlari: ${JSON.stringify(warnLines)})`);
+  assert.match(summaryLine, /\d+\/\d+/, 'ozet X/Y (ok/toplam) orani icermeli');
+  assert.match(summaryLine, /book1/, 'ozet basarisiz kitabin adini icermeli');
+});
+
+test('kısmi hata YOKSA özet TAMAM olarak (hatasız) tek satırda loglanır', async () => {
+  const www = tempWwwDir();
+  await buildFakeSet(www);
+
+  const originalLog = console.log;
+  const logLines = [];
+  console.log = (...args) => { logLines.push(args.join(' ')); };
+  try {
+    await packagingService.normalizeBookViewerViewports(www);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const summaryLine = logLines.find((l) => l.includes('shim enjeksiyonu:') && l.includes('tamam'));
+  assert.ok(summaryLine, `hatasiz durumda da bir "tamam" ozeti olmali (alinan log satirlari: ${JSON.stringify(logLines)})`);
 });
 
 // --- Kaynak-sentinel ---

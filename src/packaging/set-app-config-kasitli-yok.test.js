@@ -81,8 +81,21 @@ test('kaynak-sentinel: packagingService.js icinde app.config.js YAZAN kod YOK (e
   assert.doesNotMatch(src, writeTargetingAppConfig, 'app.config.js YAZAN kod bulundu - Nadir kararini ihlal ediyor');
 });
 
-test('kaynak-sentinel: graveyard NEDEN.md [STATE: ARCHIVED] olarak isaretli (Librarian protokolu)', () => {
-  const nedenPath = path.join(__dirname, '..', '..', '_graveyard', '2026-09-09-set-app-config', 'NEDEN.md');
+// K15 (2026-09-09, coordinator srv21 bulgusu) — `_graveyard/` git'te izlenmiyor
+// (bu depoda BİLE `git status` onu untracked olarak gösterir — bkz.
+// `.claude/docs/set-paketi-know-how.md` "Librarian" notu). srv21'deki gibi
+// git'ten TEMİZ bir checkout'ta (veya CI'da) bu dizin hiç mevcut OLMAYABİLİR —
+// bu, K1'in kod-tarafı kararının (SET içerik/config üretmeme) GEÇERSİZLİĞİ
+// anlamına gelmez, sadece Librarian arşivinin o makineye taşınmadığı anlamına
+// gelir. Dizin yoksa test "kırık" DEĞİL, "bu makinede kanıt arşivi yok" —
+// skip ile bunu açıkça söyler.
+test('kaynak-sentinel: graveyard NEDEN.md [STATE: ARCHIVED] olarak isaretli (Librarian protokolu)', (t) => {
+  const graveyardDir = path.join(__dirname, '..', '..', '_graveyard', '2026-09-09-set-app-config');
+  if (!fs.existsSync(graveyardDir)) {
+    t.skip('_graveyard/2026-09-09-set-app-config bu makinede yok (git-izlenmeyen arşiv taşınmamış) — atlanıyor');
+    return;
+  }
+  const nedenPath = path.join(graveyardDir, 'NEDEN.md');
   assert.ok(fs.existsSync(nedenPath), 'NEDEN.md _graveyard altinda olmali');
   const content = fs.readFileSync(nedenPath, 'utf8');
   assert.match(content, /\[STATE: ARCHIVED\]/);

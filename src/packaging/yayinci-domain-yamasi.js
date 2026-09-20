@@ -46,6 +46,12 @@ const SORUCOZ_RE = /(?:www\.)?sorucoz\.tv/gi;
 const APITEMPLATE_HOST_RE =
   /testSolutionVideo\s*:\s*\{[\s\S]*?apiTemplate\s*:\s*["']https?:\/\/([^/"'\s]+)/i;
 const PUBLISHER_PATTERN_RE = /https?:\/\/([a-z0-9.-]*yayincilik\.net)/i;
+// `baseEndpointUrl: "https://<host>"` — paketin KENDİ config'indeki yayıncı taban adresi.
+// 2026-09-18 ölçümü: üretilen paketlerde apiTemplate host'u sorucoz.tv, `*.yayincilik.net`
+// hiç yok → host türetilemiyor ve yama sessizce NO-OP'a düşüyordu (Shall We 6 Set'te
+// `updateBookEndPoint` dahil 6 sorucoz.tv URL'si yamasız kaldı). `baseEndpointUrl` iki
+// ayrı pakette de doğru host'u taşıyordu (akillitahta.ydspublishing.com).
+const BASE_ENDPOINT_HOST_RE = /baseEndpointUrl\s*:\s*["']https?:\/\/([^/"'\s]+)/i;
 
 // URL yeniden yazma için taranacak metin dosyaları (ikili dosyalara DOKUNULMAZ)
 const TEXT_EXTS = new Set(['.js', '.json', '.xml', '.config', '.html', '.htm', '.txt', '.css']);
@@ -55,7 +61,7 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'temp', 'uploads', 'dist', '.
 
 /**
  * Config metinlerinden yayıncı host'unu türetir (UYDURMAZ).
- * Öncelik: options.publisherHost > testSolutionVideo.apiTemplate host > *.yayincilik.net.
+ * Öncelik: options.publisherHost > baseEndpointUrl > testSolutionVideo.apiTemplate host > *.yayincilik.net.
  * sorucoz.tv asla yayıncı host olarak seçilmez.
  * @param {string[]|string} configTexts
  * @param {{publisherHost?:string}} [options]
@@ -67,7 +73,15 @@ function derivePublisherHost(configTexts, options = {}) {
   }
   const texts = Array.isArray(configTexts) ? configTexts : [configTexts];
 
-  // 1) testSolutionVideo.apiTemplate mutlak URL host'u
+  // 1) baseEndpointUrl — yayıncının taban adresi; en güvenilir kaynak
+  for (const t of texts) {
+    if (!t) continue;
+    const m = BASE_ENDPOINT_HOST_RE.exec(t);
+    if (m && m[1] && !/sorucoz\.tv$/i.test(m[1]) && !/^localhost(:|$)/i.test(m[1])) {
+      return m[1];
+    }
+  }
+  // 2) testSolutionVideo.apiTemplate mutlak URL host'u
   for (const t of texts) {
     if (!t) continue;
     const m = APITEMPLATE_HOST_RE.exec(t);
@@ -75,7 +89,7 @@ function derivePublisherHost(configTexts, options = {}) {
       return m[1];
     }
   }
-  // 2) *.yayincilik.net kalıbı (sorucoz olmayan)
+  // 3) *.yayincilik.net kalıbı (sorucoz olmayan)
   for (const t of texts) {
     if (!t) continue;
     const m = PUBLISHER_PATTERN_RE.exec(t);
@@ -216,5 +230,6 @@ module.exports = {
   rewriteHostInText,
   SORUCOZ_RE,
   TEXT_EXTS,
-  SKIP_DIRS
+  SKIP_DIRS,
+  BASE_ENDPOINT_HOST_RE
 };

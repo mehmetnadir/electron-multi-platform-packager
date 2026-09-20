@@ -23,6 +23,15 @@ function tempWwwDir() {
   return fsExtra.mkdtempSync(path.join(os.tmpdir(), 'set-book-home-test-'));
 }
 
+// K15 (2026-09-09, coordinator srv21 bulgusu) — bkz. book-android-shim.test.js
+// AYNI yorum bloğu: root altında (srv21 empp-packager systemd unit'i root
+// çalışır) 0400 yazmayı ENGELLEMEZ, EACCES hiç oluşmaz — chmod tabanlı
+// GERİLEME testi root'ta ANLAMSIZ hâle gelir (test varsayımı geçersiz, kod
+// hatası değil). Mac'te (normal kullanıcı) hâlâ GERÇEKTEN çalışmalı.
+function isRootProcess() {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
 // Gercek 59480/book1 (setBook.enable:true) ve book3'ten (setBook.enable:false)
 // BIREBIR alinmis parca (bookModule/setBook/externalbutton bloklari, kompakt
 // `bookModule:{enable:true,` formati dahil - gercek kaynaktaki tek-satirlik
@@ -250,7 +259,11 @@ test('(K9e) Tudem olcegi (8 alt-kitap) HEPSI setBook.enable=true alir - TAM sayi
   assert.strictEqual(patchedCount, 8, 'HER 8 alt-kitap da patched olmali (yalnizca ilk degil)');
 });
 
-test('GERİLEME: bir alt-kitabın app.config.js\'i EACCES verirse DİĞERLERİ yine de yamalanır (domino etkisi)', async () => {
+test('GERİLEME: bir alt-kitabın app.config.js\'i EACCES verirse DİĞERLERİ yine de yamalanır (domino etkisi)', async (t) => {
+  if (isRootProcess()) {
+    t.skip('root altında 0400 yazmayı engellemez (EACCES oluşmaz) — chmod tabanlı test anlamsız, atlanıyor');
+    return;
+  }
   const www = tempWwwDir();
   for (let i = 1; i <= 3; i++) {
     const d = path.join(www, 'book' + i);

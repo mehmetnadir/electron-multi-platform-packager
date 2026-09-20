@@ -205,12 +205,19 @@ test('kaynak-sentinel: applyPublisherDomainPatch çağrısı platform fan-out Ö
   assert.strictEqual(occurrences, 1, 'applyPublisherDomainPatch TEK bir noktadan çağrılmalı');
 });
 
-test('kaynak-sentinel: Windows HARİÇ gate\'i (platforms.filter) çağrıdan ÖNCE var', () => {
+test('GERİLEME: Windows HARİÇ gate\'i KALDIRILDI — yama tüm platformlara uygulanır', () => {
+  // 2026-09-18 Nadir kararı: `updateBookEndPoint` bu yamayla bizim host'a taşınıyor;
+  // Windows dışarıda kalırsa Windows paketlerinde ertelemeli güncelleme kurulamaz.
+  // Eski kapı ayrıca YALNIZ-Windows derlemelerini yamasız bırakıyordu (tutarsızlık).
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  const gateIdx = src.indexOf("platforms.filter((p) => p !== 'windows')");
-  const callIdx = src.indexOf('applyPublisherDomainPatch(workingPath');
-  assert.notStrictEqual(gateIdx, -1, 'Windows-hariç gate ifadesi bulunamadı');
-  assert.ok(gateIdx < callIdx, 'gate, çağrıdan ÖNCE değerlendirilmeli');
+  assert.ok(
+    !src.includes("platforms.filter((p) => p !== 'windows')"),
+    'Windows-hariç gate geri gelmiş — Windows paketleri yamasız kalır'
+  );
+  assert.ok(
+    src.includes('applyPublisherDomainPatch(workingPath'),
+    'yama çağrısı kaybolmuş'
+  );
 });
 
 test('kaynak-sentinel: packageWindows fonksiyon gövdesinde applyPublisherDomainPatch çağrısı YOK', () => {
@@ -234,4 +241,55 @@ test('kaynak-sentinel: packageAndroid ve packageLinux gövdeleri PAYLAŞILAN wor
   const linuxBody = src.slice(linuxStart, linuxStart + 3000);
   assert.ok(!androidBody.includes('applyPublisherDomainPatch'), 'packageAndroid kendi ayrı çağrısını YAPMAMALI (fan-out yok, ortak nokta yeterli)');
   assert.ok(!linuxBody.includes('applyPublisherDomainPatch'), 'packageLinux kendi ayrı çağrısını YAPMAMALI (fan-out yok, ortak nokta yeterli)');
+});
+
+// ---- baseEndpointUrl'den host türetme (2026-09-18, saha arızası) ----------------------
+
+test('baseEndpointUrl yayıncı host\'u olarak türetilir', () => {
+  // SAHA: Shall We 6 Set paketinde apiTemplate host'u sorucoz.tv, `*.yayincilik.net` hiç yok
+  // → host türetilemiyor, yama sessizce NO-OP'a düşüyor ve `updateBookEndPoint` dahil
+  // 6 sorucoz.tv URL'si yamasız kalıyordu.
+  const cfg = `
+    testSolutionVideo: { apiTemplate: "https://www.sorucoz.tv/TestlerMobil/GetZKitapCozumLinkV2?x=1" },
+    baseEndpointUrl: "https://akillitahta.ydspublishing.com",
+  `;
+  assert.strictEqual(derivePublisherHost([cfg]), 'akillitahta.ydspublishing.com');
+});
+
+test('baseEndpointUrl sorucoz.tv ise SEÇİLMEZ', () => {
+  const cfg = 'baseEndpointUrl: "https://www.sorucoz.tv",';
+  assert.strictEqual(derivePublisherHost([cfg]), null);
+});
+
+test('baseEndpointUrl localhost ise SEÇİLMEZ', () => {
+  const cfg = 'baseEndpointUrl: "http://localhost:3000",';
+  assert.strictEqual(derivePublisherHost([cfg]), null);
+});
+
+test('öncelik: options > baseEndpointUrl > apiTemplate', () => {
+  const cfg = `
+    testSolutionVideo: { apiTemplate: "https://api.baska.com/TestlerMobil/x" },
+    baseEndpointUrl: "https://taban.yayinevi.com",
+  `;
+  assert.strictEqual(derivePublisherHost([cfg]), 'taban.yayinevi.com', 'baseEndpointUrl apiTemplate\'i yenmeli');
+  assert.strictEqual(derivePublisherHost([cfg], { publisherHost: 'elle.verilen.com' }), 'elle.verilen.com');
+});
+
+test('GERÇEK KONFİG: sorucoz.tv\'nin 6 geçişi de yeniden yazılır (updateBookEndPoint dahil)', () => {
+  const cfg = [
+    'solutionVideoNameRequestUrl: "https://www.sorucoz.tv/TestlerMobil/GetZKitapNameByZKitapId?z=1",',
+    'apiTemplate: "https://www.sorucoz.tv/TestlerMobil/GetZKitapKonuAnlatimUrl?z=1",',
+    'apiTemplate: "https://www.sorucoz.tv/TestlerMobil/GetZKitapCozumLinkV2?z=1",',
+    'liveTestRequestUrl: "https://www.sorucoz.tv/CanliTestHazirla/{zKitapId}/{zKitapTestId}",',
+    'seriesLogoUrl: "https://www.sorucoz.tv/MobilService/GetBookSeriesZKitapLogoUrl?z=1",',
+    'updateBookEndPoint: "https://www.sorucoz.tv/TestlerMobil/GetKitapGuncellemeBilgi?id={bookId}",',
+    'baseEndpointUrl: "https://akillitahta.ydspublishing.com",'
+  ].join('\n');
+  const host = derivePublisherHost([cfg]);
+  assert.strictEqual(host, 'akillitahta.ydspublishing.com');
+  const { text, count } = rewriteHostInText(cfg, host);
+  assert.strictEqual(count, 6, 'altı geçişin hepsi yazılmalı');
+  assert.ok(!/sorucoz/.test(text), 'metinde sorucoz kalmamalı');
+  assert.match(text, /updateBookEndPoint: "https:\/\/akillitahta\.ydspublishing\.com\//,
+    'güncelleme kapısı bizim host\'a taşınmalı');
 });
