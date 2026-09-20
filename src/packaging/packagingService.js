@@ -23,6 +23,7 @@ const sayfaOnGetirme = require('./sayfa-on-getirme');
 const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
+const acilisGostergesi = require('./acilis-gostergesi');
 
 class PackagingService {
   constructor() {
@@ -588,6 +589,32 @@ MimeType=application/x-electron;
         } catch (ilkSayfaError) {
           console.warn('⚠️ İlk sayfa yaması başarısız (paketleme devam ediyor):',
             ilkSayfaError.message);
+        }
+      }
+
+      // ÜÇÜNCÜ AÇILIŞ GÖSTERGESİ KALKAR (K27, 2026-09-20, Nadir: "kalksın, gerek yok;
+      // hemen açılmalı") — KAPI VARSAYILAN AÇIK (`EMPP_ACILIS_GOSTERGE=0` kapatır).
+      // "Kitap Açılıyor.." ekranı, kitabı açan 5 sn'lik güvence zamanlayıcısı dolana
+      // (ya da güncelleme sorgusu bir karara bağlanana) kadar duruyordu. Güvence 0 ms'e
+      // çekilir — bileşen çizildiği anda kitap açılır — ve o metin boşaltılır.
+      // "Kitap Güncelleniyor %N" dalı KORUNUR: güncelleme gerçekten indiriliyorsa
+      // kullanıcı bunu görmeli (Nadir: "güncelleniyor, sayfa yenilenecek" diyip
+      // sayfayı tazelesin). İlk sayfa yamasından SONRA koşar; aynı paketlerde
+      // farklı çapalar kullanır, ikisi çakışmaz.
+      if (acilisGostergesi.acikMi()) {
+        try {
+          const gosterge = await acilisGostergesi.paketeUygula(workingPath, {
+            log: (s) => console.log(s), gecikmeMs: acilisGostergesi.gecikme(),
+          });
+          if (gosterge.length) {
+            const g = gosterge.reduce((a, x) => a + x.guvence, 0);
+            const t = gosterge.reduce((a, x) => a + x.metin, 0);
+            console.log(`🚪 Açılış göstergesi: ${gosterge.length} kitap, ${g} güvence `
+              + `${acilisGostergesi.gecikme()} ms'e çekildi, ${t} "Kitap Açılıyor.." kaldırıldı`);
+          }
+        } catch (gostergeError) {
+          console.warn('⚠️ Açılış göstergesi yaması başarısız (paketleme devam ediyor):',
+            gostergeError.message);
         }
       }
 

@@ -8,6 +8,8 @@
  * kimlik GEREKTİRMEYEN `vmrun` yeteneklerini kullanır: snapshot al / geri dön / listele.
  *
  * Kullanım:
+ *   node tools/windows/vm-kapi.js baslat          # başsız aç (odak çalmaz)
+ *   node tools/windows/vm-kapi.js uyut            # suspend — izleyici ayakta kalır
  *   node tools/windows/vm-kapi.js hazir
  *   node tools/windows/vm-kapi.js kur <exe-yolu> [--surec "Super Monsters 4"]
  *   node tools/windows/vm-kapi.js ac   --surec "Super Monsters 4" --yol "C:\\...\\x.exe"
@@ -35,14 +37,28 @@ function dizinleriKur() {
   for (const d of Object.values(D)) fs.mkdirSync(d, { recursive: true });
 }
 
+function calisanVmx() {
+  const c = execFileSync(VMRUN, ['list'], { encoding: 'utf8' });
+  return c.split('\n').filter((s) => s.trim().endsWith('.vmx')).map((s) => s.trim());
+}
+
+// VM KAPALIYKEN de yol gerekir (baslat komutu): çalışan yoksa varsayılan
+// kütüphaneden tek .vmx aranır. Birden çok varsa tahmin ÜRETİLMEZ, EMPP_VMX istenir.
 function vmx() {
   if (process.env.EMPP_VMX) return process.env.EMPP_VMX;
-  const c = execFileSync(VMRUN, ['list'], { encoding: 'utf8' });
-  const satirlar = c.split('\n').filter((s) => s.trim().endsWith('.vmx'));
-  if (satirlar.length !== 1) {
-    throw new Error(`tek çalışan VM bekleniyordu, ${satirlar.length} bulundu — EMPP_VMX ver`);
+  const calisan = calisanVmx();
+  if (calisan.length === 1) return calisan[0];
+  if (calisan.length > 1) throw new Error(`${calisan.length} VM çalışıyor — EMPP_VMX ver`);
+  const kutuphane = path.join(os.homedir(), 'Virtual Machines.localized');
+  const adaylar = [];
+  for (const d of (fs.existsSync(kutuphane) ? fs.readdirSync(kutuphane) : [])) {
+    if (!d.endsWith('.vmwarevm')) continue;
+    for (const f of fs.readdirSync(path.join(kutuphane, d))) {
+      if (f.endsWith('.vmx')) adaylar.push(path.join(kutuphane, d, f));
+    }
   }
-  return satirlar[0].trim();
+  if (adaylar.length !== 1) throw new Error(`kütüphanede tek VM bekleniyordu, ${adaylar.length} bulundu — EMPP_VMX ver`);
+  return adaylar[0];
 }
 
 function kalpMs() {
@@ -51,6 +67,15 @@ function kalpMs() {
     const t = Date.parse(ham);
     return Number.isFinite(t) ? t : null;
   } catch { return null; }
+}
+
+// Paylaşılan klasör bu host+misafir birleşiminde YOK (Fusion 13 / Apple Silicon /
+// Win11 ARM); komut HTTP köprüsünü gösterir. Köprü ayakta değilse belirteç de yoktur.
+function izleyiciKomutu() {
+  let belirtec = '<köprüyü başlat: node tools/windows/vm-kopru-sunucu.js>';
+  try { belirtec = fs.readFileSync(path.join(D.durum, 'belirtec.txt'), 'utf8').trim() || belirtec; } catch {}
+  return `  powershell -ExecutionPolicy Bypass -File C:\\vm-kapi\\vm-izleyici.ps1 ` +
+    `-Adres http://192.168.11.1:${process.env.EMPP_VM_PORT || 8791} -Belirtec ${belirtec}`;
 }
 
 function hazirMi() {
@@ -88,6 +113,35 @@ async function bekle(kimlik, zamanAsimiSn) {
   }
 }
 
+// BAŞSIZ ÇALIŞTIRMA (Nadir kuralı: "benden odak çalmasın").
+// Ölçüldü 2026-09-20: `start ... nogui` ön plana GEÇMİYOR (öndeki uygulama değişmedi),
+// ama Fusion arayüzü zaten açıksa VM için bir pencere oluşturuyor. Bu yüzden başlattıktan
+// sonra Fusion süreci gizlenir (⌘H eşdeğeri) — pencere ekrandan kalkar, odak yerinde kalır.
+function fusionGizle() {
+  try {
+    execFileSync('osascript',
+      ['-e', 'tell application "System Events" to set visible of process "VMware Fusion" to false'],
+      { stdio: 'ignore', timeout: 10000 });
+  } catch { /* Fusion arayüzü açık değilse gizlenecek bir şey de yoktur */ }
+}
+
+function baslat() {
+  const yol = vmx();
+  if (calisanVmx().includes(yol)) { console.log('VM zaten çalışıyor'); fusionGizle(); return; }
+  execFileSync(VMRUN, ['-T', 'fusion', 'start', yol, 'nogui'], { stdio: 'inherit' });
+  fusionGizle();
+  console.log('VM başsız başlatıldı:', path.basename(yol));
+}
+
+// "Uykuya al" = suspend: bellek diske yazılır, sonraki start kaldığı yerden sürer —
+// misafirdeki izleyici de ayakta kalır, yani tek seferlik elle başlatma tekrarlanmaz.
+function uyut() {
+  const yol = vmx();
+  if (!calisanVmx().includes(yol)) { console.log('VM zaten kapalı'); return; }
+  execFileSync(VMRUN, ['-T', 'fusion', 'suspend', yol], { stdio: 'inherit' });
+  console.log('VM uykuya alındı');
+}
+
 function anlikAl(ad) { execFileSync(VMRUN, ['-T', 'fusion', 'snapshot', vmx(), ad], { stdio: 'inherit' }); }
 function geriDon(ad) { execFileSync(VMRUN, ['-T', 'fusion', 'revertToSnapshot', vmx(), ad], { stdio: 'inherit' }); }
 
@@ -103,10 +157,15 @@ async function ana() {
     console.log(JSON.stringify(r, null, 2));
     process.exit(r.durum === 'ayakta' ? 0 : 3);
   }
+  if (komut === 'baslat') { baslat(); return; }
+  if (komut === 'uyut') { uyut(); return; }
+  if (komut === 'gizle') { fusionGizle(); return; }
+
   const i = hazirMi();
   if (i.durum !== 'ayakta' && !['anlik-al', 'geri-don'].includes(komut)) {
     console.error(`İZLEYİCİ ${i.durum.toUpperCase()}: ${i.sebep || ''}`);
-    console.error(`VM'de bir kez başlat: powershell -ExecutionPolicy Bypass -File "\\\\vmware-host\\Shared Folders\\vm-kapi\\vm-izleyici.ps1"`);
+    console.error("VM'de bir kez başlat:");
+    console.error(izleyiciKomutu());
     process.exit(3);
   }
 
@@ -133,7 +192,7 @@ async function ana() {
   if (komut === 'anlik-al') { anlikAl(process.argv[3] || 'kapi-oncesi'); return; }
   if (komut === 'geri-don') { geriDon(process.argv[3] || 'kapi-oncesi'); return; }
 
-  console.error('komut: hazir | kur <exe> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>');
+  console.error('komut: baslat | uyut | gizle | hazir | kur <exe> | ac | ekran | kapat | anlik-al <ad> | geri-don <ad>');
   process.exit(2);
 }
 
