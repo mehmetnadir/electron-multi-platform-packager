@@ -56,3 +56,13 @@ tools/*.jar
 
 # Runtime PWA config data
 pwa-configs/
+
+# Ajan/oturum artıkları (2026-09-20 — ağaçta birikmişti)
+.npm-cache/
+scratchpad/
+_graveyard/
+*.yedek-deb
+*.yedek-2*
+.conductor-assimilated
+.sm4-*.js
+uret-sm4.js

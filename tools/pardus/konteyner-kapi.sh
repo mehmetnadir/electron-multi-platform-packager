@@ -13,8 +13,15 @@ AKTIVASYON="${KAPI_AKTIVASYON:-0}"
 
 mkdir -p "$KANIT"
 say(){ echo "[kkapi] $*"; }
-red(){ say "RED: $*"; echo "RED: $*" > "$KANIT/sonuc.txt"; exit 1; }
-olcumsuz(){ say "OLCULEMEDI: $*"; echo "OLCULEMEDI: $*" > "$KANIT/sonuc.txt"; exit 2; }
+# KANIT HER YOLDA KALIR (2026-09-20 dersi): ilk surumde pencere acilmayinca
+# red() dogrudan cikiyordu ve calisma gunlugu KANIT dizinine hic kopyalanmiyordu;
+# teshis icin konteyneri bastan kosturmak gerekti.
+kanitiSakla(){
+  cp /tmp/calisma.log "$KANIT/calisma.log" 2>/dev/null
+  import -window root "$KANIT/masaustu.png" 2>/dev/null
+}
+red(){ kanitiSakla; say "RED: $*"; echo "RED: $*" > "$KANIT/sonuc.txt"; exit 1; }
+olcumsuz(){ kanitiSakla; say "OLCULEMEDI: $*"; echo "OLCULEMEDI: $*" > "$KANIT/sonuc.txt"; exit 2; }
 
 [ -f "$PAKET" ] || olcumsuz "paket yok: $PAKET"
 cp "$PAKET" /tmp/kapi.impark || olcumsuz "paket kopyalanamadi"
@@ -67,7 +74,17 @@ while [ $gecen -lt "$BEKLE" ]; do
   [ -n "$WID" ] && break
   [ $((gecen % 60)) -eq 0 ] && say "bekle ${gecen}s — surec var, pencere yok"
 done
-[ -n "$WID" ] || red "uygulama penceresi ${BEKLE} sn icinde acilmadi ($(tail -3 /tmp/calisma.log | tr '\n' ' '))"
+if [ -z "$WID" ]; then
+  # KAPI KUSURU mu PAKET KUSURU mu? (2026-09-20 olculdu: imajda `unzip` yoktu,
+  # AppRun kurulumu yapamadi ve kapi paketi RED etti — YANLIS TESHIS. Eksik
+  # sistem araci konteynerin kusurudur; paketi suclamak 2026-09-10'daki
+  # "FUSE setup hatasi yalan soyler" dersinin aynisidir.)
+  if grep -qiE "command not found|not found in PATH|No such file or directory: /usr" /tmp/calisma.log 2>/dev/null; then
+    cp /tmp/calisma.log "$KANIT/calisma.log" 2>/dev/null
+    olcumsuz "konteynerde sistem araci eksik — paket suclanamaz ($(grep -iE 'command not found' /tmp/calisma.log | head -2 | tr '\n' ' '))"
+  fi
+  red "uygulama penceresi ${BEKLE} sn icinde acilmadi ($(tail -3 /tmp/calisma.log | tr '\n' ' '))"
+fi
 say "pencere acildi (${gecen}s): '$(xdotool getwindowname "$WID")' wid=$WID"
 
 GECERLI=0
