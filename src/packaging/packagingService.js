@@ -21,6 +21,7 @@ const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
 const agPolitikasi = require('./ag-politikasi-yamasi');
 const sayfaOnGetirme = require('./sayfa-on-getirme');
 const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
+const ilkSayfa = require('./acilis-ilk-sayfa');
 
 class PackagingService {
   constructor() {
@@ -564,6 +565,28 @@ MimeType=application/x-electron;
         } catch (onGetirmeError) {
           console.warn('⚠️ Sayfa ön-getirme enjeksiyonu başarısız (paketleme devam ediyor):',
             onGetirmeError.message);
+        }
+      }
+
+      // İLK SAYFA GELDİĞİ GİBİ AÇILSIN (2026-09-20, Nadir) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_ILK_SAYFA=0` kapatır). Tek-kitap açılış ekranı kitabı ancak güncelleme
+      // sorgusunun sonucu gelince açıyor; o sorgunun `.catch`'i ve zaman aşımı yok.
+      // Ağ yoksa istek reddolur, karar hiç gönderilmez ve kitabı açan tek şey
+      // 5 saniyelik `setTimeout` güvencesi kalır — yani ağsız her makinede HER
+      // açılış düz 5 sn ödüyor. Yama sorguya süre bütçesi + hata yakalama takar:
+      // karar bilinir bilinmez kitap açılır, güvence yerinde kalır ama erişilemez.
+      // Sayfa ön-getirmesinden SONRA koşar; ikisi ayrı dosyalara dokunuyor.
+      if (ilkSayfa.acikMi()) {
+        try {
+          const ilk = await ilkSayfa.paketeUygula(workingPath, { log: (s) => console.log(s) });
+          if (ilk.length) {
+            const cagri = ilk.reduce((a, x) => a + x.cagri, 0);
+            console.log(`⚡ İlk sayfa açılışı: ${ilk.length} kitap, ${cagri} güncelleme `
+              + 'sorgusuna süre bütçesi (5 sn sabit güvence devre dışı)');
+          }
+        } catch (ilkSayfaError) {
+          console.warn('⚠️ İlk sayfa yaması başarısız (paketleme devam ediyor):',
+            ilkSayfaError.message);
         }
       }
 
