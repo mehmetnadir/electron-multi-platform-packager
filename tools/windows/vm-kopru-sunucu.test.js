@@ -142,10 +142,44 @@ test('bilinmeyen uç 404', async (t) => {
   assert.strictEqual((await fetch(`${taban}/baska`)).status, 404);
 });
 
-test('VM arayüzleri YALNIZ bridge* — 0.0.0.0 ya da dış arayüz seçilmez', () => {
+test('Bağlanılan arayüz YA VMware bridge* YA Tailscale — 0.0.0.0 ve LAN asla', () => {
   const { mod } = ortam();
   for (const a of mod.vmAdresleri()) {
-    assert.match(a.ad, /^bridge\d+/);
+    const vmware = /^bridge\d+/.test(a.ad);
+    const tailnet = /\(tailscale\)$/.test(a.ad);
+    assert.ok(vmware || tailnet, `beklenmeyen arayüz: ${a.ad} (${a.adres})`);
     assert.notStrictEqual(a.adres, '0.0.0.0');
   }
+});
+
+// ——— Tailscale üzerinden bağlanma (gerçek makineler için) ———————————————
+const kopru = require('./vm-kopru-sunucu.js');
+test('Tailscale CGNAT bloğu (100.64-127.x) tanınır, başka 100.x tanınmaz', () => {
+  const sahte = {
+    bridge100: [{ family: 'IPv4', internal: false, address: '192.168.11.1' }],
+    utun10: [{ family: 'IPv4', internal: false, address: '100.87.144.56' }],
+    en0: [{ family: 'IPv4', internal: false, address: '192.168.1.42' }],
+    lo0: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
+    utun9: [{ family: 'IPv4', internal: false, address: '100.200.1.1' }],   // CGNAT DIŞI
+  };
+  const a = kopru.vmAdresleri({}, sahte).map((x) => x.adres).sort();
+  assert.deepStrictEqual(a, ['100.87.144.56', '192.168.11.1']);
+});
+
+test('ev/ofis arayüzü (en0) ve döngü arayüzü ASLA seçilmez', () => {
+  const sahte = { en0: [{ family: 'IPv4', internal: false, address: '192.168.1.42' }] };
+  assert.deepStrictEqual(kopru.vmAdresleri({}, sahte), []);
+});
+
+test('EMPP_VM_ADRES verilirse YALNIZ o adrese bağlanılır', () => {
+  const sahte = {
+    bridge100: [{ family: 'IPv4', internal: false, address: '192.168.11.1' }],
+    utun10: [{ family: 'IPv4', internal: false, address: '100.87.144.56' }],
+  };
+  const a = kopru.vmAdresleri({ EMPP_VM_ADRES: '100.87.144.56' }, sahte);
+  assert.deepStrictEqual(a.map((x) => x.adres), ['100.87.144.56']);
+});
+
+test('EMPP_VM_ADRES=0.0.0.0 REDDEDİLİR (dış ağa açılmaz)', () => {
+  assert.throws(() => kopru.vmAdresleri({ EMPP_VM_ADRES: '0.0.0.0' }, {}), /0\.0\.0\.0/);
 });

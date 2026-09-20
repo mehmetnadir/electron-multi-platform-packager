@@ -46,13 +46,35 @@ const D = {
 };
 
 /** VMware'in host tarafı adresleri — yalnız bunlara bağlanılır, 0.0.0.0'a ASLA. */
-function vmAdresleri() {
+// Tailscale, 100.64.0.0/10 (CGNAT) bloğunu kullanır. Bu bloğa bağlanmak köprüyü
+// TAILNET'e açar: gerçek bir Windows makinesi (ofisteki x64 tahta/PC) ya da uzaktaki
+// Pardus makinesi izleyiciyi buraya bağlayabilir. Dışarıya (internete) açılmaz —
+// tailnet üyeliği + 24 hex yol belirteci iki ayrı kapıdır.
+function tailscaleAdresiMi(adres) {
+  const p = String(adres).split('.').map(Number);
+  return p.length === 4 && p[0] === 100 && p[1] >= 64 && p[1] <= 127;
+}
+
+/**
+ * Bağlanılacak arayüzler. Varsayılan: VMware bridge* + Tailscale.
+ * `EMPP_VM_ADRES` verilirse YALNIZ o adrese bağlanılır (ör. tek bir arayüzle
+ * sınırlamak istendiğinde). 0.0.0.0 hiçbir koşulda kabul edilmez.
+ */
+function vmAdresleri(env = process.env, arayuzler = os.networkInterfaces()) {
+  const zorunlu = (env.EMPP_VM_ADRES || '').trim();
   const bulunan = [];
-  for (const [ad, liste] of Object.entries(os.networkInterfaces())) {
-    if (!/^bridge\d+/.test(ad)) continue;
+  for (const [ad, liste] of Object.entries(arayuzler)) {
     for (const a of liste || []) {
-      if (a.family === 'IPv4' && !a.internal) bulunan.push({ ad, adres: a.address });
+      if (a.family !== 'IPv4' || a.internal) continue;
+      const vmware = /^bridge\d+/.test(ad);
+      const tailnet = tailscaleAdresiMi(a.address);
+      if (!vmware && !tailnet) continue;
+      bulunan.push({ ad: tailnet && !vmware ? `${ad} (tailscale)` : ad, adres: a.address });
     }
+  }
+  if (zorunlu) {
+    if (zorunlu === '0.0.0.0') throw new Error('EMPP_VM_ADRES=0.0.0.0 kabul edilmez');
+    return bulunan.filter((x) => x.adres === zorunlu);
   }
   return bulunan;
 }
