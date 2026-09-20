@@ -24,6 +24,7 @@ const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
+const paketManifesti = require('./paket-manifesti');
 
 class PackagingService {
   constructor() {
@@ -615,6 +616,33 @@ MimeType=application/x-electron;
         } catch (gostergeError) {
           console.warn('⚠️ Açılış göstergesi yaması başarısız (paketleme devam ediyor):',
             gostergeError.message);
+        }
+      }
+
+      // PAKET KİMLİK MANİFESTİ (Katman 1, 2026-09-20) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_PAKET_MANIFESTI=0` kapatır). Kurulu exe'nin "ben hangi setim, içimde
+      // hangi kitaplar var, sürümüm ne" sorusuna cevabı bugün HİÇBİR YERDE yok;
+      // kimlik yalnız ImWin32.dll'in şifreli XML'inde ve kitap bazında duruyor.
+      // setId: panel verirse aynen yazılır, vermezse burada üretilir (Nadir kararı).
+      // EN SONDA koşar — tüm yamalar bittikten sonraki ağacın parmak izini alsın.
+      if (paketManifesti.acikMi()) {
+        try {
+          const manifestSonuc = await paketManifesti.paketeUygula(workingPath, {
+            log: (s) => console.log(s),
+            setId: jobInfo.setId || (packageOptions && packageOptions.setId),
+            uygulamaAdi: appName,
+            uygulamaSurumu: appVersion,
+            uretici: (packageOptions && packageOptions.publisherName) || companyName || null,
+            kurum: { id: companyId, ad: companyName },
+          });
+          if (manifestSonuc.yazildi) {
+            const mf = manifestSonuc.manifest;
+            console.log(`🪪 Paket kimliği: ${mf.setId} (${mf.setIdKaynagi}), `
+              + `${mf.kitapSayisi} kitap, parmak izi ${mf.parmakIzi.slice(0, 12)}…`);
+          }
+        } catch (manifestError) {
+          console.warn('⚠️ Paket manifesti yazılamadı (paketleme devam ediyor):',
+            manifestError.message);
         }
       }
 
