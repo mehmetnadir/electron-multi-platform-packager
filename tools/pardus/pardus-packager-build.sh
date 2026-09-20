@@ -12,6 +12,11 @@
 #   (EMPP_SET_MENU=1) — yayincinin otomatik exe'sinden cikan SET build'inin kokunde
 #   menu YOK ve paket Pardus'ta beyaz ekranda kaliyordu (sf425/59835 ProBook kaniti).
 #   Kapatmak icin: EMPP_SET_MENU=0 pardus-packager-build.sh ...
+# KAPI GECISI (2026-09-19): sayfa-webp ve olu-motor-temizligi kapilari packagingService
+# icinde, yani KONTEYNERIN ICINDE okunuyor. Host'ta `EMPP_SAYFA_WEBP=1 pardus-packager-build.sh`
+# demek bugune kadar HICBIR SEY yapmiyordu — degisken docker'a gecirilmiyordu, kapi sessizce
+# kapali kaliyordu. Artik ikisi de -e ile aktariliyor (varsayilanlar degismedi: webp KAPALI,
+# olu temizlik ACIK).
 # Ozellikler: idempotent (imaj/volume varsa yeniden kurmaz), disk kapisi (BOYUT ORANTILI), tek build
 # (kilit), her adimda log, nice ile dusuk oncelik, Rosetta+AppImage binfmt kaydi.
 set -euo pipefail
@@ -104,6 +109,8 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -v packager-linux-nm:/app/node_modules -v packager-linux-cache:/cache \
   -e electron_config_cache=/cache/electron \
   -e EMPP_SET_MENU="${EMPP_SET_MENU:-1}" \
+  -e EMPP_SAYFA_WEBP="${EMPP_SAYFA_WEBP:-0}" \
+  -e EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?

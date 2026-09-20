@@ -816,3 +816,21 @@ test('aktivasyonBeklenir: yalnız kodlu seriler için doğru döner', () => {
     assert.ok(!desen.test(ad), `${ad} aktivasyon kodlu SAYILMAMALI`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// KAPI GEÇİŞİ (2026-09-19) — sayfa-webp ve ölü-motor-temizliği kapıları
+// packagingService içinde, yani KONTEYNERİN İÇİNDE okunuyor. Host'ta
+// `EMPP_SAYFA_WEBP=1 pardus-packager-build.sh …` demek hiçbir şey yapmıyordu:
+// değişken docker'a geçirilmediği için kapı sessizce kapalı kalıyordu. Yani
+// WebP kapısı pardus yolunda HİÇ denenememişti.
+// ---------------------------------------------------------------------------
+test('GERİLEME: kapı değişkenleri docker konteynerine aktarılır', () => {
+  const k = fs.readFileSync(path.join(__dirname, '..', '..', 'tools', 'pardus', 'pardus-packager-build.sh'), 'utf8');
+  const dockerRun = k.slice(k.indexOf('docker run --rm --platform linux/amd64'));
+  for (const ad of ['EMPP_SET_MENU', 'EMPP_SAYFA_WEBP', 'EMPP_OLU_TEMIZLIK']) {
+    assert.ok(new RegExp(`-e ${ad}=`).test(dockerRun), `${ad} docker'a aktarılmıyor — kapı sessizce kapalı kalır`);
+  }
+  // Varsayılanlar KORUNMALI: webp kapalı, ölü temizlik ve SET menüsü açık.
+  assert.match(dockerRun, /EMPP_SAYFA_WEBP="\$\{EMPP_SAYFA_WEBP:-0\}"/, 'webp varsayılanı açılmış');
+  assert.match(dockerRun, /EMPP_OLU_TEMIZLIK="\$\{EMPP_OLU_TEMIZLIK:-1\}"/, 'ölü temizlik varsayılanı kapanmış');
+});
