@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const { buildContentDisposition } = require('./content-disposition');
 
 // Upload configuration
 const upload = multer({
@@ -303,20 +304,33 @@ async function packagePWA(buildZipPath, appName, appVersion, jobId) {
 
 /**
  * Download endpoint
+ *
+ * KNOW-HOW (K11b, 2026-09-09): bu route `/api` altına mount edilir (app.js
+ * `app.use('/api', localPackagingRouter)`), AMA app.js kendi
+ * `app.get('/api/download/:jobId/:platform', ...)` route'unu (buildContentDisposition
+ * KULLANAN, K11 düzeltmesini taşıyan asıl canlı yol) DAHA ÖNCE tanımlıyor —
+ * Express aynı path için İLK eşleşen katmanı çalıştırır, bu route pratikte
+ * ASLA tetiklenmez (ölü/gölgede kalan kod). Yine de `res.download(filePath)`
+ * eskiden Türkçe dosya adında (ı/İ/ğ/Ğ/ş/Ş) `ERR_INVALID_CHAR` riskiyle AYNI
+ * sınıftan bir çağrıydı — routing sırası değişirse (veya bu router başka bir
+ * yere/bağımsız mount edilirse) K11 kusuru SESSİZCE geri gelirdi. Header'ı
+ * elle `buildContentDisposition` ile kuruyoruz ki tek doğru kaynak
+ * (`content-disposition.js`) her iki yolda da geçerli olsun.
+ * BOZARSAN: `localPackagingRoutes.test.js`'teki GERİLEME testi kırılır.
  */
 router.get('/download/:jobId/:platform', async (req, res) => {
   try {
     const { jobId, platform } = req.params;
-    
+
     const platformPath = path.join('temp', jobId, platform);
-    
+
     if (!await fs.pathExists(platformPath)) {
       return res.status(404).json({
         success: false,
         error: 'Paket bulunamadı'
       });
     }
-    
+
     const files = await fs.readdir(platformPath);
     if (files.length === 0) {
       return res.status(404).json({
@@ -324,10 +338,13 @@ router.get('/download/:jobId/:platform', async (req, res) => {
         error: 'Paket dosyası bulunamadı'
       });
     }
-    
+
     const filePath = path.join(platformPath, files[0]);
-    res.download(filePath);
-    
+    // K11b — ham res.download çağrısı YERİNE: dosya adı aynı K11 yardımcısından
+    // (Türkçe karakter ASCII fallback + filename*=UTF-8'') geçer.
+    res.setHeader('Content-Disposition', buildContentDisposition(path.basename(filePath)));
+    res.sendFile(path.resolve(filePath));
+
   } catch (error) {
     console.error('Download error:', error);
     res.status(500).json({

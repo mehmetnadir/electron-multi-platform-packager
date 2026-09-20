@@ -8,6 +8,18 @@ const http = require('http');
 const socketIo = require('socket.io');
 const AdmZip = require('adm-zip');
 
+// K13 (2026-09-09) — NEDEN: packagingService.js Node'un require() önbelleğinde
+// SINGLETON'dır; kod dosyaya kaydedilse bile canlı süreç (systemd/pm2/launchd
+// ile başlatılmış) yeniden başlatılmadan YENİ KODU GÖRMEZ. srv21'de bu durum
+// birkaç kez "deploy ettim ama davranış değişmedi" şüphesine yol açtı — tek curl
+// ile "bu süreç HANGİ commit'i koşuyor" sorusuna kanıt yoktu. `getGitCommit()`
+// (`./git-commit.js`) süreç başlarken BİR KEZ okunur (her istekte git çağırmak
+// gereksiz I/O + yanıltıcı olurdu — süreç zaten o an git HEAD neyse onu koşuyor,
+// restart olmadan değişmez). BOZARSAN: `app.test.js`'teki GERİLEME testi kırılır.
+const { getGitCommit } = require('./git-commit');
+const STARTED_AT = new Date().toISOString();
+const GIT_COMMIT = getGitCommit(path.join(__dirname, '..', '..'));
+
 const packagingService = require('../packaging/packagingService');
 const LogoService = require('../utils/logoService');
 const uploadService = require('../services/uploadService');
@@ -87,7 +99,14 @@ io.on('connection', (socket) => {
 
 // Sağlık kontrolü
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'Sunucu çalışıyor', timestamp: new Date().toISOString() });
+  // K13 — commit/startedAt: canlı sürecin HANGİ kodu koştuğu tek curl ile
+  // kanıtlanabilsin (packagingService singleton require-cache tuzağı, bkz. yukarı).
+  res.json({
+    status: 'Sunucu çalışıyor',
+    timestamp: new Date().toISOString(),
+    commit: GIT_COMMIT,
+    startedAt: STARTED_AT,
+  });
 });
 
 // Çıktı klasörünü işletim sistemi dosya gezgininde aç.
