@@ -81,9 +81,21 @@ node -e "require('http').get({host:'192.168.11.1',port:8791,path:'/<belirtec>/go
 # 204 = köprü ayakta, kuyruk boş · 404 = belirteç yanlış
 ```
 
-**Neden `curl` değil:** bu Mac'te kabuk üzerinden `curl` VMware arayüzüne çıkarken
-`000` döndü (sunucu kusuru değil — aynı anda node istemcisi 204/200 aldı). Ölçümü
-node ile yap; misafirdeki `curl.exe` bu kısıttan etkilenmiyor.
+**`curl` kullanacaksan `--noproxy '*'` şart:** bu Mac'te düz `curl` VMware arayüzüne
+çıkarken `000` döndü; `curl --noproxy '*'` ise 404/204 aldı. Sebep ortam değişkeni
+DEĞİL (`env | grep -i proxy` boş) — macOS'ta curl sistem vekil ayarlarını okuyor,
+node okumuyor. Yani sunucu kusuru yok; ölçüm aracını suçlamadan önce vekili ele.
+Misafirdeki `curl.exe` bu kısıttan etkilenmiyor.
+
+Sunucunun yalnız VMware arayüzlerine bağlandığı bağımsız olarak doğrulandı:
+
+```
+$ lsof -nP -i :8791
+node  ...  TCP 192.168.11.1:8791 (LISTEN)
+node  ...  TCP 192.168.225.1:8791 (LISTEN)
+```
+
+`0.0.0.0` yok — ev/ofis ağı bu portu görmüyor. (macOS güvenlik duvarı da açık.)
 
 ## Kullanım
 
