@@ -25,6 +25,7 @@ const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
 const paketManifesti = require('./paket-manifesti');
+const windowsMimari = require('./windows-mimari');
 
 class PackagingService {
   constructor() {
@@ -1835,6 +1836,12 @@ function closeSplashScreen() {
     console.log(`Windows kurulum dizini: ${installDir}`);
     console.log(`Company Name: ${companyName}, Company ID: ${companyId}`);
     
+    // MİMARİ: geçersiz EMPP_WIN_ARCH sessizce yutulmaz — yanlış mimari saha
+    // hatası olarak geri döner, derleme günlüğünde görünsün.
+    const mimariKarari = windowsMimari.mimariCoz();
+    if (mimariKarari.uyari) console.warn(`⚠️  ${mimariKarari.uyari}`);
+    console.log(`Windows hedef mimarisi: ${mimariKarari.mimari} (${mimariKarari.kaynak})`);
+
     // Electron Builder config oluştur
     const config = {
       appId: `com.${appName.toLowerCase().replace(/\s+/g, '')}.app`,
@@ -1856,10 +1863,10 @@ function closeSplashScreen() {
         "!uploads"
       ],
       win: {
-        target: {
-          target: "nsis",
-          arch: ["x64"]
-        },
+        // MİMARİ KARARI (2026-09-20, Nadir): üretim 32 bit (ia32). 32 bit uygulama
+        // 64 bit Windows'ta WOW64 ile çalışır; tersi çalışmaz — tek paket her iki
+        // cihaz sınıfını kapsar. Gerekçe ve sınırlar: src/packaging/windows-mimari.js
+        target: windowsMimari.hedef(),
         icon: validIcon ? path.resolve(validIcon) : undefined, // ICO dosyası (mutlak yol)
         // K19 (2026-09-19, ölçüldü): electron-builder 26 `win.publisherName`'i
         // KALDIRDI → "Invalid configuration object … unknown property 'publisherName'"
