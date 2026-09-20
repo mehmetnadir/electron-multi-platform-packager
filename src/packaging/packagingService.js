@@ -4912,7 +4912,8 @@ public class MainActivity extends BridgeActivity {
   IfFileExists "$R7\\\${APP_EXECUTABLE_FILENAME}" 0 empp_kurulum_bitir
   ReadRegStr $R8 SHELL_CONTEXT "\${UNINSTALL_REGISTRY_KEY}" DisplayVersion
   StrCmp $R8 "\${VERSION}" 0 empp_kurulum_bitir
-  MessageBox MB_YESNO|MB_ICONQUESTION "${appName} bu bilgisayarda zaten kurulu.$\\n$\\nKitabı açmak için Evet'e basın.$\\nYeniden kurmak için Hayır'a basın." IDNO empp_kurulum_bitir
+  ; SORU SORULMAZ (2026-09-20, Nadir: "bu ekrana bence gerek yok — güncelleme
+  ; varsa zaten içeride güncelleniyor"). Aynı sürüm kuruluysa kitap DOĞRUDAN açılır.
   Exec '"$R7\\\${APP_EXECUTABLE_FILENAME}"'
   Pop $R8
   Pop $R7

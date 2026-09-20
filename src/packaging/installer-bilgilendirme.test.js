@@ -117,15 +117,22 @@ test('zaten kurulu: customInit makrosu üretilir', async () => {
   }
 });
 
-test('GERİLEME: sessiz kurulumda (/S) SORU SORULMAZ', async () => {
-  // Bu kapı olmazsa MessageBox insansız koşuda süreci sonsuza kadar bekletir:
-  // ProBook/Windows kabul kapısı ve toplu kurulum donar.
+test('GERİLEME: sessiz kurulumda (/S) kurulum NORMAL koşar, kitap açılmaz', async () => {
+  // /S ile koşan kabul kapısı ve toplu kurulum gerçekten KURMALI; erken Quit
+  // ederse paket kurulmadan "başarılı" görünür.
   const s = await uret(null);
   const init = s.slice(s.indexOf('!macro customInit'), s.indexOf('!macro customInstall'));
-  assert.match(init, /IfSilent\s+\w+/, 'IfSilent kapısı yok — sessiz kurulum donar');
+  assert.match(init, /IfSilent\s+\w+/, 'IfSilent kapısı yok');
   const ifSilentIdx = init.indexOf('IfSilent');
-  const mesajIdx = init.indexOf('MessageBox');
-  assert.ok(ifSilentIdx > -1 && mesajIdx > ifSilentIdx, 'IfSilent MessageBox\'tan ÖNCE gelmeli');
+  const execIdx = init.indexOf('Exec');
+  assert.ok(ifSilentIdx > -1 && execIdx > ifSilentIdx, 'IfSilent, Exec\'ten ÖNCE gelmeli');
+});
+
+test('GERİLEME: hiçbir soru sorulmaz (Nadir: "bu ekrana gerek yok")', async () => {
+  for (const bilgi of [null, GUNCELLEME]) {
+    const s = await uret(bilgi);
+    assert.ok(!/MessageBox/.test(s), 'MessageBox geri gelmiş — kullanıcıya soru soruluyor');
+  }
 });
 
 test('zaten kurulu: yalnız sürüm AYNI ise sorulur (eski sürüm sessizce güncellenir)', async () => {
@@ -162,9 +169,10 @@ test('zaten kurulu: yazmaçlar dengeli push/pop edilir', async () => {
   assert.strictEqual(pop % push, 0, `push=${push} pop=${pop} dengesiz`);
 });
 
-test('zaten kurulu: metin gerçek Türkçe karakterlerle yazılır', async () => {
+test('kurulum betiğinin tamamı gerçek Türkçe karakterlerle yazılır', async () => {
+  // Kurulum penceresindeki DetailPrint satırları kullanıcıya görünür; ASCII
+  // fallback ("Dosyalar isleniye basliyor") kullanıcıya bozuk karakter gibi geliyordu.
   const s = await uret(null);
-  const init = s.slice(s.indexOf('!macro customInit'), s.indexOf('!macro customInstall'));
-  assert.match(init, /zaten kurulu/, 'bilgilendirme metni yok');
-  assert.match(init, /[çğıöşüÇĞİÖŞÜ]/, 'ASCII fallback kullanılmış');
+  assert.match(s, /[çğıöşüÇĞİÖŞÜ]/, 'ASCII fallback kullanılmış');
+  assert.ok(!/isleniye|basliyor|Kurulum dizini: \$INSTDIR[^"]*basliyor/.test(s), 'ASCII kalıntısı');
 });
