@@ -238,3 +238,15 @@ test('bendeYolu: her gerçek makinenin işareti AYRI dosyadır', () => {
   assert.notEqual(m.bendeYolu('/k', 'windows-kasa'), m.bendeYolu('/k', 'vm'));
   assert.notEqual(m.bendeYolu('/k', 'windows-kasa'), m.bendeYolu('/k', 'yds-can'));
 });
+
+// ——— BAŞLATMA KİPİ ————————————————————————————————————————————————————
+test('baslatmaKipi: varsayılan başsız (odak çalmaz)', () => {
+  assert.equal(m.baslatmaKipi([]), 'nogui');
+  assert.equal(m.baslatmaKipi(), 'nogui');
+  assert.equal(m.baslatmaKipi(['--gizle', '--zorla']), 'nogui');
+});
+
+test('baslatmaKipi: --arayuz verilince pencereli başlar', () => {
+  assert.equal(m.baslatmaKipi(['--arayuz']), 'gui');
+  assert.equal(m.baslatmaKipi(['baslat', '--arayuz', '--zorla']), 'gui');
+});

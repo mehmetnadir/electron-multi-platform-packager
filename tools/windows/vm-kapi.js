@@ -189,9 +189,14 @@ function baslat() {
   // nogui = pencere açılmaz, odak çalınmaz (ölçüldü). Fusion arayüzü açıksa
   // kütüphane penceresi görünür kalır — GİZLEME ARTIK OTOMATİK DEĞİL: Nadir
   // pencereyi bulamayınca "VM'imi ele geçirdin" demişti, sessiz gizleme yanlış.
-  execFileSync(VMRUN, ['-T', 'fusion', 'start', yol, 'nogui'], { stdio: 'inherit' });
+  // KİP BAŞLATMA ANINDA SEÇİLİR: başsız başlatılan VM'e Fusion SONRADAN pencere
+  // açamıyor (ölçüldü — bkz. karar.baslatmaKipi). Nadir kullanacaksa --arayuz.
+  const kip = karar.baslatmaKipi(process.argv);
+  execFileSync(VMRUN, ['-T', 'fusion', 'start', yol, kip], { stdio: 'inherit' });
   if (gizleIstendi) fusionGizle();
-  console.log('VM başsız başlatıldı:', path.basename(yol));
+  console.log(kip === 'gui'
+    ? `VM pencereli başlatıldı: ${path.basename(yol)}`
+    : `VM başsız başlatıldı: ${path.basename(yol)} (pencere gerekiyorsa: uyut + baslat --arayuz)`);
 }
 
 // "Uykuya al" = suspend: bellek diske yazılır, sonraki start kaldığı yerden sürer —
@@ -281,7 +286,7 @@ async function ana() {
   if (komut === 'anlik-al') { anlikAl(process.argv[3] || 'kapi-oncesi'); return; }
   if (komut === 'geri-don') { kapiBekcisi('geri-don'); geriDon(process.argv[3] || 'kapi-oncesi'); return; }
 
-  console.error('bayraklar: --zorla (koruma aş) · --gizle (baslat ile)\n' +
+  console.error('bayraklar: --zorla (koruma aş) · --gizle (baslat ile) · --arayuz (baslat pencereli)\n' +
     'işaret: touch ~/vm-kapi/BENDE → kapı VM durumuna dokunmaz\n' +
     'komut: baslat | uyut | gizle | hazir | kur <exe|http-adres> | ac | ekran | kapat | calistir <cmd…> | anlik-al <ad> | geri-don <ad>\n' +
     'makine: --makine <ad> (varsayılan vm) — gerçek makineler için ör. --makine windows-kasa');

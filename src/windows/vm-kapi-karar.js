@@ -164,8 +164,21 @@ function bendeYolu(kok, makine = 'vm') {
   return `${kok}/${ad}`;
 }
 
+// ——— BAŞLATMA KİPİ ————————————————————————————————————————————————————
+// ÖLÇÜLEN KUSUR (2026-09-20): `vmrun start … nogui` ile başlatılan VM'e Fusion
+// arayüzü SONRADAN pencere açamıyor. Ölçüm: vmx ayakta (vmrun list = 1) ama
+// `count windows of process "VMware Fusion"` = 0; .vmwarevm'i `open` etmek,
+// Fusion'ı kapatıp açmak ve "Virtual Machine Library" menüsünü tıklamak da
+// pencere üretmedi. Nadir "VM'i neden açamıyorum" dedi — sebebi buydu.
+// Tek çare VM'i askıya alıp `start … gui` ile yeniden başlatmak.
+// Bu yüzden kip BAŞLATMA ANINDA seçilir: otomasyon başsız (odak çalmaz),
+// Nadir kullanacaksa arayüzlü.
+function baslatmaKipi(bayraklar = []) {
+  return bayraklar.includes('--arayuz') ? 'gui' : 'nogui';
+}
+
 module.exports = {
-  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi, bendeYolu,
+  izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi, bendeYolu, baslatmaKipi,
   KOMUT_AZAMI,
   KALP_TAZE_SN, KALP_MESGUL_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
 };
