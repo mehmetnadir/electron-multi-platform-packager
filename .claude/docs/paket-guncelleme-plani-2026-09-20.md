@@ -181,7 +181,11 @@ güncelleme var?" sorusu sorulamaz.
 - `queueService`'in bellek-içi Map'i kalıcı bir deftere bağlanır (bugün restart'ta kayboluyor).
 - Üretim sonunda artefaktın sha256'sı hesaplanır (bugün yok).
 
-### Katman 1 — Pakete kimlik manifesti
+### Katman 1 — Pakete kimlik manifesti  ✅ UYGULANDI (commit 995de65)
+
+> `paket.json` paket kökünde. Gerçek SM4 derlemesinde doğrulandı: setId üretildi,
+> 5 kitap listelendi, paket parmak izi hesaplandı, dosya `app.asar` içine girdi.
+> Kalan: panel setId'yi ÜRETİP göndermeye başlayınca `setIdKaynagi` "verildi" olacak.
 Paket köküne `empp-paket.json` (asar içinde, salt okunur — yalnız okunacak):
 ```json
 { "setId": "...", "surum": "1.13.8", "kurum": "060",

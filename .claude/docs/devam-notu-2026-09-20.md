@@ -28,6 +28,15 @@ Pakette doğrulandı: "Kitap Açılıyor" **0**, 5 sn güvence **0**, işaret 10
 "Kitap Güncelleniyor" 5 (korundu). Yanındaki `SM4-K27-WEBPSIZ-KIYAS.exe` (1421 MB)
 yalnız kıyas kaydı — **test için kullanılmaz**.
 
+## Ara SONRASI yapılan (2026-09-20 akşam)
+
+**Katman 1 bitti — commit `995de65`.** `src/packaging/paket-manifesti.js`: paket köküne
+`paket.json` yazılıyor (setId + kaynağı, kurum, uygulama sürümü, kitap listesi, kitap ve
+paket parmak izleri). 20 test + **17/17 mutant**. Gerçek SM4 derlemesinde doğrulandı ve
+`SM4-K28-MANIFEST.exe` (1299 MB) üretildi; `app.asar` içinde `paket.json` bulundu
+(setId `SET-super-monsters-4-8c8fd0f9135a`, 6 parmak izi, "Kitap Açılıyor" 0).
+Tam paket: **692 test, 0 hata**.
+
 ## Kaldığım yer / sıradaki adım
 1. **Nadir K27 exe'sini deneyecek.** Bulgu gelirse ilk iş o.
 2. **VM kapısı tek elle adımı bekliyor:** misafirde izleyici bir kez başlatılacak
@@ -36,8 +45,10 @@ yalnız kıyas kaydı — **test için kullanılmaz**.
 3. Hat C menüsü kararı Nadir'de: özel menüye dokunmadan "besleme" önerisi sunuldu
    (bkz. sohbet + `paket-guncelleme-plani-2026-09-20.md` §4/7).
 4. ProBook (Pardus) K24-K27 doğrulaması — makine ağda değil (.55/.70 yanıtsız).
-5. Katman 0-1-2 (panelde paket kaydı + manifest + güncelleme ucu) — setId kararı
-   geldiği için başlanabilir.
+5. ~~Katman 1 (manifest)~~ **BİTTİ.** Sırada **Katman 0** (panelde kalıcı paket kaydı:
+   `set_id` alanı, boşsa üretim, tekillik denetimi) ve **Katman 2** (güncelleme ucu:
+   `setId + parmakIzi` ile "yeni sürüm var mı?"). Katman 0 panel tarafı olduğu için
+   Nadir'in hangi panelde (packager mı, yayıncı paneli mi) diye söylemesi gerekiyor.
 
 ## Bu Mac'te koşanlar (kapak kapanınca UYUR)
 | Süreç | Not |
