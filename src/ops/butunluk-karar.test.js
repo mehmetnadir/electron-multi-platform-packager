@@ -72,8 +72,35 @@ test('404 -> eksik', () => {
   assert.strictEqual(butunlukKarari({ satir: satirKur(), head: headKur({ status: 404 }) }).durum, 'eksik');
 });
 
-test('403 -> eksik (yetki de kayıp sayılır)', () => {
-  assert.strictEqual(butunlukKarari({ satir: satirKur(), head: headKur({ status: 403 }) }).durum, 'eksik');
+test('403 -> erisilemedi, "eksik" DEĞİL (paket duruyor olabilir)', () => {
+  const k = butunlukKarari({ satir: satirKur(), head: headKur({ status: 403 }) });
+  assert.strictEqual(k.durum, 'erisilemedi');
+  assert.strictEqual(ALARMLI.has(k.durum), true);
+});
+
+test('SAHA VAKASI cdn.yayincilik.net: bot koruması -> engellendi, "eksik" DEĞİL', () => {
+  // 2026-09-20 olculdu: alan adi dosya yerine Cloudflare "Just a moment..." veriyor.
+  // "eksik" etiketi insani OLMAYAN paketi aramaya yollar — ayri etiket sart.
+  const k = butunlukKarari({ satir: satirKur(), head: headKur({ status: 403, engel: true }) });
+  assert.strictEqual(k.durum, 'engellendi');
+  assert.strictEqual(ALARMLI.has(k.durum), true);
+});
+
+test('bot koruması 404 ile geldiğinde bile engellendi (eksik DEĞİL)', () => {
+  // Olculen: ayni challenge Node fetch'e 404, curl'e 403 donuyor. Durum koduna
+  // bakip "paket yok" demek yanlis; engel isareti HER ZAMAN once gelir.
+  const k = butunlukKarari({ satir: satirKur(), head: headKur({ status: 404, engel: true }) });
+  assert.strictEqual(k.durum, 'engellendi');
+});
+
+test('bot koruması 503 ile de gelse engellendi der', () => {
+  assert.strictEqual(
+    butunlukKarari({ satir: satirKur(), head: headKur({ status: 503, engel: true }) }).durum,
+    'engellendi');
+});
+
+test('engel işareti yoksa 503 yalnızca olculemedi', () => {
+  assert.strictEqual(butunlukKarari({ satir: satirKur(), head: headKur({ status: 503 }) }).durum, 'olculemedi');
 });
 
 test('0 bayt -> bos', () => {
@@ -118,7 +145,8 @@ test('r2 anahtarı olmayan satır atlanır (HEAD hiç yapılmaz)', () => {
 });
 
 test('alarm kümesi: sessiz kalması gerekenler dışarıda', () => {
-  assert.deepStrictEqual([...ALARMLI].sort(), ['bayat', 'bos', 'degisti', 'eksik']);
+  assert.deepStrictEqual([...ALARMLI].sort(),
+    ['bayat', 'bos', 'degisti', 'eksik', 'engellendi', 'erisilemedi']);
   for (const d of ['tamam', 'uretimde', 'olculemedi', 'atlandi']) assert.strictEqual(ALARMLI.has(d), false);
 });
 

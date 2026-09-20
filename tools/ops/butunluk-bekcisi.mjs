@@ -38,20 +38,44 @@ async function getir(yol, token) {
   return r.json();
 }
 
-/** R2 nesnesinin başlıkları. Ağ hatası ALARM değildir -> null döner. */
+/**
+ * R2 nesnesinin başlıkları. Ağ hatası ALARM değildir -> null döner.
+ *
+ * BOT KORUMASI (2026-09-20 ölçüldü): cdn.yayincilik.net dosya yerine Cloudflare
+ * "Just a moment..." challenge sayfası döndürüyor. Bunu "paket yok" saymak insanı
+ * olmayan paketi aramaya yollar, o yüzden ayrı işaretlenir: 403/503 geldiğinde
+ * gövdenin ilk baytlarına bakılır ve challenge imzası aranır.
+ */
 async function head(url) {
   try {
     const r = await fetch(url, { method: 'HEAD', redirect: 'follow',
       headers: { 'user-agent': 'yds-butunluk-bekcisi/1' },
       signal: AbortSignal.timeout(45000) });
     const lm = r.headers.get('last-modified');
-    return {
+    const sonuc = {
       status: r.status,
       contentLength: Number(r.headers.get('content-length') || 0),
       etag: r.headers.get('etag') || null,
       lastModified: lm ? Date.parse(lm) : NaN,
+      engel: false,
     };
+    if (r.status === 403 || r.status === 404 || r.status === 503) {
+      sonuc.engel = (r.headers.get('cf-mitigated') || '').includes('challenge')
+        || await challengeMi(url);
+    }
+    return sonuc;
   } catch { return null; }
+}
+
+/** Gövdenin ilk 2 KB'ına bakıp Cloudflare challenge imzası arar. */
+async function challengeMi(url) {
+  try {
+    const r = await fetch(url, { method: 'GET', redirect: 'follow',
+      headers: { 'user-agent': 'yds-butunluk-bekcisi/1', range: 'bytes=0-2047' },
+      signal: AbortSignal.timeout(30000) });
+    const govde = (await r.text()).slice(0, 2048);
+    return /Just a moment|__cf_chl|cf-browser-verification|challenge-platform/i.test(govde);
+  } catch { return false; }
 }
 
 function durumOku() {

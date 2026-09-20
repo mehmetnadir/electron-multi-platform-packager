@@ -13,7 +13,11 @@
  *   tamam     — nesne var, boyutu makul, koşu damgasından yeni
  *   uretimde  — o an bir koşu sürüyor; nesnenin eski olması normaldir, ALARM YOK
  *   bayat     — koşu bitmiş görünüyor ama nesne o koşudan ESKİ (bugünkü hata)
- *   eksik     — nesne yok (404/403)
+ *   eksik     — nesne yok (404)
+ *   engellendi— alan adı dosya yerine bot koruması/challenge döndürüyor (2026-09-20
+ *               ölçüldü: cdn.yayincilik.net her istekte Cloudflare "Just a moment..."
+ *               sayfası veriyor). Paket VAR olabilir; ölçülemeyen şey erişimdir.
+ *               "eksik" demek yanlış yönlendirir — insanı olmayan paketi aramaya yollar.
  *   bos       — nesne var ama içerik yok
  *   degisti   — koşu değişmediği hâlde parmak izi (etag) değişti: sessiz değişim
  *   olculemedi— HEAD başarısız (ağ/CDN); alarm değil, bir sonraki turda tekrar
@@ -46,8 +50,13 @@ function butunlukKarari({ satir, head, onceki = null, toleransMs = 15 * 60 * 100
     return { durum: 'atlandi', sebep: `durum=${satir.status}` };
   }
   if (!head) return { durum: 'olculemedi', sebep: 'HEAD yapilamadi' };
-  if (head.status === 404 || head.status === 403) {
-    return { durum: 'eksik', sebep: `HTTP ${head.status}` };
+  if (head.engel) {
+    return { durum: 'engellendi', sebep: `bot korumasi (HTTP ${head.status})` };
+  }
+  if (head.status === 404) return { durum: 'eksik', sebep: 'HTTP 404' };
+  if (head.status === 403) {
+    // Cok-parcali yuklenen nesnede R2 bazen 403 doner; gercek yokluk 404'tur.
+    return { durum: 'erisilemedi', sebep: 'HTTP 403' };
   }
   if (head.status !== 200) return { durum: 'olculemedi', sebep: `HTTP ${head.status}` };
   if (!(Number(head.contentLength) > 0)) return { durum: 'bos', sebep: 'content-length 0' };
@@ -72,7 +81,12 @@ function butunlukKarari({ satir, head, onceki = null, toleransMs = 15 * 60 * 100
   return { durum: 'tamam', sebep: `${head.contentLength} bayt` };
 }
 
-/** Alarm üretilecek durumlar — 'uretimde' ve 'olculemedi' alarm DEĞİLDİR. */
-const ALARMLI = new Set(['bayat', 'eksik', 'bos', 'degisti']);
+/**
+ * Alarm üretilecek durumlar. 'uretimde' ve 'olculemedi' alarm DEĞİLDİR: biri
+ * beklenen hâl, diğeri geçici ağ gürültüsü — yanlış alarm veren bekçi bekçi değildir.
+ * 'engellendi' ve 'erisilemedi' alarm ÜRETİR ama "eksik" DEMEZ: paket duruyor olabilir,
+ * bozuk olan erişimdir; ayrı etiket olmazsa insan olmayan paketi aramaya gider.
+ */
+const ALARMLI = new Set(['bayat', 'eksik', 'bos', 'degisti', 'engellendi', 'erisilemedi']);
 
 module.exports = { butunlukKarari, kosuSuruyor, ALARMLI };
