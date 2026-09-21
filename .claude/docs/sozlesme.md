@@ -118,3 +118,24 @@ kurum logolu paketler üretmek.
 | 2026-09-20 | K27 üçüncü açılış göstergesi kaldırıldı (Nadir: "kalksın, hemen açılmalı"). Ölçüm: pakette "Kitap Açılıyor" 0, 5 sn güvence 0, işaret 10, "Kitap Güncelleniyor" 5 korundu. Ayrıca setId kararı plana yazıldı (panel üretir / elle girilebilir / global tekil / değişmez) | 006cff11 |
 | 2026-09-20 | Katman 1: paket kimlik manifesti (`paket.json`) — Nadir'in setId kararı uygulandı. Gerçek derlemede doğrulandı: `SET-super-monsters-4-8c8fd0f9135a`, 5 kitap, paket parmak izi; app.asar içinde bulundu | 006cff11 |
 | 2026-09-20 | Windows kapısı çok makineli: kuyruk/kalp/`BENDE` işareti makine bazlı ayrıldı (tek kuyrukta 8 görevin 1'i yanlış makineye gidiyordu), uzak komut (`calistir`) eklendi — Windows-Kasa x64 gerçek donanım kabul şeridi olarak devrede |
+
+## Anlık yama katmanı (2026-09-21, HENÜZ BAĞLANMADI)
+
+Kurulu uygulamanın birkaç KB'lik bir düzeltmeyi (ör. `index.html` — bu kitapta **2.973 bayt**,
+paket ise 1.890.051.700 bayt / 13.677 dosya) yeniden kurulum olmadan alabilmesi için iki modül
+yazıldı; canlı paketleme yoluna **bilerek bağlanmadı**, kapı `EMPP_YAMA=1` ile varsayılan KAPALI.
+
+- `src/packaging/yama-katmani.js` — üretilen uygulamanın ana sürecine `protocol.handle('file')`
+  kancası enjekte eder: istenen yol önce `userData/<YAMA_DIZIN>` altında aranır.
+  **Atomik**: `app.whenReady`/`app.on('ready')` çapası yoksa HİÇBİR ŞEY eklenmez (yarım enjeksiyon
+  pencereyi hiç açmayabilir). İdempotent. `../` ve mutlak yol kaçışı reddedilir.
+- `src/packaging/yama-defteri.js` — `{surum, dosyalar:[{yol,sha256,bayt}]}` defterini bloklamadan
+  çeker (sert zaman aşımı), sha256 doğrular, **geçici ada yazıp rename** ile atomik koyar,
+  toplam bayt bütçesini (varsayılan 5 MB) aşarsa listeyi keser.
+
+Neden ayrı bir yola ihtiyaç var: renderer'daki `fs-shim` `fetch()`'i zaten sarıyor ve göreli
+URL'leri `userData/work` altından servis edebiliyor — ama **HTML navigasyonu fetch'ten geçmez**,
+`file://` üzerinden okunur; depoda protokol kancası yoktu (grep ile doğrulandı).
+
+Uyarı: yayıncının kendi güncelleyicisi açılışta zaten koşuyor ve ~350 MB indiriyor (indiriyor ama
+uygulamıyor, ~99 sn bekletiyor). Bizim yolumuz İKİNCİ bir bloklayıcı güncelleme olmayacak.
