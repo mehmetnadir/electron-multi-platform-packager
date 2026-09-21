@@ -8,7 +8,7 @@
 #
 # Kullanim: probook-kabul.sh <paket.impark | uzak:/ProBook/yolu.impark> [kanit-dizini]
 #   Cikis 0 = kabul (kurulum + acilis + kok sayfa temiz), !=0 = RED (paket yuklenmemeli)
-# Ortam: PROBOOK_HOST (etapadmin@192.168.1.55), PROBOOK_KEY (~/.ssh/id_ed25519),
+# Ortam: PROBOOK_HOST (varsayilan etapadmin@100.73.161.76 — Tailscale), PROBOOK_KEY (~/.ssh/id_ed25519),
 #        PROBOOK_BEKLE (acilis icin ust sinir sn, varsayilan 300),
 #        PROBOOK_PENCERE (surec gorulduikten sonra cizim payi sn, varsayilan 25)
 #
@@ -20,7 +20,14 @@ set -uo pipefail
 # Temizlik govdesi bu betigin yanindadir (symlink ile cagrilsa da dogru cozulsun).
 BETIK_DIZIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIRDI="${1:?impark yolu (veya uzak:/yol)}"; KANIT="${2:-}"
-HOST="${PROBOOK_HOST:-etapadmin@192.168.1.55}"
+# ADRES: varsayilan TAILSCALE (100.73.161.76), LAN (192.168.1.55) DEGIL.
+# Gerekce (olculdu 2026-09-21): LAN adresi yalniz ofisten calisir. Nadir ofis disindayken
+# ya da paketleyici baska agdayken kapi "ProBook'a baglanilamadi" verip isi bekletiyordu —
+# 6 pardus paketi bu yuzden kuyrukta kaldi (45481/45482/45487/45541/45549/73581), oysa
+# paketlerin hepsi bit duzeyinde TAM. Tailscale adresi her iki durumda da calisir:
+# ayni makine, `ip -4 addr` ciktisi 192.168.1.55 + 192.168.1.241 + 100.73.161.76.
+# LAN'a donmek gerekirse: PROBOOK_HOST=etapadmin@192.168.1.55 probook-kabul.sh ...
+HOST="${PROBOOK_HOST:-etapadmin@100.73.161.76}"
 KEY="${PROBOOK_KEY:-$HOME/.ssh/id_ed25519}"
 BEKLE="${PROBOOK_BEKLE:-300}"
 PENCERE="${PROBOOK_PENCERE:-25}"
