@@ -501,11 +501,35 @@ const DISK_KAPISI_ISARETI = '[ertelenebilir-kaynak-darligi]';
  * @param {Error|string|*} err
  * @returns {boolean}
  */
+/** ProBook'a ERİŞİLEMEMESİ hatalarını ayıran işaret (mesaja gömülür). */
+const PROBOOK_KAPISI_ISARETI = '[ertelenebilir-probook-erisimi]';
+
 function ertelenebilirKaynakHatasi(err) {
   const raw = typeof err === 'string' ? err
     : (err && typeof err === 'object' && typeof err.message === 'string') ? err.message
       : '';
-  return raw.includes(DISK_KAPISI_ISARETI);
+  return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI);
+}
+
+/**
+ * probook-kabul.sh RED çıktısı, paketin kusuru DEĞİL de ProBook'a ERİŞİLEMEMESİ mi?
+ * (ssh bağlantısı kurulamadı / ProBook'un kendi diski dolu / kapı ProBook yanıt
+ * vermediği için zaman aşımına uğradı). Bu üçü ALTYAPI'dır — ölçüm 2026-09-21:
+ * 45478 pardus 03:41'de "ProBook'a baglanilamadi" ile düştü (gece, muhtemelen makine
+ * uykuda), 12:50'de AYNI IP (etapadmin@192.168.1.55, script varsayılanıyla birebir)
+ * ile GEÇTİ — IP/config hatası değil, o anki erişilebilirlik.
+ *
+ * Paketin AÇILAMAMASI, penceresinin içerik taşımaması veya kapanması bu sınıfa
+ * GİRMEZ — o gerçek paket kusurudur (K18), `failed` yazılması doğrudur.
+ *
+ * @param {string} cikti probook-kabul.sh birleşik stdout/stderr çıktısı
+ * @param {boolean} [timedOut] kapı betiği kendi üst sınırında bitmediyse true
+ * @returns {boolean}
+ */
+function probookErisilemezHatasi(cikti, timedOut = false) {
+  if (timedOut) return true;
+  const raw = typeof cikti === 'string' ? cikti : '';
+  return /ProBook'a baglanilamadi/.test(raw) || /ProBook diskinde yer yok/.test(raw);
 }
 
 /**
@@ -650,4 +674,6 @@ module.exports = {
   pardusGerekliDiskGb,
   ertelenebilirKaynakHatasi,
   DISK_KAPISI_ISARETI,
+  probookErisilemezHatasi,
+  PROBOOK_KAPISI_ISARETI,
 };

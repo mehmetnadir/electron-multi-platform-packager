@@ -23,7 +23,9 @@ const {
   CONFIG,
   ensureDockerReady,
   buildPardusArtifact,
+  pardusKabulKapisi,
 } = require('./runner.js');
+const { ertelenebilirKaynakHatasi, PROBOOK_KAPISI_ISARETI } = require('./runner-helpers');
 const { mapPlatform, artifactExtension } = require('./runner-helpers');
 
 // ---------------------------------------------------------------------------
@@ -558,9 +560,12 @@ test('kabul kapısı: GERÇEK timeout — asılı kalan betik SIGKILL edilir (sp
       try {
         const artifactPath = path.join(work, 'artifact.impark');
         const t0 = Date.now();
+        // 2026-09-21: timeout artık ProBook'a erişilemezlik olarak sınıflanır
+        // (ertelenebilir — bkz. probookErisilemezHatasi), ama YİNE fırlar; bu
+        // testin asıl amacı (gerçek spawn `timeout`, SIGKILL, hızlı fail) sürer.
         await assert.rejects(
           () => buildPardusArtifact('/tmp/fake.zip', 'test-app', '1.0.0', artifactPath, work),
-          /kabul kapısından geçemedi/,
+          new RegExp(PROBOOK_KAPISI_ISARETI.replace(/[[\]]/g, '\\$&')),
         );
         const gecen = Date.now() - t0;
         assert.ok(gecen < 10000, `kapı asılı kaldı (${gecen}ms) — timeout uygulanmıyor (timeoutMs yazılmış olabilir)`);
@@ -575,7 +580,7 @@ test('kabul kapısı: GERÇEK timeout — asılı kalan betik SIGKILL edilir (sp
 test('GERİLEME: kapı spawn\'ın gerçek `timeout` seçeneğini kullanır, `timeoutMs` DEĞİL', () => {
   const bas = SRC.indexOf('async function pardusKabulKapisi');
   assert.notEqual(bas, -1, 'kabul kapısı fonksiyonu runner.js\'te olmalı');
-  const blok = SRC.slice(bas, bas + 1400);
+  const blok = SRC.slice(bas, bas + 2600);
   assert.match(blok, /runKabulBetigi\(/);
   assert.doesNotMatch(blok, /timeoutMs: CONFIG\.pardusKabulTimeoutMs/, 'spawn `timeoutMs` diye bir seçenek bilmez — sessizce yok sayılır');
   assert.match(blok, /throw new Error\(`pardus paketi ProBook kabul kapısından geçemedi/);
@@ -833,4 +838,84 @@ test('GERİLEME: kapı değişkenleri docker konteynerine aktarılır', () => {
   // Varsayılanlar KORUNMALI: webp kapalı, ölü temizlik ve SET menüsü açık.
   assert.match(dockerRun, /EMPP_SAYFA_WEBP="\$\{EMPP_SAYFA_WEBP:-0\}"/, 'webp varsayılanı açılmış');
   assert.match(dockerRun, /EMPP_OLU_TEMIZLIK="\$\{EMPP_OLU_TEMIZLIK:-1\}"/, 'ölü temizlik varsayılanı kapanmış');
+});
+
+// ---------------------------------------------------------------------------
+// ProBook'a ERİŞİLEMEMESİ vs PAKET KUSURU (2026-09-21, ölçümle).
+//
+// 45478 pardus 2026-09-21T03:41'de "ProBook'a baglanilamadi (etapadmin@192.168.1.55)"
+// ile düştü ve satıra `failed` yazıldı; AYNI IP ile 12:50'de (72378 pardus) geçti —
+// yani config/IP hatası değildi, o anki erişilebilirlikti (muhtemelen gece makinesi
+// uykuda). Disk kapısıyla AYNI ayrım burada da geçerli: altyapıya erişilememe paketin
+// kusuru DEĞİLDİR, `ertelenebilirKaynakHatasi` bunu da tanımalı ki ana döngü
+// `failed` YAZMASIN (bkz. runner.js ana döngü — DISK_KAPISI_ISARETI dalı).
+// ---------------------------------------------------------------------------
+
+test('kabul kapısı: ProBook\'a SSH ile bağlanılamazsa PROBOOK_KAPISI_ISARETI ile fırlar ve ertelenebilir sayılır', async () => {
+  await withFakeKabul(
+    `#!/bin/bash\necho "[kabul] RED: ProBook'a baglanilamadi (etapadmin@192.168.1.55)"\nexit 1\n`,
+    async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      let hata = null;
+      try {
+        await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap');
+      } catch (e) { hata = e; }
+      assert.ok(hata, 'fırlamalı');
+      assert.match(hata.message, new RegExp(PROBOOK_KAPISI_ISARETI.replace(/[[\]]/g, '\\$&')));
+      assert.equal(ertelenebilirKaynakHatasi(hata), true, 'ana döngü bunu ertelenebilir saymalı — failed YAZILMAMALI');
+    },
+  );
+});
+
+test('kabul kapısı: ProBook diskinde yer yoksa da ERTELENEBİLİR sayılır (altyapı, paket kusuru değil)', async () => {
+  await withFakeKabul(
+    `#!/bin/bash\necho "[kabul] RED: ProBook diskinde yer yok (120 MB bos < 3830 MB gerekli)"\nexit 1\n`,
+    async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      let hata = null;
+      try {
+        await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap');
+      } catch (e) { hata = e; }
+      assert.ok(hata, 'fırlamalı');
+      assert.equal(ertelenebilirKaynakHatasi(hata), true);
+    },
+  );
+});
+
+test('kabul kapısı: ProBook YANIT VERMEZSE (zaman aşımı) da ERTELENEBİLİR sayılır', async () => {
+  const prev = CONFIG.pardusKabulTimeoutMs;
+  CONFIG.pardusKabulTimeoutMs = 300;
+  try {
+    await withFakeKabul(`#!/bin/bash\nsleep 30\nexit 0\n`, async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      let hata = null;
+      try {
+        await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap');
+      } catch (e) { hata = e; }
+      assert.ok(hata, 'fırlamalı (timeout)');
+      assert.equal(ertelenebilirKaynakHatasi(hata), true, 'ProBook yanıt vermiyorsa da ertelenebilir');
+    });
+  } finally {
+    CONFIG.pardusKabulTimeoutMs = prev;
+  }
+});
+
+test('GERİLEME: gerçek paket kusuru (pencere içerik taşımıyor) ERTELENEBİLİR SAYILMAZ — K18 hâlâ failed yazmalı', async () => {
+  await withFakeKabul(
+    `#!/bin/bash\necho "[kabul] [kabul] RED: pencere acildi ama ICERIK YOK (sapma=0.020 koyu=0.00047 renk=10)"\nexit 1\n`,
+    async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      let hata = null;
+      try {
+        await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap');
+      } catch (e) { hata = e; }
+      assert.ok(hata, 'fırlamalı');
+      assert.doesNotMatch(hata.message, new RegExp(PROBOOK_KAPISI_ISARETI.replace(/[[\]]/g, '\\$&')));
+      assert.equal(ertelenebilirKaynakHatasi(hata), false, 'gerçek paket kusuru ertelenebilir SAYILMAMALI — yoksa arıza gizlenir');
+    },
+  );
 });

@@ -44,6 +44,7 @@ const {
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
+  probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 
@@ -1360,9 +1361,23 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
     { EMPP_AKTIVASYON_BEKLENIR: aktivasyon ? '1' : '0' });
   for (const satir of String(kabul.stdout || '').split('\n').filter(Boolean)) log('  [kabul]', satir);
   if (kabul.code !== 0) {
+    const cikti = String(kabul.stdout || kabul.stderr || '');
     const sebep = kabul.timedOut
       ? `kapı ${Math.round(CONFIG.pardusKabulTimeoutMs / 60000)} dk içinde bitmedi (ProBook yanıt vermiyor olabilir)`
-      : String(kabul.stdout || kabul.stderr || '').split('\n').filter(Boolean).slice(-2).join(' | ');
+      : cikti.split('\n').filter(Boolean).slice(-2).join(' | ');
+    // ALTYAPI vs PAKET KUSURU (2026-09-21, ölçümle — disk kapısıyla AYNI ayrım):
+    // ssh bağlantısı kurulamadı / ProBook'un kendi diski dolu / kapı zaman aşımına
+    // uğradı → ProBook'a o an ERİŞİLEMEDİ, bu paketin kusuru DEĞİL. 45478 pardus
+    // 03:41'de (muhtemelen makine uykuda) bu yüzden düştü, AYNI IP ile 12:50'de
+    // 72378 pardus geçti — config/IP hatası değildi. Paketin içeriği/açılışıyla
+    // ilgili RED (pencere açılmadı, içerik yok, motor kopyası hatası) bu sınıfa
+    // GİRMEZ — K18 gerçek paket kusurudur, `failed` doğru sınıflandırmadır.
+    if (probookErisilemezHatasi(cikti, kabul.timedOut)) {
+      throw new Error(
+        `${PROBOOK_KAPISI_ISARETI} ProBook'a erişilemedi (rc=${kabul.code}): ${sebep} `
+        + `— paket kusuru DEĞİL, iş ertelenmeli`,
+      );
+    }
     throw new Error(`pardus paketi ProBook kabul kapısından geçemedi (rc=${kabul.code}): ${sebep}`);
   }
   log('pardus: ProBook kabul kapısı GEÇTİ — kanıt:', kanitDir);
