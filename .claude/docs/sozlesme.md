@@ -38,9 +38,11 @@ kurum logolu paketler üretmek.
 | sunucu artık temizliği (`src/services/paket-temizlik.js` + `tools/sunucu-temizlik.js`) | temp/ + uploads/ → eski artıklar silinir | aktif iş ve <10 dk KORU; artefaktsız >6 sa, artefaktlı >48 sa SİL; kuyruk okunamazsa HİÇ silmez (exit 3); varsayılan KURU | canlı — srv21 crontab `25 * * * *` |
 | ana ekran yolu yaması (K20, `src/packaging/ana-ekran-yolu-yamasi.js`) | bundle'lardaki `path.join(path.dirname(location.href),"../")` → `new URL("..",location.href)` | Geri referanslı regex (join+dirname aynı değişken); idempotent; yalnız `.js`; kök+bookN. Windows'ta beyaz ekranı onarır | canlı |
 | ölü motor temizliği (`src/packaging/olu-motor-temizligi.js`) | alt-kitap kökü → index.html'den ulaşılamayan `<20-hex>.…` js/css atılır | Yalnız içerik-hash'li adlar aday; geçişli kapanış; js girişi yoksa NO-OP. sm4: 826 dosya / 191,8 MB, üç kitap açılarak doğrulandı | **kapı varsayılan AÇIK** (`EMPP_OLU_TEMIZLIK=0`) |
-| sayfa WebP (`src/packaging/sayfa-webp.js`) | `assets/*/pages/*.png` → WebP içerik, **ad `.png` kalır** | mod1 (ilk 100 bayt, `256−x`) çözülür/yeniden uygulanır; küçülmüyorsa özgün korunur; thumbs ve core'a DOKUNULMAZ | **kapı `EMPP_SAYFA_WEBP=1` — ProBook doğrulaması bekliyor** |
+| sayfa WebP (`src/packaging/sayfa-webp.js`) | `assets/*/pages/*.png` → WebP içerik, **ad `.png` kalır** | mod1 (ilk 100 bayt, `256−x`) çözülür/yeniden uygulanır; küçülmüyorsa özgün korunur; thumbs ve core'a DOKUNULMAZ. Kapı hâlâ varsayılan KAPALI (ProBook doğrulaması bekliyor) — AMA 2026-09-20 23:30–09-21 arası elle başlatılmış bir süreç bu bayrakla ayakta kalıp ProBook kabulü olmadan üretime karıştı (SM4 Windows paketinde sayfaların çoğu WebP çıktı, kaynak PNG'ydi); artık `webp-kapi-uyarisi.js` kapı açıkken günlüğe GÖRÜNÜR uyarı basıyor (sessiz açık kapı yasak) | **kapı `EMPP_SAYFA_WEBP=1`, varsayılan KAPALI — 2026-09-21'de fiilen açık koştu** |
 | sayfa ön-getirme (K24, `src/packaging/sayfa-on-getirme.js`) | kitap açılınca tüm sayfalar SIRAYLA okunup işletim sistemi dosya önbelleği ısıtılır | Enjekte edilen betik `index.html` sonuna girer; Node varsa `fs`, yoksa `fetch`; baytlar atılır; sekme gizlenince durur. sm4: 5 kitap / 380 sayfa | **kapı varsayılan AÇIK** (`EMPP_ON_GETIRME=0`) |
 | açılış güncelleme ötelemesi (K25, `src/packaging/acilis-guncelleme-oteleme.js`) | ana süreç `electron.js`/`main.js` → `createWindow()` ÖNE alınır, `checkForUpdates()` ateşle-unut olarak 3 sn sonraya ötelenir | Motor pencereyi `await checkForUpdates()` ARKASINDA açıyordu: splash bile gelmiyordu. Ayrıca `https.get` zaman aşımsızdı → yanıtsız sunucu açılışı süresiz askıya alıyordu; `{timeout:15000}` + `.on("timeout", destroy)` takıldı. Güncelleme iptal EDİLMEZ | **kapı varsayılan AÇIK** (`EMPP_GUNCELLEME_OTELEME=0`) |
+| sürüm normalleştirme (`src/agent/surum-normallestir.js`, `publisher-update.js` çağırır) | yayıncı `version.txt` içeriği → daima 3 parçalı semver | Normalize edilemiyorsa YAZMAZ, mevcudu korur (fail-safe, SAF modül). Gerekçe: yayıncının `checkVersion`'ı 3 parça olmayan (örn. `1.13.1.3`) her değeri koşulsuz "eski" saydı → her açılışta ~350 MB boşuna indi | **kapı `EMPP_SURUM_NORMALLESTIR`, varsayılan AÇIK** |
+| VM izleyici sürüm tespiti (`src/windows/izleyici-surum.js`, manuel runbook `tools/windows/YUKSELTME.md`) | guest'teki `vm-izleyici.ps1` metni + kalp dosyası → yükseltme gerekli mi | Üç bağımsız çapayla (arka-plan kalp/çoklu makine/doğrudan URL) sürüm tespiti; şüphede (boş/bozuk/okunamaz) kalp atışı DAİMA "bayat" sayılır. Guest'e otomatik dokunulamaz (parola guest'e girmez) — host tarafı karar modülü, elle yükseltme adımı YUKSELTME.md'de | canlı (saf modül), guest yükseltmesi ELLE |
 | ilk sayfa geldiği gibi açılış (K25, `src/packaging/acilis-ilk-sayfa.js`) | bundle'lardaki güncelleme sorgusuna süre bütçesi (2,5 sn) + hata yakalama | Sorgunun `.catch`'i ve zaman aşımı yoktu: ağ düşünce `SET_CHECK_UPDATE` hiç gönderilmiyor, kitabı açan tek şey 5 sn'lik `setTimeout` güvencesi kalıyordu — yani ağsız makinede güvence NORMAL yoldu. Artık karar bilinir bilinmez açılıyor; 5 sn güvence yerinde ama erişilemez. sm4: 22 bundle / 22 çağrı | **kapı varsayılan AÇIK** (`EMPP_ILK_SAYFA=0`) |
 | splash beklemesi (K26, `src/packaging/acilis-splash-beklemesi.js`) | bundle'lardaki `setTimeout(()=>ayarla(FR.LOADED),1500)` → süre 0 | Kitap açılırken üç gösterge arka arkaya geliyordu (3 nokta → logo splash → "Kitap Açılıyor.."); ortadaki SAF yapay beklemeydi — logo görseli zaten yüklenmişken 1500 ms daha tutuluyordu. Çağrı ve efekt koşulları korunur, splash iptal EDİLMEZ. `EMPP_SPLASH_MS` ile markalı duraklama verilebilir. sm4: 5 kitap / 31 bundle | **kapı varsayılan AÇIK** (`EMPP_SPLASH_BEKLEMESI=0`) |
 | ikon saydamlığı (`src/packaging/ikon-saydamlik.js`) | kurum logosunun ETRAFINDAKİ düz zemin → saydam (Windows/Linux/macOS ikon yollarının üçü) | Kenardan taşma-doldurma: yalnız dışa bağlı zemin silinir, logonun İÇİNDEKİ beyazlar korunur; kenar için yumuşatma bandı. Dört kapı DOKUNMAZ: zaten saydam · köşeler tutarsız · neredeyse tamamı · ihmal edilebilir. Beyaz kutu kaynak logodan geliyor (YDS: 0/262.144 saydam piksel), paketleyiciden değil | **kapı varsayılan AÇIK** (`EMPP_IKON_SAYDAM=0`) |
@@ -102,11 +104,8 @@ kurum logolu paketler üretmek.
 
 | Tarih | Ne Değişti | Hangi Oturum |
 |---|---|---|
-| 2026-09-17 | İlk taslak; K17 (SET kök menüsü) işlevi + pardus paralel bayrağı eklendi | 006cff11 |
-| 2026-09-17 | ProBook kabul kapısı işlevi eklendi (üretilen paket açılmadan yüklenmez) | 006cff11 |
-| 2026-09-17 | srv21 üretim şeridi + `EMPP_LINUX_DEB` bayrağı; serit-uret.js scp portu (-P) onarıldı | 006cff11 |
-| 2026-09-17 | kuyruk-boş temizliği taze uploads dizinlerini koruyor (yeni yükleme siliniyordu, iş asılı kalıyordu) | 006cff11 |
-| 2026-09-17 | ProBook kapısına disk ön-kontrolü + boyutla ölçeklenen açılış süresi; şeride AppRun (`resolve_executable`) kapısı | 006cff11 |
+| 2026-09-17 | İlk taslak; K17 (SET kök menüsü) + pardus paralel bayrağı + ProBook kabul kapısı (üretilen paket açılmadan yüklenmez) eklendi | 006cff11 |
+| 2026-09-17 | srv21 üretim şeridi + `EMPP_LINUX_DEB`; scp portu (-P) onarıldı; kuyruk-boş temizliği taze uploads'u koruyor; ProBook kapısına disk ön-kontrolü + AppRun (`resolve_executable`) kapısı | 006cff11 |
 | 2026-09-18 | pardus disk kapısı kaynak indirmeden ÖNCE soruluyor (gece 11 iş 1,5 GB'ı boşuna indirip düşmüştü) | 006cff11 |
 | 2026-09-18 | Electron verimliliği: dil budaması + açılış yaması + sayfa WebP (kapılı). Ölçüm: paketin %91'i app.asar, %97'si assets/ | 006cff11 |
 | 2026-09-18 | Kademeli kurulum + sayfa önbelleği + Inno Setup yükleyicisi sözleşmeye eklendi (tasarım). Ölçümler: `.claude/docs/yukleyici-arastirma-2026-09-18.md` §E-G | 006cff11 |
@@ -117,25 +116,23 @@ kurum logolu paketler üretmek.
 | 2026-09-20 | Windows kabul kapısı: VM sürücüsü + karar modülü (18 test) + guest izleyici; taşıma HTTP köprüsüne alındı — Fusion 13 Apple Silicon + Win11 ARM misafirde paylaşılan klasörü DESTEKLEMİYOR (panel yok, vmx'te hgfs satırı yok). Köprü yalnız bridge* arayüzüne bağlanır, belirteç yol önekiyle korunur (12 test, gerçek HTTP) | 006cff11 |
 | 2026-09-20 | K27 üçüncü açılış göstergesi kaldırıldı (Nadir: "kalksın, hemen açılmalı"). Ölçüm: pakette "Kitap Açılıyor" 0, 5 sn güvence 0, işaret 10, "Kitap Güncelleniyor" 5 korundu. Ayrıca setId kararı plana yazıldı (panel üretir / elle girilebilir / global tekil / değişmez) | 006cff11 |
 | 2026-09-20 | Katman 1: paket kimlik manifesti (`paket.json`) — Nadir'in setId kararı uygulandı. Gerçek derlemede doğrulandı: `SET-super-monsters-4-8c8fd0f9135a`, 5 kitap, paket parmak izi; app.asar içinde bulundu | 006cff11 |
-| 2026-09-20 | Windows kapısı çok makineli: kuyruk/kalp/`BENDE` işareti makine bazlı ayrıldı (tek kuyrukta 8 görevin 1'i yanlış makineye gidiyordu), uzak komut (`calistir`) eklendi — Windows-Kasa x64 gerçek donanım kabul şeridi olarak devrede |
+| 2026-09-20 | Windows kapısı çok makineli: kuyruk/kalp/`BENDE` işareti makine bazlı ayrıldı (tek kuyrukta 8 görevin 1'i yanlış makineye gidiyordu), uzak komut (`calistir`) eklendi — Windows-Kasa x64 gerçek donanım kabul şeridi olarak devrede | 006cff11 |
+| 2026-09-21 | Sayfa WebP satırı düzeltildi: kapı hâlâ varsayılan KAPALI ama 2026-09-20 23:30–09-21 elle koşan bir süreç ProBook kabulü olmadan üretime karıştı (SM4 Windows); `webp-kapi-uyarisi.js` artık açık kapıyı günlüğe basıyor. Sürüm normalleştirme (`surum-normallestir.js`, varsayılan AÇIK — `checkVersion` 4 parçalı sürümü koşulsuz eski sayıp ~350 MB boşuna indiriyordu) ve VM izleyici sürüm tespiti (`izleyici-surum.js`, manuel runbook) eklendi. Anlık yama katmanı (`yama-katmani.js`+`yama-defteri.js`) HENÜZ BAĞLANMADI | 006cff11 |
 
 ## Anlık yama katmanı (2026-09-21, HENÜZ BAĞLANMADI)
 
-Kurulu uygulamanın birkaç KB'lik bir düzeltmeyi (ör. `index.html` — bu kitapta **2.973 bayt**,
-paket ise 1.890.051.700 bayt / 13.677 dosya) yeniden kurulum olmadan alabilmesi için iki modül
-yazıldı; canlı paketleme yoluna **bilerek bağlanmadı**, kapı `EMPP_YAMA=1` ile varsayılan KAPALI.
+Kurulu uygulamaya birkaç KB'lik bir düzeltmeyi (ör. `index.html` **2.973 bayt** vs paket
+1.890.051.700 bayt/13.677 dosya) yeniden kurulum olmadan uygulamak için iki modül yazıldı;
+canlı paketleme yoluna **bilerek bağlanmadı**, kapı `EMPP_YAMA=1` ile varsayılan KAPALI.
+Gerekçe: renderer `fs-shim` `fetch()`'i sarıyor ama **HTML navigasyonu fetch'ten geçmez**
+(`file://`'dan okunur), depoda protokol kancası yoktu.
 
-- `src/packaging/yama-katmani.js` — üretilen uygulamanın ana sürecine `protocol.handle('file')`
-  kancası enjekte eder: istenen yol önce `userData/<YAMA_DIZIN>` altında aranır.
-  **Atomik**: `app.whenReady`/`app.on('ready')` çapası yoksa HİÇBİR ŞEY eklenmez (yarım enjeksiyon
-  pencereyi hiç açmayabilir). İdempotent. `../` ve mutlak yol kaçışı reddedilir.
-- `src/packaging/yama-defteri.js` — `{surum, dosyalar:[{yol,sha256,bayt}]}` defterini bloklamadan
-  çeker (sert zaman aşımı), sha256 doğrular, **geçici ada yazıp rename** ile atomik koyar,
-  toplam bayt bütçesini (varsayılan 5 MB) aşarsa listeyi keser.
+- `src/packaging/yama-katmani.js` — ana sürece `protocol.handle('file')` kancası enjekte eder,
+  yol önce `userData/<YAMA_DIZIN>` altında aranır. Atomik (yarım enjeksiyon = pencere hiç açılmaz
+  riskiyle hiçbir şey eklenmez), idempotent, `../`/mutlak yol kaçışı reddedilir.
+- `src/packaging/yama-defteri.js` — `{surum, dosyalar:[{yol,sha256,bayt}]}` defterini çeker
+  (zaman aşımlı), sha256 doğrular, geçici ada yazıp rename ile atomik koyar, bayt bütçesini
+  (varsayılan 5 MB) aşarsa listeyi keser.
 
-Neden ayrı bir yola ihtiyaç var: renderer'daki `fs-shim` `fetch()`'i zaten sarıyor ve göreli
-URL'leri `userData/work` altından servis edebiliyor — ama **HTML navigasyonu fetch'ten geçmez**,
-`file://` üzerinden okunur; depoda protokol kancası yoktu (grep ile doğrulandı).
-
-Uyarı: yayıncının kendi güncelleyicisi açılışta zaten koşuyor ve ~350 MB indiriyor (indiriyor ama
-uygulamıyor, ~99 sn bekletiyor). Bizim yolumuz İKİNCİ bir bloklayıcı güncelleme olmayacak.
+Yayıncının kendi güncelleyicisi açılışta zaten ~350 MB indiriyor (uygulamadan, ~99 sn bekletiyor);
+bizim yolumuz İKİNCİ bloklayıcı güncelleme OLMAYACAK.
