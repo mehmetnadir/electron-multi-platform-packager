@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const { yazilacakSurum, acikMi } = require('./surum-normallestir');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.empp-agent', 'updates');
 
@@ -64,7 +65,18 @@ function applyPublisherUpdate(buildDir, opts = {}) {
   if (!isNewer(from, upd.version)) return { applied: false, from, to: upd.version, companyId, reason: 'zaten güncel' };
   const r = spawnSync('unzip', ['-o', '-q', upd.zipPath, '-d', buildDir], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`güncelleme açılamadı (${upd.zipPath}): ${(r.stderr || '').slice(-300)}`);
-  fs.writeFileSync(path.join(buildDir, 'version.txt'), upd.version);
+  // 2026-09-21 bug-fix: yayıncının electron.js'i version.txt 3 parça değilse
+  // koşulsuz "eski" sayıp 350MB güncellemeyi tekrar tekrar indiriyordu (kök neden:
+  // zip adı ham yazılıyordu, örn "1.13.1.3"). Normalize et; edilemiyorsa mevcut
+  // (unzip'ten ÖNCEKİ) değeri geri yaz — zip'in kendi içinde bozuk bir version.txt
+  // varsa unzip onu build köküne zaten açmış olabilir, "dokunma" fail-safe'i bunu
+  // da kapsamalı (from = unzip'ten önce okunmuş, güvenilir değer).
+  if (acikMi()) {
+    const { deger } = yazilacakSurum(upd.version, from);
+    fs.writeFileSync(path.join(buildDir, 'version.txt'), deger !== null ? deger : from);
+  } else {
+    fs.writeFileSync(path.join(buildDir, 'version.txt'), upd.version);
+  }
   return { applied: true, from, to: upd.version, companyId, reason: 'uygulandı' };
 }
 
