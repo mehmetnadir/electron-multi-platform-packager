@@ -73,6 +73,13 @@ const CONFIG = {
   notaryProfile: process.env.APPLE_NOTARY_PROFILE || '', // notarytool keychain profile name
   appleId: process.env.APPLE_ID || '',
   applePassword: process.env.APPLE_PASSWORD || '',
+  // stapler RETRY (2026-09-21, ölçümle): notarytool --wait başarılı dönse bile Apple'ın
+  // CloudKit ticket-delivery veritabanına yayılması az gecikmeli — ilk staple denemesi
+  // "Record not found" (Error 65) ile düşebilir (bilinen yarış durumu, bkz. sign
+  // AndNotarizeMac üstündeki not). Testler bu iki değeri küçültüp gerçek zaman
+  // beklemeden koşar.
+  stapleRetryMax: Number(process.env.AGENT_STAPLE_RETRY_MAX || 4),
+  stapleRetryDelayMs: Number(process.env.AGENT_STAPLE_RETRY_DELAY_MS || 20000),
   // Pardus (.impark) — srv21'in packageLinux'ını Docker'da BİREBİR koşturan betik
   // (bkz. pardus-packager-build.sh header). Test'ler bu CONFIG alanlarını (packagerApi
   // gibi) doğrudan üzerine yazıp gerçek spawn ile fake bir betik/binfmt çalıştırır.
@@ -1057,12 +1064,59 @@ async function signAndNotarizeMac(dmgPath) {
   log('notarytool submit:', dmgPath);
   const notar = await run('xcrun', notaryArgs);
   if (notar.code !== 0) {
-    warn('notarytool failed (continuing without staple):', notar.stderr.slice(-300));
+    warn('notarytool failed (continuing without staple):', agStapleCikti(notar));
     return;
   }
-  const staple = await run('xcrun', ['stapler', 'staple', dmgPath]);
-  if (staple.code !== 0) warn('stapler failed:', staple.stderr.slice(-300));
-  else log('notarized + stapled:', dmgPath);
+
+  // STAPLE RETRY + GÖRÜNÜR HATA (2026-09-21, ölçümle — 8/8 mac işi 2026-09-18'den beri
+  // ilk denemede düşüyordu, hepsi "stapler failed: " BOŞ mesajla):
+  //
+  // 1) BOŞ MESAJ SEBEBİ: `xcrun stapler` TÜM tanı çıktısını (CloudKit sorgusu, hata
+  //    detayı) stdout'a yazar, stderr HER ZAMAN boştur — gerçek `xcrun stapler staple`
+  //    ile doğrulandı. Eski kod yalnız `staple.stderr`yi okuyordu (Silent Catch Gate
+  //    ihlali). Artık her iki akış da loglanır (agStapleCikti).
+  // 2) GERÇEK ARIZA — YARIŞ DURUMU: notarytool --wait "Accepted" dönse bile Apple'ın
+  //    CloudKit ticket-delivery veritabanına yayılması az gecikmelidir; ilk staple
+  //    denemesi "CloudKit query ... failed due to Record not found" (Error 65) ile
+  //    düşebilir. Dokümante edilmiş, Apple-taraflı bilinen davranış (Apple Developer
+  //    Forums thread 115670/123806, electron/notarize#120) — kod/kimlik kusuru DEĞİL.
+  //    Çözüm: kısa bekleyip yeniden dene (varsayılan 4 deneme, 20/40/60 sn artan bekleme).
+  let staple = null;
+  let stapleDeneme = 0;
+  const maxDeneme = Math.max(1, CONFIG.stapleRetryMax);
+  for (stapleDeneme = 1; stapleDeneme <= maxDeneme; stapleDeneme++) {
+    staple = await run('xcrun', ['stapler', 'staple', dmgPath]);
+    if (staple.code === 0) break;
+    if (stapleDeneme < maxDeneme) {
+      const gecikmeMs = CONFIG.stapleRetryDelayMs * stapleDeneme;
+      warn(`stapler denemesi ${stapleDeneme}/${maxDeneme} başarısız (${gecikmeMs} ms sonra tekrar):`,
+        agStapleCikti(staple));
+      await sleep(gecikmeMs);
+    }
+  }
+  if (!staple || staple.code !== 0) {
+    // `failed` YAZILMAZ (best-effort imza dalı, eskisi gibi) — ama artık GÖRÜNÜR
+    // işaretle: notarizasyon TAMAMDIR (Gatekeeper ÇEVRİMİÇİ geçer), yalnız OFFLINE
+    // ilk açılış (stapled ticket) etkilenir. İzleyici bu işareti grep'leyebilir.
+    warn(`${STAPLE_KAPISI_ISARETI} stapler ${maxDeneme} denemede de başarısız (paket NOTARIZE edildi, yalnız çevrimdışı ilk açılış riskli):`,
+      agStapleCikti(staple));
+    return;
+  }
+  log('notarized + stapled:', dmgPath, stapleDeneme > 1 ? `(${stapleDeneme}. denemede)` : '');
+}
+
+/** stapler kapısı hatalarını ayıran işaret (mesaja gömülür; izleyici grep'ler). */
+const STAPLE_KAPISI_ISARETI = '[stapler-basarisiz-notarize-tamam]';
+
+/** `run()` sonucundan TEK satırlık, hem stdout hem stderr'i içeren özet (stapler
+ * tüm tanı çıktısını stdout'a yazar — yalnız stderr okumak mesajı BOŞ gösterirdi). */
+function agStapleCikti(res) {
+  if (!res) return '(sonuç yok)';
+  const parcalar = [res.stdout, res.stderr]
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => s.trim());
+  if (!parcalar.length) return `(çıktı boş, rc=${res.code})`;
+  return parcalar.join(' | ').slice(-500);
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,6 +1765,7 @@ module.exports = {
   // ürettiğinden farklı bir build.zip doğar ve paket sessizce bozulur.
   downloadFile, zipDir,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
+  STAPLE_KAPISI_ISARETI, agStapleCikti,
   packagerReleaseJob,
   touchCacheEntry,
   ensureDockerReady, runPardusScript, runKabulBetigi, buildPardusArtifact, hazirPardusPaketi, pardusKabulKapisi, heartbeat, injectPardusIcon,
