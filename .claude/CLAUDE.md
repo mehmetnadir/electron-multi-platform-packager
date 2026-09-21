@@ -21,7 +21,8 @@
 | Frontend (ana UI) | `src/client/public/app.js` + index.html |
 | Ayarlar sayfası | `src/client/settings.html` |
 | Yayınevi yönetimi | `src/client/publishers.html` |
-| Platform yardımcıları (KULLANILIYOR) | `src/platforms/macos/{mac-signing,dmg-layout}.js`, `src/platforms/common/fs-shim.js`, `src/platforms/android/empp-android-shim.js`; `*PackagingService.js` iskeletleri canlı yol DEĞİL ama sentinel'ler onları da tutar |
+| Platform yardımcıları (KULLANILIYOR) | `src/platforms/macos/{mac-signing,dmg-layout}.js`, `src/platforms/common/fs-shim.js`, `src/platforms/android/empp-android-shim.js` |
+| Ölü platform iskeletleri (KARANTİNA, 2026-09-21) | `_graveyard/2026-09-21-platforms/` — eski `*PackagingService.js` + registry/orchestrator/interfaces (12 dosya, ~6.4k satır); hiçbir giriş noktasından require edilmiyordu, ölçüm+kanıt `OKU.md`'de, kalıcı kapı `src/platforms/olu-yol-kapisi.js`/`.test.js` |
 | Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js`, `local-build.js` |
 
 ## Dikkat Edilecekler (Gotchas)
