@@ -17,6 +17,11 @@ const AdmZip = require('adm-zip');
 // gereksiz I/O + yanıltıcı olurdu — süreç zaten o an git HEAD neyse onu koşuyor,
 // restart olmadan değişmez). BOZARSAN: `app.test.js`'teki GERİLEME testi kırılır.
 const { getGitCommit } = require('./git-commit');
+// K-saglik-kimligi (2026-09-21, kaçak paketleyici arızası) — sağlık ucu artık yalnız
+// CANLILIK değil KİMLİK bildirir: `kapilar` üretim-davranışı bayraklarının BU süreçteki
+// açık/kapalı durumunu (yalnız boolean, ham env basılmaz) taşır. Karar mantığı
+// `./saglik-kimligi.js`'te (saf, I/O yok) — burada yalnız çağrılır.
+const { kapilariOku } = require('./saglik-kimligi');
 const STARTED_AT = new Date().toISOString();
 const GIT_COMMIT = getGitCommit(path.join(__dirname, '..', '..'));
 
@@ -101,11 +106,15 @@ io.on('connection', (socket) => {
 app.get('/api/health', (req, res) => {
   // K13 — commit/startedAt: canlı sürecin HANGİ kodu koştuğu tek curl ile
   // kanıtlanabilsin (packagingService singleton require-cache tuzağı, bkz. yukarı).
+  // K-saglik-kimligi — pid + kapilar: "canlı mı" değil "benim başlatacağım kopya mı"
+  // sorusuna cevap versin (kaçak paketleyici arızası, bkz. saglik-kimligi.js).
   res.json({
     status: 'Sunucu çalışıyor',
     timestamp: new Date().toISOString(),
     commit: GIT_COMMIT,
     startedAt: STARTED_AT,
+    pid: process.pid,
+    kapilar: kapilariOku(process.env),
   });
 });
 

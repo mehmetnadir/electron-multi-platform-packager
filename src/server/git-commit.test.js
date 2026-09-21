@@ -40,8 +40,36 @@ test('kaynak-sentinel: app.js /api/health commit + startedAt alanlarını dönd�
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const routeStart = src.indexOf("app.get('/api/health'");
   assert.notStrictEqual(routeStart, -1, '/api/health route bulunmalı');
-  const routeBody = src.slice(routeStart, routeStart + 400);
+  // Pencere 400→700: K-saglik-kimligi (2026-09-21) route'a pid/kapilar yorumu +
+  // alanları ekledi, commit/startedAt eski pencerenin dışına kaydı.
+  const routeBody = src.slice(routeStart, routeStart + 700);
   assert.match(routeBody, /commit:\s*GIT_COMMIT/, 'health JSON commit alanı içermeli');
   assert.match(routeBody, /startedAt:\s*STARTED_AT/, 'health JSON startedAt alanı içermeli');
   assert.match(src, /require\(['"]\.\/git-commit['"]\)/, 'app.js getGitCommit yardımcısını kullanmalı (kopya kod yazma)');
+});
+
+// K-saglik-kimligi (2026-09-21, kaçak paketleyici arızası) — sağlık ucu artık pid +
+// kapilar (kapı bayraklarının açık/kapalı durumu) da döner. Bu iki sentinel, hem alanın
+// VARLIĞINI hem de ham env değerinin DIŞARI TAŞINMADIĞINI (yalnız boolean) kilitler.
+test('kaynak-sentinel: app.js /api/health pid + kapilar alanlarını döndürür', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const routeStart = src.indexOf("app.get('/api/health'");
+  assert.notStrictEqual(routeStart, -1, '/api/health route bulunmalı');
+  const routeBody = src.slice(routeStart, routeStart + 700);
+  assert.match(routeBody, /pid:\s*process\.pid/, 'health JSON pid alanı içermeli');
+  assert.match(routeBody, /kapilar:\s*kapilariOku\(process\.env\)/,
+    'health JSON kapilar alanını saglik-kimligi.js üzerinden üretmeli (kopya mantık yazma)');
+  assert.match(src, /require\(['"]\.\/saglik-kimligi['"]\)/,
+    'app.js kapilariOku yardımcısını kullanmalı');
+});
+
+test('sentinel: /api/health route ham EMPP_ env değerini DOĞRUDAN basmaz (yalnız boolean)', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const routeStart = src.indexOf("app.get('/api/health'");
+  const routeEnd = src.indexOf('});', routeStart) + 3;
+  const routeBody = src.slice(routeStart, routeEnd);
+  // Route'un KENDİSİ hiçbir EMPP_ bayrağını okumamalı — kapı kararı tamamen
+  // saglik-kimligi.js'e devredilmiş olmalı (drift/sızıntı riski oradan taşınmasın).
+  assert.doesNotMatch(routeBody, /process\.env\.EMPP_/,
+    'route ham EMPP_ env değeri okumamalı, kapilariOku() delege etmeli');
 });
