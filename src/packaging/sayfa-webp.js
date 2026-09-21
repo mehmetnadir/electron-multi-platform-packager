@@ -23,6 +23,7 @@
 
 const fs = require('fs-extra');
 const path = require('path');
+const { uyariMetni } = require('./webp-kapi-uyarisi');
 
 const MOD1_N = 100;
 const PNG_IMZA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
@@ -94,6 +95,12 @@ async function bufferiDonustur(buf, { kalite = VARSAYILAN_KALITE, sharpFn } = {}
  */
 async function klasoruDonustur(kokDizin, opts = {}) {
   const { kalite = VARSAYILAN_KALITE, kuru = false, log = () => {} } = opts;
+
+  // Sessiz açık kapı arızanın ta kendisiydi (2026-09-21) — kapı açıkken burası,
+  // paketleme başında, HER ZAMAN görünür bir uyarı basar.
+  const uyari = uyariMetni(process.env);
+  if (uyari) log(uyari);
+
   const ist = { bakilan: 0, donusturulen: 0, atlanan: 0, hata: 0, oncekiBayt: 0, sonrakiBayt: 0, sebepler: {} };
 
   const adaylar = [];

@@ -116,6 +116,38 @@ test('klasör turu: yalnız sayfaları çevirir, diğerlerine dokunmaz', async (
   } finally { await fs.remove(kok); }
 });
 
+test('GÖRÜNÜR UYARI: kapı açıkken klasoruDonustur üretim başında log basar', async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'webp-uyari-acik-'));
+  const onceki = process.env.EMPP_SAYFA_WEBP;
+  process.env.EMPP_SAYFA_WEBP = '1';
+  try {
+    const gunlukler = [];
+    await klasoruDonustur(kok, { log: (s) => gunlukler.push(s) });
+    assert.ok(
+      gunlukler.some((s) => /^UYARI:.*EMPP_SAYFA_WEBP=1/.test(s)),
+      'kapı açıkken görünür UYARI satırı basılmalı'
+    );
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP;
+    else process.env.EMPP_SAYFA_WEBP = onceki;
+    await fs.remove(kok);
+  }
+});
+
+test('kapı kapalıyken klasoruDonustur UYARI basmaz', async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'webp-uyari-kapali-'));
+  const onceki = process.env.EMPP_SAYFA_WEBP;
+  delete process.env.EMPP_SAYFA_WEBP;
+  try {
+    const gunlukler = [];
+    await klasoruDonustur(kok, { log: (s) => gunlukler.push(s) });
+    assert.ok(!gunlukler.some((s) => /^UYARI:/.test(s)), 'kapı kapalıyken UYARI basılmamalı');
+  } finally {
+    if (onceki !== undefined) process.env.EMPP_SAYFA_WEBP = onceki;
+    await fs.remove(kok);
+  }
+});
+
 test('kuru koşu hiçbir dosyayı değiştirmez', async () => {
   const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'webp-kuru-'));
   try {
