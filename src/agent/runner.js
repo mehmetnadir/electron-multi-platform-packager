@@ -43,7 +43,7 @@ const {
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
-  pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
+  pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
@@ -964,13 +964,14 @@ async function dizinBoyutuHesapla(dir) {
  * tavanı uygular — cache 2026-09-13'te 35 GB'a ulaştı; `pruneSiblingVersions`
  * yalnız AYNI kitabın eski sürümünü siliyordu, kitaplar ARASI bir tavan yoktu.
  *
- * Tavan: `EMPP_CACHE_CAP_GB` (varsayılan 35 GB). `korunanBookId` = üzerinde
- * çalışılan iş; LRU seçimi ondan bağımsız aynı kalsa da asla silinmez. Hata
- * yutulur — cache tavanı üretimi asla durdurmaz.
+ * Tavan artık düz bir sabit DEĞİL — cache'teki EN BÜYÜK tek girdiye ORANTILI
+ * (`kaynakCacheTavaniGb`, aynı desen: `pardusGerekliDiskGb`, 2026-09-19). Açık
+ * override: `EMPP_CACHE_CAP_GB` (verilirse tek söz sahibi, ölçüme bakılmaz).
+ * `korunanBookId` = üzerinde çalışılan iş; LRU seçimi ondan bağımsız aynı kalsa
+ * da asla silinmez. Hata yutulur — cache tavanı üretimi asla durdurmaz.
  */
 async function cacheTavaniUygula(cacheRoot, korunanBookId) {
   try {
-    const tavanBayt = Number(process.env.EMPP_CACHE_CAP_GB || 35) * 1024 ** 3;
     let bookDirs;
     try {
       bookDirs = await fsp.readdir(cacheRoot, { withFileTypes: true });
@@ -1000,6 +1001,17 @@ async function cacheTavaniUygula(cacheRoot, korunanBookId) {
         girdiler.push({ yol, bayt, sonKullanim, korunan: bookId === String(korunanBookId) });
       }
     }
+
+    const enBuyukGirdiBayt = girdiler.reduce((acc, g) => Math.max(acc, g.bayt), 0) || null;
+    const tavanGb = kaynakCacheTavaniGb({
+      enBuyukGirdiBayt,
+      bosGb: diskBosGb(cacheRoot),
+      kat: Number(process.env.EMPP_CACHE_KAT || 3),
+      tabanGb: Number(process.env.EMPP_CACHE_TABAN_GB || 5),
+      ustSinirPayi: Number(process.env.EMPP_CACHE_UST_SINIR_PAYI || 0.5),
+      elleGb: process.env.EMPP_CACHE_CAP_GB ? Number(process.env.EMPP_CACHE_CAP_GB) : null,
+    });
+    const tavanBayt = tavanGb * 1024 ** 3;
 
     const silinecekler = lruSilinecekler(girdiler, tavanBayt);
     for (const girdi of silinecekler) {
