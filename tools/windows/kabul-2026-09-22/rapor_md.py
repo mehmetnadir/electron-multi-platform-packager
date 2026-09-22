@@ -309,13 +309,44 @@ g = ["# Paket Güncelleme Raporu (yarın yapılacak iş)", "",
      "", "Otorite: yayıncı origin'indeki statik dosya (`Uploads/KitapTekExe/<id>/<KitapAdi>.exe`).",
      "Sürüm etiketi (`-vNN`) TEK BAŞINA yeterli değil — etiket aynıyken bayt boyutu değişebiliyor.", "",
      "| ID | Başlık | Bizim | Yayıncı | Durum | Not |", "|---|---|---|---|---|---|"]
+# BOS KABUK KAPISI (olculdu 2026-09-22): yayinci dosyasi bizimkinin dortte birinden
+# kucukse o dosya "yeni surum" degil, kitap modulu icermeyen SALT-MOTOR kabuktur.
+# 45551'de tam cikarimla kanitlandi (~74,7 MB, sifir kitap modulu). AYNI imza 45550'de
+# de var (74.853.296 bayt / bizim 810.009.360) ama rapor onu "GUNCEL — yayinci geri
+# almis" diye gecistirmisti; guncelleme yapilsaydi 810 MB'lik CALISAN kopyamiz 74 MB'lik
+# bos kabukla degistirilecekti. Karar boyut ORANINDAN uretilir, elle nottan degil.
+BOS_KABUK_ORAN = 0.25
+
+def bos_kabuk_mu(x):
+    yb = x.get("yayinciBoyut") or 0
+    bb = x.get("bizimBoyut") or 0
+    return bool(yb and bb and yb < bb * BOS_KABUK_ORAN)
+
+bos_kabuklar = [(i, G[i["bookId"]]) for i in isler
+                if G.get(i["bookId"]) and bos_kabuk_mu(G[i["bookId"]])]
+
 for i in isler:
     b = i["bookId"]; x = G.get(b)
-    if not x or x.get("durum") == "GUNCEL": continue
+    if not x: continue
+    if x.get("durum") == "GUNCEL" and not bos_kabuk_mu(x): continue
     d = GD.get(b) or {}
     g.append(f"| {b} | {i['baslik']} | {x.get('bizimSurum') or '—'} | {x.get('yayinciSurum') or '—'} | "
-             f"{x.get('durum')} | {d.get('karar') or x.get('not') or x.get('aciklama') or '—'} |")
-g += ["", f"Güncel olan paket sayısı: **{sum(1 for x in G.values() if x.get('durum')=='GUNCEL')}/47**.", "",
+             f"{'BOŞ KABUK — GÜNCELLEME YAPILMAZ' if bos_kabuk_mu(x) else x.get('durum')} | "
+             f"{d.get('karar') or x.get('not') or x.get('aciklama') or '—'} |")
+g += ["", f"Güncel olan paket sayısı: **{sum(1 for x in G.values() if x.get('durum')=='GUNCEL' and not bos_kabuk_mu(x))}/47** "
+      f"(boş kabuk sınıfı hariç tutuldu: {len(bos_kabuklar)} paket).", ""]
+if bos_kabuklar:
+    g += ["## Boş kabuk sınıfı — bu paketlere DOKUNULMAZ", "",
+          "Yayıncının dosyası bizimkinin dörtte birinden küçük. Bu \"yeni sürüm\" değil,",
+          "kitap modülü içermeyen salt-motor kabuğu. Güncelleme yapılırsa çalışan kopyamız",
+          "boş bir dosyayla değiştirilir — müşteri kitapları kaybeder.", "",
+          "| ID | Başlık | Bizim | Yayıncı | Oran |", "|---|---|---|---|---|"]
+    for i, x in bos_kabuklar:
+        yb = x.get("yayinciBoyut") or 0; bb = x.get("bizimBoyut") or 1
+        g.append("| %s | %s | %s MB | %s MB | %%%.1f |" % (
+            i["bookId"], i["baslik"], f"{bb/1048576:.1f}", f"{yb/1048576:.1f}", 100.0*yb/bb))
+    g += [""]
+g += [
       "## Boyut düşüşü neden alarm değil", "",
       "Yukarıdaki satırların dördünde (45449 · 45100 · 45487 · 45448) yayıncı dosyası",
       "bizimkinden **83-89 MB KÜÇÜK** ve sürüm etiketi aynı kalmış. Bu tek başına",
