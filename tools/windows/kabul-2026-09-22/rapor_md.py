@@ -14,11 +14,32 @@ def oku(p, v=None):
     except Exception: return v
 
 def jsonl(p):
-    t = os.path.join(SP, p); o = {}
-    try:
-        for l in open(t, encoding="utf-8"):
-            d = json.loads(l); o[d["bookId"]] = d
-    except Exception: pass
+    """Son kayit kazanir (2. pas 1. pasin ustune yazar — satirlar sirayla eklenir).
+
+    SATIR BAZINDA hata yakalama SART (olculdu 2026-09-22): try/except eskiden TUM
+    dongunun etrafindaydi; tek bozuk/yarim satir sonrasindaki HER kaydi sessizce
+    dusuruyordu ve rapor "o paketler hic olculmedi" diyordu. Dosyaya iki betik
+    (dongu.py ve tekrar.py) EKLEME yapiyor; rapor okurken bir satir yarim yazilmis
+    olabilir. Bozuk satir ATLANIR, sayisi `jsonl.bozuk` ile disari bildirilir —
+    sessizce yutulmaz."""
+    t = os.path.join(SP, p); o = {}; bozuk = 0
+    if not os.path.exists(t):
+        jsonl.bozuk = 0
+        return o
+    for l in open(t, encoding="utf-8"):
+        l = l.strip()
+        if not l:
+            continue
+        try:
+            d = json.loads(l)
+        except Exception:
+            bozuk += 1
+            continue
+        if isinstance(d, dict) and d.get("bookId"):
+            o[d["bookId"]] = d
+        else:
+            bozuk += 1
+    jsonl.bozuk = bozuk
     return o
 
 def ix(v):
@@ -93,6 +114,16 @@ muaf  = [i for i in gecti if kabul[i["bookId"]].get("muafiyet")
          or any(x.get("muafiyet") for x in (kabul[i["bookId"]].get("kitaplar") or []))]
 sekmeli = [i for i in olculen if any(x.get("sekmeUyarisi") for x in (kabul[i["bookId"]].get("kitaplar") or []))
            or kabul[i["bookId"]].get("sekmeUyarisi")]
+# IKINCI PAS GECISLERI — Nadir'in "ilk olcumde KALDI, duzeltilmis kapida GECTI"
+# ayrimini gorebilmesi icin. Veri zaten kayitta (`pas`, `oncekiSonuc`) ama
+# raporda hic gorunmuyordu (olculdu 2026-09-22).
+gecis = [(i, kabul[i["bookId"]]) for i in olculen
+         if kabul[i["bookId"]].get("pas") == 2
+         and kabul[i["bookId"]].get("oncekiSonuc")
+         and kabul[i["bookId"]].get("oncekiSonuc") != kabul[i["bookId"]].get("sonuc")]
+ayni = [i for i in olculen
+        if kabul[i["bookId"]].get("pas") == 2
+        and kabul[i["bookId"]].get("oncekiSonuc") == kabul[i["bookId"]].get("sonuc")]
 r += [f"**Evren · Yoklanan · Atlanan: 47 · {len(olculen)} · {47-len(olculen)}**", "",
       f"- GEÇTİ: **{len(gecti)}**  (bunların {len(muaf)}'inde tek sayfalık içerik muafiyeti var)",
       f"- KALDI (gerçek kusur, bizim işimiz): **{len(kaldi)}**",
@@ -102,6 +133,26 @@ if akt:
     r += ["> Aktivasyon isteyen pakete gerçek anahtar girilmedi: anahtar yayıncıda",
           "> (kitapId, key, makineId) üçlüsüne kaydoluyor ve lisans koltuğu tüketiyor.",
           "> Bu paketlerin içeriği anahtarsız yoldan (dosya sayımı) ayrıca ölçüldü.", ""]
+
+if gecis or ayni:
+    r += ["## İkinci pas sonrası değişenler", "",
+          "Kapı gece içinde altı kez düzeltildi; bu paketler DÜZELTİLMİŞ kapıyla",
+          "yeniden ölçüldü. Verdikt son ölçümündür — ilk pastaki sonuç yanıltıcı olabilir.", ""]
+    if gecis:
+        r += ["| Paket | Ad | İlk pas | İkinci pas | Kitap |", "|---|---|---|---|---|"]
+        for i, d in gecis:
+            r.append("| %s | %s | %s | **%s** | %s/%s |" % (
+                i["bookId"], (d.get("baslik") or i.get("baslik") or "")[:40],
+                d.get("oncekiSonuc"), d.get("sonuc"),
+                d.get("gecenKitap"), d.get("toplamKitap")))
+        r += [""]
+    else:
+        r += ["Verdikti değişen paket yok.", ""]
+    r += ["Yeniden ölçülüp sonucu DEĞİŞMEYEN paket: **%d**" % len(ayni), ""]
+
+if getattr(jsonl, "bozuk", 0):
+    r += ["> ⚠️ `sonuclar.jsonl` içinde çözülemeyen **%d satır** atlandı — rapor eksik olabilir."
+          % jsonl.bozuk, ""]
 if sekmeli:
     r += [f"> **Sekmeli menü uyarısı:** {len(sekmeli)} pakette menü birden çok sekme taşıyor;",
           "> kapı yalnız açık sekmedeki kitapları tıklayabildi. Diğer sekmeler ölçülmedi.", ""]

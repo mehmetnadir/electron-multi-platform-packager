@@ -89,7 +89,11 @@ def main() -> int:
             out = (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
             out = ""
-        # SAGLAM AYIKLAMA (olculdu 2026-09-22): 72379 gercekte 7/7 GECTI idi ama tek satirlik
+        # SAGLAM AYIKLAMA (olculdu 2026-09-22): 72379/72380/59834 gercekte GECTI idi ama
+        # SAHTE "CIKTI_YOK/KALDI" kaydedildi. GERCEK kok neden burasi DEGIL, kosu.py idi:
+        # `print(out[-3000:])` buyuk paketin JSON'unu bastan kirpip `JSON>>>` isaretini
+        # yok ediyordu (yanlilik kitap sayisiyla artar). kosu.py duzeltildi; buradaki
+        # ayiklama ikinci savunma hatti olarak kalir. Eski aciklama (tek satirlik greedy
         # greedy regex eslesmedi ve paket sahte "CIKTI_YOK/KALDI" olarak kaydedildi. Konuk
         # tarafta log satirlari stdout'a karisabiliyor. Cozum: SON "JSON>>>" isaretinden sonrasini
         # al, satir sonlarini yok sayarak (DOTALL) en dis suslu parantez ciftini coz.
@@ -101,23 +105,23 @@ def main() -> int:
             s_ = kuyruk.rfind("}")
             if b >= 0 and s_ > b:
                 m = re.match(r"(?s)(.*)", kuyruk[b:s_ + 1])
-            if m:
-                try:
-                    d = json.loads(m.group(1))
-                except Exception:
-                    d = {"bookId": bid, "sonuc": "KALDI", "sebep": "JSON_COZULEMEDI"}
-            else:
-                d = {"bookId": bid, "sonuc": "KALDI", "sebep": "CIKTI_YOK", "ham": out[-400:]}
-            d["yayinevi"] = j["yayinevi"]
-            d["url"] = j["url"]
-            d["pas"] = 2
-            d["oncekiSonuc"] = eski.get("sonuc")
-            d["sureSn"] = round(time.time() - t0, 1)
-            with open(CIKTI, "a", encoding="utf-8") as f:
-                f.write(json.dumps(d, ensure_ascii=False) + "\n")
-            yaz(f"[{n}/{len(hedef)}] {bid} -> {d.get('sonuc')} "
-                f"kitap={d.get('gecenKitap')}/{d.get('toplamKitap')} "
-                f"(onceki: {eski.get('sonuc')}) sebep={d.get('sebep','-')} ({d['sureSn']} sn)")
+        if m:
+            try:
+                d = json.loads(m.group(1))
+            except Exception:
+                d = {"bookId": bid, "sonuc": "KALDI", "sebep": "JSON_COZULEMEDI"}
+        else:
+            d = {"bookId": bid, "sonuc": "KALDI", "sebep": "CIKTI_YOK", "ham": out[-400:]}
+        d["yayinevi"] = j["yayinevi"]
+        d["url"] = j["url"]
+        d["pas"] = 2
+        d["oncekiSonuc"] = eski.get("sonuc")
+        d["sureSn"] = round(time.time() - t0, 1)
+        with open(CIKTI, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d, ensure_ascii=False) + "\n")
+        yaz(f"[{n}/{len(hedef)}] {bid} -> {d.get('sonuc')} "
+            f"kitap={d.get('gecenKitap')}/{d.get('toplamKitap')} "
+            f"(onceki: {eski.get('sonuc')}) sebep={d.get('sebep','-')} ({d['sureSn']} sn)")
     yaz("TEKRAR BITTI")
     return 0
 
