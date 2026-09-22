@@ -25,8 +25,13 @@ const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
 const paketManifesti = require('./paket-manifesti');
+const setKimligi = require('./set-kimligi');
+const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
 const windowsMimari = require('./windows-mimari');
+const windowsAsarsiz = require('./windows-asarsiz');
 const ikonSaydamlik = require('./ikon-saydamlik');
+const harfKapisi = require('./harf-kapisi');
+const surumTuret = require('./surum-turet');
 
 class PackagingService {
   constructor() {
@@ -379,7 +384,7 @@ MimeType=application/x-electron;
   }
 
   async startPackaging(jobId, jobInfo, io) {
-    const { sessionId, platforms, logoId, logoPath: providedLogoPath, appName, appVersion, packageOptions, pwaConfig } = jobInfo;
+    const { sessionId, platforms, logoId, logoPath: providedLogoPath, appName, appVersion: appVersionGirdi, packageOptions, pwaConfig } = jobInfo;
     
     const results = {};
     let completedPlatforms = 0;
@@ -422,6 +427,19 @@ MimeType=application/x-electron;
       } catch (copyError) {
         throw new Error(`Build dosyaları kopyalanamadı: ${copyError.message}. Session: ${sessionId}`);
       }
+
+      // SÜRÜM TÜRETME (2026-09-22, Nadir onayı) — bkz. src/packaging/surum-turet.js.
+      // Ölçülen arıza: üretim tetikleyicileri (.sm4-k*-uret.js) appVersion'ı hep
+      // '1.0.0' gönderiyordu; customInit (aşağıda ~5191) aynı DisplayVersion'ı
+      // görünce kurulumu atlayıp eski exe'yi Exec edip Quit ediyordu — farklı
+      // içerikli her yeni paket eski kurulumun arkasına gizleniyordu. Çağıran
+      // açık bir sürüm verdiyse dokunulmaz; vermediyse/1.0.0 ise workingPath'in
+      // içerik parmak izinden türetilir. TEK NOKTADAN geçer: windows/macos/
+      // linux/android/pwa'nın hepsi bu `appVersion`'ı kullanır.
+      const surumSonucu = surumTuret.turet(appVersionGirdi, workingPath);
+      const appVersion = surumSonucu.surum;
+      console.log(`🔢 Sürüm türetildi: ${appVersion} (kaynak: ${surumSonucu.kaynak}`
+        + `${surumSonucu.parmakIzi ? ', parmakİzi ' + surumSonucu.parmakIzi : ''})`);
 
       // K9c — NEDEN: ISO-kaynaklı SET yüklemeleri (Tudem) orijinal salt-okunur
       // (0400) izinleri workingPath'e taşıyabilir; sonraki HİÇBİR enjeksiyon
@@ -696,6 +714,64 @@ MimeType=application/x-electron;
         }
       }
 
+      // SET KİMLİĞİ + KABUK ENVANTERİ (2026-09-21, sözleşme:
+      // `.claude/docs/kitap-guncelleme-sozlesmesi.md`) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_SET_GUNCELLEME=0` kapatır). Paket kökünde `empp-set.json` üretir:
+      // setin kimliği + güncelleme tabanı + KABUK dosyaları (index.html, assets2/,
+      // set_app.config) + ÜYELİK listesi (book1…bookN). Kitapların İÇİ bu kanalın
+      // kapsamı DIŞIDIR — onlar kendi uçlarından zaten güncelleniyor (Nadir, 2026-09-21).
+      // Kimlik YALNIZ paketleme isteğinden gelir; yoksa dosya "setKimligi": null +
+      // "sebep" ile YİNE yazılır (sessizce düşmesi ölçümü imkânsız kılardı).
+      // electron-builder ÇAĞRILMADAN ÖNCE, tüm yamalardan sonra koşar ki envanter
+      // ağacın son hâlini yansıtsın.
+      if (setKimligi.acikMi()) {
+        try {
+          const setSonuc = await setKimligi.paketeYaz(workingPath, {
+            log: (satir) => console.log(satir),
+            setKimligi: jobInfo.setKimligi || (packageOptions && packageOptions.setKimligi),
+            guncellemeTabani: jobInfo.guncellemeTabani
+              || (packageOptions && packageOptions.guncellemeTabani) || null,
+            sebep: jobInfo.setKimligiSebebi || null,
+          });
+          const sh = setSonuc.harita;
+          console.log(`🆔 SET kimliği: ${sh.setKimligi || 'YOK'} (${sh.setKimligiKaynagi}), `
+            + `${sh.kabukDosyaSayisi} kabuk dosyası, ${sh.kitapSayisi} kitap üye`);
+        } catch (setKimlikError) {
+          console.warn('⚠️ SET kimliği yazılamadı (paketleme devam ediyor):',
+            setKimlikError.message);
+        }
+      }
+
+      // SET GÜNCELLEYİCİ ENJEKSİYONU (2026-09-21, sözleşme:
+      // `.claude/docs/kitap-guncelleme-sozlesmesi.md`) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_SET_GUNCELLEME=0` kapatır). `src/runtime/kitap-guncelleyici.js`
+      // paketin girişinin yanına `empp-set-guncelleyici.js` olarak kopyalanır ve
+      // giriş dosyasına ötelenmiş, ateşle-unut bir çağrı eklenir. Çalışma anında
+      // bir önceki adımın yazdığı `empp-set.json` okunur.
+      // SIRA: setKimligi.paketeYaz'dan SONRA (envanter hazır olsun),
+      // prepareElectronFiles'tan ÖNCE (o adım electron.js'i main.js olarak
+      // kopyalar; kopya da yamalı doğsun — güncelleme ötelemesiyle aynı gerekçe).
+      // ATOMİK: `app.whenReady()` çapası olmayan dosyaya ne yama ne modül konur.
+      if (guncelleyiciEnjekte.acikMi()) {
+        try {
+          const enjekte = await guncelleyiciEnjekte.paketeUygula(workingPath, {
+            log: (satir) => console.log(satir),
+          });
+          const yamali = enjekte.filter((x) => x.uygulandi);
+          if (yamali.length) {
+            console.log(`🔄 SET güncelleyici enjekte edildi: ${yamali.length} giriş dosyası`);
+          }
+          const modulsuz = yamali.filter((x) => !x.modul);
+          if (modulsuz.length) {
+            console.warn(`⚠️ SET güncelleyici modülü kopyalanamadı: `
+              + modulsuz.map((x) => x.dosya).join(', '));
+          }
+        } catch (enjekteHatasi) {
+          console.warn('⚠️ SET güncelleyici enjekte edilemedi (paketleme devam ediyor):',
+            enjekteHatasi.message);
+        }
+      }
+
       // Electron için gerekli dosyaları oluştur
       await this.prepareElectronFiles(workingPath, appName, appVersion, companyName);
 
@@ -735,6 +811,29 @@ MimeType=application/x-electron;
         }
       } catch (domainErr) {
         console.warn('⚠️ yayinci-domain-yamasi başarısız (paketleme devam ediyor):', domainErr.message);
+      }
+
+      // HARF KAPISI (2026-09-21) — referans ↔ dosya adı büyük/küçük harf uyuşmazlığı.
+      // Gerekçe + ölçülen kanıt: `src/packaging/harf-kapisi.js` dosya başlığı.
+      // Kısaca: macOS/Windows harf DUYARSIZ, Linux DUYARLIDIR. `book*/index.html`
+      // `./core/kurumLogo.png` istiyor, diskte `core/kurumlogo.png` var; bu Mac'te
+      // sessizce çözülüyor, Pardus (.impark) ve asar içinde ÇÖZÜLMÜYOR.
+      // Ölçüm (2026-09-21, iki gerçek set ağacı): SM4 Set ağacı 459 dosya/1818 referans
+      // → 6 harf farkı; "Shall We 6 Set" .impark'ının asar'ı (Pardus ext4, 3822 dosya)
+      // 87 dosya/169 referans → 5 harf farkı. Hepsi AYNI sınıf.
+      //
+      // BURADA, çünkü: tüm yamalardan SONRA (yamalar referans üretebilir) ve platform
+      // fan-out'undan ÖNCE, tek `workingPath` üzerinde — K16 ile aynı gerekçe.
+      // `scripts/windows-paket-kapisi.js` YANLIŞ yer olurdu: yalnız Windows .exe'sini
+      // ölçer, Pardus/.impark oradan hiç geçmez.
+      if (harfKapisi.acikMi()) {
+        try {
+          await harfKapisi.paketeUygula(workingPath, { log: (s) => console.log(s) });
+        } catch (harfErr) {
+          // mod=dusur ise bilinçli düşüştür — yut­ma, yukarı taşı.
+          if (harfErr && harfErr.harfSonucu) throw harfErr;
+          console.warn('⚠️ harf-kapisi başarısız (paketleme devam ediyor):', harfErr.message);
+        }
       }
 
       // Her platform için paketleme
@@ -1406,6 +1505,28 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
         console.log('✅ Logo kopyalandı');
       }
       
+      // 3b. ZIP KAPISI (2026-09-21) — AppRun'ın AYNI hedefe açtığı zip'ler arasındaki çakışma.
+      // Gerekçe + ölçülen kanıt: `src/packaging/harf-kapisi.js` "ZIP ÇAKIŞMA KAPISI" başlığı.
+      // Kısaca: eski İmpark hattının AppRun'ı `core.zip` ve `book.zip`i AYNI dizine açıyor
+      // (`unzip -o`, son açılan kazanır). Pardus'ta ölçüldü (SM4-v49.impark): 171 tam yol
+      // kesişimi (39'unda içerik FARKLI) + 1 yalnız-harf çakışması
+      // (`core/kurumLogo.png` 30718 B / `core/kurumlogo.png` 13642 B) — harf duyarsız dosya
+      // sisteminde biri diğerini EZİYOR, yani aynı referans iki platformda FARKLI BAYTA
+      // çözülüyor. Bu 404 değil, sessiz YANLIŞ İÇERİK.
+      //
+      // BURADA, çünkü: AppDir tam olarak burada bitmiş durumda (AppRun yazıldı, zenity gömüldü,
+      // logo kopyalandı) ve `appimagetool` HENÜZ paketlemedi — düşürülecekse .impark hiç doğmaz.
+      // Plan AppRun'ın KENDİ metninden okunur; bu deponun tek-zip'li AppRun'ında grup oluşmaz,
+      // kapı no-op'tur. İkinci bir zip aynı hedefe eklenirse anında görünür.
+      // BOZARSAN: `harf-kapisi.test.js`'teki "zip kapısı çağrı noktası" testi kırılır.
+      try {
+        await harfKapisi.zipKapisi(extractDir, { log: (s) => console.log(s) });
+      } catch (zipErr) {
+        // mod=dusur ise bilinçli düşüştür — yutma, yukarı taşı (.impark üretilmesin).
+        if (zipErr && zipErr.zipSonucu) throw zipErr;
+        console.warn('⚠️ zip-kapisi başarısız (paketleme devam ediyor):', zipErr.message);
+      }
+
       // 4. appimagetool ile yeniden paketle
       console.log('📦 Yeniden paketleniyor...');
       
@@ -1891,12 +2012,46 @@ function closeSplashScreen() {
         app: path.resolve(workingPath), // Mutlak yol kullan
         output: outputPath
       },
+      // `build/` DIŞLAMASI (2026-09-21, ölçümle — `asar: false` kararının eşlikçisi).
+      //
+      // NEDEN: `createCustomInstallationFiles()` (bu dosyada, ~4959) NSIS kurulum
+      // kaynaklarını (`installer.nsh`, `installerHeader.bmp`, `installerSidebar.bmp`,
+      // logo) `workingPath/build/` altına yazar. asar AÇIKKEN bunlar `app.asar` içinde
+      // kalıyordu; diskte `resources/app/build` diye bir yol YOKTU. `asar: false` ile
+      // ÖLÇÜLDÜ (beyan değil): bu dizin aynen `resources/app/build/` olarak paketlendi
+      // — electron-builder onu buildResources sayıp dışlamadı.
+      //
+      // RİSK: yayıncının motor dosyalarında gömülü
+      // `path.dirname(app.getPath("exe")) + "/resources/app/build"` sabiti var. Bugün
+      // ÖLÜ — ölçüldü: 184 dosyada yalnız TANIM satırı geçiyor, ÇAĞIRAN SIFIR (pozitif
+      // kontrol: kardeş `getParentPath` 115 ayrı dosyada gerçekten çağrılıyor, yani
+      // çağrı olsaydı metinsel görünürdü); ayrıca paket Electron 27.3.11 ve
+      // `@electron/remote` kurulu değil → çağrılsa bile "" dönerdi. Ama `asar: false`
+      // o yolu "yok"tan "VAR AMA YANLIŞ İÇERİK"e (NSIS artefaktları) çeviriyordu —
+      // sessiz yanlış dal yüzeyi. Dışlama o yüzeyi kapatır.
+      //
+      // KAYIP YOK — ÖLÇÜLDÜ: NSIS bu dosyaları `workingPath`'ten okur (`nsis.include`,
+      // `installerHeader`, `installerSidebar` hepsi `path.resolve(workingPath, ...)`),
+      // paketin İÇİNDEN değil; `build/` dışlanmış halde gerçek bir NSIS Setup.exe
+      // üretildi ve `resources/app/build` oluşmadı.
+      //
+      // BU DİZİ MAKİNE-OKUNUR KALMALI: `windows-asarsiz.test.js` B3d desenleri buradan
+      // okuyup electron-builder'ın KENDİ eleyicisine veriyor. Araya yorum satırı koyma.
       files: [
         "**/*",
         "!node_modules",
         "!temp",
-        "!uploads"
+        "!uploads",
+        "!build"
       ],
+      // asar KAPALI — YALNIZ WINDOWS (2026-09-21, ölçümle). Gerekçe + geri dönüş
+      // kapısı (EMPP_WINDOWS_ASARSIZ=0) tek yerde: src/packaging/windows-asarsiz.js.
+      // ÖZETLE: `app.asar` bir DOSYA olduğu için SET güncelleme kanalının her yazması
+      // ENOTDIR veriyor; `asarUnpack` yetmiyor (asar başlığı bir indeks → sonradan
+      // KİTAP EKLENEMİYOR). macOS/Linux bu kararın DIŞINDA: codesign .app içindeki
+      // her dosyayı CodeResources'a mühürlüyor, 10 bin dosyalık açık ağaç saatler
+      // sürüyor. mac/dmg config'i (packageMacOS) bu anahtarı TAŞIMAZ.
+      asar: windowsAsarsiz.asarSecenegi(),
       win: {
         // MİMARİ KARARI (2026-09-20, Nadir): üretim 32 bit (ia32). 32 bit uygulama
         // 64 bit Windows'ta WOW64 ile çalışır; tersi çalışmaz — tek paket her iki

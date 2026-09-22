@@ -195,3 +195,121 @@ test('yamalı çıktı SÖZDİZİMSEL olarak geçerli kalır', () => {
   // new Function ile ayrıştırma: bozuk parantez/virgül anında yakalanır.
   assert.doesNotThrow(() => new Function(`var c={JF:{}},u={},a={},i={},U=function(){},O=function(){};${r.icerik}`));
 });
+
+// ---------------------------------------------------------------------------
+// K27b — ekranın TAMAMEN kaldırılması (EKRAN_RE).
+//
+// Gerçek paketten (sm4 paketi, kaynak zip ~/Downloads/yds-pketler/sm4.zip,
+// book1/f96d0dd09b0181a41437.450.js) K27 UYGULANMADAN ÖNCEKİ ham hâliyle
+// unzip -p ile tek dosya çıkarılıp ÖLÇÜLMÜŞ parça. Basitleştirilmiş GERCEK
+// fixture'ından farkı: iki iç içe div + BarLoader burada GERÇEKTEN var.
+const GERCEK_EKRAN = 'var j=' +
+  'function(e){var t=e.loadBook,n=U(),o=(0,m.oR)(),r=(0,a.Z)(o,3),l=r[0],c=r[1],u=r[2],' +
+  's=(0,i.useState)(!1),p=(0,a.Z)(s,2),f=p[0],g=p[1],v=(0,i.useState)(0),b=(0,a.Z)(v,2),' +
+  'E=b[0],h=b[1];return(0,i.useEffect)((function(){var e;if(null!=(null===(e=l.module)' +
+  '||void 0===e?void 0:e.oneBook)){var n=l.module.covers[0],a=l.module.checkUpdates[l.module.oneBook];' +
+  '(null==a?void 0:a.status)===d.JF.PENDING?(g(!0),S(a.url,n,(function(e){return h(e.loaded)}))' +
+  '.then((function(){try{n.isDownloaded=!0,c(u.module.CHANGE_DOWNLOAD_STATUS,{cover:n,status:d.JF.END}),' +
+  '(0,T.L5)(l.module.dll)}catch(e){}})).finally((function(){g(!1),t(n)}))):' +
+  '(null==a?void 0:a.status)===d.JF.NONE&&t(n)}}),[l.module.checkUpdates]),(0,i.useEffect)((function(){' +
+  'return f||(window.t1=setTimeout((function(){t(l.module.covers[0])}),5e3)),function(){' +
+  'return clearTimeout(window.t1)}}),[f]),i.createElement("div",{className:n.fullscreen},' +
+  'i.createElement("div",{className:n.infoLoader},i.createElement("p",null,' +
+  'f?"Kitap Güncelleniyor %".concat(E):"Kitap Açılıyor.."),i.createElement(F.BarLoader,' +
+  '{color:"#111",loading:!0,height:3,width:100})))};';
+
+// Yamalı `j` kaynağını gerçek stub'larla ÇALIŞTIRIR — string eşleşmesi değil,
+// bileşenin GERÇEKTEN ne döndürdüğünü ölçer. useState kuyruğu bayrak/ilerleme
+// değerini dışarıdan zorlar (useEffect'ler no-op — [f]/[checkUpdates] bağımlılık
+// dizileri hâlâ değerlendirilir ama etkiler hiç çalıştırılmaz).
+function bileseniCalistir(jKaynagi, bayrakDegeri, ilerlemeDegeri = 0) {
+  const useStateKuyrugu = [[bayrakDegeri, () => {}], [ilerlemeDegeri, () => {}]];
+  let sira = 0;
+  const i = {
+    useEffect: () => {},
+    useState: () => useStateKuyrugu[sira++],
+    createElement: (tip, props, ...cocuklar) => ({ tip, props, cocuklar }),
+  };
+  const a = { Z: (dizi) => dizi };
+  const modul = { checkUpdates: undefined, oneBook: null, covers: [] };
+  const mStub = { oR: () => [{ module: modul }, () => {}, {}] };
+  const d = { JF: { PENDING: 'PENDING', NONE: 'NONE', END: 'END' } };
+  const T = { L5: () => {} };
+  const S = () => Promise.resolve();
+  const U = () => ({ fullscreen: 'fullscreen', infoLoader: 'infoLoader' });
+  const F = { BarLoader: 'BarLoader' };
+  // eslint-disable-next-line no-new-func
+  const olustur = new Function('i', 'a', 'm', 'd', 'T', 'S', 'U', 'F', `${jKaynagi} return j;`);
+  const j = olustur(i, a, mStub, d, T, S, U, F);
+  return j({ loadBook: () => {} });
+}
+
+test('K27b: gerçek bundle parçasında EKRAN_RE eşleşir', () => {
+  const r = m.icerigiDuzelt(GERCEK_EKRAN);
+  assert.strictEqual(r.uygulandi, true);
+  assert.strictEqual(r.guvence, 1);
+  assert.strictEqual(r.metin, 1);
+  assert.strictEqual(r.ekran, 1);
+});
+
+test('K27b: m FALSY → bileşen GERÇEKTEN null döndürür', () => {
+  const r = m.icerigiDuzelt(GERCEK_EKRAN);
+  const sonuc = bileseniCalistir(r.icerik, false, 0);
+  assert.strictEqual(sonuc, null);
+});
+
+test('K27b: m TRUTHY → metin + BarLoader AYNEN korunur', () => {
+  const r = m.icerigiDuzelt(GERCEK_EKRAN);
+  const sonuc = bileseniCalistir(r.icerik, true, 42);
+  assert.strictEqual(sonuc.tip, 'div');
+  assert.strictEqual(sonuc.props.className, 'fullscreen');
+  const icDiv = sonuc.cocuklar[0];
+  assert.strictEqual(icDiv.props.className, 'infoLoader');
+  const [pDugum, barLoaderDugum] = icDiv.cocuklar;
+  assert.deepStrictEqual(pDugum.cocuklar, ['Kitap Güncelleniyor %42']);
+  assert.strictEqual(barLoaderDugum.tip, 'BarLoader');
+  assert.deepStrictEqual(barLoaderDugum.props, {
+    color: '#111', loading: true, height: 3, width: 100,
+  });
+});
+
+test('K27b: çapa bulunamazsa dosya bayt bayt AYNI kalır', () => {
+  const r = m.icerigiDuzelt(GERCEK); // BarLoader/ikinci div içermeyen basit fixture
+  assert.strictEqual(r.ekran, 0);
+});
+
+test('K27b: idempotent — ikinci geçişte dokunmaz', () => {
+  const bir = m.icerigiDuzelt(GERCEK_EKRAN);
+  const iki = m.icerigiDuzelt(bir.icerik);
+  assert.strictEqual(iki.uygulandi, false);
+  assert.strictEqual(iki.sebep, 'zaten-yamali');
+  assert.strictEqual(iki.icerik, bir.icerik);
+});
+
+test('K27b: alt kapı EMPP_ACILIS_EKRAN=0 → eski davranış (yalnız metin boşalır)', () => {
+  const r = m.icerigiDuzelt(GERCEK_EKRAN, { ekranKaldir: false });
+  assert.strictEqual(r.uygulandi, true);
+  assert.strictEqual(r.ekran, 0);
+  assert.strictEqual(r.metin, 1);
+  const sonuc = bileseniCalistir(r.icerik, false, 0);
+  // Ekran sarılmadı: f=false olsa da ağaç GENE çiziliyor (K27 eski davranışı).
+  assert.notStrictEqual(sonuc, null);
+  assert.strictEqual(sonuc.tip, 'div');
+});
+
+test('K27b: alt kapı ekranAcikMi() ortamdan okunur', () => {
+  assert.strictEqual(m.ekranAcikMi({}), true);
+  assert.strictEqual(m.ekranAcikMi({ EMPP_ACILIS_EKRAN: '1' }), true);
+  assert.strictEqual(m.ekranAcikMi({ EMPP_ACILIS_EKRAN: '0' }), false);
+});
+
+test('K27b: paketeUygula ile de sarılır (env varsayılan AÇIK)', async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'k27b-ekran-'));
+  await fs.writeFile(path.join(kok, 'main.js'), GERCEK_EKRAN, 'utf8');
+  const r = await m.paketeUygula(kok);
+  assert.strictEqual(r.reduce((t, x) => t + x.ekran, 0), 1);
+  const icerik = await fs.readFile(path.join(kok, 'main.js'), 'utf8');
+  const sonucKapali = bileseniCalistir(icerik, false, 0);
+  assert.strictEqual(sonucKapali, null);
+  await fs.remove(kok);
+});

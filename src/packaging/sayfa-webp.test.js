@@ -5,7 +5,23 @@ const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
 const sharp = require('sharp');
-const { mod1, pngDurumu, sayfaGorseliMi, bufferiDonustur, klasoruDonustur, acikMi } = require('./sayfa-webp');
+const {
+  mod1, pngDurumu, sayfaGorseliMi, bufferiDonustur, klasoruDonustur, acikMi,
+  kipCoz, sharpSecenekleri,
+} = require('./sayfa-webp');
+
+/** sharp mock: gerçek işlem yapmaz, `.webp()`'e giden seçenek nesnesini yakalar. */
+function sahteSharpOlustur() {
+  const cagrilar = [];
+  const sharpFn = () => ({
+    webp: (secenek) => {
+      cagrilar.push(secenek);
+      return { toBuffer: async () => Buffer.alloc(5, 1) }; // küçük çıktı, guard'ı tetikleyebilir
+    },
+    metadata: async () => ({ width: 1, height: 1 }),
+  });
+  return { sharpFn, cagrilar };
+}
 
 const pngUret = (en = 300, boy = 400) =>
   sharp({ create: { width: en, height: boy, channels: 3, background: { r: 240, g: 90, b: 30 } } })
@@ -166,4 +182,180 @@ test('KAPI: varsayılan KAPALI — yalnız EMPP_SAYFA_WEBP=1 açar', () => {
   assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: '0' }), false);
   assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: 'true' }), false);
   assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: '1' }), true);
+});
+
+// ---------------------------------------------------------------------------
+// KİP: kayipsiz (varsayılan) / yakin / kayipli — 2026-09-22
+// ---------------------------------------------------------------------------
+
+test('kipCoz: EMPP_SAYFA_WEBP_KIP tanımsızsa varsayılan kayipsiz, UYARI yok', () => {
+  const { kip, uyari } = kipCoz({});
+  assert.strictEqual(kip, 'kayipsiz');
+  assert.strictEqual(uyari, null);
+});
+
+test('kipCoz: geçersiz değer kayipsiz + görünür UYARI üretir', () => {
+  const { kip, uyari } = kipCoz({ EMPP_SAYFA_WEBP_KIP: 'zibidi' });
+  assert.strictEqual(kip, 'kayipsiz');
+  assert.match(uyari, /^UYARI:.*EMPP_SAYFA_WEBP_KIP/);
+});
+
+test('kipCoz: geçerli üç değer de aynen döner, UYARI yok', () => {
+  assert.deepStrictEqual(kipCoz({ EMPP_SAYFA_WEBP_KIP: 'kayipsiz' }), { kip: 'kayipsiz', uyari: null });
+  assert.deepStrictEqual(kipCoz({ EMPP_SAYFA_WEBP_KIP: 'yakin' }), { kip: 'yakin', uyari: null });
+  assert.deepStrictEqual(kipCoz({ EMPP_SAYFA_WEBP_KIP: 'kayipli' }), { kip: 'kayipli', uyari: null });
+});
+
+test('sharpSecenekleri: her kip doğru sharp .webp() seçeneğini üretir', () => {
+  assert.deepStrictEqual(sharpSecenekleri('kayipsiz'), { lossless: true });
+  assert.deepStrictEqual(sharpSecenekleri('yakin', { yakinKalite: 60 }), { nearLossless: true, quality: 60 });
+  assert.deepStrictEqual(sharpSecenekleri('kayipli', { kayipliKalite: 82 }), { quality: 82 });
+  // varsayılan kaliteler (parametre verilmezse)
+  assert.deepStrictEqual(sharpSecenekleri('yakin'), { nearLossless: true, quality: 60 });
+  assert.deepStrictEqual(sharpSecenekleri('kayipli'), { quality: 82 });
+});
+
+test('bufferiDonustur: kip verilmez, env de yoksa sharp.webp lossless:true alır (varsayılan)', async () => {
+  const onceki = process.env.EMPP_SAYFA_WEBP_KIP;
+  delete process.env.EMPP_SAYFA_WEBP_KIP;
+  try {
+    const { sharpFn, cagrilar } = sahteSharpOlustur();
+    const p = await pngUret(50, 50);
+    const r = await bufferiDonustur(p, { sharpFn });
+    assert.deepStrictEqual(cagrilar[0], { lossless: true });
+    assert.strictEqual(r.kip, 'kayipsiz');
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP_KIP; else process.env.EMPP_SAYFA_WEBP_KIP = onceki;
+  }
+});
+
+test('bufferiDonustur: opts.kip=yakin ile nearLossless + varsayılan kalite 60', async () => {
+  const onceki = process.env.EMPP_SAYFA_WEBP_KALITE;
+  delete process.env.EMPP_SAYFA_WEBP_KALITE;
+  try {
+    const { sharpFn, cagrilar } = sahteSharpOlustur();
+    const p = await pngUret(50, 50);
+    const r = await bufferiDonustur(p, { kip: 'yakin', sharpFn });
+    assert.deepStrictEqual(cagrilar[0], { nearLossless: true, quality: 60 });
+    assert.strictEqual(r.kip, 'yakin');
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP_KALITE; else process.env.EMPP_SAYFA_WEBP_KALITE = onceki;
+  }
+});
+
+test('bufferiDonustur: EMPP_SAYFA_WEBP_KALITE env, yakin kipte kaliteyi değiştirir', async () => {
+  const onceki = process.env.EMPP_SAYFA_WEBP_KALITE;
+  process.env.EMPP_SAYFA_WEBP_KALITE = '75';
+  try {
+    const { sharpFn, cagrilar } = sahteSharpOlustur();
+    const p = await pngUret(50, 50);
+    await bufferiDonustur(p, { kip: 'yakin', sharpFn });
+    assert.deepStrictEqual(cagrilar[0], { nearLossless: true, quality: 75 });
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP_KALITE; else process.env.EMPP_SAYFA_WEBP_KALITE = onceki;
+  }
+});
+
+test('bufferiDonustur: opts.kip=kayipli mevcut davranışı korur (quality 82)', async () => {
+  const { sharpFn, cagrilar } = sahteSharpOlustur();
+  const p = await pngUret(50, 50);
+  const r = await bufferiDonustur(p, { kip: 'kayipli', sharpFn });
+  assert.deepStrictEqual(cagrilar[0], { quality: 82 });
+  assert.strictEqual(r.kip, 'kayipli');
+});
+
+test('bufferiDonustur: geçersiz EMPP_SAYFA_WEBP_KIP → kayipsiz + görünür UYARI log satırı', async () => {
+  const onceki = process.env.EMPP_SAYFA_WEBP_KIP;
+  process.env.EMPP_SAYFA_WEBP_KIP = 'gecersiz-deger';
+  try {
+    const gunlukler = [];
+    const { sharpFn, cagrilar } = sahteSharpOlustur();
+    const p = await pngUret(50, 50);
+    const r = await bufferiDonustur(p, { sharpFn, log: (s) => gunlukler.push(s) });
+    assert.strictEqual(r.kip, 'kayipsiz');
+    assert.deepStrictEqual(cagrilar[0], { lossless: true });
+    assert.ok(gunlukler.some((s) => /^UYARI:.*EMPP_SAYFA_WEBP_KIP/.test(s)));
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP_KIP; else process.env.EMPP_SAYFA_WEBP_KIP = onceki;
+  }
+});
+
+test('GERÇEK ÖLÇÜM: kip=kayipsiz decode edilen piksel özgünle bayt-eşit (bkz. WEBP-KAYIPSIZ-OLCUMU.md)', async () => {
+  const p = await pngUret(300, 400);
+  const r = await bufferiDonustur(p, { kip: 'kayipsiz' });
+  assert.strictEqual(r.donusturuldu, true);
+  assert.strictEqual((await sharp(r.cikti).metadata()).format, 'webp');
+  const ozgunRaw = await sharp(p).raw().toBuffer();
+  const cozulmusRaw = await sharp(r.cikti).raw().toBuffer();
+  assert.deepStrictEqual(cozulmusRaw, ozgunRaw, 'lossless WebP piksel-eşit OLMALI');
+});
+
+test('GERÇEK ÖLÇÜM: kip=yakin ile küçülür ve neredeyse-kayıpsız kalır (maxAbsErr küçük)', async () => {
+  const p = await pngUret(300, 400);
+  const r = await bufferiDonustur(p, { kip: 'yakin', kalite: 60 });
+  assert.strictEqual(r.donusturuldu, true);
+  assert.ok(r.cikti.length < p.length);
+  const ozgunRaw = await sharp(p).raw().toBuffer();
+  const cozulmusRaw = await sharp(r.cikti).raw().toBuffer();
+  assert.strictEqual(cozulmusRaw.length, ozgunRaw.length);
+  let maksFark = 0;
+  for (let i = 0; i < ozgunRaw.length; i++) {
+    const fark = Math.abs(ozgunRaw[i] - cozulmusRaw[i]);
+    if (fark > maksFark) maksFark = fark;
+  }
+  assert.ok(maksFark <= 4, `near-lossless fark küçük olmalı, ölçülen=${maksFark}`);
+});
+
+test('boyut-koruma guard kayipsiz kipte de çalışır: küçük düz renkli PNG özgün kalır ya da bayt-eşit döner', async () => {
+  const kucuk = await sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 10, g: 20, b: 30 } } })
+    .png({ compressionLevel: 9 }).toBuffer();
+  const r = await bufferiDonustur(kucuk, { kip: 'kayipsiz' });
+  assert.strictEqual(r.kip, 'kayipsiz');
+  if (!r.donusturuldu) {
+    assert.strictEqual(r.sebep, 'kucultmedi');
+    assert.deepStrictEqual(r.cikti, kucuk);
+  } else {
+    const oRaw = await sharp(kucuk).raw().toBuffer();
+    const cRaw = await sharp(r.cikti).raw().toBuffer();
+    assert.deepStrictEqual(cRaw, oRaw);
+  }
+});
+
+test('klasoruDonustur: kip belirtilmezse varsayılan kayipsiz ile dönüştürür ve log kip adını taşır', async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'webp-kip-'));
+  const onceki = process.env.EMPP_SAYFA_WEBP_KIP;
+  delete process.env.EMPP_SAYFA_WEBP_KIP;
+  try {
+    const p = await pngUret(300, 400);
+    await fs.outputFile(path.join(kok, 'assets/100/pages/1.png'), mod1(p));
+
+    const gunlukler = [];
+    const ist = await klasoruDonustur(kok, { log: (s) => gunlukler.push(s) });
+    assert.strictEqual(ist.donusturulen, 1);
+
+    const yeni = await fs.readFile(path.join(kok, 'assets/100/pages/1.png'));
+    const cozulmus = mod1(yeni);
+    assert.strictEqual((await sharp(cozulmus).metadata()).format, 'webp');
+    const ozgunRaw = await sharp(p).raw().toBuffer();
+    const cozulmusRaw = await sharp(cozulmus).raw().toBuffer();
+    assert.deepStrictEqual(cozulmusRaw, ozgunRaw, 'klasör turu da bayt-eşit lossless üretmeli');
+
+    assert.ok(gunlukler.some((s) => s.includes('[sayfa-webp] kip=kayipsiz')), 'günlükte kip adı görünmeli');
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_SAYFA_WEBP_KIP; else process.env.EMPP_SAYFA_WEBP_KIP = onceki;
+    await fs.remove(kok);
+  }
+});
+
+test('klasoruDonustur: opts.kip=kayipli verilirse eski davranışla dönüştürür', async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'webp-kip-kayipli-'));
+  try {
+    const p = await pngUret(300, 400);
+    await fs.outputFile(path.join(kok, 'assets/100/pages/1.png'), mod1(p));
+
+    const gunlukler = [];
+    const ist = await klasoruDonustur(kok, { kip: 'kayipli', log: (s) => gunlukler.push(s) });
+    assert.strictEqual(ist.donusturulen, 1);
+    assert.ok(gunlukler.some((s) => s.includes('[sayfa-webp] kip=kayipli')));
+  } finally { await fs.remove(kok); }
 });

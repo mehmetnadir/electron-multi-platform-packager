@@ -8,6 +8,24 @@
  * temsili örneklemde WebP q82 **%52** boyut veriyor ve gözle özgünden ayırt edilemiyor
  * (PNG8 256 renk benzer boyut veriyor ama gradyanlarda bantlanma üretiyor — kullanılmaz).
  *
+ * NEDEN VARSAYILAN KİP `kayipsiz`'E DÖNDÜ (2026-09-22, yeniden ölçüldü — Nadir q82'de
+ * pikselleşme GÖRDÜ): 25 sayfalık örnekte kayıplı q82'nin en kötü sayfası **32,4 dB
+ * PSNR** veriyor — bu görülen pikselleşmenin kanıtı. Kayıpsız WebP (sharp
+ * `{lossless:true}`, effort varsayılan 4) aynı 25 sayfanın 25'inde de decode-edilmiş
+ * piksel çıktısını özgünle **bayt-eşit** (PSNR sonsuz) üretiyor ve paketi yine **%47**
+ * küçültüyor (effort 6'ya geçmeye değmez: daha büyük + %18 daha yavaş çıktı verdi).
+ * near-lossless q60 ara nokta: en kötü PSNR 52,5 dB (q82'den ~20 dB daha temiz), %58
+ * küçülme. Detay ölçüm: `WEBP-KAYIPSIZ-OLCUMU.md`. Bu yüzden **varsayılan kip artık
+ * `kayipsiz`**; kayıplı (eski davranış, en yüksek küçülme ama pikselleşme riski)
+ * yalnız açık env talebiyle seçilir.
+ *
+ * KİPLER (`EMPP_SAYFA_WEBP_KIP`, geçersiz/tanımsız değer → `kayipsiz` + görünür UYARI):
+ *   - `kayipsiz` (VARSAYILAN) — sharp `{lossless:true}`. Bayt-eşit piksel, ~%47 küçülme.
+ *   - `yakin`    — `{nearLossless:true, quality:N}` (N=`EMPP_SAYFA_WEBP_KALITE`,
+ *                  varsayılan 60). En kötü PSNR 52,5 dB (q60), ~%58 küçülme.
+ *   - `kayipli`  — eski davranış, `{quality:82}`. En büyük küçülme (~%85) ama en kötü
+ *                  PSNR 32,4 dB — bildirilen pikselleşme buradan geliyordu.
+ *
  * NEDEN ADI DEĞİŞMİYOR: motor sayfa yolunu sabit uzantıyla kuruyor
  * (`kitapDosyalar/{bookId}/pages/{imageName}.png`). Ama Chromium `<img>` için uzantıya
  * DEĞİL içeriğe bakar (content sniffing) — ölçüldü (Chrome headless, file://):
@@ -28,8 +46,37 @@ const { uyariMetni } = require('./webp-kapi-uyarisi');
 const MOD1_N = 100;
 const PNG_IMZA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const PNG_IMZA_SIFRELI = Buffer.from([0x77, 0xb0, 0xb2, 0xb9]); // (256 − x) & 0xFF
-const VARSAYILAN_KALITE = 82;
+const VARSAYILAN_KALITE = 82; // yalnız kip='kayipli'
+const VARSAYILAN_YAKIN_KALITE = 60; // yalnız kip='yakin'
+const KIP_KAYIPSIZ = 'kayipsiz';
+const KIP_YAKIN = 'yakin';
+const KIP_KAYIPLI = 'kayipli';
+const GECERLI_KIPLER = [KIP_KAYIPSIZ, KIP_YAKIN, KIP_KAYIPLI];
+const VARSAYILAN_KIP = KIP_KAYIPSIZ;
 const ESZAMANLI = 4;
+
+/**
+ * `EMPP_SAYFA_WEBP_KIP`'i çözer. Tanımsız/geçersiz değer sessizce değil, UYARI ile
+ * `kayipsiz`'e düşer.
+ * @returns {{kip: 'kayipsiz'|'yakin'|'kayipli', uyari: string|null}}
+ */
+function kipCoz(env = process.env) {
+  const ham = env && env.EMPP_SAYFA_WEBP_KIP;
+  if (!ham) return { kip: VARSAYILAN_KIP, uyari: null };
+  if (GECERLI_KIPLER.includes(ham)) return { kip: ham, uyari: null };
+  return {
+    kip: VARSAYILAN_KIP,
+    uyari: `UYARI: EMPP_SAYFA_WEBP_KIP="${ham}" geçersiz (kayipsiz|yakin|kayipli) — ` +
+      `varsayılan '${VARSAYILAN_KIP}' kullanılıyor.`,
+  };
+}
+
+/** kip → sharp `.webp()` seçenek nesnesi. */
+function sharpSecenekleri(kip, { yakinKalite = VARSAYILAN_YAKIN_KALITE, kayipliKalite = VARSAYILAN_KALITE } = {}) {
+  if (kip === KIP_KAYIPSIZ) return { lossless: true };
+  if (kip === KIP_YAKIN) return { nearLossless: true, quality: yakinKalite };
+  return { quality: kayipliKalite }; // kip === KIP_KAYIPLI
+}
 
 /** mod1: ilk n baytı (256 − x) ile çevir. İnvolutif — iki kez uygulanınca özgün döner. */
 function mod1(buf, n = MOD1_N) {
@@ -54,24 +101,39 @@ function sayfaGorseliMi(goreliYol) {
 
 /**
  * Tek dosyayı dönüştür. Küçülmüyorsa ÖZGÜNÜ döndürür (paketi büyütmek yasak).
- * @returns {Promise<{cikti: Buffer, donusturuldu: boolean, sebep: string}>}
+ * @param {Buffer} buf
+ * @param {{kip?: string, kalite?: number, sharpFn?: Function, log?: Function}} [opts]
+ *   `kip` verilmezse `EMPP_SAYFA_WEBP_KIP` env'inden çözülür (varsayılan `kayipsiz`).
+ *   `kalite` yalnız `yakin`/`kayipli` kiplerinde etkilidir (yakin varsayılanı
+ *   `EMPP_SAYFA_WEBP_KALITE` env'inden, yoksa 60; kayipli varsayılanı 82).
+ * @returns {Promise<{cikti: Buffer, donusturuldu: boolean, sebep: string, kip: string}>}
  */
-async function bufferiDonustur(buf, { kalite = VARSAYILAN_KALITE, sharpFn } = {}) {
+async function bufferiDonustur(buf, opts = {}) {
+  const { sharpFn, log = () => {} } = opts;
   const durum = pngDurumu(buf);
-  if (durum === 'bilinmiyor') return { cikti: buf, donusturuldu: false, sebep: 'png-degil' };
+  const { kip, uyari } = opts.kip ? { kip: opts.kip, uyari: null } : kipCoz(process.env);
+  if (uyari) log(uyari);
+  if (durum === 'bilinmiyor') return { cikti: buf, donusturuldu: false, sebep: 'png-degil', kip };
 
   const duz = durum === 'sifreli' ? mod1(buf) : buf;
+
+  const yakinKaliteVarsayilan = Number(process.env.EMPP_SAYFA_WEBP_KALITE) || VARSAYILAN_YAKIN_KALITE;
+  const kalite = opts.kalite !== undefined ? opts.kalite : undefined;
+  const secenek = sharpSecenekleri(kip, {
+    yakinKalite: kalite !== undefined ? kalite : yakinKaliteVarsayilan,
+    kayipliKalite: kalite !== undefined ? kalite : VARSAYILAN_KALITE,
+  });
 
   let webp;
   try {
     const sharp = sharpFn || require('sharp');
-    webp = await sharp(duz).webp({ quality: kalite }).toBuffer();
+    webp = await sharp(duz).webp(secenek).toBuffer();
   } catch (e) {
-    return { cikti: buf, donusturuldu: false, sebep: 'kodlama-hatasi:' + e.message };
+    return { cikti: buf, donusturuldu: false, sebep: 'kodlama-hatasi:' + e.message, kip };
   }
 
   if (!webp || webp.length >= duz.length) {
-    return { cikti: buf, donusturuldu: false, sebep: 'kucultmedi' };
+    return { cikti: buf, donusturuldu: false, sebep: 'kucultmedi', kip };
   }
 
   // Geri okuma: çıktının gerçekten çözülebildiğini doğrula (sessiz bozuk dosya yasak).
@@ -79,22 +141,28 @@ async function bufferiDonustur(buf, { kalite = VARSAYILAN_KALITE, sharpFn } = {}
     const sharp = sharpFn || require('sharp');
     const ust = await sharp(webp).metadata();
     if (!ust || !ust.width || !ust.height) {
-      return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-basarisiz' };
+      return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-basarisiz', kip };
     }
   } catch (e) {
-    return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-hatasi:' + e.message };
+    return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-hatasi:' + e.message, kip };
   }
 
   const cikti = durum === 'sifreli' ? mod1(webp) : webp;
-  return { cikti, donusturuldu: true, sebep: 'tamam' };
+  return { cikti, donusturuldu: true, sebep: 'tamam', kip };
 }
 
 /**
  * Bir uygulama dizinindeki TÜM sayfa görsellerini dönüştürür.
  * Dosya adları DEĞİŞMEZ. Yazma atomiktir (geçici dosya + rename).
+ * @param {string} kokDizin
+ * @param {{kip?: string, kalite?: number, kuru?: boolean, log?: Function, sharpFn?: Function}} [opts]
+ *   `kip` verilmezse `EMPP_SAYFA_WEBP_KIP` env'inden çözülür (varsayılan `kayipsiz`).
  */
 async function klasoruDonustur(kokDizin, opts = {}) {
-  const { kalite = VARSAYILAN_KALITE, kuru = false, log = () => {} } = opts;
+  const { kalite, kuru = false, log = () => {}, sharpFn } = opts;
+
+  const { kip, uyari: kipUyarisi } = opts.kip ? { kip: opts.kip, uyari: null } : kipCoz(process.env);
+  if (kipUyarisi) log(kipUyarisi);
 
   // Sessiz açık kapı arızanın ta kendisiydi (2026-09-21) — kapı açıkken burası,
   // paketleme başında, HER ZAMAN görünür bir uyarı basar.
@@ -121,7 +189,7 @@ async function klasoruDonustur(kokDizin, opts = {}) {
     try { buf = await fs.readFile(tam); } catch (e) { ist.hata++; return; }
     ist.oncekiBayt += buf.length;
 
-    const r = await bufferiDonustur(buf, { kalite });
+    const r = await bufferiDonustur(buf, { kip, kalite, sharpFn });
     if (!r.donusturuldu) {
       ist.atlanan++;
       ist.sebepler[r.sebep] = (ist.sebepler[r.sebep] || 0) + 1;
@@ -147,7 +215,7 @@ async function klasoruDonustur(kokDizin, opts = {}) {
   }
 
   const kazanc = ist.oncekiBayt - ist.sonrakiBayt;
-  log(`🖼️  Sayfa WebP: ${ist.donusturulen}/${ist.bakilan} dönüştürüldü, ` +
+  log(`[sayfa-webp] kip=${kip} 🖼️  Sayfa WebP: ${ist.donusturulen}/${ist.bakilan} dönüştürüldü, ` +
       `${(ist.oncekiBayt / 1048576).toFixed(0)} MB → ${(ist.sonrakiBayt / 1048576).toFixed(0)} MB ` +
       `(kazanç ${(kazanc / 1048576).toFixed(0)} MB)`);
   return ist;
@@ -160,5 +228,7 @@ function acikMi(env = process.env) {
 
 module.exports = {
   mod1, pngDurumu, sayfaGorseliMi, bufferiDonustur, klasoruDonustur, acikMi,
-  MOD1_N, VARSAYILAN_KALITE,
+  kipCoz, sharpSecenekleri,
+  MOD1_N, VARSAYILAN_KALITE, VARSAYILAN_YAKIN_KALITE,
+  KIP_KAYIPSIZ, KIP_YAKIN, KIP_KAYIPLI, VARSAYILAN_KIP,
 };
