@@ -317,6 +317,16 @@ g = ["# Paket Güncelleme Raporu (yarın yapılacak iş)", "",
 # bos kabukla degistirilecekti. Karar boyut ORANINDAN uretilir, elle nottan degil.
 BOS_KABUK_ORAN = 0.25
 
+def bos_kabuk_notu(x):
+    """Elle yazilmis 'not' alani bos kabuk satirinda YANILTICI olabilir — 45550'de
+    'yayinci geri almis' yaziyordu, oysa dosya salt-motor kabugu. Gerekce olculen
+    sayidan uretilir, elle nottan degil."""
+    yb = x.get("yayinciBoyut") or 0; bb = x.get("bizimBoyut") or 1
+    return ("Yayıncı dosyası bizimkinin **%%%.1f**'i (%.1f MB / %.1f MB) — salt-motor "
+            "kabuğu imzası. Güncelleme çalışan kopyayı boş dosyayla ezer." % (
+                100.0*yb/bb, yb/1048576.0, bb/1048576.0))
+
+
 def bos_kabuk_mu(x):
     yb = x.get("yayinciBoyut") or 0
     bb = x.get("bizimBoyut") or 0
@@ -332,7 +342,22 @@ for i in isler:
     d = GD.get(b) or {}
     g.append(f"| {b} | {i['baslik']} | {x.get('bizimSurum') or '—'} | {x.get('yayinciSurum') or '—'} | "
              f"{'BOŞ KABUK — GÜNCELLEME YAPILMAZ' if bos_kabuk_mu(x) else x.get('durum')} | "
-             f"{d.get('karar') or x.get('not') or x.get('aciklama') or '—'} |")
+             f"{bos_kabuk_notu(x) if bos_kabuk_mu(x) else (d.get('karar') or x.get('not') or x.get('aciklama') or '—')} |")
+# TAZE HEAD CAPRAZ DENETIMI (2026-09-22): rapor.json'daki karar her paket icin TEK
+# olcume dayaniyor. 45496 tam da bunda yanildi — bir kez 200 olculmus, uc taze denemede
+# ucu de 404 verdi. Ayri bir olcumden gelen 47 satirlik taze HEAD dosyasi varsa
+# "GUNCEL" iddialari onunla capraz kontrol edilir; tek olcum kanit sayilmaz.
+taze = oku(os.path.join("sonuc", "fresh_head_results.json"), []) or []
+taze_ix = {str(t.get("bookId")): t for t in taze if isinstance(t, dict)}
+dogrulanamayan = []
+for i in isler:
+    t = taze_ix.get(i["bookId"])
+    if not t:
+        continue
+    o = t.get("originFresh") or {}
+    if str(o.get("status")) != "200":
+        dogrulanamayan.append((i, o.get("status"), t.get("originUrl")))
+
 g += ["", f"Güncel olan paket sayısı: **{sum(1 for x in G.values() if x.get('durum')=='GUNCEL' and not bos_kabuk_mu(x))}/47** "
       f"(boş kabuk sınıfı hariç tutuldu: {len(bos_kabuklar)} paket).", ""]
 if bos_kabuklar:
@@ -345,6 +370,19 @@ if bos_kabuklar:
         yb = x.get("yayinciBoyut") or 0; bb = x.get("bizimBoyut") or 1
         g.append("| %s | %s | %s MB | %s MB | %%%.1f |" % (
             i["bookId"], i["baslik"], f"{bb/1048576:.1f}", f"{yb/1048576:.1f}", 100.0*yb/bb))
+    g += [""]
+if dogrulanamayan:
+    g += ["## Güncelliği DOĞRULANAMAYAN paketler", "",
+          "Bu paketlerin kararı tek bir ölçüme dayanıyordu; taze yeniden denemede",
+          "yayıncı dosyasına erişilemedi. \"Güncel\" saymak için kanıt yetersiz.", "",
+          "İki ayrı durum var, karıştırma:",
+          "- **404** = dosya gerçekten o adreste yok (ya da ürettiğimiz ad yanlış).",
+          "- **—** = durum kodu hiç alınamadı. `*.yayincilik.net` curl'e 403 veriyor",
+          "  (WAF); bu bizim ölçüm sınırımız, yayıncı tarafında sorun olduğu anlamına",
+          "  gelmez. Tarayıcı UA'sı ya da `X-Book-Proxy` başlığıyla yeniden ölçülmeli.", "",
+          "| ID | Başlık | Taze durum | URL |", "|---|---|---|---|"]
+    for i, kod, u in dogrulanamayan:
+        g.append("| %s | %s | %s | `%s` |" % (i["bookId"], i["baslik"], kod or "—", u or "—"))
     g += [""]
 g += [
       "## Boyut düşüşü neden alarm değil", "",
