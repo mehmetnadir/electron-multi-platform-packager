@@ -614,10 +614,35 @@ def main():
         # DIKKAT: jsj() ZATEN json.loads yapip dict dondurur. Cevresine bir json.loads daha
         # sarmak TypeError firlatir ve sessiz catch tespiti komple kapatir (olculdu 2026-09-22:
         # 45469 bu yuzden sahte KALDI aldi). Sessiz yutma YOK — hata alanini rapora yaz.
-        akt = c.jsj(JS_AKTIVASYON)
-        if not isinstance(akt, dict):
-            r["aktivasyonSondaHatasi"] = repr(akt)[:120]
-            akt = {}
+        # TEK OLCUM YETMIYOR (olculdu 2026-09-22): JS_MENU 12x5sn yoklanirken
+        # JS_AKTIVASYON tek seferlik olculuyordu. Anahtar kapisi menu bos dondukten
+        # SONRA, gec aciliyor; ayni turda 7 paket dogru tespit edilirken 45478/45449/
+        # 45479/45469 kacti ve sahte KALDI aldi — dort pakette toplam 99 kitap
+        # "kirik" gorundu, oysa hicbiri olculmemisti bile. Ekran goruntuleri
+        # "Kitabi goruntulemek icin aktivasyon kodunu giriniz" diyordu.
+        # Mekanizma calisiyordu, ZAMANLAMA kaciriyordu -> menu ile ayni yoklama.
+        akt = {}
+        # NOT: `atla_dene()` main()'den ERISILEMEZ — kitap_kanit() icine gomulu bir
+        # ic fonksiyon (AST ile dogrulandi). Buradan cagirmak NameError verir ve
+        # kapiyi bos-menulu HER pakette dusururdu; ortu temizligi JS_ATLA ile
+        # dogrudan yapiliyor.
+        r["aktivasyonOncesiAtlanan"] = []
+        for _ in range(6):
+            try:
+                _a = c.jsj(JS_ATLA)
+                if _a:
+                    r["aktivasyonOncesiAtlanan"].append(str(_a.get("t"))[:40])
+            except Exception as _e:
+                r.setdefault("aktivasyonOrtuHatasi", str(_e)[:80])
+            a = c.jsj(JS_AKTIVASYON)
+            if isinstance(a, dict):
+                if a.get("aktivasyon"):
+                    akt = a
+                    break
+                akt = a
+            else:
+                r["aktivasyonSondaHatasi"] = repr(a)[:120]
+            time.sleep(5)
         if akt.get("aktivasyon"):
             r["aktivasyonGerekli"] = True
             r["aktivasyonMetni"] = akt.get("metin")
