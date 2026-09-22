@@ -83,6 +83,13 @@
     extname: function (p) { var b = pathMod.basename(p); var i = b.lastIndexOf('.'); return i > 0 ? b.slice(i) : ''; },
     isAbsolute: function (p) { return String(p).charAt(0) === '/'; },
     relative: function (a, b) { return String(b).replace(String(a), '').replace(/^\/+/, ''); },
+    // K8: motor zip'i `path.parse(zipYolu).dir` altina acar; parse yoktu -> TypeError.
+    parse: function (p) {
+      p = String(p);
+      var d = pathMod.dirname(p), b = pathMod.basename(p), e = pathMod.extname(p);
+      return { root: p.charAt(0) === '/' ? '/' : '', dir: d === '.' ? '' : d, base: b, ext: e,
+        name: e ? b.slice(0, -e.length) : b };
+    },
     normalize: normalize,
     posix: null
   };
@@ -214,6 +221,7 @@
   var fsMod = {
     existsSync: function (p) {
       if (vfsHas(p) || vfsDirHas(p)) return true;
+      if (indirilmis(mutlakYol(p))) return true; // K8: indirilen kitap
       var m = getManifest(); var rp = relUrl(p);
       if (m.dirs && m.dirs.indexOf(rp) !== -1) return true;
       if (m.files && m.files.indexOf(rp) !== -1) return true;
@@ -223,20 +231,24 @@
     readFileSync: function (p, enc) {
       var encoding = enc && typeof enc === 'object' ? enc.encoding : enc;
       var v = fromStored(storage ? storage.getItem(key(p)) : null, encoding);
-      if (v !== null) return v;
-      var t = syncGet(relUrl(p), !encoding);
-      if (t === null) throw enoent(p);
-      return t;
+      if (v === null) v = syncGet(relUrl(p), !encoding);
+      if (v === null) throw enoent(p);
+      // K9: arka planda guncellenen kitabin surumu menuye islenir.
+      if (typeof v === 'string' && /ImWin32\.dll$/i.test(String(p))) v = menuDllYamasi(v);
+      return v;
     },
     writeFileSync: function (p, data) { try { storage.setItem(key(p), toText(data)); } catch (e) { console.warn('[empp-android] writeFileSync', e && e.message); } },
     appendFileSync: function (p, data) { var cur = storage ? storage.getItem(key(p)) : null; fsMod.writeFileSync(p, (cur || '') + toText(data)); },
     writeFile: function (p, data, opts, cb) { if (typeof opts === 'function') cb = opts; fsMod.writeFileSync(p, data); if (cb) cb(null); },
     readFile: function (p, opts, cb) { if (typeof opts === 'function') { cb = opts; opts = null; } try { cb(null, fsMod.readFileSync(p, opts)); } catch (e) { cb(e); } },
-    unlinkSync: function (p) { try { storage.removeItem(key(p)); } catch (e) {} },
+    unlinkSync: function (p) { delete bellekDosyalari[yolAnahtari(p)]; try { storage.removeItem(key(p)); } catch (e) {} },
     unlink: function (p, cb) { fsMod.unlinkSync(p); if (cb) cb(null); },
     rmSync: function (p) { fsMod.unlinkSync(p); },
     rm: function (p, o, cb) { if (typeof o === 'function') cb = o; fsMod.unlinkSync(p); if (cb) cb(null); },
     rmdirSync: function () {},
+    // K8: motorun readFile'i once `fs.open(p,'a+',cb)` cagiriyor ("a.open is not a function").
+    open: function (p, f, m, cb) { cb = [f, m, cb].filter(function (x) { return typeof x === 'function'; })[0]; if (cb) cb(null, 3); },
+    close: function (fd, cb) { if (typeof cb === 'function') cb(null); },
     mkdirSync: function () {},
     mkdir: function (p, o, cb) { if (typeof o === 'function') cb = o; if (cb) cb(null); },
     renameSync: function (a, b) { var v = storage.getItem(key(a)); if (v !== null) { storage.setItem(key(b), v); storage.removeItem(key(a)); } },
@@ -262,15 +274,24 @@
       return { isFile: function () { return !isDir; }, isDirectory: function () { return isDir; }, size: 0, mtime: new Date() };
     },
     lstatSync: function (p) { return fsMod.statSync(p); },
+    // K8: parcalar ikili olarak toplanir; zip/buyuk ikili localStorage'a DEGIL bellege
+    // (Blob) gider — 10-60 MB'lik kitap zip'i localStorage'a sigmaz.
     createWriteStream: function (p) {
-      var buf = ''; var h = {};
-      return {
-        write: function (d) { buf += toText(d); return true; },
-        end: function (d) { if (d) buf += toText(d); fsMod.writeFileSync(p, buf); if (h.finish) h.finish(); },
+      var parcalar = []; var h = {}; var bitti = false;
+      var ws = {
+        write: function (d) { if (d != null) parcalar.push(d); return true; },
+        end: function (d) {
+          if (bitti) return; bitti = true;
+          if (d != null) parcalar.push(d);
+          try { akisDosyasiYaz(p, parcalar); } catch (e) { if (h.error) { h.error(e); return; } }
+          if (h.finish) h.finish();
+          if (h.close) h.close();
+        },
         close: function () {},
-        on: function (ev, fn) { h[ev] = fn; return this; },
-        once: function (ev, fn) { h[ev] = fn; return this; }
+        on: function (ev, fn) { h[ev] = fn; return ws; },
+        once: function (ev, fn) { h[ev] = fn; return ws; }
       };
+      return ws;
     },
     createReadStream: function () {
       return { on: function (ev, fn) { if (ev === 'error') setTimeout(function () { fn(new Error('not supported')); }, 0); return this; }, pipe: function () { return this; } };
@@ -288,16 +309,433 @@
     remote: undefined,
     app: undefined
   };
-  function AdmZip() {}
-  AdmZip.prototype.extractAllTo = function () {};
-  AdmZip.prototype.getEntries = function () { return []; };
-  var httpsMod = {
-    get: function (url, cb) {
-      var h = {};
-      setTimeout(function () { if (h.error) h.error(new Error('https.get not supported in WebView')); }, 0);
-      return { on: function (ev, fn) { h[ev] = fn; return this; } };
-    }
+  // K8 — NEDEN (2026-09-22): kitap kartindaki mavi (indir) / yesil (guncelle) bulut
+  // %0'da takili kaliyordu. Motorun indirme zinciri masaustu Node API'si ister:
+  // `https.get(url, res => res.on('data') + res.pipe(fs.createWriteStream(zip)))`
+  // -> `new AdmZip(zip).extractAllTo(path.parse(zip).dir)` -> `fs.unlinkSync(zip)`.
+  // Burada https bir saplamaydi (hemen 'https.get not supported in WebView' hatasi),
+  // AdmZip hicbir sey yapmiyordu, path.parse yoktu; motor hatayi yakalamadigi icin
+  // kart "indiriliyor %0"da kaliyordu.
+  // KANIT: BES Yabanci Dil (paket 74451) logcat; sunucu tarafi saglam —
+  // GetKitapGuncellemeBilgi 200, ZKitapZipH/70465-1.zip 10,5 MB, CORS '*'.
+  // Cozum: https.get gercek fetch akisi (ilerleme 'data' olaylariyla gelir); zip
+  // bellekte (Blob) toplanir, merkez dizinden okunup DecompressionStream('deflate-raw')
+  // ile acilir, her dosya Cache Storage'a kitabin KENDI adresiyle yazilir
+  // ('https://localhost/assets/<id>/pages/1.png'). Indirilen dosya listesi localStorage'da
+  // kucuk bir dizin olarak tutulur (existsSync senkron cevap verebilsin). fetch ve <img>
+  // indirilmis dosyayi APK'daki kopyanin ONUNE koyar; yoksa APK kopyasi okunur.
+  // Guncellemede once dizin silinir (okuma APK'ya duser), eski girdiler temizlenir,
+  // yenileri yazilir, dizin EN SON yazilir — yarim acilan kitap asla "var" gorunmez.
+  // BOZARSAN: `empp-android-shim-indirme.test.js` kirilir.
+  var KITAP_CACHE = 'empp-kitap-v1';
+  var INDIRILEN_ONEK = 'empp_indirilen:';
+  var ZIP_BELLEK_ESIGI = 1024 * 1024;
+  var bellekDosyalari = {};
+  var ortam = {
+    caches: null,
+    storage: storage,
+    origin: (isBrowser && win.location && win.location.origin) || 'https://localhost'
   };
+  var indirilenOnbellek = null;
+
+  function yolAnahtari(p) { return normalize('/' + String(p)); }
+  function cozUrl(u) { try { return decodeURI(u); } catch (e) { return u; } }
+  // Yerel yolu sayfa kokune gore mutlak yola cevirir; baska host / data / blob -> null.
+  function mutlakYol(p) {
+    if (p == null) return null;
+    p = String(p).split(/[?#]/)[0];
+    var o = ortam.origin;
+    if (o && p.indexOf(o + '/') === 0) p = p.slice(o.length);
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(p) || p.indexOf('//') === 0) return null;
+    return p.charAt(0) === '/' ? normalize(p) : normalize(pageBaseDir() + '/' + p);
+  }
+  function cachesAl() { return ortam.caches || (isBrowser && win.caches) || null; }
+  function indirilenler() {
+    if (indirilenOnbellek) return indirilenOnbellek;
+    var m = {}, st = ortam.storage;
+    try {
+      for (var i = 0; st && i < st.length; i++) {
+        var k = st.key(i);
+        if (k && k.indexOf(INDIRILEN_ONEK) === 0) m[k.slice(INDIRILEN_ONEK.length)] = JSON.parse(st.getItem(k)) || [];
+      }
+    } catch (e) { /* bozuk dizin -> APK kopyasi okunur */ }
+    indirilenOnbellek = m;
+    return m;
+  }
+  function indirilenYaz(dizin, adlar) {
+    indirilenOnbellek = null;
+    var st = ortam.storage; if (!st) return;
+    if (adlar) st.setItem(INDIRILEN_ONEK + dizin, JSON.stringify(adlar));
+    else st.removeItem(INDIRILEN_ONEK + dizin);
+  }
+  // 'dosya' | 'dizin' | false
+  function indirilmis(yol) {
+    if (!yol) return false;
+    var m = indirilenler();
+    for (var d in m) {
+      if (yol === d) return 'dizin';
+      if (yol.indexOf(d + '/') !== 0) continue;
+      var geri = yol.slice(d.length + 1), l = m[d];
+      if (l.indexOf(geri) !== -1) return 'dosya';
+      for (var i = 0; i < l.length; i++) if (l[i].indexOf(geri + '/') === 0) return 'dizin';
+    }
+    return false;
+  }
+  function indirilenYanit(yol) {
+    var c = cachesAl();
+    if (!c) return Promise.resolve(null);
+    return c.open(KITAP_CACHE)
+      .then(function (k) { return k.match(ortam.origin + yol); })
+      .then(function (r) { return r || null; }, function () { return null; });
+  }
+  function imgIndirilen(el) {
+    var src = el.getAttribute('src');
+    if (!src || el.__emppKaynak === src) return;
+    var y = mutlakYol(src);
+    if (!y || indirilmis(y) !== 'dosya') return;
+    el.__emppKaynak = src;
+    indirilenYanit(y).then(function (r) { return r && r.blob(); }).then(function (b) {
+      if (!b || el.getAttribute('src') !== src) return;
+      var u = win.URL.createObjectURL(b);
+      el.__emppKaynak = u;
+      el.setAttribute('src', u);
+    }).catch(function () {});
+  }
+
+  function parcaBayt(d) {
+    if (d instanceof Uint8Array) return d;
+    if (d instanceof ArrayBuffer) return new Uint8Array(d);
+    if (d && d.buffer instanceof ArrayBuffer) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+    return new TextEncoder().encode(String(d));
+  }
+  function akisDosyasiYaz(p, parcalar) {
+    var metin = parcalar.every(function (x) { return typeof x === 'string'; });
+    if (metin) { fsMod.writeFileSync(p, parcalar.join('')); return; }
+    var baytlar = parcalar.map(parcaBayt), top = 0;
+    for (var i = 0; i < baytlar.length; i++) top += baytlar[i].length;
+    if (/\.zip$/i.test(String(p)) || top > ZIP_BELLEK_ESIGI) {
+      bellekDosyalari[yolAnahtari(p)] = new Blob(baytlar);
+      return;
+    }
+    var u = new Uint8Array(top), o = 0;
+    for (var j = 0; j < baytlar.length; j++) { u.set(baytlar[j], o); o += baytlar[j].length; }
+    fsMod.writeFileSync(p, u);
+  }
+
+  // Zip merkez dizini (zip64 yok — kitap zip'leri 4 GB'nin cok altinda).
+  function zipGirdileri(u8) {
+    var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    var eocd = -1;
+    for (var i = u8.length - 22; i >= 0 && i >= u8.length - 22 - 65535; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('zip: merkez dizin sonu bulunamadi');
+    var adet = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true);
+    var td = new TextDecoder(), out = [];
+    for (var n = 0; n < adet; n++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip: merkez dizin bozuk');
+      var bayrak = dv.getUint16(p + 8, true), yontem = dv.getUint16(p + 10, true);
+      var sikisik = dv.getUint32(p + 20, true), boyut = dv.getUint32(p + 24, true);
+      var adL = dv.getUint16(p + 28, true), ekL = dv.getUint16(p + 30, true), ymL = dv.getUint16(p + 32, true);
+      var yerel = dv.getUint32(p + 42, true);
+      var ad = td.decode(u8.subarray(p + 46, p + 46 + adL)).replace(/\\/g, '/');
+      p += 46 + adL + ekL + ymL;
+      if (/\/$/.test(ad)) continue; // dizin girdisi
+      // Varsayilan RET: kok disina cikan / mutlak ad (zip-slip) atlanir.
+      if (ad.charAt(0) === '/' || /(^|\/)\.\.(\/|$)/.test(ad) || /^[a-zA-Z]:/.test(ad)) continue;
+      if (bayrak & 1) throw new Error('zip: sifreli girdi desteklenmez: ' + ad);
+      if (dv.getUint32(yerel, true) !== 0x04034b50) throw new Error('zip: yerel baslik bozuk: ' + ad);
+      var veriBas = yerel + 30 + dv.getUint16(yerel + 26, true) + dv.getUint16(yerel + 28, true);
+      out.push({ ad: ad, yontem: yontem, sikisik: sikisik, boyut: boyut, veriBas: veriBas });
+    }
+    return out;
+  }
+  function zipGirdiAc(u8, g) {
+    var ham = u8.subarray(g.veriBas, g.veriBas + g.sikisik);
+    var sonuc;
+    if (g.yontem === 0) sonuc = Promise.resolve(ham.slice());
+    else if (g.yontem === 8) {
+      var akis = new Blob([ham]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      sonuc = new Response(akis).arrayBuffer().then(function (b) { return new Uint8Array(b); });
+    } else return Promise.reject(new Error('zip: desteklenmeyen yontem ' + g.yontem + ': ' + g.ad));
+    return sonuc.then(function (v) {
+      if (v.length !== g.boyut) throw new Error('zip: boyut tutmadi ' + g.ad + ' ' + v.length + '/' + g.boyut);
+      return v;
+    });
+  }
+  var MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml',
+    webp: 'image/webp', xml: 'application/xml', json: 'application/json', mp4: 'video/mp4', mp3: 'audio/mpeg',
+    html: 'text/html', js: 'text/javascript', css: 'text/css', txt: 'text/plain' };
+  function mimeOf(ad) { var e = pathMod.extname(ad).slice(1).toLowerCase(); return MIME[e] || 'application/octet-stream'; }
+
+  // K9: motorun elle indirmesi ile oto-guncelleyici ayni anda acabilir -> tek kuyruk.
+  var acmaKuyrugu = Promise.resolve();
+  function kitapAc(blob, hedef) {
+    var is = acmaKuyrugu.then(function () { return kitapAcAsil(blob, hedef); });
+    acmaKuyrugu = is.catch(function () {});
+    return is;
+  }
+  function kitapAcAsil(blob, hedef) {
+    var c = cachesAl();
+    if (!c) return Promise.reject(new Error('Cache Storage yok'));
+    var dizin = mutlakYol(hedef);
+    if (!dizin || dizin === '/') return Promise.reject(new Error('gecersiz hedef dizin: ' + hedef));
+    var u8, girdiler, kasa;
+    return blob.arrayBuffer().then(function (b) {
+      u8 = new Uint8Array(b);
+      girdiler = zipGirdileri(u8);
+      if (!girdiler.length) throw new Error('zip bos');
+      return c.open(KITAP_CACHE);
+    }).then(function (k) {
+      kasa = k;
+      var eski = indirilenler()[dizin] || [];
+      indirilenYaz(dizin, null); // okuma su andan itibaren APK kopyasina duser
+      return eski.reduce(function (pr, ad) {
+        return pr.then(function () { return kasa.delete(ortam.origin + dizin + '/' + ad); });
+      }, Promise.resolve());
+    }).then(function () {
+      return girdiler.reduce(function (pr, g) {
+        return pr.then(function () { return zipGirdiAc(u8, g); }).then(function (v) {
+          return kasa.put(ortam.origin + dizin + '/' + g.ad, new Response(v, {
+            status: 200, headers: { 'Content-Type': mimeOf(g.ad), 'Content-Length': String(v.length) } }));
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      var adlar = girdiler.map(function (g) { return g.ad; });
+      indirilenYaz(dizin, adlar);
+      return adlar.length;
+    });
+  }
+
+  function AdmZip(p) { this._yol = p; }
+  AdmZip.prototype.extractAllTo = function (hedef) {
+    var blob = bellekDosyalari[yolAnahtari(this._yol)];
+    if (!blob) return Promise.reject(new Error('zip bellekte yok: ' + this._yol));
+    return kitapAc(blob, hedef).then(function (n) {
+      try { console.log('[empp-android] kitap acildi: ' + hedef + ' (' + n + ' dosya)'); } catch (e) {}
+      return n;
+    });
+  };
+  AdmZip.prototype.getEntries = function () { return []; };
+
+  function varsayilanFetch() {
+    // CapacitorWebFetch = WebView'in yamasiz fetch'i: govdeyi AKIS olarak verir (ilerleme).
+    if (isBrowser && typeof win.CapacitorWebFetch === 'function') return win.CapacitorWebFetch.bind(win);
+    if (isBrowser && typeof win.fetch === 'function') return win.fetch.bind(win);
+    return typeof fetch === 'function' ? fetch : null;
+  }
+  function httpsGet(url, secenek, cb, fetchFn) {
+    if (typeof secenek === 'function') { fetchFn = cb; cb = secenek; }
+    fetchFn = fetchFn || varsayilanFetch();
+    var istekH = {};
+    var istek = {
+      on: function (ev, fn) { istekH[ev] = fn; return istek; },
+      once: function (ev, fn) { istekH[ev] = fn; return istek; },
+      end: function () { return istek; }, abort: function () {}, destroy: function () {}, setTimeout: function () { return istek; }
+    };
+    Promise.resolve().then(function () {
+      if (!fetchFn) throw new Error('fetch yok');
+      return fetchFn(String(url));
+    }).then(function (y) {
+      if (!y.ok) throw new Error('HTTP ' + y.status + ' ' + url);
+      var resH = {}, hedefler = [], basliklar = {};
+      y.headers.forEach(function (v, k) { basliklar[String(k).toLowerCase()] = v; });
+      var res = {
+        statusCode: y.status, headers: basliklar,
+        on: function (ev, fn) { resH[ev] = fn; return res; },
+        once: function (ev, fn) { resH[ev] = fn; return res; },
+        pipe: function (ws) { hedefler.push(ws); return ws; },
+        setEncoding: function () { return res; }, resume: function () { return res; }
+      };
+      if (cb) cb(res);
+      function ver(u) { if (resH.data) resH.data(u); for (var i = 0; i < hedefler.length; i++) hedefler[i].write(u); }
+      function bitir() { if (resH.end) resH.end(); for (var i = 0; i < hedefler.length; i++) hedefler[i].end(); }
+      if (!y.body || typeof y.body.getReader !== 'function') {
+        return y.arrayBuffer().then(function (b) { ver(new Uint8Array(b)); bitir(); });
+      }
+      var okuyucu = y.body.getReader();
+      function oku() {
+        return okuyucu.read().then(function (r) { if (r.done) return bitir(); ver(r.value); return oku(); });
+      }
+      return oku();
+    }).catch(function (e) {
+      try { console.error('[empp-android] indirme hatasi: ' + (e && e.message)); } catch (x) {}
+      if (istekH.error) istekH.error(e);
+    });
+    return istek;
+  }
+  var httpsMod = { get: function (url, secenek, cb) { return httpsGet(url, secenek, cb); } };
+
+  // K8: motor kurum/seri logosunu `Buffer.from(arrayBuffer)` ile yaziyor ("Buffer is not
+  // defined"). Kucuk, isaretli bir yerine-koyma: isBuffer yalniz KENDI urettigini tanir,
+  // boylece `typeof Buffer` bakan kutuphaneler duz Uint8Array'i Buffer sanmaz.
+  var BufferShim = {
+    from: function (x, enc) {
+      var u = typeof x === 'string'
+        ? (enc === 'base64' ? Uint8Array.from(atob(x), function (c) { return c.charCodeAt(0); }) : new TextEncoder().encode(x))
+        : parcaBayt(x).slice();
+      u.__emppBuffer = true;
+      return u;
+    },
+    alloc: function (n) { var u = new Uint8Array(n); u.__emppBuffer = true; return u; },
+    isBuffer: function (v) { return !!(v && v.__emppBuffer); }
+  };
+  function installBuffer() { if (isBrowser && typeof win.Buffer === 'undefined') win.Buffer = BufferShim; }
+
+  // K9 — NEDEN (2026-09-22, Nadir): cihaz Wi-Fi'deyken (ucretlendirilmeyen baglanti)
+  // kitap guncellemeleri (yesil bulut) kendiliginden insin; mobil veride inmesin.
+  // Motor guncelleme kontrolunu YALNIZ ekrandaki sekmenin kartlari icin yapar, o yuzden
+  // dugmeye tiklamak yetmez: guncelleyici menudeki (ImWin32.dll) TUM kurulu kitaplari
+  // tarar, K8 yoluyla indirip acar, yeni surumu `empp_surum` kaydina yazar. Menu okunurken
+  // (`fs.readFileSync(.../ImWin32.dll)`) kayittaki surum menuye islenir -> motor o kitap
+  // icin bir daha yesil bulut gostermez. Motor kodu DEGISMEZ.
+  // Baglanti bilgisi yerel EmppAg eklentisinden gelir (ag-bilgisi.js); eklenti yoksa ya
+  // da baglanti olculuyorsa HICBIR SEY indirilmez. Mavi bulut (hic inmemis kitap) otomatik
+  // DEGIL — cihazda yer kaplar, kullanici dokununca iner.
+  // BOZARSAN: `empp-android-shim-oto.test.js` kirilir.
+  var SURUM_ANAHTARI = 'empp_surum';
+  var SON_TARAMA_ANAHTARI = 'empp_oto_guncelleme_son';
+  var TARAMA_ARALIGI = 6 * 3600 * 1000;
+  var IMWIN_BICIM = [[127, 17], [27, 5]];
+
+  function surumlerOku() {
+    try { return JSON.parse((ortam.storage && ortam.storage.getItem(SURUM_ANAHTARI)) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function surumYaz(id, v) {
+    var m = surumlerOku(); m[String(id)] = Number(v);
+    try { ortam.storage.setItem(SURUM_ANAHTARI, JSON.stringify(m)); } catch (e) {}
+  }
+  function imwinCoz(t) {
+    t = String(t);
+    for (var i = 0; i < IMWIN_BICIM.length; i++) {
+      var n = IMWIN_BICIM[i][0], r = IMWIN_BICIM[i][1];
+      if (t.length > n && t.charAt(n) === '<' && t.charAt(t.length - (n + r)) === '>') {
+        var out = [];
+        for (var p = n; t.length - p > n; p += r) out.push(t.charAt(p));
+        return { xml: out.join(''), n: n, r: r };
+      }
+    }
+    return null;
+  }
+  function imwinYaz(xml, n, r) {
+    function dolgu(k) { var s = ''; for (var i = 0; i < k; i++) s += String.fromCharCode(1 + Math.floor(Math.random() * 125)); return s; }
+    var g = [];
+    for (var i = 0; i < xml.length; i++) g.push(xml.charAt(i) + dolgu(r - 1));
+    return dolgu(n) + g.join('') + dolgu(n);
+  }
+  function nitelik(etiket, ad) {
+    var m = new RegExp('(?:^|\\s)' + ad + '="([^"]*)"').exec(etiket);
+    return m ? m[1] : null;
+  }
+  function menuKitaplari(xml) {
+    var l = [], re = /<cover\b[^>]*>/g, m;
+    while ((m = re.exec(xml))) {
+      var e = m[0], xs = nitelik(e, 'xmlSource') || '';
+      l.push({ id: nitelik(e, 'ID'), surum: Number(nitelik(e, 'version') || 0),
+        kurulu: nitelik(e, 'isDownloaded') === 'true',
+        dizin: xs.indexOf('/data/') > 0 ? xs.slice(0, xs.indexOf('/data/')) : null });
+    }
+    return l;
+  }
+  // Kayittaki surum menudekinden BUYUKSE menuye islenir (kucukse motorunki kazanir).
+  function menuSurumYamasi(xml, surumler) {
+    return xml.replace(/<cover\b[^>]*>/g, function (e) {
+      var id = nitelik(e, 'ID'), kayit = surumler[id];
+      if (kayit == null) return e;
+      var su = Number(nitelik(e, 'version') || 0);
+      if (!(Number(kayit) > su)) return e;
+      return /(\s)version="[^"]*"/.test(e)
+        ? e.replace(/(\s)version="[^"]*"/, '$1version="' + Number(kayit) + '"')
+        : e.replace(/\s*\/?>$/, function (son) { return ' version="' + Number(kayit) + '"' + son; });
+    });
+  }
+  function menuDllYamasi(metin) {
+    var s = surumlerOku();
+    if (!Object.keys(s).length || typeof metin !== 'string') return metin;
+    var c = imwinCoz(metin);
+    if (!c) return metin;
+    var yeni = menuSurumYamasi(c.xml, s);
+    return yeni === c.xml ? metin : imwinYaz(yeni, c.n, c.r);
+  }
+  function dllYolu() {
+    try { if (typeof AppConfig !== 'undefined' && AppConfig.bookModule && AppConfig.bookModule.dll) return AppConfig.bookModule.dll; } catch (e) {}
+    return 'classlibraries/ImWin32.dll';
+  }
+  function guncellemeUcu() {
+    try { return AppConfig.xml.desktop.updateBookEndPoint || null; } catch (e) { return null; }
+  }
+  function agDurumu() {
+    try {
+      var C = isBrowser ? win.Capacitor : null;
+      if (C && typeof C.nativePromise === 'function') return C.nativePromise('EmppAg', 'durum', {}).catch(function () { return null; });
+      if (C && C.Plugins && C.Plugins.EmppAg) return C.Plugins.EmppAg.durum().catch(function () { return null; });
+    } catch (e) {}
+    return Promise.resolve(null);
+  }
+  function uygunBaglanti(d) { return !!(d && d.bagli === true && d.olculen === false); }
+  function gunluk(s) { try { console.log('[empp-android] oto-guncelleme: ' + s); } catch (e) {} }
+
+  // deps (testte enjekte): agDurumu, jsonGetir(url), zipGetir(url)->Blob, menuMetni(), simdi()
+  function otoGuncelle(deps) {
+    deps = deps || {};
+    var ag = deps.agDurumu || agDurumu;
+    var simdi = deps.simdi || function () { return Date.now(); };
+    var jsonGetir = deps.jsonGetir || function (u) { return win.fetch(u).then(function (r) { return r.json(); }); };
+    var zipGetir = deps.zipGetir || function (u) {
+      return varsayilanFetch()(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
+    };
+    var menuMetni = deps.menuMetni || function () { return fsMod.readFileSync(dllYolu(), 'utf8'); };
+    var uc = deps.uc || guncellemeUcu();
+    var rapor = { tarandi: 0, guncellendi: [], hata: [], sebep: null };
+    return ag().then(function (d) {
+      if (!uygunBaglanti(d)) { rapor.sebep = 'baglanti-uygun-degil'; return rapor; }
+      var son = Number((ortam.storage && ortam.storage.getItem(SON_TARAMA_ANAHTARI)) || 0);
+      if (!deps.zorla && simdi() - son < TARAMA_ARALIGI) { rapor.sebep = 'yakinda-tarandi'; return rapor; }
+      if (!uc) { rapor.sebep = 'guncelleme-ucu-yok'; return rapor; }
+      var c = imwinCoz(menuMetni());
+      if (!c) { rapor.sebep = 'menu-okunamadi'; return rapor; }
+      var kitaplar = menuKitaplari(c.xml).filter(function (k) { return k.kurulu && k.id && k.dizin; });
+      var yarida = false;
+      return kitaplar.reduce(function (pr, k) {
+        return pr.then(function () {
+          if (yarida) return;
+          rapor.tarandi++;
+          var url = uc.replace('{bookId}', k.id).replace('{version}', k.surum).replace('{isSet}', '0');
+          return jsonGetir(url).then(function (j) {
+            if (!j || !j.Success || !j.Data || !(Number(j.Vs) > k.surum)) return;
+            // Indirmeden hemen once baglantiyi YENIDEN sor: Wi-Fi'den cikildiysa dur.
+            return ag().then(function (d2) {
+              if (!uygunBaglanti(d2)) { yarida = true; rapor.sebep = 'baglanti-degisti'; return; }
+              return zipGetir(j.Data).then(function (b) { return kitapAc(b, k.dizin); }).then(function () {
+                surumYaz(k.id, j.Vs);
+                rapor.guncellendi.push(k.id + ':' + k.surum + '->' + j.Vs);
+                gunluk(k.id + ' ' + k.surum + ' -> ' + j.Vs);
+              });
+            });
+          }).catch(function (e) { rapor.hata.push(k.id + ': ' + (e && e.message)); });
+        });
+      }, Promise.resolve()).then(function () {
+        if (!yarida) { try { ortam.storage.setItem(SON_TARAMA_ANAHTARI, String(simdi())); } catch (e) {} }
+        gunluk('tarandi=' + rapor.tarandi + ' guncellendi=' + rapor.guncellendi.length + ' hata=' + rapor.hata.length);
+        return rapor;
+      });
+    });
+  }
+  var otoCalisiyor = false;
+  function otoTetikle() {
+    if (otoCalisiyor) return;
+    otoCalisiyor = true;
+    otoGuncelle().catch(function (e) { gunluk('hata ' + (e && e.message)); })
+      .then(function () { otoCalisiyor = false; });
+  }
+  function installOtoGuncelleme() {
+    if (!isBrowser || !win.setTimeout) return false;
+    win.setTimeout(otoTetikle, 20000); // menu + motorun kendi kontrolu once otursun
+    try { win.addEventListener('online', function () { win.setTimeout(otoTetikle, 5000); }); } catch (e) {}
+    try { win.setInterval(otoTetikle, 15 * 60 * 1000); } catch (e) {}
+    return true;
+  }
+
   var modules = { fs: fsMod, path: pathMod, os: osMod, electron: electronMod, 'adm-zip': AdmZip, https: httpsMod, http: httpsMod };
 
   function requireFn(name) {
@@ -313,9 +751,28 @@
         var url = (input && typeof input === 'object' && 'url' in input) ? input.url : String(input);
         if (!/^(https?|data|blob):/i.test(url) || url.indexOf(win.location.origin) === 0) {
           var rel = url.replace(win.location.origin, '').split(/[?#]/)[0];
+          // K9: motor menuyu `fetch(bookModule.dll)` ile okur (kV) — arka planda guncellenen
+          // kitabin surumu BURADA da menuye islenmeli; yalniz readFileSync'e koymak yetmedi
+          // (telefonda olculdu: menu dogruyken 4 kart yine yesil bulut gosterdi).
+          if (/ImWin32\.dll$/i.test(rel) && Object.keys(surumlerOku()).length) {
+            var s9 = this, a9 = arguments;
+            var ham = vfsHas(rel)
+              ? Promise.resolve(fromStored(storage.getItem(key(rel)), 'utf8'))
+              : real.apply(s9, a9).then(function (r) { return r && r.ok ? r.text() : null; });
+            return ham.then(function (t) {
+              if (typeof t !== 'string') return real.apply(s9, a9);
+              return new win.Response(menuDllYamasi(t), { status: 200, headers: { 'X-EMPP-Source': 'k9-menu' } });
+            });
+          }
           if (vfsHas(rel)) {
             var v = fromStored(storage.getItem(key(rel)));
             return Promise.resolve(new win.Response(v, { status: 200, headers: { 'X-EMPP-Source': 'vfs' } }));
+          }
+          // K8: indirilen/guncellenen kitap dosyasi APK'daki kopyanin ONUNE gecer.
+          var iy = mutlakYol(cozUrl(rel));
+          if (iy && indirilmis(iy) === 'dosya') {
+            var self = this, args = arguments;
+            return indirilenYanit(iy).then(function (r) { return r || real.apply(self, args); });
           }
         }
       } catch (e) { /* dus */ }
@@ -356,6 +813,83 @@
     win.XMLHttpRequest = EmppXHR;
   }
 
+  // K7 — NEDEN (2026-09-22): panele bagli pakette (main/@ID = paket id) motor menuyu
+  // `GetPackageBooks`'tan yeniden kurar ve kapagi `source = 'assets/<id>/' + remoteSource`
+  // diye birlestirir; remoteSource '/' ile basladigi icin ('/Uploads/Resim/x.png')
+  // yol CIFT SLASH tasir: 'assets/66357//Uploads/...'. Masaustunde (dosya sistemi) fark
+  // etmez; Capacitor'in yerel sunucusu '//'yi BULAMAZ.
+  // BELİRTİ: BES Yabanci Dil paketi (74451) telefonda TUM kapaklar bos kutu.
+  // KANIT: ayni dosya CDP ile telefondan olculdu — '.../assets/66357//Uploads/...png'
+  // -> 404, tek slash -> 200 (71.900 bayt). Dosya APK'daydi, adres bozuktu.
+  // Cozum: yerel (orijin ya da goreli) adreslerde semadan sonraki ardisik '/' tek '/'
+  // olur; style (url(...)) ve src izlenir. Orijin altinda '//' HER ZAMAN 404 verdigi
+  // icin bu calisan hicbir adresi degistiremez. Baska host, data:, blob:, protokol-
+  // goreli ('//x') ve sorgu/hash kismi DOKUNULMAZ.
+  // BOZARSAN: `empp-android-shim-slash.test.js` kirilir.
+  var SEMA_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)/;
+  function slashTekle(u) {
+    u = String(u);
+    var m = SEMA_RE.exec(u);
+    var bas = m ? m[1] : '';
+    var geri = u.slice(bas.length);
+    var i = geri.search(/[?#]/);
+    var yol = i === -1 ? geri : geri.slice(0, i);
+    var kuyruk = i === -1 ? '' : geri.slice(i);
+    return bas + yol.replace(/\/{2,}/g, '/') + kuyruk;
+  }
+  function yerelMi(u, origin) {
+    if (!u) return false;
+    u = String(u);
+    if (/^(data|blob|javascript):/i.test(u)) return false;
+    if (SEMA_RE.test(u)) return !!origin && u.indexOf(origin + '/') === 0;
+    if (u.indexOf('//') === 0) return false; // protokol-goreli = baska host
+    return true;
+  }
+  function cssUrlDuzelt(deger, origin) {
+    if (!deger || String(deger).indexOf('url(') === -1) return deger;
+    return String(deger).replace(/url\((['"]?)([^'")]+)\1\)/g, function (tam, q, u) {
+      if (!yerelMi(u, origin)) return tam;
+      var y = slashTekle(u);
+      return y === u ? tam : 'url(' + q + y + q + ')';
+    });
+  }
+  function installSlashFix() {
+    if (!win) return false;
+    var d = win.document;
+    if (!win.MutationObserver || !d || !d.documentElement) return false;
+    var origin = win.location && win.location.origin;
+    function elemDuzelt(el) {
+      if (!el || el.nodeType !== 1 || !el.getAttribute) return;
+      var st = el.getAttribute('style');
+      if (st && st.indexOf('//') !== -1) {
+        var y = cssUrlDuzelt(st, origin);
+        if (y !== st) el.setAttribute('style', y);
+      }
+      var src = el.getAttribute('src');
+      if (src && src.indexOf('//') !== -1 && yerelMi(src, origin)) {
+        var s2 = slashTekle(src);
+        if (s2 !== src) el.setAttribute('src', s2);
+      }
+      if (el.tagName === 'IMG') imgIndirilen(el); // K8
+    }
+    function agacDuzelt(kok) {
+      elemDuzelt(kok);
+      if (kok && kok.querySelectorAll) {
+        var l = kok.querySelectorAll('[style*="//"],[src*="//"],img[src]');
+        for (var i = 0; i < l.length; i++) elemDuzelt(l[i]);
+      }
+    }
+    new win.MutationObserver(function (kayitlar) {
+      for (var i = 0; i < kayitlar.length; i++) {
+        var k = kayitlar[i];
+        if (k.type === 'attributes') elemDuzelt(k.target);
+        else for (var j = 0; j < k.addedNodes.length; j++) agacDuzelt(k.addedNodes[j]);
+      }
+    }).observe(d.documentElement, { subtree: true, childList: true, attributes: true,
+      attributeFilter: ['style', 'src'] });
+    return true;
+  }
+
   function install() {
     if (!isBrowser) return null;
     if (typeof win.require === 'function' && !win.__emppAndroidShim) return null; // gercek Node (Electron) — dokunma
@@ -366,11 +900,20 @@
     if (typeof win.process === 'undefined') win.process = { env: {}, platform: 'android', versions: {} };
     installFetch();
     installSyncXhr();
+    installSlashFix();
+    installBuffer();
+    installOtoGuncelleme();
+    try { if (win.navigator && win.navigator.storage && win.navigator.storage.persist) win.navigator.storage.persist(); } catch (e) {}
     return win.__emppAndroidShim;
   }
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { pathMod: pathMod, fsMod: fsMod, install: install, normalize: normalize, _internals: { key: key, relUrl: relUrl, toText: toText, fromStored: fromStored } };
+    module.exports = { pathMod: pathMod, fsMod: fsMod, install: install, normalize: normalize, _internals: { key: key, relUrl: relUrl, toText: toText, fromStored: fromStored, slashTekle: slashTekle, yerelMi: yerelMi, cssUrlDuzelt: cssUrlDuzelt, installSlashFix: installSlashFix,
+    zipGirdileri: zipGirdileri, zipGirdiAc: zipGirdiAc, kitapAc: kitapAc, httpsGet: httpsGet, AdmZip: AdmZip,
+    indirilmis: indirilmis, indirilenYanit: indirilenYanit, mutlakYol: mutlakYol, bellekDosyalari: bellekDosyalari,
+    ortam: ortam, BufferShim: BufferShim,
+    imwinCoz: imwinCoz, imwinYaz: imwinYaz, menuKitaplari: menuKitaplari, menuSurumYamasi: menuSurumYamasi,
+    menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz } };
   }
   if (isBrowser) install();
 })(typeof window !== 'undefined' ? window : undefined);

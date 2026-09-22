@@ -4145,6 +4145,7 @@ if (!window.cordova) {
 
     // Tam ekran (immersive) — status + navigation bar'ı native gizle
     await this.configureAndroidFullscreen(webAppPath);
+    await this.configureAndroidAgBilgisi(webAppPath);
 
     // www/index.html'e viewport + fullscreen enjekte et (cap sync bunu kopyalar)
     await this.enableAndroidFullscreen(wwwPath);
@@ -4211,6 +4212,49 @@ if (!window.cordova) {
     } catch (error) {
       console.error('❌ AndroidManifest düzenlenirken hata:', error.message);
       // Build'i durdurma — orientation olmadan da APK üretilebilir
+    }
+  }
+
+  // K9 — Wi-Fi'de otomatik kitap güncellemesi için yerel "ağ bilgisi" eklentisi.
+  // WebView'da navigator.connection.type "unknown" döner; ücretlendirilmeyen bağlantı
+  // ancak yerel taraftan okunur. Ayrıntı + gerekçe: src/platforms/android/ag-bilgisi.js.
+  // Fullscreen MainActivity'yi baştan yazdığı için ONDAN SONRA çağrılır.
+  // Build düşürülmez: eklenti yoksa shim otomatik güncellemeyi yapmaz (elle bulut
+  // çalışmaya devam eder) ve durumu günlüğe yazar.
+  async configureAndroidAgBilgisi(webAppPath) {
+    const ag = require('../platforms/android/ag-bilgisi');
+    try {
+      const javaRoot = path.join(webAppPath, 'android', 'app', 'src', 'main', 'java');
+      const bul = async (dir) => {
+        let entries = [];
+        try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch (e) { return null; }
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) { const f = await bul(full); if (f) return f; }
+          else if (e.name === 'MainActivity.java') return full;
+        }
+        return null;
+      };
+      const ma = await bul(javaRoot);
+      const manifestPath = path.join(webAppPath, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+      if (!ma || !await fs.pathExists(manifestPath)) {
+        console.warn('⚠️ K9: MainActivity/Manifest yok — ağ bilgisi eklentisi eklenmedi');
+        return false;
+      }
+      const src = await fs.readFile(ma, 'utf8');
+      const pkg = (src.match(/package\s+([\w.]+)\s*;/) || [])[1];
+      if (!pkg) { console.warn('⚠️ K9: paket adı çözülemedi'); return false; }
+      // Önce hepsi bellekte üretilir; biri tutmazsa HİÇBİRİ yazılmaz (yarım Java = gradle düşer).
+      const yeniMa = ag.mainActivityYamasi(src);
+      const yeniManifest = ag.manifestYamasi(await fs.readFile(manifestPath, 'utf8'));
+      await fs.writeFile(path.join(path.dirname(ma), 'EmppAgPlugin.java'), ag.eklentiJava(pkg));
+      await fs.writeFile(ma, yeniMa);
+      await fs.writeFile(manifestPath, yeniManifest);
+      console.log('✅ K9: EmppAg (ağ bilgisi) eklentisi eklendi');
+      return true;
+    } catch (error) {
+      console.error('❌ K9: ağ bilgisi eklentisi eklenemedi:', error.message);
+      return false;
     }
   }
 

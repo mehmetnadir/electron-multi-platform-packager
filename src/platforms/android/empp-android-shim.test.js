@@ -80,7 +80,7 @@ test('fetch: VFS\'te olan göreli yol oradan, diğerleri gerçek fetch', async (
   assert.strictEqual(r3.real, true, 'VFS\'te olmayan yerel dosya gerçek fetch ile');
 });
 
-test('stub modüller: os.networkInterfaces boş, electron.remote yok, https.get error verir', async () => {
+test('stub modüller: os.networkInterfaces boş, electron.remote yok; https.get ulaşılamayan adreste error verir (K8: artık gerçek fetch)', async () => {
   const win = fakeWindow({});
   load(win);
   assert.deepStrictEqual(win.require('os').networkInterfaces(), {});
