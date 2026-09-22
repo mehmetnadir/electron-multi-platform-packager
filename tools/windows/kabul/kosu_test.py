@@ -129,5 +129,36 @@ class AyiklamaTest(unittest.TestCase):
         self.assertEqual(d["toplamKitap"], 5)
 
 
+
+class TekAyiklamaNoktasiTest(unittest.TestCase):
+    """Cagiranlar kendi ayiklamasini YAPMAMALI.
+
+    SINIR: bu testler KAYNAK METNI tarar, davranisi degil — `dongu.py`/`tekrar.py`
+    modul seviyesinde is kosturdugu icin import edilemez. Davranis kanitini yukaridaki
+    AyiklamaTest verir; buradaki testler yalniz "cagiran yeniden kendi regex'ini yazdi"
+    geriletmesini yakalar. Neden gerekli: 2026-09-22'de kosu.py duzeltildi ama iki
+    cagiran kendi `re.search(r"JSON>>>(\\{.*\\})")` kopyasiyla (DOTALL yok) kaldi.
+    """
+
+    def _oku(self, ad):
+        yol = os.path.join(os.path.dirname(os.path.abspath(__file__)), ad)
+        return open(yol, encoding="utf-8").read()
+
+    def test_cagiranlar_tek_noktayi_kullanir(self):
+        for ad in ("dongu.py", "tekrar.py"):
+            s = self._oku(ad)
+            self.assertIn("from kosu import ciktidan_json", s,
+                          "%s tek ayiklama noktasini kullanmiyor" % ad)
+            self.assertIn("ciktidan_json(out)", s, "%s ayiklamayi cagirmiyor" % ad)
+
+    def test_cagiranlarda_kendi_json_regexi_kalmadi(self):
+        for ad in ("dongu.py", "tekrar.py"):
+            kod = "\n".join(l for l in self._oku(ad).split("\n")
+                            if not l.lstrip().startswith("#"))
+            self.assertNotIn('re.search(r"JSON>>>', kod,
+                             "%s yine kendi ayiklamasini yapiyor" % ad)
+            self.assertNotIn('re.match(r"(?s)', kod,
+                             "%s yine kendi ayiklamasini yapiyor" % ad)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
