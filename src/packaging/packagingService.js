@@ -4157,6 +4157,7 @@ if (!window.cordova) {
     // Logo setup (eğer varsa)
     if (logoPath && await fs.pathExists(logoPath)) {
       await this.setupCapacitorIcons(webAppPath, logoPath, appName);
+      await this.setupCapacitorSplash(webAppPath, logoPath);
     }
 
     console.log('Capacitor projesi hazırlandı');
@@ -4614,6 +4615,63 @@ public class MainActivity extends BridgeActivity {
     } catch (error) {
       console.error('❌ Capacitor icon setup hatası:', error.message);
       // Devam et, icon olmasa da APK oluşabilir
+    }
+  }
+
+  // Android AÇILIŞ EKRANI (native splash) kurum logosundan üretilir.
+  // Kusur (2026-09-21, ölçüldü — BES Felsefe KTT APK'sı): setupCapacitorIcons
+  // launcher ikonunu doğru yazıyordu ama `res/drawable*/splash.png` Capacitor
+  // şablonundan GELDİĞİ GİBİ kalıyordu → kullanıcı uygulamayı açınca yayıncının
+  // logosu yerine Capacitor'ün mavi varyantını görüyordu. İkon doğru olduğu için
+  // kusur teslimde fark edilmiyordu; ayırt edici iz `splash.png` baytının iki
+  // ayrı üretimde BİREBİR aynı kalmasıydı.
+  // Logo `contain` ile yerleştirilir (geniş logolar bozulmaz), zemin beyaz —
+  // Capacitor şablonunun `windowBackground`'u da beyazdır, kenar çizgisi olmaz.
+  async setupCapacitorSplash(webAppPath, logoPath) {
+    const sharp = require('sharp');
+    console.log('🖼️ Capacitor Android splash setup başlatılıyor');
+
+    try {
+      const resPath = path.join(webAppPath, 'android', 'app', 'src', 'main', 'res');
+      // Capacitor 7 şablonundaki splash yoğunlukları (port + land + taban).
+      const hedefler = [
+        { dir: 'drawable', w: 480, h: 320 },
+        { dir: 'drawable-port-mdpi', w: 320, h: 480 },
+        { dir: 'drawable-port-hdpi', w: 480, h: 800 },
+        { dir: 'drawable-port-xhdpi', w: 720, h: 1280 },
+        { dir: 'drawable-port-xxhdpi', w: 960, h: 1600 },
+        { dir: 'drawable-port-xxxhdpi', w: 1280, h: 1920 },
+        { dir: 'drawable-land-mdpi', w: 480, h: 320 },
+        { dir: 'drawable-land-hdpi', w: 800, h: 480 },
+        { dir: 'drawable-land-xhdpi', w: 1280, h: 720 },
+        { dir: 'drawable-land-xxhdpi', w: 1600, h: 960 },
+        { dir: 'drawable-land-xxxhdpi', w: 1920, h: 1280 },
+      ];
+      const white = { r: 255, g: 255, b: 255, alpha: 1 };
+
+      for (const h of hedefler) {
+        const dizin = path.join(resPath, h.dir);
+        await fs.ensureDir(dizin);
+        // Logo ekranın ~%38'ini kaplasın; kalanı beyaz zemin.
+        const logoW = Math.max(1, Math.round(Math.min(h.w, h.h) * 0.38));
+        const logo = await sharp(logoPath)
+          .resize(logoW, logoW, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
+          .png()
+          .toBuffer();
+        const buffer = await sharp({
+          create: { width: h.w, height: h.h, channels: 4, background: white },
+        })
+          .composite([{ input: logo, gravity: 'centre' }])
+          .png()
+          .toBuffer();
+        await fs.writeFile(path.join(dizin, 'splash.png'), buffer);
+      }
+
+      console.log(`✅ Capacitor Android splash üretildi (${hedefler.length} yoğunluk)`);
+
+    } catch (error) {
+      console.error('❌ Capacitor splash setup hatası:', error.message);
+      // Devam et — splash olmasa da APK oluşabilir (şablon splash'ı kalır)
     }
   }
 
