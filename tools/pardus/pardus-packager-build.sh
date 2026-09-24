@@ -20,8 +20,13 @@
 # Ozellikler: idempotent (imaj/volume varsa yeniden kurmaz), disk kapisi (BOYUT ORANTILI), tek build
 # (kilit), her adimda log, nice ile dusuk oncelik, Rosetta+AppImage binfmt kaydi.
 set -euo pipefail
-TOOLS="${PARDUS_TOOLS:-$(cd "$(dirname "$0")" && pwd)}"
-REPO="${PACKAGER_REPO:-$(cd "$TOOLS/../.." && pwd)}"
+# pwd -P ŞART (2026-09-23, ölçüldü): ~/01dev/pardus/tools bu dizine SYMLINK'tir;
+# logical pwd ile TOOLS=/Users/nadir/01dev/pardus/tools çözülür, REPO=TOOLS/../..
+# = /Users/nadir (TÜM HOME) olur ve konteyner rsync'i home'u /app'e kopyalamaya
+# başlar — 37 GB yazıp Docker VM'ini doldurdu, VM read-only'ye düştü (Waypoint 9
+# koşusu). pwd -P symlink'i çözer; PACKAGER_REPO override'ı aynen geçerli.
+TOOLS="${PARDUS_TOOLS:-$(cd "$(dirname "$0")" && pwd -P)}"
+REPO="${PACKAGER_REPO:-$(cd "$TOOLS/../.." && pwd -P)}"
 IMG="packager-linux:2"   # :2 = zenity gomulu (2026-09-15)
 LOCK="/tmp/f1-pardus/.pardus-packager.lock"
 DISK_KAT="${PARDUS_DISK_KAT:-5}"          # olculen tepe/kaynak orani (2026-09-19)
@@ -111,6 +116,7 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_SET_MENU="${EMPP_SET_MENU:-1}" \
   -e EMPP_SAYFA_WEBP="${EMPP_SAYFA_WEBP:-0}" \
   -e EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" \
+  -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?
