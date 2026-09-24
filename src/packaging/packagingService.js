@@ -25,8 +25,11 @@ const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
 const paketManifesti = require('./paket-manifesti');
+const motorSurumu = require('./motor-surumu');
+const okuyucuKabugu = require('./okuyucu-kabugu');
 const setKimligi = require('./set-kimligi');
 const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
+const icerikGuncelleme = require('./icerik-guncelleme');
 const windowsMimari = require('./windows-mimari');
 const windowsAsarsiz = require('./windows-asarsiz');
 const ikonSaydamlik = require('./ikon-saydamlik');
@@ -639,6 +642,48 @@ MimeType=application/x-electron;
         }
       }
 
+      // OKUYUCU KABUĞU "ESKİYSE DEĞİŞTİR" (Faz 3c, 2026-09-24, Nadir: "Web-Z kabuğu pakete
+      // girsin") — KAPI VARSAYILAN AÇIK (`EMPP_OKUYUCU_KABUGU=0` kapatır). Sağ alttaki sürüm
+      // rozeti kabuktan gelir (bookN `*.main.js` i8). Kanonik: `~/.empp-agent/kabuk/`
+      // (`scripts/kabuk-kanonik-doldur.js`, Web-Z/YDS WebZKitap). Kitap içeriğine dokunmaz;
+      // index.html şablonu korunur, yalnız main referansı yeniden yazılır. Kanonik yoksa
+      // hiçbir şey değişmez. MOTORDAN ÖNCE koşar (sıra: kabuk → motor → manifest).
+      let kabukDamgasiSonucu = null;
+      if (okuyucuKabugu.acikMi()) {
+        try {
+          kabukDamgasiSonucu = await okuyucuKabugu.okuyucuKabuguDegistir(workingPath, undefined, {
+            log: (s) => console.log(s),
+          });
+          console.log(`📖 Okuyucu kabuğu: ${kabukDamgasiSonucu.durum}, ${kabukDamgasiSonucu.degisen} kitap `
+            + `değişti (kanonik ${kabukDamgasiSonucu.kanonikSurum || 'YOK'})`);
+        } catch (kabukError) {
+          console.warn('⚠️ Okuyucu kabuğu değiştirme başarısız (paketleme devam ediyor):', kabukError.message);
+          kabukDamgasiSonucu = { durum: 'hata', hata: kabukError.message };
+        }
+      }
+
+      // MOTOR "ESKİYSE DEĞİŞTİR" (Faz 3b, 2026-09-24, Nadir: "bizim derlediğimiz motor
+      // kanoniktir") — KAPI VARSAYILAN AÇIK (`EMPP_MOTOR_SURUMU=0` kapatır). Paketteki her
+      // 43e23fce…js kopyası (kök + alt kitaplar + kitap-içi gömülü) kanonik önbellekten
+      // (`~/.empp-agent/motor/`, `scripts/motor-kanonik-doldur.js`) ESKİYSE değiştirilir;
+      // eskisi ağaç DIŞINA (.empp-eski/) taşınır. Kanonik yoksa hiçbir şey değişmez
+      // (`durum: bilinmiyor`). MANİFESTTEN ÖNCE koşar: manifest/SET envanteri parmak izi
+      // (yol+boyut) motorun SON hâlini görsün. Hata build'i DÜŞÜRMEZ, görünür loglanır.
+      let motorDamgasiSonucu = null;
+      if (motorSurumu.acikMi()) {
+        try {
+          motorDamgasiSonucu = await motorSurumu.motorDegistir(workingPath, undefined, {
+            log: (s) => console.log(s),
+          });
+          console.log(`🧩 Motor: ${motorDamgasiSonucu.durum}, ${motorDamgasiSonucu.degisen} kopya `
+            + `değişti (kanonik ${motorDamgasiSonucu.kanonikSha12 || 'YOK'} `
+            + `${motorDamgasiSonucu.kanonikSurum || ''})`);
+        } catch (motorError) {
+          console.warn('⚠️ Motor değiştirme başarısız (paketleme devam ediyor):', motorError.message);
+          motorDamgasiSonucu = { durum: 'hata', hata: motorError.message };
+        }
+      }
+
       // PAKET KİMLİK MANİFESTİ (Katman 1, 2026-09-20) — KAPI VARSAYILAN AÇIK
       // (`EMPP_PAKET_MANIFESTI=0` kapatır). Kurulu exe'nin "ben hangi setim, içimde
       // hangi kitaplar var, sürümüm ne" sorusuna cevabı bugün HİÇBİR YERDE yok;
@@ -655,6 +700,14 @@ MimeType=application/x-electron;
             uretici: (packageOptions && packageOptions.publisherName) || companyName || null,
             kurum: { id: companyId, ad: companyName },
           });
+          if (motorDamgasiSonucu) {
+            await motorSurumu.paketJsonaDamgaYaz(workingPath, motorDamgasiSonucu);
+          }
+          if (kabukDamgasiSonucu) {
+            const pjYol = path.join(workingPath, 'paket.json');
+            const pj = JSON.parse(await fs.readFile(pjYol, 'utf8'));
+            await fs.writeFile(pjYol, `${JSON.stringify({ ...pj, kabukSurumu: kabukDamgasiSonucu }, null, 2)}\n`);
+          }
           if (manifestSonuc.yazildi) {
             const mf = manifestSonuc.manifest;
             console.log(`🪪 Paket kimliği: ${mf.setId} (${mf.setIdKaynagi}), `
@@ -774,6 +827,29 @@ MimeType=application/x-electron;
 
       // Electron için gerekli dosyaları oluştur
       await this.prepareElectronFiles(workingPath, appName, appVersion, companyName);
+
+      // İMPARK KİTAP İÇERİK KANALI (K) — Faz 2, 2026-09-24. KAPI VARSAYILAN AÇIK
+      // (`EMPP_ICERIK_GUNCELLEME=0` kapatır). Motor kitap güncellemesini
+      // `window.require("adm-zip")` ile açıyordu; adm-zip pakette YOKTU, hata yutuluyor,
+      // menü sürümü yine de ilerliyordu (sahte "Kitap Güncellendi"). Modül: yayıncının kabuk
+      // kanalını (Ş) kapatır — kapatamazsa adm-zip KOYMAZ —, adm-zip'i node_modules +
+      // dependencies'e, çalışma anı modülünü (WORK'e geçici açma/doğrulama, file: örtüsü,
+      // menü uzlaşması) pakete ekler. prepareElectronFiles'tan SONRA: package.json/main.js hazır.
+      // mac/linux `files`'taki "node_modules/adm-zip" istisnası bununla eştir; Windows KAPSAM
+      // DIŞI (istisna yok → adm-zip Windows paketine girmez). Sentinel: icerik-guncelleme.test.js.
+      if (icerikGuncelleme.acikMi()) {
+        try {
+          const icerik = await icerikGuncelleme.paketeUygula(workingPath, {
+            log: (satir) => console.log(satir),
+          });
+          if (!icerik.admZip || icerik.hata) {
+            console.warn(`⚠️ Kitap içerik güncellemesi bu pakette ÇALIŞMAYACAK: ${icerik.hata || 'adm-zip yok'}`);
+          }
+        } catch (icerikHatasi) {
+          console.warn('⚠️ İçerik güncelleme enjekte edilemedi (paketleme devam ediyor):',
+            icerikHatasi.message);
+        }
+      }
 
       // Logo path'i belirle - önce jobInfo'dan gelen, yoksa prepareLogo ile al
       let logoPath = providedLogoPath;
@@ -2216,6 +2292,7 @@ function closeSplashScreen() {
       files: [
         "**/*",
         "!node_modules",
+        "node_modules/adm-zip",
         "!temp",
         "!uploads"
       ],
@@ -2391,6 +2468,7 @@ function closeSplashScreen() {
       files: [
         "**/*",
         "!node_modules",
+        "node_modules/adm-zip",
         "!temp",
         "!uploads"
       ],
