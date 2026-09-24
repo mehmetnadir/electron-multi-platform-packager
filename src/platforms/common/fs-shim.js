@@ -139,6 +139,29 @@
     win.fetch = wrapped;
   }
 
+  /**
+   * İçerik güncelleme kancası (Faz 2, 2026-09-24): paket kökünde `empp-icerik-guncelleme.js`
+   * VARSA (paketleyici `src/packaging/icerik-guncelleme.js` koyar) renderer parçasını kurar:
+   * `window.require('adm-zip')` açma hedefi WORK'e, açma doğrulaması, sahte sürüm ilerletme
+   * süzgeci. Dosya YOKSA hiçbir şey değişmez (eski paketler birebir aynı davranır).
+   * Windows'ta çağrılmaz (kapsam dışı).
+   * `kok` = uygulama kökü (alt-kitap sayfasında BASE'in `__emppSubBook` kadar yukarısı).
+   */
+  function icerikKancasi(win, realRequire, realFs, pathMod, R, WORK, kok) {
+    try {
+      var modul = pathMod.join(kok, 'empp-icerik-guncelleme.js');
+      if (!realFs.existsSync(modul)) return null;
+      return realRequire(modul).rendererKur(win, { R: R, realFs: realFs, pathMod: pathMod, WORK: WORK, realRequire: realRequire });
+    } catch (e) {
+      try { console.warn('[empp-fs-shim] içerik kancası kurulamadı:', e && e.message); } catch (_) {}
+      return null;
+    }
+  }
+
+  function kokBul(pathMod, BASE, subBook) {
+    return subBook ? pathMod.resolve(BASE, subBook.split('/').map(function () { return '..'; }).join('/')) : BASE;
+  }
+
   function install(win) {
     try {
       if (!win || typeof win.require !== 'function') return null; // web/Capacitor: shim gereksiz
@@ -147,8 +170,10 @@
       var pathMod = realRequire('path');
       var realFs = realRequire('fs');
       var proc = (typeof process !== 'undefined') ? process : null;
-      if (proc && proc.platform === 'win32') return null; // Windows'ta CWD kurulum dizini — dokunma
       var BASE = (typeof __dirname === 'string' && __dirname) ? __dirname : pathMod.dirname((win.location && win.location.pathname) || '/');
+      // Windows'ta CWD kurulum dizini — dokunma. İçerik güncellemesi de Windows'ta KAPSAM DIŞI
+      // (Faz 2 review #4: ölçülmedi; adm-zip Windows paketine konmaz).
+      if (proc && proc.platform === 'win32') return null;
       var WORK_ROOT = (proc && proc.env && proc.env.EMPP_WORK_DIR) || null;
       if (!WORK_ROOT) {
         var home = (proc && proc.env && (proc.env.HOME || proc.env.USERPROFILE)) || '';
@@ -170,6 +195,7 @@
       installFetch(win, realFs, pathMod, WORK, BASE);
       Object.keys(realRequire).forEach(function (k) { try { win.require[k] = realRequire[k]; } catch (e) {} });
       win.__emppFsShim = shim;
+      icerikKancasi(win, realRequire, realFs, pathMod, makeResolver(pathMod, realFs, WORK, BASE), WORK, kokBul(pathMod, BASE, subBook));
       return shim;
     } catch (e) {
       try { console.warn('[empp-fs-shim] kurulamadı:', e && e.message); } catch (_) {}
@@ -177,6 +203,6 @@
     }
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl, icerikKancasi, kokBul };
   if (isRenderer) install(window);
 })();

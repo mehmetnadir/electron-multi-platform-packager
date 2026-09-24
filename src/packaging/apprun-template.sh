@@ -112,6 +112,9 @@ fi
 #   paket <  kurulu       → düşürme yok, kuruluyu çalıştır (stderr'e tek satır not)
 #   işaret yok / paket >  → eski kurulumu kenara al (mv, silme YOK), yeniden kur
 # Kullanıcı verisi (~/.empp-work, ~/.config) kurulum dizininin DIŞINDADIR; dokunulmaz.
+# WORK menüsü ↔ yeni paket menüsü uzlaşması burada DEĞİL, uygulamanın ana sürecinde her
+# açılışta yapılır (empp-icerik-guncelleme.js uzlastir(): geride/sahte ilerlemiş WORK
+# sürümünde paket kazanır, açılmış+doğrulanmış içerik varsa WORK kalır; silme yok).
 backupPath=""
 if [ -f "$executablePath" ]; then
     if [ -z "$APP_VERSION" ]; then

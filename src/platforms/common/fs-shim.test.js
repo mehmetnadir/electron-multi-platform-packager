@@ -119,12 +119,46 @@ test('GERİLEME: __emppSubBook onekleme kaldirilirsa book1/book3 AYNI WORK dosya
   assert.notStrictEqual(shimBook1.__empp.WORK, shimBook3.__empp.WORK);
 });
 
-test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR verir, asar açılmaz (sentinel)', () => {
+test('packagingService: shim index.html\'e enjekte edilir, main EMPP_WORK_DIR verir, asar mac/Linux/Android\'da AÇIK kalır — Windows hariç (sentinel)', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../packaging/packagingService.js'), 'utf8');
   assert.ok(src.includes('empp-fs-shim.js'));
   assert.ok(src.includes("process.env.EMPP_WORK_DIR"));
   assert.ok(src.includes('EMPP_QUIT_ON_CLOSE'), 'macOS pencere kapanınca çıkış enjeksiyonu');
-  assert.ok(!/asar: false/.test(src), 'asar kapatılmamalı (10k dosya imzası saatler sürer)');
+  // ASAR SENTİNELİ — KAPSAM DARALTILDI (2026-09-21).
+  //
+  // ESKİ HALİ: tüm dosyada `asar: false` literali arıyordu. Gerekçesi macOS
+  // `codesign`'dır ve HÂLÂ GEÇERLİDİR: codesign .app içindeki HER dosyayı
+  // `CodeResources`'a mühürler, 10 bin dosyalık açık ağacın imzalanması saatler
+  // sürer. Ama bu ceza Windows'ta YOKTUR — NSIS kurulum exe'si TEK PARÇA imzalanır.
+  // Windows'ta asar bir de zarar veriyordu: `app.asar` bir DOSYA olduğu için SET
+  // güncelleme kanalının her yazması ENOTDIR veriyor ve `asarUnpack` bunu çözmüyor
+  // (asar başlığı bir indekstir → kanaldan KİTAP EKLENEMİYOR).
+  //
+  // Bu yüzden sentinel artık DOSYANIN TAMAMINI değil, mac/Linux/Android platform
+  // bloklarını tarar; Windows bloğu bilerek dışarıdadır (kendi kapısı ve testleri
+  // var: src/packaging/windows-asarsiz.js + windows-asarsiz.test.js).
+  //
+  // Aynı anda GÜÇLENDİ: yalnız `asar: false` literalini değil, o bloklardaki HER
+  // `asar:` anahtarını reddeder — `asar: 0`, `asar: gizliBayrak()` gibi bir yazım
+  // eski sentineli sessizce atlatabiliyordu.
+  {
+    const isaretler = ['async packageWindows(', 'async packageMacOS(',
+      'async packageLinux(', 'async packageAndroid('];
+    const ofset = isaretler.map((im) => {
+      const i = src.indexOf(im);
+      assert.notStrictEqual(i, -1, `asar sentineli köreldi: "${im}" kaynakta yok`);
+      return i;
+    });
+    for (let k = 1; k < ofset.length; k++) {
+      assert.ok(ofset[k] > ofset[k - 1], 'platform fonksiyonlarının kaynak sırası değişmiş');
+    }
+    const winBlok = src.slice(ofset[0], ofset[1]);
+    const macLinuxAndroid = src.slice(ofset[1]);
+    assert.ok(!/\basar\s*:/.test(macLinuxAndroid),
+      'mac/Linux/Android config\'ine asar anahtarı sızmış (10k dosya imzası saatler sürer)');
+    assert.match(winBlok, /asar:\s*windowsAsarsiz\.asarSecenegi\(\)/,
+      'Windows bloğu asar kararını kapıdan almıyor — düzen değişikliği pakete geçmez');
+  }
   assert.ok(!/\} else \{\s*\n\s*\/\/ Mevcut main\.js/.test(src), 'main.js düzenleme bloğu else dalında kalmamalı (electron.js kopyalanınca atlanıyordu)');
 });
 
