@@ -58,8 +58,16 @@ function normName(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g
   const cacheRoot = process.env.EMPP_SOURCE_CACHE || path.join(os.homedir(), '.empp-agent', 'cache');
   const cachedZip = path.join(cacheRoot, BOOK_ID, path.basename(EXE), 'build.zip');
   const zipPath = path.join(work, 'build.zip');
-  const { latestLocalUpdate, isNewer } = require('./publisher-update');
-  const zipStale = () => { try { const rd=(f)=>{const r=require('child_process').spawnSync('unzip',['-p',cachedZip,f],{encoding:'utf8'});return r.status===0?r.stdout.trim():''}; const k=rd('kurum.txt').replace(/\r|\n/g,''); const u=latestLocalUpdate(k?k.padStart(3,'0'):null); return !!u && isNewer(rd('version.txt')||'1', u.version); } catch(e){ return false; } };
+  const { latestLocalUpdate } = require('./publisher-update');
+  // 2026-09-21 — KARDEŞ UÇ: burası `runner.js:cachedZipIsStale` ile AYNI kararı
+  // verir (önbellekteki build.zip bayat mı?) ve eskiden AYNI hatalı kıyası
+  // (`publisher-update.isNewer`'ın eski gövdesi) kullanıyordu. `version.txt`
+  // normalleştirmesi etkin olduğunda önbellekteki değer 3 parçaya iner
+  // ("1.13.1") ama zip adı 4 parçalı kalır ("1.13.1.3") → eski kıyas HER İŞTE
+  // "bayat" der → ~1 GB kaynak boşuna yeniden indirilip çıkarılır. Kıyas tek
+  // kaynaktan gelir: `surum-kiyas.dahaYeniMi`. Kendi mantığını KURMA.
+  const { dahaYeniMi } = require('./surum-kiyas');
+  const zipStale = () => { try { const rd=(f)=>{const r=require('child_process').spawnSync('unzip',['-p',cachedZip,f],{encoding:'utf8'});return r.status===0?r.stdout.trim():''}; const k=rd('kurum.txt').replace(/\r|\n/g,''); const u=latestLocalUpdate(k?k.padStart(3,'0'):null); return !!u && dahaYeniMi(rd('version.txt')||'1', u.version); } catch(e){ return false; } };
   if (fs.existsSync(cachedZip) && !zipStale()) { log('önbellek HIT:', cachedZip); await fsp.copyFile(cachedZip, zipPath); }
   else {
     const ex = path.join(work, 'extracted'); await fsp.mkdir(ex, { recursive: true });

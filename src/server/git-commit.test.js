@@ -56,7 +56,11 @@ test('kaynak-sentinel: app.js /api/health pid + kapilar alanlarını döndürür
   const routeStart = src.indexOf("app.get('/api/health'");
   assert.notStrictEqual(routeStart, -1, '/api/health route bulunmalı');
   const routeBody = src.slice(routeStart, routeStart + 700);
-  assert.match(routeBody, /pid:\s*process\.pid/, 'health JSON pid alanı içermeli');
+  // K-surec-kimligi (2026-09-21): pid artık `...surecKimligi()` yayılımından gelir
+  // (ppid/yetimMi/moduller/diskHash/bayatMi ile aynı kaynaktan). Sentinel'in KORUDUĞU
+  // şey alanın VARLIĞI — üretildiği yer değil; iki biçim de kabul edilir.
+  assert.match(routeBody, /pid:\s*process\.pid|\.\.\.surecKimligi\(\)/,
+    'health JSON pid alanı içermeli (doğrudan ya da surecKimligi() yayılımıyla)');
   assert.match(routeBody, /kapilar:\s*kapilariOku\(process\.env\)/,
     'health JSON kapilar alanını saglik-kimligi.js üzerinden üretmeli (kopya mantık yazma)');
   assert.match(src, /require\(['"]\.\/saglik-kimligi['"]\)/,

@@ -14,6 +14,8 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const { yazilacakSurum, acikMi } = require('./surum-normallestir');
+// TEK KAYNAK: sürüm kıyası burada YENİDEN YAZILMAZ (bkz. isNewer/cmpVersion).
+const { dahaYeniMi, parcalara } = require('./surum-kiyas');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.empp-agent', 'updates');
 
@@ -25,15 +27,44 @@ function companyIdFrom(buildDir) {
   } catch (e) { return null; }
 }
 
-/** electron.js checkVersion ile aynı: 3 parça değilse "güncelle" (true); yoksa sayısal karşılaştırma */
+/**
+ * "Bu aday elimizdekinden daha yeni mi?" — KARAR. Gövdesi `surum-kiyas.js`'te.
+ *
+ * 2026-09-21 — KARDEŞ UÇ ONARIMI. Burada eskiden yayıncının electron.js
+ * `checkVersion()` davranışının birebir kopyası vardı: "iki taraf da 3 parça
+ * DEĞİLSE string farkı = yeni". Aynı gün eklenen `version.txt` normalleştirmesi
+ * (commit 07f1d39, 350 MB müşteri indirmesinin kökü) build'in version.txt'sini
+ * 3 parçaya indirince, zip adı 4 parçalı kaldığı için kıyas HER KOŞUDA string'e
+ * düşüyor ve "yeni" diyordu. ÖLÇÜLDÜ (fixture: build 1.11.5, zip 1.13.1.3):
+ * 1., 2. ve 3. `applyPublisherUpdate` çağrısının ÜÇÜ de "uygulandı" döndü —
+ * yani aynı ~350 MB zip her paketleme işinde yeniden açılıyordu. Kardeşi
+ * `runner.js:cachedZipIsStale` aynı sebeple her işte ~1 GB kaynak indiriyordu.
+ *
+ * `dahaYeniMi` normalleştirilmiş hâlini aynı sürüm sayar ("1.13.1" ≡ "1.13.1.3")
+ * ve belirsiz girdide asla "yeni" demez. Ayrışma ölçüldü: yedi kıyas çiftinin
+ * YALNIZ birinde ("1.13.1" ↔ "1.13.1.3") karar değişti; kalan altısı birebir
+ * aynı kaldı — bu dar bir düzeltme, davranış yeniden yazımı değil.
+ *
+ * Ad geriye dönük uyum için korundu (dışa açık; test ve eski çağıranlar kullanır).
+ */
 function isNewer(current, incoming) {
-  const c = String(current || '').trim().split('.'); const i = String(incoming || '').trim().split('.');
-  if (c.length !== 3 || i.length !== 3) return c.join('.') !== i.join('.');
-  for (let k = 0; k < 3; k++) { const cv = parseInt(c[k], 10), iv = parseInt(i[k], 10); if (cv < iv) return true; if (cv > iv) return false; }
-  return false;
+  return dahaYeniMi(current, incoming);
 }
+
+/**
+ * HAM ZİP DOSYA ADI sıralaması (`latestLocalUpdate` içindir) — KARAR değil.
+ *
+ * Ayrıştırma kuralları `surum-kiyas.parcalara`'dan gelir (tek kaynak); ama
+ * kanoniklestirme (3 parçaya kırpma) BİLEREK yapılmaz: buradaki iki taraf da
+ * diskteki gerçek dosya adıdır, "1.13.1.3.zip" ile "1.13.1.5.zip" AYRI iki
+ * dosyadır ve 4. parça GERÇEK bilgidir. Kanonik kıyas ikisini eşit sayar,
+ * "en yeni zip" seçimi `readdir` sırasına kalırdı (belirsiz seçim).
+ * `dahaYeniMi` ise bir tarafı normalleştirilmiş `version.txt` olan KARAR için
+ * kullanılır; orada 4. parça zaten kaybolmuştur.
+ */
 function cmpVersion(a, b) {
-  const pa = a.split('.').map((x) => parseInt(x, 10) || 0), pb = b.split('.').map((x) => parseInt(x, 10) || 0);
+  const pa = parcalara(a) || [];
+  const pb = parcalara(b) || [];
   for (let k = 0; k < Math.max(pa.length, pb.length); k++) { const d = (pa[k] || 0) - (pb[k] || 0); if (d) return d; }
   return 0;
 }

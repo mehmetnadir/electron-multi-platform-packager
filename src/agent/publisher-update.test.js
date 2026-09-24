@@ -30,6 +30,10 @@ test('kurum.txt "60" → "060"; sürüm karşılaştırma electron.js ile aynı'
   assert.strictEqual(isNewer('1.12.0', '1.11.5'), false);
   assert.strictEqual(isNewer('1.11.5', '1.13.1.3'), true, '4 parçalı sürüm → güncelle (yayıncı davranışı)');
   assert.strictEqual(isNewer('1.13.1.3', '1.13.1.3'), false);
+  // 2026-09-21: normalleştirme SONRASI vaka — "1.13.1" ile "1.13.1.3" AYNI
+  // sürümdür; "yeni" demek her işte ~350 MB zip'i yeniden açtırır.
+  assert.strictEqual(isNewer('1.13.1', '1.13.1.3'), false, 'normalleştirilmiş hâl aynı sürümdür');
+  assert.strictEqual(isNewer('1.13.1', '1.13.8'), true, 'gerçek ilerleme hâlâ "yeni"');
 });
 
 test('en yeni yerel zip seçilir ve build üstüne uygulanır, version.txt güncellenir', () => {
@@ -43,17 +47,21 @@ test('en yeni yerel zip seçilir ve build üstüne uygulanır, version.txt günc
   // edilmiş 3 parça yazılır (kök neden — yayıncının electron.js'i 3 parça
   // değilse koşulsuz "eski" sayıp update indiriyordu).
   assert.strictEqual(fs.readFileSync(path.join(build, 'version.txt'), 'utf8'), '1.13.1');
-  // BİLİNEN YAN ETKİ: yazılan değer normalize edildiği (3 parça) için, zip adı
-  // hâlâ anomalik 4 parçalı olduğundan (bu fixture'ın simüle ettiği asıl bozukluk)
-  // agent'ın kendi isNewer() karşılaştırması bir sonraki koşuda "farklı" görür ve
-  // AYNI zip'i yeniden uygular (unzip -o idempotent, veri kaybı yok — sadece
-  // gereksiz tekrar). Bu, isNewer/companyIdFrom karşılaştırma mantığına
-  // dokunulmadığı için beklenen davranıştır (bu görevin kapsamı sadece
-  // version.txt normalize edilmesi); zip adları normal (3 parça) üretildiğinde
-  // bu tekrar oluşmaz.
+  // 2026-09-21 KARDEŞ UÇ ONARIMI — eskiden burada şu YAN ETKİ "beklenen" diye
+  // çivilenmişti: version.txt normalize edilip "1.13.1" olduğu, zip adı ise
+  // anomalik "1.13.1.3" kaldığı için eski `isNewer` her koşuda "farklı" görüp
+  // AYNI ~350 MB zip'i yeniden uyguluyordu. Ölçüldü: 1./2./3. çağrının üçü de
+  // "uygulandı" dönüyordu. Artık kıyas `surum-kiyas.dahaYeniMi`'den gelir ve
+  // normalleştirilmiş hâl aynı sürüm sayılır → ikinci koşu İŞ YAPMAZ.
+  // Bu satır bir GERİLEME KAPISI: yeniden "uygulandı" dönerse kıyas kardeş
+  // uçlardan birinde tekrar ayrışmış demektir.
   const again = applyPublisherUpdate(build, { updateDir: updRoot });
-  assert.strictEqual(again.applied, true);
-  assert.strictEqual(again.reason, 'uygulandı');
+  assert.strictEqual(again.applied, false, 'aynı zip ikinci kez uygulanmamalı (350 MB tekrar)');
+  assert.strictEqual(again.reason, 'zaten güncel');
+  const ucuncu = applyPublisherUpdate(build, { updateDir: updRoot });
+  assert.strictEqual(ucuncu.applied, false);
+  // version.txt ikinci/üçüncü koşuda da değişmemeli (idempotent kapı)
+  assert.strictEqual(fs.readFileSync(path.join(build, 'version.txt'), 'utf8'), '1.13.1');
 });
 
 test('güncelleme dizini/kurum yoksa dokunmaz', () => {
