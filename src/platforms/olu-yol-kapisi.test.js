@@ -23,6 +23,7 @@ const kapi = require('./olu-yol-kapisi');
 // Ölçümün bugünkü beyanı. Değişirse test kırılır ve KARAR vermeye zorlar:
 // ya dosya gerçekten canlıya bağlandı (beyanı güncelle), ya da yanlışlıkla koptu.
 const BEYAN_CANLI = [
+  'platforms/android/ag-bilgisi.js', // 0a55136 (K7-K9) packagingService.js:4415'ten canlı; beyan 24.09'da güncellendi
   'platforms/android/empp-android-shim.js',
   'platforms/common/ag-politikasi.js',
   'platforms/common/fs-shim.js',
