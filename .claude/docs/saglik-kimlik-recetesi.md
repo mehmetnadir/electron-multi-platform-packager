@@ -140,11 +140,34 @@ ve `/api/health` şeması bu depodaki değişikliklerle zaten canlı (bu dosyaya
 dokunulmasa da health ucu pid/kapilar döner; geri alınan tek şey run-agent.sh'ın
 BUNU SORMASI olur).
 
+## Sağlık ucu ne döner (2026-09-21 akşamı genişletildi)
+
+Reçete hâlâ UYGULANMADI, ama `/api/health` gövdesi artık kimlik alanlarını da taşıyor
+(`src/server/surec-kimligi.js`, ölçüm; karar yine `saglik-kimligi.js`):
+
+| Alan | Anlamı | Kırmızı okuması |
+|---|---|---|
+| `pid` / `ppid` | Sürecin ve onu başlatanın numarası | — |
+| `yetimMi` | `ppid === 1` | `true` → elle başlatılıp terminalden kopmuş: launchd servisi DEĞİL. `null` = ölçülemedi, yeşil sayma |
+| `kapilar` | `EMPP_*` bayraklarının açık/kapalı hâli (**yalnız boolean**, ham değer ASLA) | beklenenden sapma |
+| `moduller` | Kritik modüllerin **bellekteki** (require.cache'te yüklü) sürümünün kısa parmak izi | `null` = yüklü değil — "sorun yok" DEĞİL |
+| `diskHash` | Aynı dosyaların **diskteki** hâli | `null` = okunamadı |
+| `bayatMi` | Bellek ≠ disk (ya da kıyas yapılamıyor) | `true` → süreç eski kodu koşuyor, RESTART gerekir |
+| `bayatSebepleri` | İnsan-okunur tek satır sebepler (yalnız yol + hash) | boş olmalı |
+
+`src/runtime/kitap-guncelleyici.js` sunucuda require edilmez (pakete kopyalanır) →
+`moduller` alanında normal şartlarda daima `null`; onun için anlamlı olan `diskHash`.
+
+`beklenen`'e `bayatMi: false` eklenirse yukarıdaki bash bloğu bayat süreci de kırmızı
+sayar (kimlik kıyası alan-bazlıdır, kod değişikliği gerekmez).
+
 ## Uygulama sonrası tek satır kontrol
 
 ```bash
 curl -s http://127.0.0.1:3001/api/health | node -e '
   const s = JSON.parse(require("fs").readFileSync(0, "utf8"));
-  console.log("commit=" + s.commit, "pid=" + s.pid, JSON.stringify(s.kapilar));
+  console.log("commit=" + s.commit, "pid=" + s.pid, "ppid=" + s.ppid,
+    "yetim=" + s.yetimMi, "bayat=" + s.bayatMi, JSON.stringify(s.kapilar));
+  if (s.bayatMi) console.log("BAYAT:", (s.bayatSebepleri || []).join(" | "));
 '
 ```

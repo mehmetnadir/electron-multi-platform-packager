@@ -17,8 +17,10 @@
  *
  * BİREBİR KAYNAK (drift'i önlemek için kopya mantık değil, doğrudan çağrı):
  *   - sayfaWebp  → src/packaging/sayfa-webp.js       `acikMi()`
+ *   - setGuncelleme → src/packaging/guncelleyici-enjekte.js `acikMi()`
  *   - surumNormallestir → src/agent/surum-normallestir.js `acikMi()`
  *   - yama       → src/packaging/yama-katmani.js      `acikMi()`
+ *   - windowsAsarsiz → src/packaging/windows-asarsiz.js `acikMi()`
  * setMenu ve pardusKabul için ayrı export edilmiş bir `acikMi()` YOK — koşulları
  * kaynağında (aşağıdaki BİREBİR yorumlar) inline olarak taşındı:
  *   - setMenu     → src/packaging/set-menu.js `ensureSetMenu()`:
@@ -27,13 +29,22 @@
  *                   env parçası buraya taşındı)
  *   - pardusKabul → src/agent/runner.js CONFIG: `process.env.EMPP_PARDUS_KABUL === '1'`
  *
+ * EKSİK KAPI (2026-09-21, kör nokta kapatıldı): `EMPP_SET_GUNCELLEME` aynı gün
+ * eklenmiş, ÜRETİM DAVRANIŞINI DEĞİŞTİREN bir kapıdır (`empp-set.json` yazılır mı +
+ * güncelleyici enjekte edilir mi) ama bu listede YOKTU. `EMPP_SET_GUNCELLEME=0` ile
+ * başlatılmış KAÇAK bir süreç, sağlık ucunda temiz kopyadan ayırt EDİLEMİYORDU —
+ * modülün var olma sebebi olan arızanın (2026-09-20 kaçak paketleyici) tıpatıp
+ * aynısı. Kapı listesi, üretim davranışını değiştiren HER bayrağı taşımalıdır.
+ *
  * BOZARSAN: `saglik-kimligi.test.js` kırılır. O dosyalardaki koşul DEĞİŞİRSE burası da
  * (setMenu/pardusKabul için) elle güncellenmeli — aksi halde sağlık ucu YALAN söyler.
  */
 
 const { acikMi: sayfaWebpAcikMi } = require('../packaging/sayfa-webp');
+const { acikMi: setGuncellemeAcikMi } = require('../packaging/guncelleyici-enjekte');
 const { acikMi: surumNormallestirAcikMi } = require('../agent/surum-normallestir');
 const { acikMi: yamaAcikMi } = require('../packaging/yama-katmani');
+const { acikMi: windowsAsarsizAcikMi } = require('../packaging/windows-asarsiz');
 
 /**
  * Bir sürecin ortam değişkenlerinden üretim-davranışı kapılarının açık/kapalı
@@ -42,7 +53,8 @@ const { acikMi: yamaAcikMi } = require('../packaging/yama-katmani');
  *
  * @param {NodeJS.ProcessEnv|Object} env
  * @returns {{sayfaWebp: boolean, setMenu: boolean, pardusKabul: boolean,
- *            surumNormallestir: boolean, yama: boolean}}
+ *            surumNormallestir: boolean, yama: boolean, setGuncelleme: boolean,
+ *            windowsAsarsiz: boolean}}
  */
 function kapilariOku(env) {
   const e = (env && typeof env === 'object') ? env : {};
@@ -52,6 +64,13 @@ function kapilariOku(env) {
     pardusKabul: e.EMPP_PARDUS_KABUL === '1',
     surumNormallestir: surumNormallestirAcikMi(e) === true,
     yama: yamaAcikMi(e) === true,
+    // Varsayılan AÇIK ('0' kapatır) — `guncelleyici-enjekte.js` ile BİREBİR.
+    setGuncelleme: setGuncellemeAcikMi(e) === true,
+    // Varsayılan AÇIK ('0' kapatır) — Windows NSIS paketinde `asar` kapalı mı?
+    // PAKET DÜZENİNİ değiştirir (içerik `resources/app.asar` yerine `resources/app/`
+    // altında düz dosya olarak durur), yani üretim davranışı kapısıdır: bu bayrağı
+    // kapatmış KAÇAK bir süreç temiz kopyadan ayırt edilebilmeli.
+    windowsAsarsiz: windowsAsarsizAcikMi(e) === true,
   };
 }
 

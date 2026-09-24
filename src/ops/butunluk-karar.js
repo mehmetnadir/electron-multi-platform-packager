@@ -21,6 +21,16 @@
  *   bos       — nesne var ama içerik yok
  *   degisti   — koşu değişmediği hâlde parmak izi (etag) değişti: sessiz değişim
  *   olculemedi— HEAD başarısız (ağ/CDN); alarm değil, bir sonraki turda tekrar
+ *
+ * SKIP KÖR NOKTASI (2026-09-21 ölçümü — "R2 bütünlük: 14 sapma" saat başı tekrarı):
+ * `lastResult:'skipped'` bir koşunun BİLEREK nesneyi yeniden yüklemediğini söyler
+ * (mevcut dosya yeterli görüldü). Bu satırlarda last_run_at nesnenin gerçek yükleme
+ * zamanından YENİ olabilir — bu "bayat" değildir, tasarım gereği beklenen durumdur.
+ * 14 sapmanın 3'ü (59834/45549/45482-windows) tam bu sebepten yanlış alarmdı; ölçüldü:
+ * origin S3 HeadObject CDN ile birebir aynı zaman farkını verdi (CDN yalanı değil),
+ * ama satırın `lastResult` alanı hiç okunmuyordu. 404/bos/engellendi/erisilemedi/degisti
+ * hâlâ ALARM ÜRETİR — skip gerçek bir bozukluğu MASKELEMEZ, yalnız zaman-farkı
+ * kıyasını atlar.
  */
 
 /** Koşu hâlâ sürüyor mu? Süren koşuda eski nesne beklenen durumdur. */
@@ -71,6 +81,10 @@ function butunlukKarari({ satir, head, onceki = null, toleransMs = 15 * 60 * 100
 
   if (kosuSuruyor(satir)) {
     return { durum: 'uretimde', sebep: `faz=${satir.currentPhase || '?'} ilerleme=${satir.progress ?? '?'}` };
+  }
+
+  if (String(satir.lastResult || '') === 'skipped') {
+    return { durum: 'tamam', sebep: 'skip - nesne zaten güncel (yeniden yüklenmedi)' };
   }
 
   if (Number.isFinite(kosu) && Number.isFinite(nesne) && nesne < kosu - toleransMs) {

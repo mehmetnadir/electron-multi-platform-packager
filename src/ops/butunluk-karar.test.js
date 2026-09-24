@@ -160,3 +160,51 @@ test('lastRunAt okunamazsa bayat suçlaması yapılmaz', () => {
   const k = butunlukKarari({ satir: satirKur({ lastRunAt: null }), head: headKur() });
   assert.strictEqual(k.durum, 'tamam');
 });
+
+// --- SKIP KÖR NOKTASI (2026-09-21, "R2 bütünlük: 14 sapma" saha vakası) ---
+
+test('SAHA VAKASI 59834/45549/45482: lastResult=skipped + nesne eski -> tamam, bayat DEĞİL', () => {
+  const k = butunlukKarari({
+    satir: satirKur({ lastResult: 'skipped' }),
+    head: headKur({ lastModified: Date.parse('2026-09-19T10:56:53Z') }), // ayni saha degeri, 3 saat eski
+  });
+  assert.strictEqual(k.durum, 'tamam');
+  assert.match(k.sebep, /skip/);
+});
+
+test('skip + nesne 220 gün eski olsa da tamam (last_run_at skip turunda anlamsizdir)', () => {
+  const k = butunlukKarari({
+    satir: satirKur({ lastResult: 'skipped', lastRunAt: T('2026-07-31T07:27:23Z') }),
+    head: headKur({ lastModified: Date.parse('2025-12-22T15:38:43Z') }),
+  });
+  assert.strictEqual(k.durum, 'tamam');
+});
+
+test('skip gercek bozuklugu MASKELEMEZ: 404 hala eksik', () => {
+  const k = butunlukKarari({ satir: satirKur({ lastResult: 'skipped' }), head: headKur({ status: 404 }) });
+  assert.strictEqual(k.durum, 'eksik');
+});
+
+test('skip gercek bozuklugu MASKELEMEZ: 0 bayt hala bos', () => {
+  const k = butunlukKarari({
+    satir: satirKur({ lastResult: 'skipped' }),
+    head: headKur({ contentLength: 0 }),
+  });
+  assert.strictEqual(k.durum, 'bos');
+});
+
+test('skip gercek bozuklugu MASKELEMEZ: bot korumasi hala engellendi', () => {
+  const k = butunlukKarari({
+    satir: satirKur({ lastResult: 'skipped' }),
+    head: headKur({ status: 403, engel: true }),
+  });
+  assert.strictEqual(k.durum, 'engellendi');
+});
+
+test('lastResult uploaded ise skip kisayolu devreye GIRMEZ (eski davranis korunur)', () => {
+  const k = butunlukKarari({
+    satir: satirKur({ lastResult: 'uploaded' }),
+    head: headKur({ lastModified: Date.parse('2026-09-19T10:56:53Z') }),
+  });
+  assert.strictEqual(k.durum, 'bayat');
+});
