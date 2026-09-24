@@ -163,3 +163,52 @@ test('alt kitapta kapak yoksa menü yine üretilir (kapaksız kart)', async () =
   const html = fs.readFileSync(path.join(kok, 'index.html'), 'utf8');
   assert.ok(html.includes('href="book2/index.html"'), 'kapaksız kitap da menüde');
 });
+
+// 2026-09-24 — 73768 (Super Monsters Grade 3 - Maarif): tek kabuk kuralı.
+// Kabuğun tek üreticisi Üretim Masası (Web-Z sf425); bu modül onu EZMEZ ve kabuk izi
+// olan kökte sade menü (ID etiketli, beyaz) ÜRETMEZ.
+const WEBZ_INDEX = '<!DOCTYPE html><html><head><title>Super Monsters Grade 3 - Maarif</title>'
+  + '</head><body><div id="bookSetContainer"></div>'
+  + '<script src="scripts/cevrimdisi-yama.js"></script>'
+  + '<script src="scripts/language-set.js"></script></body></html>';
+
+async function kabukDosyalari(kok) {
+  await fs.ensureDir(path.join(kok, 'config'));
+  await fs.writeFile(path.join(kok, 'config', 'settings.json'), '{"books":{}}');
+  await fs.ensureDir(path.join(kok, 'scripts'));
+  await fs.writeFile(path.join(kok, 'scripts', 'language-set.js'), '// tema');
+}
+
+test('Web-Z kabuğu kökteyse dokunulmaz (masaüstü tek kabuk üreticisi)', async () => {
+  const kok = await sahteSet({ rootIndex: WEBZ_INDEX });
+  await kabukDosyalari(kok);
+  const r = await ensureSetMenu(kok, { force: true });
+  assert.strictEqual(r.action, 'custom-menu-kept');
+  assert.strictEqual(r.kabuk, 'webz');
+  assert.strictEqual(fs.readFileSync(path.join(kok, 'index.html'), 'utf8'), WEBZ_INDEX);
+  assert.ok(!fs.existsSync(path.join(kok, YEDEK_AD)), 'yedek oluşmamalı');
+});
+
+test('kabuk dosyaları var ama kök motor kopyası → sade menü ÜRETİLMEZ (73768 vakası)', async () => {
+  const kok = await sahteSet();
+  await kabukDosyalari(kok);
+  const r = await ensureSetMenu(kok, { force: true });
+  assert.strictEqual(r.action, 'webz-shell-index-missing');
+  const html = fs.readFileSync(path.join(kok, 'index.html'), 'utf8');
+  assert.ok(!html.includes(MENU_ISARETI), 'sade menü yazılmamalı');
+  assert.ok(motorKopyasiMi(html), 'kök olduğu gibi kalır');
+});
+
+test('sayısal PDF adı kitap adı sayılmaz (pdf/15792.pdf → "Kitap N", "15792" değil)', async () => {
+  const kok = await sahteSet({ books: 2, pdfUrl: false });
+  for (let i = 1; i <= 2; i += 1) {
+    const d = path.join(kok, `book${i}`, 'assets', String(58000 + i), 'data');
+    await fs.ensureDir(d);
+    await fs.writeFile(path.join(d, 'BookContent.xml'),
+      `<?xml version="1.0"?><Book pdfUrl="pdf/1579${i}.pdf" />`);
+  }
+  await ensureSetMenu(kok, { force: true });
+  const html = fs.readFileSync(path.join(kok, 'index.html'), 'utf8');
+  assert.ok(!html.includes('>15791<') && !html.includes('>15792<'), 'kimlik ad olarak basılmamalı');
+  assert.ok(html.includes('Kitap 1'), 'yedek etiket');
+});

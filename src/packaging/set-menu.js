@@ -49,6 +49,26 @@ function motorKopyasiMi(html) {
   return /src="\.?\/?[0-9a-f]{16,}\.main\.js"/i.test(html);
 }
 
+/**
+ * Kökte Üretim Masası'nın Web-Z kabuğu (sf425 teması) var mı? (2026-09-24, 73768)
+ *
+ * NEDEN: çevrimdışı paketin kök menüsü Web-Z ile AYNI olmalı ve kabuğun TEK üreticisi
+ * masaüstündeki `WebZTemaUretici`dir (Nadir kararı). 73768'de yayıncının exe'si kabuk
+ * dosyalarını (config/settings.json, scripts/language-set.js…) taşıyordu ama kök
+ * index.html motor kopyasıydı; bu modül onun üstüne sade menü yazıp kartlara PDF dosya
+ * adından türettiği sayısal kimlikleri (15792/15793/15612) bastı — beyaz, ad yerine ID.
+ * Kabuk izi varsa bu modül HTML ÜRETMEZ.
+ */
+async function webZKabuguVarMi(rootPath) {
+  return (await fs.pathExists(path.join(rootPath, 'config', 'settings.json')))
+    && (await fs.pathExists(path.join(rootPath, 'scripts', 'language-set.js')));
+}
+
+/** Kök index.html masaüstünün ürettiği Web-Z kabuğu mu? */
+function webZKabukIndexiMi(html) {
+  return typeof html === 'string' && html.includes('scripts/language-set.js');
+}
+
 /** Kitabın kendi kapak küçük görselini bul (assets/<id>/thumbs/1.jpg). */
 async function kapakYolu(rootPath, bookDir) {
   const assetsDir = path.join(rootPath, bookDir, 'assets');
@@ -103,7 +123,9 @@ async function kitapAdiCikar(rootPath, bookDir) {
     const m = /pdfUrl="[^"]*?\/?([^"/]+)\.pdf"/i.exec(bas);
     if (!m) continue;
     const ad = m[1].replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!ad) continue;
+    // YDS PDF'leri sayısal adlı (pdf/15792.pdf) — bu bir kitap ADI değil, kimlik.
+    // Kimliği ad diye basmak 73768'de kartlara "15792" yazdırdı (2026-09-24).
+    if (!ad || /^[\d\s]+$/.test(ad)) continue;
     return ad.split(' ')
       .map((k) => (/^\d+$/.test(k) ? k : k.charAt(0) + k.slice(1).toLowerCase()))
       .join(' ');
@@ -221,7 +243,7 @@ ${kartlar}
  * @param {{ appName?: string, titles?: Record<string,string>, force?: boolean }} [opts]
  * @returns {Promise<{action: string, books: string[], mode?: string}>}
  *   action: 'disabled' | 'not-a-set' | 'custom-menu-kept' | 'already-generated'
- *         | 'generated' | 'no-root-index'
+ *         | 'generated' | 'no-root-index' | 'webz-shell-index-missing'
  */
 async function ensureSetMenu(rootPath, opts = {}) {
   const acik = opts.force === true || process.env.EMPP_SET_MENU === '1';
@@ -240,9 +262,20 @@ async function ensureSetMenu(rootPath, opts = {}) {
   if (mevcut && mevcut.includes(MENU_ISARETI)) {
     return { action: 'already-generated', books: bookDirs };
   }
+  if (mevcut && webZKabukIndexiMi(mevcut)) {
+    // Üretim Masası'nın Web-Z kabuğu — tek kabuk üreticisi odur, dokunulmaz.
+    return { action: 'custom-menu-kept', books: bookDirs, kabuk: 'webz' };
+  }
   if (mevcut && !motorKopyasiMi(mevcut)) {
     // Yayıncının/Nadir'in kendi set menüsü — dokunulmaz (Flashy 59480 vakası).
     return { action: 'custom-menu-kept', books: bookDirs };
+  }
+  if (await webZKabuguVarMi(rootPath)) {
+    // Kabuk dosyaları var ama kök index kabuk değil: sade menü YAZILMAZ (tek kabuk
+    // kuralı). Kök index'i masaüstü üretmeli (Üretim Masası › Set Menüsü / başsız araç).
+    console.warn('⚠️ SET kökünde Web-Z kabuk dosyaları var ama index.html kabuk değil — '
+      + 'sade menü ÜRETİLMEDİ; kök menüyü Üretim Masası üretmeli');
+    return { action: 'webz-shell-index-missing', books: bookDirs };
   }
 
   const kitaplar = [];
@@ -278,4 +311,6 @@ async function ensureSetMenu(rootPath, opts = {}) {
   return { action: mevcut == null ? 'no-root-index' : 'generated', books: bookDirs, mode };
 }
 
-module.exports = { ensureSetMenu, motorKopyasiMi, kitapAdiCikar, MENU_ISARETI, YEDEK_AD };
+module.exports = {
+  ensureSetMenu, motorKopyasiMi, kitapAdiCikar, webZKabukIndexiMi, MENU_ISARETI, YEDEK_AD,
+};
