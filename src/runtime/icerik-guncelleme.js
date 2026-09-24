@@ -128,6 +128,9 @@ var GECICI_DIZIN = '.empp-gecici';
 var KILIT_ADI = '.empp-uzlasma.kilit';
 var YAPISAL_DENEME = 2; // aynı yapısal hata 2. kez görülünce vazgeçilir
 var VARSAYILAN_TAVAN_MB = 4096;
+/** Paketleyicinin adm-zip'i koyduğu yer (paket kökü = bu modülün dizini; node_modules DIŞI —
+ * gerekçe: src/packaging/icerik-guncelleme.js başlığı, 73768 mac regresyonu). */
+var VENDOR_ADM_ZIP = 'empp-vendor/adm-zip';
 var ESKI_BASARISIZ_TAVAN = 2; // kitap başına tutulan başarısız açma kenarı (Şef kararı)
 
 function md5(fsMod, crypto, yolVeyaBuf) {
@@ -762,10 +765,21 @@ function rendererKur(win, o) {
   };
   var fsNesnesi = korumaliFs(o.fsNesnesi || onceki('fs'), ctx);
   var zipSinifi = null;
+  // Satıcı dizini VARSA oradan (paketin kendi adm-zip'i), yoksa motorun kendi çözümü (eski paketler).
+  var admZipYolu = o.admZipYolu !== undefined ? o.admZipYolu
+    : (typeof __dirname === 'string' ? o.pathMod.join(__dirname, VENDOR_ADM_ZIP) : null);
+  function gercekZip(self, args) {
+    if (admZipYolu) {
+      var varMi = false;
+      try { varMi = o.realFs.existsSync(o.pathMod.join(admZipYolu, 'adm-zip.js')); } catch (e) { varMi = false; }
+      if (varMi) return realRequire(admZipYolu);
+    }
+    return onceki.apply(self, args); // yoksa GERÇEK hata fırlar
+  }
   win.require = function (ad) {
     if (ad === 'fs') return fsNesnesi;
     if (ad === 'adm-zip') {
-      if (!zipSinifi) zipSinifi = admZipSar(onceki.apply(this, arguments), ctx); // yoksa GERÇEK hata fırlar
+      if (!zipSinifi) zipSinifi = admZipSar(gercekZip(this, arguments), ctx);
       return zipSinifi;
     }
     return onceki.apply(this, arguments);
@@ -777,7 +791,7 @@ function rendererKur(win, o) {
 
 module.exports = {
   MENU_GORELI: MENU_GORELI, ISARET_ADI: ISARET_ADI, ESKI_DIZIN: ESKI_DIZIN, LOG_ADI: LOG_ADI,
-  BASARISIZ_ADI: BASARISIZ_ADI, ESKI_BASARISIZ_TAVAN: ESKI_BASARISIZ_TAVAN, GECICI_DIZIN: GECICI_DIZIN, KILIT_ADI: KILIT_ADI, YAPISAL_DENEME: YAPISAL_DENEME,
+  BASARISIZ_ADI: BASARISIZ_ADI, ESKI_BASARISIZ_TAVAN: ESKI_BASARISIZ_TAVAN, VENDOR_ADM_ZIP: VENDOR_ADM_ZIP, GECICI_DIZIN: GECICI_DIZIN, KILIT_ADI: KILIT_ADI, YAPISAL_DENEME: YAPISAL_DENEME,
   menuCoz: menuCoz, menuKodla: menuKodla, kapaklar: kapaklar, kapakAyarla: kapakAyarla,
   kapakKarari: kapakKarari, menuUzlastir: menuUzlastir, uzlastir: uzlastir, menuDizinleri: menuDizinleri,
   kilitAl: kilitAl, zamanDamgasi: zamanDamgasi, girdiGoreli: girdiGoreli,

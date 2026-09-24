@@ -104,15 +104,16 @@ function paketKur() {
   return kok;
 }
 
-test('paketeUygula: adm-zip + bağımlılık + modül + ana süreç bloğu + kanal Ş (kök ve bookN)', async () => {
+test('paketeUygula: adm-zip (empp-vendor, bağımlılıksız) + modül + ana süreç bloğu + kanal Ş (kök ve bookN)', async () => {
   const kok = paketKur();
   const r = await m.paketeUygula(kok);
   assert.strictEqual(r.admZip, true);
-  assert.strictEqual(r.bagimlilik, true);
   assert.strictEqual(r.modul, true);
-  assert.ok(fs.existsSync(path.join(kok, 'node_modules', 'adm-zip', 'adm-zip.js')));
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(kok, 'package.json'), 'utf8')).dependencies,
-    { 'adm-zip': require('adm-zip/package.json').version });
+  assert.ok(fs.existsSync(path.join(kok, m.VENDOR_DIZIN, 'adm-zip', 'adm-zip.js')));
+  // REGRESYON 73768 mac 1.0.2: bağımlılık yazılırsa electron-builder npm list yolundan toplar,
+  // npm UUID'yi *** ile maskeler → ENOENT. node_modules'e de KONMAZ.
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(kok, 'package.json'), 'utf8')).dependencies, {});
+  assert.ok(!fs.existsSync(path.join(kok, 'node_modules')), 'node_modules oluşturulmamalı');
   assert.strictEqual(fs.readFileSync(path.join(kok, m.MODUL_ADI), 'utf8'), fs.readFileSync(m.KAYNAK_MODUL, 'utf8'));
   assert.deepStrictEqual(r.anaSurec.map((x) => [x.dosya, x.uygulandi]), [['electron.js', true], ['main.js', true]]);
   assert.ok(!fs.readFileSync(path.join(kok, 'book2', 'electron.js'), 'utf8').includes(m.ISARET), 'ana süreç bloğu yalnız kökte');
@@ -120,12 +121,28 @@ test('paketeUygula: adm-zip + bağımlılık + modül + ana süreç bloğu + kan
   assert.deepStrictEqual(kapali, ['book2/electron.js', 'electron.js', 'electronUpdate.js', 'main.js'].sort());
   for (const f of ['main.js', 'electron.js', 'book2/electron.js']) assert.ok(sozdizimi(fs.readFileSync(path.join(kok, f), 'utf8')));
   // pakete giren adm-zip GERÇEKTEN yüklenebilir (bağımlılıksız)
-  const Z = require(path.join(kok, 'node_modules', 'adm-zip'));
+  const Z = require(path.join(kok, m.ADM_ZIP_GORELI));
   assert.strictEqual(typeof new Z().addFile, 'function');
   // İdempotent
   const r2 = await m.paketeUygula(kok);
   assert.ok(r2.anaSurec.every((x) => !x.uygulandi));
   assert.ok(r2.kanalS.every((x) => !x.uygulandi));
+});
+
+test('REGRESYON 73768: eski koşudan kalan adm-zip bağımlılığı (node_modules karşılığı yok) geri alınır; yayıncınınki korunur', async () => {
+  const kok = paketKur();
+  fs.writeFileSync(path.join(kok, 'package.json'), JSON.stringify({ name: 'x', main: 'main.js', dependencies: { 'adm-zip': '0.5.16', lodash: '4' } }));
+  const loglar = [];
+  await m.paketeUygula(kok, { log: (x) => loglar.push(x) });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(kok, 'package.json'), 'utf8')).dependencies, { lodash: '4' });
+  assert.ok(loglar.some((x) => /adm-zip bağımlılığı kaldırıldı/.test(x)));
+  // yayıncı kendi node_modules/adm-zip'ini getirmişse bağımlılık ona aittir — dokunulmaz
+  const kok2 = paketKur();
+  fs.writeFileSync(path.join(kok2, 'package.json'), JSON.stringify({ name: 'x', main: 'main.js', dependencies: { 'adm-zip': '0.5.10' } }));
+  fs.mkdirSync(path.join(kok2, 'node_modules', 'adm-zip'), { recursive: true });
+  fs.writeFileSync(path.join(kok2, 'node_modules', 'adm-zip', 'package.json'), '{"name":"adm-zip","version":"0.5.10"}');
+  assert.strictEqual(await m.bagimlilikGeriAl(kok2), false);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(kok2, 'package.json'), 'utf8')).dependencies, { 'adm-zip': '0.5.10' });
 });
 
 test('paketeUygula ATOMİK: adm-zip kaynağı yoksa ana süreç bloğu KONMAZ (kanal Ş yine kapanır)', async () => {
@@ -186,6 +203,9 @@ function sentinelDenetle(src) {
     assert.strictEqual(ele('/k/node_modules/adm-zip/adm-zip.js', dosya), cagri);
     assert.strictEqual(ele('/k/node_modules/electron/index.js', dosya), false);
     assert.strictEqual(ele('/k/book1/index.html', dosya), true);
+    // adm-zip'in GERÇEK yeri: satıcı dizini hiçbir desenle elenmemeli (73768 regresyon düzeltmesi).
+    assert.strictEqual(ele('/k/' + m.ADM_ZIP_GORELI + '/adm-zip.js', dosya), true, 'empp-vendor elendi');
+    assert.strictEqual(ele('/k/' + m.ADM_ZIP_GORELI + '/util/utils.js', dosya), true, 'empp-vendor alt dizini elendi');
   }
   return { cagri };
 }
@@ -233,6 +253,7 @@ test('R2 — kanal Ş tanınmayan biçimdeyse (adı değişmiş minify) adm-zip 
   const r = await m.paketeUygula(kok, { log: (x) => loglar.push(x) });
   assert.deepStrictEqual(r.kanalSAcik, ['main.js']);
   assert.strictEqual(r.admZip, false);
+  assert.ok(!fs.existsSync(path.join(kok, m.VENDOR_DIZIN)), 'adm-zip pakete girmedi');
   assert.ok(!fs.existsSync(path.join(kok, 'node_modules', 'adm-zip')), 'adm-zip pakete girmedi');
   assert.ok(!fs.existsSync(path.join(kok, m.MODUL_ADI)));
   assert.ok(!fs.readFileSync(path.join(kok, 'main.js'), 'utf8').includes(m.ISARET));

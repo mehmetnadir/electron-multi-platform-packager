@@ -20,13 +20,18 @@ function shimYukle(dirname, proc) {
 }
 const icerik = require('../../runtime/icerik-guncelleme.js');
 
-function ortam({ modulVar, subBook = 'book2', platform }) {
+function ortam({ modulVar, subBook = 'book2', platform, vendor = false, motorAdmZipYok = false }) {
   const kok = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'shim-icerik-')), 'app.asar');
   const BASE = subBook ? path.join(kok, subBook) : kok;
   fs.mkdirSync(BASE, { recursive: true });
   if (modulVar) fs.copyFileSync(require.resolve('../../runtime/icerik-guncelleme.js'), path.join(kok, 'empp-icerik-guncelleme.js'));
   const workKok = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-icerik-work-'));
-  const win = { require: (ad) => require(ad) };
+  if (vendor) fs.cpSync(path.dirname(require.resolve('adm-zip/package.json')), path.join(kok, icerik.VENDOR_ADM_ZIP), { recursive: true });
+  const win = { require: (ad) => {
+    if (ad === 'adm-zip' && motorAdmZipYok) { const e = new Error("Cannot find module 'adm-zip'"); e.code = 'MODULE_NOT_FOUND'; throw e; }
+    return require(ad);
+  } };
+  Object.assign(win.require, { resolve: require.resolve });
   if (subBook) win.__emppSubBook = subBook;
   const proc = { platform: platform || 'linux', env: { EMPP_WORK_DIR: workKok } };
   shimYukle(BASE, proc).install(win);
@@ -62,4 +67,20 @@ test('Windows: ne fs-shim ne içerik kancası kurulur (kapsam dışı — review
   assert.strictEqual(o.win.__emppFsShim, undefined);
   assert.strictEqual(o.win.__emppIcerik, undefined);
   assert.strictEqual(o.win.require('adm-zip'), require('adm-zip'), 'adm-zip sarılmadı');
+});
+
+test('REGRESYON 73768: adm-zip paketin empp-vendor dizininden çözülür (node_modules yokken bile)', () => {
+  const o = ortam({ modulVar: true, vendor: true, motorAdmZipYok: true });
+  const Z = o.win.require('adm-zip');
+  assert.strictEqual(Z.__empp, true, 'sarıldı');
+  const zip = new Z();
+  assert.strictEqual(typeof zip.addFile, 'function', 'gerçek adm-zip örneği');
+  // satıcı kopyası GERÇEKTEN yüklendi (depodaki node_modules değil)
+  const yuklu = Object.keys(require.cache).some((k) => k.startsWith(path.join(fs.realpathSync(o.kok), 'empp-vendor', 'adm-zip')));
+  assert.ok(yuklu, 'empp-vendor/adm-zip require önbelleğinde yok');
+});
+
+test('satıcı dizini YOKSA (eski paket) motorun kendi çözümü; o da yoksa GERÇEK hata fırlar', () => {
+  const o = ortam({ modulVar: true, vendor: false, motorAdmZipYok: true });
+  assert.throws(() => o.win.require('adm-zip'), /Cannot find module 'adm-zip'/);
 });

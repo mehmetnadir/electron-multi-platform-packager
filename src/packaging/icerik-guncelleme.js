@@ -8,10 +8,17 @@
  * pakette adm-zip YOK, hata yutuluyor, menü sürümü yine de ilerliyor (sahte "Kitap Güncellendi").
  *
  * Bu modülün pakete yaptığı dört şey (hepsi `paketeUygula`):
- *   1) `node_modules/adm-zip/` — saf JS, bağımlılıksız; depodaki sürüm birebir kopyalanır ve
- *      paketin package.json `dependencies`'ine yazılır (electron-builder ancak böyle toplar).
- *      electron-builder `files` listesindeki `!node_modules` dışlaması `ADM_ZIP_FILES_ISTISNASI`
- *      ile delinmelidir — o değişiklik DONDURULMUŞ `packagingService.js`'te; yama dosyası ayrı.
+ *   1) `empp-vendor/adm-zip/` — saf JS, bağımlılıksız; depodaki sürüm birebir kopyalanır.
+ *      node_modules'e KONMAZ ve package.json `dependencies`'ine YAZILMAZ (REGRESYON 2026-09-24,
+ *      73768 mac 1.0.2): bağımlılık yazılınca electron-builder 26 düğüm modüllerini
+ *      `npm list --json --long` çıktısındaki `path`'ten toplar; npm 11 (@npmcli/redact) UUID
+ *      görünümlü yol parçalarını üç yıldızla maskeler → iş dizini `temp/<uuid>/app` olduğu için
+ *      toplanan yol `temp/<üç yıldız>/app/node_modules/adm-zip` olur → ENOENT scandir, mac
+ *      derlemesi düşer (UUID'siz yolda ölçümde geçiyordu, o yüzden görülmedi). Bağımlılıksız
+ *      `node_modules/adm-zip` ise electron-builder tarafından hiç kopyalanmaz (ölçüldü: asar'da 0 girdi). Satıcı dizini
+ *      `files`'taki tümünü-al deseniyle her platformda asar'a girer; renderer parçası
+ *      `window.require('adm-zip')`'i buradan çözer (Windows'ta fs-shim kurulmaz → atıl bayt).
+ *      packagingService'teki "node_modules/adm-zip" `files` istisnası artık ETKİSİZ (zararsız).
  *   2) `empp-icerik-guncelleme.js` — çalışma anı modülü (`src/runtime/icerik-guncelleme.js`):
  *      renderer parçasını fs-shim kurar, ana süreç parçasını (3) çağırır.
  *   3) Ana süreç bloğu (giriş dosyasının SONUNA): WORK↔paket menü uzlaşması + `file:` örtüsü.
@@ -41,6 +48,9 @@ const KAYNAK_MODUL = path.join(__dirname, '..', 'runtime', 'icerik-guncelleme.js
 // `/*` içeren desen, kaynağı `/\*…\*/` ile yorumsuzlaştıran sentinel testleri
 // (linux-deb-opsiyonel.test.js) sessizce körleştiriyordu — ölçüldü 2026-09-24.
 const ADM_ZIP_FILES_ISTISNASI = 'node_modules/adm-zip';
+/** adm-zip'in pakette durduğu yer — node_modules DIŞI (npm/electron-builder toplayıcısına girmez). */
+const VENDOR_DIZIN = 'empp-vendor';
+const ADM_ZIP_GORELI = VENDOR_DIZIN + '/adm-zip';
 const GIRIS_ADLARI = ['electron.js', 'main.js'];
 /** Kanal Ş'nin yaşadığı dosyalar: giriş + motorun `electronUpdate.js` → `electron.js` takası. */
 const KANAL_S_ADLARI = ['electron.js', 'main.js', 'electronUpdate.js'];
@@ -120,24 +130,31 @@ async function dosyaDonustur(dosya, fn) {
   return r;
 }
 
-/** Paketin package.json'una adm-zip bağımlılığını yazar (varsa). */
-async function bagimlilikYaz(paketKoku, kaynak) {
+/**
+ * package.json'da adm-zip bağımlılığı VARSA ve node_modules/adm-zip YOKSA siler (electron-builder
+ * npm toplayıcısı onu arar, bulamaz, derleme düşer). Yayıncı kendi node_modules/adm-zip'ini
+ * getirmişse dokunulmaz. @returns {Promise<boolean>} silindi mi
+ */
+async function bagimlilikGeriAl(paketKoku, log = () => {}) {
   const pj = path.join(paketKoku, 'package.json');
   if (!(await fs.pathExists(pj))) return false;
   const j = await fs.readJson(pj);
-  j.dependencies = { ...(j.dependencies || {}), ...paketBagimliliklari(kaynak) };
+  if (!j.dependencies || !Object.prototype.hasOwnProperty.call(j.dependencies, 'adm-zip')) return false;
+  if (await fs.pathExists(path.join(paketKoku, 'node_modules', 'adm-zip', 'package.json'))) return false;
+  delete j.dependencies['adm-zip'];
   await fs.writeJson(pj, j, { spaces: 2 });
+  log('   package.json: node_modules karşılığı olmayan adm-zip bağımlılığı kaldırıldı');
   return true;
 }
 
 /**
  * Pakete uygular. prepareElectronFiles'tan SONRA çağrılmalı (package.json + main.js hazır;
  * o adımın `npm install`'ı node_modules'ümüze dokunmasın).
- * @returns {Promise<{kanalS:Array, admZip:boolean, modul:boolean, bagimlilik:boolean, anaSurec:Array}>}
+ * @returns {Promise<{kanalS:Array, admZip:boolean, modul:boolean, anaSurec:Array}>}
  */
 async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakModul } = {}) {
   const sonuc = {
-    kanalS: [], kanalSAcik: [], admZip: false, modul: false, bagimlilik: false, anaSurec: [], hata: null,
+    kanalS: [], kanalSAcik: [], admZip: false, modul: false, anaSurec: [], hata: null,
   };
 
   // 4) Kanal Ş — kök + birinci düzey alt dizinler (bookN/electron.js kopyaları).
@@ -146,7 +163,7 @@ async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakMod
     const tam = path.join(paketKoku, ad);
     let d;
     try { d = await fs.stat(tam); } catch (e) { continue; }
-    if (!d.isDirectory() || ad === 'node_modules') continue;
+    if (!d.isDirectory() || ad === 'node_modules' || ad === VENDOR_DIZIN) continue;
     for (const g of KANAL_S_ADLARI) adaylar.push(path.join(tam, g));
   }
   for (const dosya of adaylar) {
@@ -169,7 +186,7 @@ async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakMod
   }
 
   // 1) adm-zip
-  const hedef = path.join(paketKoku, 'node_modules', 'adm-zip');
+  const hedef = path.join(paketKoku, VENDOR_DIZIN, 'adm-zip');
   let kaynak = null;
   try {
     kaynak = admZipKaynak || admZipKaynagi();
@@ -180,11 +197,10 @@ async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakMod
     sonuc.hata = `adm-zip yok: ${e.message}`;
   }
   if (!sonuc.admZip) log(`   ⛔ içerik güncelleme KAPALI — ${sonuc.hata}`);
-  if (sonuc.admZip) {
-    try { sonuc.bagimlilik = await bagimlilikYaz(paketKoku, kaynak); } catch (e) {
-      sonuc.hata = `package.json dependencies yazılamadı: ${e.message}`;
-      log(`   ⚠️ ${sonuc.hata}`);
-    }
+  // package.json'a adm-zip bağımlılığı YAZILMAZ (başlıktaki regresyon); eski bir koşudan kalmışsa
+  // geri alınır — bağımlılık + eksik node_modules = electron-builder ENOENT.
+  try { await bagimlilikGeriAl(paketKoku, log); } catch (e) {
+    log(`   ⚠️ package.json adm-zip bağımlılığı geri alınamadı: ${e.message}`);
   }
 
   // 2) çalışma anı modülü
@@ -229,7 +245,7 @@ async function durumYaz(paketKoku, sonuc, log) {
 }
 
 module.exports = {
-  ISARET, KANAL_S_ISARET, MODUL_ADI, KAYNAK_MODUL, ADM_ZIP_FILES_ISTISNASI, DURUM_ADI,
+  ISARET, KANAL_S_ISARET, MODUL_ADI, KAYNAK_MODUL, ADM_ZIP_FILES_ISTISNASI, DURUM_ADI, VENDOR_DIZIN, ADM_ZIP_GORELI, bagimlilikGeriAl,
   acikMi, admZipKaynagi, kanalSTehlikeli, paketBagimliliklari, kanalSKapat, blokUret, anaSurecEnjekteEt,
   paketeUygula,
 };
