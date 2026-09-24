@@ -162,3 +162,31 @@ node scripts/guncelleme-manifesti-uret.js --set-koku <kok> --set-kimligi <id> \
   --cikti <dizin> [--kitaplar '<json dizisi>']
 # çıktı: <cikti>/set/<id>/{surum.json,manifest.json,dosya/<yol>}
 ```
+
+## Sunucu tarafı — TASARIM (2026-09-23, Şef; Nadir'in "R2 statik" önerisine itirazı yok)
+
+Karar: SET güncelleme uçları **yayıncının R2 kovasında statik dosya** olarak yaşar; API'ye
+rota eklenmez. Taban = `<r2Config.publicUrl>/guncelleme` (YDS örneği:
+`https://cdn.ydspublishing.com/guncelleme` → `…/guncelleme/set/11811/surum.json`).
+Yayınevi × kova ilkesi: taban yayıncının R2 config'inden çözülür, env varsayılanına düşülmez.
+
+Üç parça, üç sorumluluk (R2 kimlik bilgileri YALNIZ srv21'de — Decision B):
+1. **Paketleyici (Mac, `packagingService`)** — `setKimligi` verilen Windows işinde, TÜM
+   yamalardan sonra (empp-set.json ile aynı anda) `scripts/guncelleme-manifesti-uret.js`
+   çekirdeğini `workingPath` üzerinde koşturur → `temp/<jobId>/windows/guncelleme/set/<id>/
+   {surum.json, manifest.json, dosya/…}`; `GET /api/download/:jobId/guncelleme` bunu tek
+   `.tar.gz` olarak verir. Paketteki `empp-set.json.taban` = istekteki `guncellemeTabani`.
+2. **API (srv21, `routes/agent/build-agents.ts`)** — claim yükü `setKimligi` +
+   `guncellemeTabani` (= publicUrl + `/guncelleme`) taşır; yeni uç
+   `POST /api/v1/agents/:agentId/result/presign-guncelleme` `{bookId, platform, setKimligi,
+   dosyalar:[{yol, boyut, contentType}]}` → her dosya için presigned PUT
+   (`guncelleme/set/<setKimligi>/<yol>` anahtarı, kitabın yayıncısının kovası, lease şartı).
+3. **Runner (Mac, `src/agent/runner.js`)** — Windows SET işi başarıyla bitince
+   `guncelleme` paketini indirir, SIRAYLA yükler: önce `dosya/*`, sonra `manifest.json`,
+   EN SON `surum.json` (tüketici tutarlı durum görsün); ardından `GET <taban>/set/<id>/surum.json`
+   ile üretilen sürümü doğrular; eşleşmezse iş "yüklendi" sayılmaz.
+
+Tetikleyici (AÇIK SORU — Nadir): Windows SET paketi bugün elle (`.sm4-*-uret.js`) üretiliyor;
+boru hattında `windows` platformu origin exe'nin R2 kopyası. NSIS SET paketi ayrı bir platform
+(`windows-set`) mı olacak, yoksa `windows` teslimini mi değiştirecek? Cevaba kadar üç parça
+elle tetiklenen işte de çalışır.
