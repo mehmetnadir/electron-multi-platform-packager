@@ -524,8 +524,11 @@
     if (isBrowser && typeof win.fetch === 'function') return win.fetch.bind(win);
     return typeof fetch === 'function' ? fetch : null;
   }
+  // K10: motorun kendi kitap zip indirmesi basladi mi (tek kitapta cift indirmeyi onler).
+  var motorZipIndirmesi = { basladi: false };
   function httpsGet(url, secenek, cb, fetchFn) {
     if (typeof secenek === 'function') { fetchFn = cb; cb = secenek; }
+    if (/\/ZKitapZip/i.test(String(url))) motorZipIndirmesi.basladi = true;
     fetchFn = fetchFn || varsayilanFetch();
     var istekH = {};
     var istek = {
@@ -627,12 +630,14 @@
     var m = new RegExp('(?:^|\\s)' + ad + '="([^"]*)"').exec(etiket);
     return m ? m[1] : null;
   }
-  function menuKitaplari(xml) {
+  // K10: tek kitap exe'sinin menusunde `isDownloaded` HIC YOK (kitaplik ekrani gosterilmedigi
+  // icin motor yazmaz). Nitelik yoksa kitabin BookContent.xml'i var mi diye bakilir (`varMi`).
+  function menuKitaplari(xml, varMi) {
     var l = [], re = /<cover\b[^>]*>/g, m;
     while ((m = re.exec(xml))) {
-      var e = m[0], xs = nitelik(e, 'xmlSource') || '';
+      var e = m[0], xs = nitelik(e, 'xmlSource') || '', isd = nitelik(e, 'isDownloaded');
       l.push({ id: nitelik(e, 'ID'), surum: Number(nitelik(e, 'version') || 0),
-        kurulu: nitelik(e, 'isDownloaded') === 'true',
+        kurulu: isd === 'true' || (isd === null && !!xs && typeof varMi === 'function' && !!varMi(xs)),
         dizin: xs.indexOf('/data/') > 0 ? xs.slice(0, xs.indexOf('/data/')) : null });
     }
     return l;
@@ -694,7 +699,19 @@
       if (!uc) { rapor.sebep = 'guncelleme-ucu-yok'; return rapor; }
       var c = imwinCoz(menuMetni());
       if (!c) { rapor.sebep = 'menu-okunamadi'; return rapor; }
-      var kitaplar = menuKitaplari(c.xml).filter(function (k) { return k.kurulu && k.id && k.dizin; });
+      // K10 (2026-09-22): TEK KITAP (menude tek kapak) motorun `oneBook` kipidir. Motor
+      // acilista guncellemeyi KENDISI sorar ve varsa yukleme ekraniyla indirip acar (K8 yolu,
+      // her baglantida). Burada da taramak ayni zip'i IKINCI kez indirir (telefonda olculdu:
+      // 153 MB iki kez). Tek kitapta guncelleme motorundur; oto-guncelleme yalniz paket icindir.
+      var varMi = deps.varMi || function (y) { try { return fsMod.existsSync(y); } catch (e) { return false; } };
+      var tum = menuKitaplari(c.xml, varMi);
+      // Motor oneBook'ta guncellemeyi acilista kendisi baslatir — ama yalniz sorgu cevabi
+      // kitap acilmadan (5 sn zamanlayici) once gelirse. Yavas agda cevap gec gelir, kitap
+      // guncellenmeden acilir (telefonda olculdu: cevap 5,1 sn'de geldi). Bu yuzden: motor bu
+      // oturumda zip indirmeye BASLADIYSA dokunma; baslamadiysa yedek olarak biz indiririz.
+      var motorIndirdi = deps.motorIndirdi || function () { return motorZipIndirmesi.basladi; };
+      if (tum.length === 1 && motorIndirdi()) { rapor.sebep = 'tek-kitap-motor-guncelliyor'; return rapor; }
+      var kitaplar = tum.filter(function (k) { return k.kurulu && k.id && k.dizin; });
       var yarida = false;
       return kitaplar.reduce(function (pr, k) {
         return pr.then(function () {
@@ -913,7 +930,7 @@
     indirilmis: indirilmis, indirilenYanit: indirilenYanit, mutlakYol: mutlakYol, bellekDosyalari: bellekDosyalari,
     ortam: ortam, BufferShim: BufferShim,
     imwinCoz: imwinCoz, imwinYaz: imwinYaz, menuKitaplari: menuKitaplari, menuSurumYamasi: menuSurumYamasi,
-    menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz } };
+    menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz, motorZipIndirmesi: motorZipIndirmesi } };
   }
   if (isBrowser) install();
 })(typeof window !== 'undefined' ? window : undefined);

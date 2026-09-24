@@ -187,3 +187,52 @@ test('GERİLEME: motorun fetch(ImWin32.dll) okuması da sürüm yamasından geç
   assert.match(c2.xml, /ID="72859"[^>]*version="2"/);
   assert.match(c2.xml, /ID="72858"[^>]*version="1"/);
 });
+
+// K10 (2026-09-22): tek kitap exe'si = motorun `oneBook` kipi (menüde tek kapak, `isDownloaded`
+// niteliği YOK). Motor açılışta güncellemeyi kendisi indirir — yalnız sorgu cevabı 5 sn içinde
+// gelirse. Telefonda ölçüldü: iki taraf birlikte indirince 153 MB iki kez indi; cevap 5,1 sn'de
+// gelince de motor hiç indirmedi. Kural: motor başladıysa dokunma, başlamadıysa yedek ol.
+const TEK_MENU = '<main activation="false" label="İmpark Eğitim" bookUpdate="true"><Group ID="0" label="">' +
+  '<Tab ID="0" label=""><cover ID="74209" etkID="74209" source="assets/74209/cover.png" ' +
+  'xmlSource="assets/74209/data/BookContent.xml" version="0" install="true" update="false"></cover>' +
+  '</Tab></Group></main>';
+function tekBagim(motor, cagri) {
+  const d = bagimliliklar({ bagli: true, olculen: false }, { 74209: 1 }, cagri);
+  d.menuMetni = () => I.imwinYaz(TEK_MENU, 27, 5);
+  d.varMi = (y) => y === 'assets/74209/data/BookContent.xml';
+  d.motorIndirdi = () => motor;
+  return d;
+}
+
+test('K10 tek kitap: motor zip indirmeye BAŞLADIYSA oto-güncelleme sorgu atmaz (çift indirme yok)', async () => {
+  kur();
+  const cagri = { json: [], zip: [] };
+  const r = await I.otoGuncelle(tekBagim(true, cagri));
+  assert.strictEqual(r.sebep, 'tek-kitap-motor-guncelliyor');
+  assert.deepStrictEqual([cagri.json.length, cagri.zip.length], [0, 0]);
+});
+
+test('K10 tek kitap: motor BAŞLAMADIYSA (geç cevap) yedek olarak iner; isDownloaded yokken dosyadan kurulu sayılır', async () => {
+  kur();
+  const cagri = { json: [], zip: [] };
+  const r = await I.otoGuncelle(tekBagim(false, cagri));
+  assert.deepStrictEqual(r.guncellendi, ['74209:0->1']);
+  assert.match(I.imwinCoz(I.menuDllYamasi(I.imwinYaz(TEK_MENU, 27, 5))).xml, /ID="74209"[^>]*version="1"/);
+});
+
+test('K10: httpsGet bir ZKitapZip adresine giderse motor-indirdi bayrağı kalkar', () => {
+  I.motorZipIndirmesi.basladi = false;
+  I.httpsGet('https://x/Uploads/ZKitapZipH/74209-1.zip', () => {}, async () => new Response(''));
+  assert.strictEqual(I.motorZipIndirmesi.basladi, true);
+  I.motorZipIndirmesi.basladi = false;
+});
+
+test('K10 GERİLEME: paket menüsü (2+ kapak) taranmaya devam eder; isDownloaded="false" dosya olsa bile kurulu değil', async () => {
+  kur();
+  const cagri = { json: [], zip: [] };
+  const d = bagimliliklar({ bagli: true, olculen: false }, { 72859: 2, 15415: 1 }, cagri);
+  d.varMi = () => true;
+  const r = await I.otoGuncelle(d);
+  assert.deepStrictEqual(r.guncellendi, ['72859:1->2']);
+  assert.ok(!cagri.json.some((u) => u.includes('id=15415')));
+});
