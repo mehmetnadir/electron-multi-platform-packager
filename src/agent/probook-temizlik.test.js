@@ -1,21 +1,20 @@
 'use strict';
-// ProBook kabul kapısının gizleme + temizlik gövdelerinin GERÇEK koşumu (mock yok):
-//   tools/pardus/probook-gizle.sh     — testten önce envanter + gizleme
-//   tools/pardus/probook-temizlik.sh  — testten sonra geri alma + silme
+// ProBook kabul kapısının gizleme + temizlik + kilit gövdelerinin GERÇEK koşumu (mock yok):
+//   tools/pardus/probook-gizle.sh     — testten önce gizleme + MANİFEST
+//   tools/pardus/probook-temizlik.sh  — testten sonra YALNIZ manifestteki yollar
+//   tools/pardus/probook-kilit.sh     — uzak/yerel kapıların ortak ~/.kabul.lock'u
 // Sahte bir $HOME altında bash ile koşturulur.
 //
-// Neden bu testler var — üçü de ölçülmüş saha kusuru (2026-09-19):
-//  1) Temizlik yalnız `.kabulgizli-<damga>` gizlilerini geziyordu; kitabın önceden
-//     kurulumu yoksa taze kurulum ProBook'ta kalıyordu ("YDT Power 12 Set").
-//  2) `trap` yoktu; anormal çıkışta hiç temizlenmiyordu (1029 MB'lık impark iki gün durdu).
-//  3) İKİ kurulum kökü var, kapı birini biliyordu:
-//       ~/DijiTap/DijiTap/<Set>        (SET paketi)
-//       ~/DijiTap/<alan-adi>/<Kitap>   (tekil kitap)
-//     İkincisinden 514 MB'lık Lingo-Land-Grade-3 kurulumu geride kaldı.
+// Ölçülmüş saha kusurları:
+//  2026-09-19: (1) önceden kurulumu olmayan kitabın taze kurulumu kalıyordu ("YDT Power 12 Set");
+//   (2) trap yoktu; (3) iki kurulum kökü (~/DijiTap/DijiTap/<Set>, ~/DijiTap/<alan>/<Kitap>).
+//  2026-09-24 18:06: "başlangıç envanterinde yok → test kurulumu → SİL" yöntemi, eşzamanlı bir
+//   sürecin oluşturduğu `DijiTap/Privilege Grade 11.yedek-20260924-180613`'ü SİLDİ. Artık
+//   yalnız manifest (KURULUM/GIZLI/KOK) işlenir; manifestte olmayan dizin silinmez.
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -23,12 +22,12 @@ const path = require('node:path');
 const ARAC = path.join(__dirname, '..', '..', 'tools', 'pardus');
 const GIZLE = path.join(ARAC, 'probook-gizle.sh');
 const TEMIZLIK = path.join(ARAC, 'probook-temizlik.sh');
+const KILIT = path.join(ARAC, 'probook-kilit.sh');
 
 function damgaUret() {
   return `test${process.pid}${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// kurulumlar: "kok/ad" biçiminde yollar (örn. "DijiTap/Kitap A").
 function evKur(kurulumlar = []) {
   const ev = fs.mkdtempSync(path.join(os.tmpdir(), 'probook-kapi-'));
   const taban = path.join(ev, 'DijiTap');
@@ -41,18 +40,17 @@ function evKur(kurulumlar = []) {
   return { ev, taban };
 }
 
-function kosGizle(ev, damga) {
-  return execFileSync('bash', [GIZLE, damga], { env: { ...process.env, HOME: ev }, encoding: 'utf8' });
+// hedef: paketin kuracağı "kok/ad" (üretimde AppRun'dan okunur; burada açık verilir).
+function kosGizle(ev, damga, hedef = '') {
+  return execFileSync('bash', [GIZLE, damga, '', hedef], { env: { ...process.env, HOME: ev }, encoding: 'utf8' });
 }
-
 function kosTemizlik(ev, damga, kopyala = '0', uzak = '') {
-  return execFileSync('bash', [TEMIZLIK, damga, kopyala, uzak], {
-    env: { ...process.env, HOME: ev },
-    encoding: 'utf8',
-  });
+  return execFileSync('bash', [TEMIZLIK, damga, kopyala, uzak], { env: { ...process.env, HOME: ev }, encoding: 'utf8' });
 }
-
-// $HOME/DijiTap altındaki tüm kurulumlar, "kok/ad" biçiminde, sıralı.
+function kur(taban, yol, isaret = 'TAZE') {
+  fs.mkdirSync(path.join(taban, yol), { recursive: true });
+  fs.writeFileSync(path.join(taban, yol, isaret), 'x');
+}
 function kurulumlar(taban) {
   const cikti = [];
   for (const kok of fs.readdirSync(taban)) {
@@ -64,93 +62,164 @@ function kurulumlar(taban) {
   }
   return cikti.sort();
 }
+const manifest = (ev, damga) => {
+  const y = path.join(ev, `.kabul-${damga}.manifest`);
+  return fs.existsSync(y) ? fs.readFileSync(y, 'utf8').split('\n').filter(Boolean).sort() : null;
+};
 
-function envanter(damga) {
-  const yol = `/tmp/kabul-onceki-${damga}.txt`;
-  return fs.existsSync(yol)
-    ? fs.readFileSync(yol, 'utf8').split('\n').filter(Boolean).sort()
-    : null;
-}
+// ---- gizleme + manifest ----
 
-// ---- gizleme ----
-
-test('gizleme her iki kurulum kökünü de envantere yazar ve gizler', () => {
+test('gizleme iki kökü de gizler ve manifeste GIZLI + KURULUM yazar', () => {
   const damga = damgaUret();
-  const { ev, taban } = evKur([
-    'DijiTap/Super Monsters 3 Set',
-    'akillitahta.ydspublishing.com/Lingo-Land-Grade-3',
-  ]);
-  const cikti = kosGizle(ev, damga);
-  assert.deepStrictEqual(envanter(damga), [
-    'DijiTap/Super Monsters 3 Set',
-    'akillitahta.ydspublishing.com/Lingo-Land-Grade-3',
+  const { ev, taban } = evKur(['DijiTap/Super Monsters 3 Set', 'akillitahta.ydspublishing.com/Lingo-Land-Grade-3']);
+  const cikti = kosGizle(ev, damga, 'DijiTap/Bloktest');
+  assert.deepStrictEqual(manifest(ev, damga), [
+    'GIZLI DijiTap/Super Monsters 3 Set',
+    'GIZLI akillitahta.ydspublishing.com/Lingo-Land-Grade-3',
+    'KURULUM DijiTap/Bloktest',
   ]);
   assert.deepStrictEqual(kurulumlar(taban), [
     `DijiTap/Super Monsters 3 Set.kabulgizli-${damga}`,
     `akillitahta.ydspublishing.com/Lingo-Land-Grade-3.kabulgizli-${damga}`,
   ]);
-  assert.match(cikti, /gizlendi: akillitahta\.ydspublishing\.com\/Lingo-Land-Grade-3/);
+  assert.match(cikti, /hedef: DijiTap\/Bloktest/);
   kosTemizlik(ev, damga);
 });
 
-test('hiç kurulum yokken gizleme boş envanter üretir (dosya yokluğu ≠ boşluk)', () => {
+test('başkasının .yedek-/.kabulgizli-/.kaldirildi- dizinleri GİZLENMEZ ve manifeste girmez', () => {
   const damga = damgaUret();
-  const { ev } = evKur([]);
-  kosGizle(ev, damga);
-  assert.deepStrictEqual(envanter(damga), []);
+  const { ev, taban } = evKur([
+    'DijiTap/Privilege Grade 11.yedek-20260924-180613', 'DijiTap/X.kabulgizli-baska', 'DijiTap/Y.kaldirildi-1',
+  ]);
+  kosGizle(ev, damga, 'DijiTap/Bloktest');
+  assert.deepStrictEqual(manifest(ev, damga), ['KURULUM DijiTap/Bloktest']);
   kosTemizlik(ev, damga);
+  assert.deepStrictEqual(kurulumlar(taban), [
+    'DijiTap/Privilege Grade 11.yedek-20260924-180613', 'DijiTap/X.kabulgizli-baska', 'DijiTap/Y.kaldirildi-1',
+  ]);
+});
+
+test('yeni alan adı kökü manifeste KOK olarak girer ve boş kalınca kaldırılır', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Super Monsters 3 Set']);
+  kosGizle(ev, damga, 'akillitahta.ydspublishing.com/Lingo-Land-Grade-3');
+  assert.ok(manifest(ev, damga).includes('KOK akillitahta.ydspublishing.com'));
+  kur(taban, 'akillitahta.ydspublishing.com/Lingo-Land-Grade-3');
+  const cikti = kosTemizlik(ev, damga);
+  assert.match(cikti, /silindi \(test kurulumu\): akillitahta\.ydspublishing\.com\/Lingo-Land-Grade-3/);
+  assert.strictEqual(fs.existsSync(path.join(taban, 'akillitahta.ydspublishing.com')), false);
+  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Super Monsters 3 Set']);
 });
 
 // ---- temizlik ----
 
+test('GERİLEME 18:06: test sırasında doğan, manifestte OLMAYAN dizin SİLİNMEZ (.yedek- olayı)', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Privilege Grade 11']);
+  kosGizle(ev, damga, 'DijiTap/Bloktest');
+  kur(taban, 'DijiTap/Bloktest');                                 // bizim kurulumumuz
+  kur(taban, 'DijiTap/Privilege Grade 11.yedek-20260924-180613', 'YEDEK'); // eşzamanlı başka süreç
+  kur(taban, 'baska-alan.com/Baska Kitap', 'BASKA');              // başka kapı/öğretmen kurulumu
+  const cikti = kosTemizlik(ev, damga);
+  assert.deepStrictEqual(kurulumlar(taban), [
+    'DijiTap/Privilege Grade 11',
+    'DijiTap/Privilege Grade 11.yedek-20260924-180613',
+    'baska-alan.com/Baska Kitap',
+  ]);
+  assert.match(cikti, /silindi \(test kurulumu\): DijiTap\/Bloktest/);
+  assert.doesNotMatch(cikti, /yedek-20260924-180613/);
+});
+
 test('testin kurduğu kurulum silinir — kitabın ÖNCEDEN kurulumu olmasa bile', () => {
   const damga = damgaUret();
   const { ev, taban } = evKur(['DijiTap/Super Monsters 3 Set']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'DijiTap', 'YDT Power 12 Set'), { recursive: true });
+  kosGizle(ev, damga, 'DijiTap/YDT Power 12 Set');
+  kur(taban, 'DijiTap/YDT Power 12 Set');
   const cikti = kosTemizlik(ev, damga);
   assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Super Monsters 3 Set']);
   assert.match(cikti, /silindi \(test kurulumu\): DijiTap\/YDT Power 12 Set/);
 });
 
-test('İKİNCİ kökteki test kurulumu da silinir (514 MB Lingo kalıntısının sınıfı)', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Super Monsters 3 Set']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'akillitahta.ydspublishing.com', 'Lingo-Land-Grade-3'), {
-    recursive: true,
-  });
-  const cikti = kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Super Monsters 3 Set']);
-  assert.match(cikti, /silindi \(test kurulumu\): akillitahta\.ydspublishing\.com\/Lingo-Land-Grade-3/);
-  // Test sirasinda dogan bos alan adi dizini de kalmaz.
-  assert.strictEqual(fs.existsSync(path.join(taban, 'akillitahta.ydspublishing.com')), false);
-});
-
-test('testten ÖNCE var olan kurulumlar korunur (iki kökte de)', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap A', 'akillitahta.ydspublishing.com/Kitap B']);
-  kosGizle(ev, damga);
-  kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), [
-    'DijiTap/Kitap A',
-    'akillitahta.ydspublishing.com/Kitap B',
-  ]);
-});
-
 test('gizlenen eski kurulum geri konur, üstüne kurulan taze sürüm gider', () => {
   const damga = damgaUret();
   const { ev, taban } = evKur(['DijiTap/Kitap A']);
-  kosGizle(ev, damga);
-  // Test ayni kitabi yeniden kurdu; taze kurulumu TAZE isaretiyle ayirt ediyoruz.
-  const taze = path.join(taban, 'DijiTap', 'Kitap A');
-  fs.mkdirSync(taze, { recursive: true });
-  fs.writeFileSync(path.join(taze, 'TAZE'), 'x');
+  kosGizle(ev, damga, 'DijiTap/Kitap A');
+  kur(taban, 'DijiTap/Kitap A');
   const cikti = kosTemizlik(ev, damga);
   assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
-  assert.strictEqual(fs.existsSync(path.join(taze, 'TAZE')), false);
-  assert.strictEqual(fs.existsSync(path.join(taze, 'AppRun')), true);
+  assert.strictEqual(fs.existsSync(path.join(taban, 'DijiTap', 'Kitap A', 'TAZE')), false);
+  assert.strictEqual(fs.existsSync(path.join(taban, 'DijiTap', 'Kitap A', 'AppRun')), true);
   assert.match(cikti, /geri konuldu: DijiTap\/Kitap A/);
+});
+
+test('geri koyarken yerde BAŞKA bir dizin varsa ezilmez, gizli kopya bırakılır', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Kitap A']);
+  kosGizle(ev, damga, 'DijiTap/Bloktest');
+  kur(taban, 'DijiTap/Kitap A', 'BASKASI');
+  const cikti = kosTemizlik(ev, damga);
+  assert.match(cikti, /CAKISMA: DijiTap\/Kitap A/);
+  assert.ok(fs.existsSync(path.join(taban, 'DijiTap', 'Kitap A', 'BASKASI')));
+  assert.ok(fs.existsSync(path.join(taban, 'DijiTap', `Kitap A.kabulgizli-${damga}`, 'AppRun')));
+});
+
+test('hedef gizlemeden sonra da duruyorsa ONCEKI sayılır ve SİLİNMEZ', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur([]);
+  // gizlenemeyen (korunan adla değil, gerçekten silinemeyen) durumu taklit: hedefi yalnız
+  // okunur bir kökün altına koy → mv başarısız → ONCEKI.
+  kur(taban, 'kilitli.com/Kitap', 'ORIJINAL');
+  fs.chmodSync(path.join(taban, 'kilitli.com'), 0o555);
+  try {
+    kosGizle(ev, damga, 'kilitli.com/Kitap');
+    assert.ok(manifest(ev, damga).includes('ONCEKI kilitli.com/Kitap'));
+    assert.ok(!manifest(ev, damga).includes('KURULUM kilitli.com/Kitap'));
+    kosTemizlik(ev, damga);
+    assert.ok(fs.existsSync(path.join(taban, 'kilitli.com', 'Kitap', 'ORIJINAL')));
+  } finally {
+    fs.chmodSync(path.join(taban, 'kilitli.com'), 0o755);
+  }
+});
+
+test('hedef bilinmiyorsa (AppRun okunamadı) hiçbir kurulum silinmez, gizliler yine geri konur', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Kitap A']);
+  const cikti = kosGizle(ev, damga, '');
+  assert.match(cikti, /hedef: BILINMIYOR/);
+  kur(taban, 'DijiTap/Taze');
+  kosTemizlik(ev, damga);
+  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A', 'DijiTap/Taze']);
+});
+
+test('manifest YOKSA hiçbir şey silinmez (güvenli taraf)', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Kitap A']);
+  const cikti = kosTemizlik(ev, damga);
+  assert.match(cikti, /manifest yok/);
+  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
+});
+
+test('manifestte güvensiz yol (.., mutlak, derin) SİLİNMEZ', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur([]);
+  kur(taban, 'DijiTap/Kurban');
+  fs.writeFileSync(path.join(ev, `.kabul-${damga}.manifest`),
+    'KURULUM ../DijiTap\nKURULUM /etc/x\nKURULUM DijiTap/Kurban/alt\nKURULUM DijiTap\n');
+  const cikti = kosTemizlik(ev, damga);
+  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kurban']);
+  assert.match(cikti, /atlandi \(gecersiz yol\)/);
+});
+
+test('iki kez koşmak zararsız; manifest temizlikten sonra kalmaz', () => {
+  const damga = damgaUret();
+  const { ev, taban } = evKur(['DijiTap/Kitap A']);
+  kosGizle(ev, damga, 'DijiTap/Taze Kitap');
+  kur(taban, 'DijiTap/Taze Kitap');
+  kosTemizlik(ev, damga);
+  assert.strictEqual(manifest(ev, damga), null);
+  const ikinci = kosTemizlik(ev, damga);
+  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
+  assert.strictEqual(ikinci.includes('silindi (test kurulumu)'), false);
 });
 
 test('başka koşunun gizlisine dokunulmaz', () => {
@@ -158,79 +227,57 @@ test('başka koşunun gizlisine dokunulmaz', () => {
   const baska = damgaUret();
   const { ev, taban } = evKur([]);
   fs.mkdirSync(path.join(taban, 'DijiTap', `Yabanci.kabulgizli-${baska}`), { recursive: true });
-  kosGizle(ev, damga);
+  kosGizle(ev, damga, 'DijiTap/Bloktest');
   kosTemizlik(ev, damga);
   assert.deepStrictEqual(kurulumlar(taban), [`DijiTap/Yabanci.kabulgizli-${baska}`]);
 });
 
-test('envanter YOKSA hiçbir kurulum silinmez (güvenli taraf)', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap A']);
-  kosTemizlik(ev, damga); // gizleme hiç koşmadı → envanter yok
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
-});
-
-test('iki kez koşmak zararsız (trap + red() aynı anda çağırabilir)', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap A']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'DijiTap', 'Taze Kitap'), { recursive: true });
-  kosTemizlik(ev, damga);
-  const ikinci = kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
-  assert.strictEqual(ikinci.includes('silindi (test kurulumu)'), false);
-});
-
-test('envanter temizlikten sonra kalmaz', () => {
-  const damga = damgaUret();
-  const { ev } = evKur(['DijiTap/Kitap A']);
-  kosGizle(ev, damga);
-  assert.notStrictEqual(envanter(damga), null);
-  kosTemizlik(ev, damga);
-  assert.strictEqual(envanter(damga), null);
-});
-
-test('ad eşleşmesi TAM satır olmalı — önek eşleşmesi kalıntı bırakmaz', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap A Deneme']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'DijiTap', 'Kitap A'), { recursive: true });
-  kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A Deneme']);
-});
-
-test('ad düz metin karşılaştırılır — regex özel karakteri kalıntı bırakmaz', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap AX']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'DijiTap', 'Kitap A.'), { recursive: true });
-  kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap AX']);
-});
-
-test('aynı ad iki farklı kökte ise yalnız testin kurduğu gider', () => {
-  const damga = damgaUret();
-  const { ev, taban } = evKur(['DijiTap/Kitap A']);
-  kosGizle(ev, damga);
-  fs.mkdirSync(path.join(taban, 'baska-alan.com', 'Kitap A'), { recursive: true });
-  kosTemizlik(ev, damga);
-  assert.deepStrictEqual(kurulumlar(taban), ['DijiTap/Kitap A']);
-});
-
-test('KOPYALA=1 ise uzaktaki impark kopyası silinir', () => {
+test('KOPYALA=1 ise uzaktaki impark kopyası silinir; KOPYALA=0 ise yerinde paket kalır', () => {
   const damga = damgaUret();
   const { ev } = evKur([]);
   const uzak = path.join(ev, `kabul-${damga}.impark`);
   fs.writeFileSync(uzak, 'paket');
   kosTemizlik(ev, damga, '1', uzak);
   assert.strictEqual(fs.existsSync(uzak), false);
-});
-
-test('KOPYALA=0 ise yerinde duran paket silinmez', () => {
-  const damga = damgaUret();
-  const { ev } = evKur([]);
   const yerinde = path.join(ev, 'yerinde.impark');
   fs.writeFileSync(yerinde, 'paket');
   kosTemizlik(ev, damga, '0', yerinde);
   assert.strictEqual(fs.existsSync(yerinde), true);
+});
+
+// ---- ortak kilit ----
+
+const kilitKos = (ev, ...a) => spawnSync('bash', [KILIT, ...a], { env: { ...process.env, HOME: ev }, encoding: 'utf8' });
+
+test('kilit: O_EXCL — ikinci kapı alamaz, sahibi bırakınca alır; başkası bırakamaz', () => {
+  const { ev } = evKur([]);
+  assert.strictEqual(kilitKos(ev, 'al', 'd1', 'mac', '111').status, 0);
+  const ikinci = kilitKos(ev, 'al', 'd2', 'etap', String(process.pid));
+  assert.strictEqual(ikinci.status, 3);
+  assert.match(ikinci.stdout, /KILIT_MESGUL pid=111 damga=d1 kaynak=mac/);
+  kilitKos(ev, 'birak', 'd2');
+  assert.ok(fs.existsSync(path.join(ev, '.kabul.lock')), 'başkasının damgasıyla bırakılamaz');
+  kilitKos(ev, 'birak', 'd1');
+  assert.strictEqual(kilitKos(ev, 'al', 'd2', 'x', '1').status, 0);
+});
+
+test('kilit: aynı makinede sahibi ölü ise bayat sayılır, kenara alınır (silinmez)', () => {
+  const { ev } = evKur([]);
+  const host = execFileSync('hostname', { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(ev, '.kabul.lock'), `pid=999999 damga=eski kaynak=${host} zaman=1\n`);
+  const r = kilitKos(ev, 'al', 'yeni', host, String(process.pid));
+  assert.strictEqual(r.status, 0, r.stdout);
+  assert.match(r.stdout, /BAYAT KILIT kenara alindi \(sahibi pid 999999 olu\)/);
+  assert.ok(fs.readdirSync(ev).some((f) => f.startsWith('.kabul.lock.kaldirildi-')));
+});
+
+test('kilit: uzak sahipli taze kilit pid kontrolüyle BOZULMAZ; yaş sınırı aşılınca bozulur', () => {
+  const { ev } = evKur([]);
+  fs.writeFileSync(path.join(ev, '.kabul.lock'), 'pid=999999 damga=uzak kaynak=baska-mac zaman=1\n');
+  assert.strictEqual(kilitKos(ev, 'al', 'yerel', 'etap', '1').status, 3);
+  const eski = new Date(Date.now() - 61 * 60 * 1000);
+  fs.utimesSync(path.join(ev, '.kabul.lock'), eski, eski);
+  const r = kilitKos(ev, 'al', 'yerel', 'etap', '1');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /60 dk'dan eski/);
 });

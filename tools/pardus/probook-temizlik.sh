@@ -3,65 +3,66 @@
 # Uzak makinede `bash -s <DAMGA> <KOPYALA> <UZAK>` ile koşar.
 # Testi: src/agent/probook-temizlik.test.js — sahte bir $HOME altında gerçekten koşar.
 #
-# Neden gerekti (2026-09-19, üç ölçülmüş kusur):
-#  1) Eski döngü YALNIZ `.kabulgizli-<damga>` diye gizlenmiş dizinleri geziyordu.
-#     Kitabın ÖNCEDEN KURULUMU YOKSA gizlenecek bir şey olmuyor, döngü hiç dönmüyor,
-#     TAZE KURULUM ProBook'ta KALIYORDU. Kanıt: 16:47 koşusu "YDT Power 12 Set".
-#  2) `trap` yoktu; anormal çıkışta temizlik hiç koşmuyordu. Kanıt:
-#     /tmp/kabul-1789656459.impark (1029 MB) iki gün durdu.
-#  3) Tek kök biliniyordu (~/DijiTap/DijiTap). Tekil kitap paketleri
-#     ~/DijiTap/<alan-adi>/<Kitap> altına kuruluyor; oradaki 514 MB'lık
-#     Lingo-Land-Grade-3 kurulumu ve ÇALIŞAN uygulaması geride kalıyordu
-#     (pkill kalıbı da o yolu tutmuyordu).
+# YALNIZ MANİFEST (2026-09-24 olayı): eski gövde "başlangıç envanterinde olmayan her dizini"
+# test kurulumu sayıp siliyordu. 18:06'da eşzamanlı bir sürecin oluşturduğu
+# `~/DijiTap/DijiTap/Privilege Grade 11.yedek-20260924-180613` böyle silindi.
+# Artık yalnız ~/.kabul-<damga>.manifest'te bu koşunun yazdığı yollar işlenir; manifestte
+# olmayan hiçbir dizin silinmez. Manifest yoksa hiçbir şey silinmez, uygulama da kapatılmaz.
+# Önceki kusurlar (2026-09-19) hâlâ kapalı: taze kurulum hedefi manifestte (KURULUM) olduğu
+# için ÖNCEDEN kurulumu olmayan kitapta da silinir; trap ile her çıkışta koşar; iki kök.
 set -u
 
 DAMGA="${1:?damga gerekli}"
 KOPYALA="${2:-0}"
 UZAK="${3:-}"
-
 TABAN="$HOME/DijiTap"
-ONCEKI="/tmp/kabul-onceki-$DAMGA.txt"
+M="$HOME/.kabul-$DAMGA.manifest"
 
-# Her iki kökteki uygulamayı da kapat (eski kalıp yalnız DijiTap/DijiTap'i tutuyordu).
-pkill -f "$HOME/[D]ijiTap/" 2>/dev/null
-sleep 2
-pkill -9 -f "$HOME/[D]ijiTap/" 2>/dev/null
+gecerli_yol(){ case "$1" in ""|/*|*/*/*|*..*|*/) return 1 ;; */*) return 0 ;; esac; return 1; }
+listede(){ grep -Fxq "$1 $2" "$M" 2>/dev/null; }
 
-# (a) Testin KURDUĞU kurulumları sil — kitabın önceden kurulumu olsun olmasın.
-if [ -f "$ONCEKI" ] && [ -d "$TABAN" ]; then
-  for kok in "$TABAN"/*/; do
-    [ -d "$kok" ] || continue
-    kokad="$(basename "${kok%/}")"
-    case "$kokad" in *.kabulgizli-*) continue ;; esac
-    for d in "$kok"*/; do
-      [ -d "$d" ] || continue
-      ad="$(basename "${d%/}")"
-      case "$ad" in *.kabulgizli-*) continue ;; esac
-      grep -Fxq "$kokad/$ad" "$ONCEKI" || { rm -rf "${d%/}"; echo "silindi (test kurulumu): $kokad/$ad"; }
-    done
-  done
+if [ -f "$M" ]; then
+  pkill -f "$HOME/[D]ijiTap/" 2>/dev/null
+  sleep 2
+  pkill -9 -f "$HOME/[D]ijiTap/" 2>/dev/null
+
+  # (a) Bu koşunun kurduğu kurulum.
+  while read -r tur yol; do
+    [ "$tur" = "KURULUM" ] || continue
+    gecerli_yol "$yol" || { echo "atlandi (gecersiz yol): $yol"; continue; }
+    listede ONCEKI "$yol" && { echo "atlandi (onceden vardi): $yol"; continue; }
+    hedef="$TABAN/$yol"
+    [ -L "$hedef" ] && { echo "atlandi (symlink): $yol"; continue; }
+    [ -d "$hedef" ] && { rm -rf "$hedef"; echo "silindi (test kurulumu): $yol"; }
+  done < "$M"
+
+  # (b) Bu koşunun gizlediklerini geri koy. Yerinde başka bir şey varsa EZME.
+  while read -r tur yol; do
+    [ "$tur" = "GIZLI" ] || continue
+    gecerli_yol "$yol" || continue
+    g="$TABAN/$yol.kabulgizli-$DAMGA"; a="$TABAN/$yol"
+    [ -e "$g" ] || continue
+    if [ -e "$a" ]; then
+      echo "CAKISMA: $yol yerinde bir dizin var — gizli kopya birakildi: $(basename "$g")"
+    else
+      mv "$g" "$a" && echo "geri konuldu: $yol"
+    fi
+  done < "$M"
+
+  # (c) Bu koşunun açtığı alan adı kökü, boş kaldıysa.
+  while read -r tur yol; do
+    [ "$tur" = "KOK" ] || continue
+    case "$yol" in ""|*/*|*..*) continue ;; esac
+    rmdir "$TABAN/$yol" 2>/dev/null && echo "silindi (bos kok): $yol"
+  done < "$M"
+
+  rm -f "$M"   # kendi manifestimiz
+else
+  echo "manifest yok ($M) — hicbir sey silinmedi/kapatilmadi"
 fi
 
-# (b) Gizlenen ESKİ kurulumları geri koy.
-for kok in "$TABAN"/*/; do
-  [ -d "$kok" ] || continue
-  for d in "$kok"*.kabulgizli-"$DAMGA"; do
-    [ -e "$d" ] || continue
-    asil="${d%.kabulgizli-$DAMGA}"
-    rm -rf "$asil"
-    mv "$d" "$asil"
-    echo "geri konuldu: $(basename "$(dirname "$asil")")/$(basename "$asil")"
-  done
-done
-
-# (c) Testin açtığı BOŞ alan adı dizinleri (kitap kökü testte doğmuş olabilir).
-for kok in "$TABAN"/*/; do
-  [ -d "$kok" ] || continue
-  rmdir "${kok%/}" 2>/dev/null && echo "silindi (bos kok): $(basename "${kok%/}")"
-done
-
 # (d) Bu koşunun kendi artıkları.
-rm -f "$ONCEKI" /tmp/kabul-baslatan.pid /tmp/kabul-calisma.log \
+rm -f "/tmp/kabul-onceki-$DAMGA.txt" /tmp/kabul-baslatan.pid /tmp/kabul-calisma.log \
       /tmp/kabul-ekran.png /tmp/kabul-masaustu.png
 [ "$KOPYALA" = "1" ] && [ -n "$UZAK" ] && rm -f "$UZAK"
 

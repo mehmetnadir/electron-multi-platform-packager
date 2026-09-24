@@ -1,0 +1,22 @@
+# ProBook Pardus şeridi ajanı — systemd KULLANICI birimi (plan C2). kur.sh kurar:
+#   ~/.config/systemd/user/empp-serit-agent.service  +  loginctl enable-linger etapadmin
+# Jeton (~/.empp-agent/token.json) yoksa birim BAŞLAMAZ (ConditionPathExists) — kayıt
+# yapılmadan crash-loop olmasın. Kayıt: tools/probook/kaydol.js (sır stdin'den).
+[Unit]
+Description=EMPP Pardus seridi ajani (ProBook, cekme kipi)
+ConditionPathExists=%h/.empp-agent/token.json
+ConditionPathExists=%h/empp-serit/node/bin/node
+
+[Service]
+Type=simple
+WorkingDirectory=%h/empp-serit/repo
+ExecStart=%h/empp-serit/repo/tools/probook/serit-ajan.sh
+Restart=always
+RestartSec=30
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+KillMode=control-group
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

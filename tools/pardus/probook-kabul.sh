@@ -39,12 +39,31 @@ PENCERE="${PROBOOK_PENCERE:-25}"
 # Bu kitaplarda RENK esigi (>=500) aranmaz — diyalog az renk icerir; sapma ve koyu
 # piksel sartlari AYNEN gecerlidir, yani bos/beyaz ekran yine reddedilir.
 AKTIVASYON="${EMPP_AKTIVASYON_BEKLENIR:-0}"
-SSH=(ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$HOST")
+# YEREL KIP (2026-09-24, ProBook şeridi plan C6): ajan ProBook'un KENDİSİNDE koşarken
+# PROBOOK_HOST=yerel verilir -> ssh yerine `bash -c`, scp yok, paket yerinde açılır
+# (kopyalanmaz, temizlikte SİLİNMEZ — yükleme adımı ona hâlâ muhtaç). Uzak davranış AYNEN.
+YEREL=0
+if [ "$HOST" = "yerel" ]; then
+  YEREL=1
+  SSH=(bash -c)
+else
+  SSH=(ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$HOST")
+fi
+# Uzak dosyayi (ya da yerel kipte yerel dosyayi) kanit dizinine alir.
+kanit_al(){
+  if [ "$YEREL" = "1" ]; then cp -f "$1" "$2" 2>/dev/null
+  else scp -q -o BatchMode=yes -o ConnectTimeout=10 -i "$KEY" "$HOST:$1" "$2" 2>/dev/null; fi
+}
 say(){ printf '[kabul] %s\n' "$*"; }
 red(){ say "RED: $*"; temizle; exit 1; }
 
 DAMGA=$(date +%s)
-if [[ "$GIRDI" == uzak:* ]]; then
+if [ "$YEREL" = "1" ]; then
+  YOL="${GIRDI#uzak:}"
+  [ -f "$YOL" ] || { say "RED: paket bulunamadi: $YOL"; exit 1; }
+  UZAK="$(cd "$(dirname "$YOL")" && pwd)/$(basename "$YOL")"; AD=$(basename "$UZAK"); KOPYALA=0
+  [ -n "$KANIT" ] || KANIT="$(dirname "$UZAK")/probook-kabul"
+elif [[ "$GIRDI" == uzak:* ]]; then
   UZAK="${GIRDI#uzak:}"; AD=$(basename "$UZAK"); KOPYALA=0
   [ -n "$KANIT" ] || KANIT="${TMPDIR:-/tmp}/probook-kabul-$DAMGA"
 else
@@ -65,22 +84,110 @@ mkdir -p "$KANIT"
 #     temizlik HIC kosmuyordu. Kanit: /tmp/kabul-1789656459.impark (1029 MB,
 #     17 Eylul) iki gun boyunca durdu.
 #
-# Cozum: testten ONCE mevcut dizin listesi kaydedilir; temizlikte listede
-# OLMAYAN her dizin (yani testin kurdugu) silinir. Ayrica trap ile her cikis
-# yolunda kosar. Idempotent: iki kez cagrilmasi zararsiz.
+# Cozum (2026-09-24 surumu): gizleme, paketin kurulum hedefini (AppRun PUBLISHER/APP)
+# ve kendi gizledigi dizinleri ~/.kabul-<damga>.manifest'e yazar; temizlik YALNIZ
+# manifestteki yollari isler. Eski "envanterde olmayan her dizini sil" yontemi, eszamanli
+# bir surecin yarattigi `Privilege Grade 11.yedek-…` dizinini sildigi icin KALDIRILDI.
+# trap ile her cikis yolunda kosar. Idempotent: iki kez cagrilmasi zararsiz.
 # GOVDE AYRI DOSYADA: tools/pardus/probook-temizlik.sh — sebebi test
 # edilebilirlik (src/agent/probook-temizlik.test.js onu gercekten kosturur).
+# 2026-09-24: temizlik YALNIZ gizlemenin yazdigi ~/.kabul-<damga>.manifest'i isler (envanter
+# farki yontemi kaldirildi — eszamanli surecin .yedek- dizinini silmisti). Kilit birakma da burada.
 TEMIZLENDI=0
+BASLADI=0
+KILIT=0
+KAYNAK_AD="$(hostname 2>/dev/null || echo '?')"
+kilit(){ # $1 = al|birak ; stdout: probook-kilit.sh ciktisi
+  "${SSH[@]}" "bash -s '$1' '$DAMGA' '$KAYNAK_AD' '$$'" <"$BETIK_DIZIN/probook-kilit.sh" 2>&1
+}
 temizle(){
   [ "$TEMIZLENDI" = "1" ] && return 0
   TEMIZLENDI=1
-  "${SSH[@]}" "bash -s '$DAMGA' '$KOPYALA' '$UZAK'" \
-    >>"$KANIT/temizlik.log" 2>&1 <"$BETIK_DIZIN/probook-temizlik.sh"
+  # Gizlemeden ONCE cikista (mesgul/disk/kilit RED) govde kosmaz: hicbir sey degismedi.
+  if [ "$BASLADI" = "1" ]; then
+    "${SSH[@]}" "bash -s '$DAMGA' '$KOPYALA' '$UZAK'" \
+      >>"$KANIT/temizlik.log" 2>&1 <"$BETIK_DIZIN/probook-temizlik.sh"
+  elif [ "$KOPYALA" = "1" ] && [ "$KILIT" = "1" ]; then
+    "${SSH[@]}" "rm -f '$UZAK'" >/dev/null 2>&1
+  fi
+  [ "$KILIT" = "1" ] && kilit birak >>"$KANIT/temizlik.log"
+  return 0
 }
 trap 'temizle' EXIT
 
-command -v ssh >/dev/null || { say "RED: ssh yok"; exit 1; }
-"${SSH[@]}" 'echo hazir' >/dev/null 2>&1 || { say "RED: ProBook'a baglanilamadi ($HOST)"; exit 1; }
+# ORTAK KILIT (uzak + yerel kapi ayni ~/.kabul.lock; bkz. probook-kilit.sh). Bekleme tavani
+# ajanin kapi zaman asimindan (Mac 8 dk) uzun: once ajan zaman asimi olur → "ertelenebilir".
+BOSLUK_TAVAN="${KABUL_BOSLUK_TAVAN:-1800}"
+BOSLUK_ARALIK="${KABUL_BOSLUK_ARALIK:-15}"
+
+if [ "$YEREL" = "1" ]; then
+  # BOŞLUK BEKLE (yerel kip): ProBook'u başka kapılar da kullanıyor (Mac/Tudem ajanlarının
+  # UZAK kabulü, elle açılmış DijiTap uygulaması). Kapı betikleri /tmp'de SABİT adlar
+  # kullanıyor (kabul-baslatan.pid, kabul-calisma.log) — iki kapı aynı anda koşarsa
+  # birbirinin sürecini/ekranını ölçer. Uzak kabulün ProBook'taki izi: gizle ile temizlik
+  # arasında yaşayan /tmp/kabul-onceki-<damga>.txt. Kendi süreç grubumuz sayılmaz.
+  ISARET_DIZIN="${KABUL_ISARET_DIZIN:-/tmp}"
+  KENDI_GRUP=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  mesgul_sebep(){
+    local f p g
+    for f in "$ISARET_DIZIN"/kabul-onceki-*.txt; do
+      [ -e "$f" ] || continue
+      # 60 dk'dan eski işaret yetim sayılır (çökmüş kapı) — sonsuz bekleme yok.
+      [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && { echo "baska kabul suruyor ($(basename "$f"))"; return 0; }
+    done
+    # UZAK kabulün ilk izi scp ile gelen /tmp/kabul-<damga>.impark (gizle ondan SONRA koşar;
+    # 2026-09-24 ölçüldü: yerel kabul biterken başka ajanın 1,9 GB kopyası iniyordu).
+    for f in "$ISARET_DIZIN"/kabul-*.impark; do
+      [ -e "$f" ] || continue
+      [ -n "$(find "$f" -mmin -60 2>/dev/null)" ] && { echo "uzak kabul paketi aktariliyor/test ediliyor ($(basename "$f"))"; return 0; }
+    done
+    for p in $(pgrep -f "${KABUL_SUREC_DESENI:-[p]robook-kabul[.]sh}" 2>/dev/null); do
+      g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')
+      [ -n "$g" ] && [ "$g" != "$KENDI_GRUP" ] && { echo "baska probook-kabul sureci (pid $p)"; return 0; }
+    done
+    p=$(pgrep -f "$HOME/[D]ijiTap/" 2>/dev/null | head -1)
+    [ -n "$p" ] && { echo "DijiTap uygulamasi acik (pid $p)"; return 0; }
+    return 1
+  }
+  # Once KILIT, sonra kilit disi izler (eski surum kapi isaretleri, elle acik uygulama).
+  kilit_ve_bosluk(){
+    local c
+    c=$(kilit al) || { echo "kabul kilidi: ${c##*KILIT_MESGUL }"; return 0; }
+    KILIT=1
+    if SEBEP2=$(mesgul_sebep); then kilit birak >/dev/null; KILIT=0; echo "$SEBEP2"; return 0; fi
+    return 1
+  }
+  BEKLENEN=0
+  while SEBEP=$(kilit_ve_bosluk); do
+    [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: $SEBEP"; exit 1; }
+    [ $((BEKLENEN % 60)) -eq 0 ] && say "ProBook mesgul, bekleniyor: $SEBEP"
+    sleep "$BOSLUK_ARALIK"; BEKLENEN=$((BEKLENEN + BOSLUK_ARALIK))
+  done
+  KILIT=1  # donguden SEBEP'siz cikis = kilit alindi (alt kabukta set edildigi icin burada da)
+  [ "$BEKLENEN" -gt 0 ] && say "ProBook bosaldi (${BEKLENEN} sn beklendi)"
+  # Disk kapisi: kopya YOK, yalniz ~/DijiTap altina acilis (~1,5 kat) + 2 GB pay.
+  BOYUT=$(stat -c%s "$UZAK" 2>/dev/null || stat -f%z "$UZAK")
+  GEREKLI_MB=$(( BOYUT / 1000000 * 15 / 10 + 2000 ))
+  BOS_MB=$(df -Pk "$HOME" | awk 'NR==2{print int($4/1024)}')
+  if [ -n "$BOS_MB" ] && [ "$BOS_MB" -lt "$GEREKLI_MB" ]; then
+    say "RED: ProBook diskinde yer yok (${BOS_MB} MB bos < ${GEREKLI_MB} MB gerekli)"
+    exit 1
+  fi
+  say "yerel kip: $AD ($((BOYUT/1000000)) MB), disk ${BOS_MB:-?} MB bos (gerekli ~${GEREKLI_MB} MB)"
+  OLCEKLI=$(( ${PROBOOK_BEKLE_TABAN:-300} + BOYUT / 1000000 / 2 ))
+  [ "$OLCEKLI" -gt "$BEKLE" ] && { say "acilis ust siniri buyutuldu: ${BEKLE} -> ${OLCEKLI} sn"; BEKLE="$OLCEKLI"; }
+else
+  command -v ssh >/dev/null || { say "RED: ssh yok"; exit 1; }
+  "${SSH[@]}" 'echo hazir' >/dev/null 2>&1 || { say "RED: ProBook'a baglanilamadi ($HOST)"; exit 1; }
+  BEKLENEN=0
+  until C=$(kilit al); do
+    [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: kabul kilidi ${C##*KILIT_MESGUL }"; exit 1; }
+    [ $((BEKLENEN % 60)) -eq 0 ] && say "ProBook mesgul (kabul kilidi: ${C##*KILIT_MESGUL }), bekleniyor"
+    sleep "$BOSLUK_ARALIK"; BEKLENEN=$((BEKLENEN + BOSLUK_ARALIK))
+  done
+  KILIT=1
+  [ "$BEKLENEN" -gt 0 ] && say "ProBook bosaldi (${BEKLENEN} sn beklendi)"
+fi
 
 if [ "$KOPYALA" = "1" ]; then
   BOYUT=$(stat -f%z "$GIRDI" 2>/dev/null || stat -c%s "$GIRDI")
@@ -110,10 +217,11 @@ if [ "$KOPYALA" = "1" ]; then
 fi
 
 say "eski kurulumlar gizleniyor + paket baslatiliyor"
+BASLADI=1
 # GIZLEME GOVDESI AYRI DOSYADA (2026-09-19): iki kurulum kokunu de gezer ve
 # envanteri /tmp/kabul-onceki-<damga>.txt'ye yazar; temizlik ayni dosyayi okur.
 # Gerekcesi ve kanitlari: tools/pardus/probook-gizle.sh basligi.
-"${SSH[@]}" "bash -s '$DAMGA'" > "$KANIT/baslat.log" 2>&1 <"$BETIK_DIZIN/probook-gizle.sh" \
+"${SSH[@]}" "bash -s '$DAMGA' '$UZAK' '${KABUL_HEDEF:-}'" > "$KANIT/baslat.log" 2>&1 <"$BETIK_DIZIN/probook-gizle.sh" \
   || { say "RED: gizleme adimi basarisiz"; exit 1; }
 
 "${SSH[@]}" "bash -s" >> "$KANIT/baslat.log" 2>&1 <<UZAKBETIK
@@ -174,7 +282,17 @@ while [ \$gecen -lt $BEKLE ]; do
       [ -z "\$ata" ] && break
     done
     [ "\$bizim" = "1" ] || continue
-    APPPID=\$pid; break
+    APPPID=\$pid
+    # Hedef AppRun'dan okunamadiysa (manifestte KURULUM yok): BIZIM baslattigimiz surecin
+    # kurulum dizini bu kosunundur — ONCEKI listesindeyse degildir, yazilmaz.
+    MAN="\$HOME/.kabul-$DAMGA.manifest"
+    if [ -f "\$MAN" ] && ! grep -q '^KURULUM ' "\$MAN"; then
+      rel=\${exe#\$TABAN/}; kok=\${rel%%/*}; r2=\${rel#*/}; ad=\${r2%%/*}
+      if [ -n "\$kok" ] && [ -n "\$ad" ] && [ "\$kok" != "\$rel" ] && ! grep -Fxq "ONCEKI \$kok/\$ad" "\$MAN"; then
+        echo "KURULUM \$kok/\$ad" >> "\$MAN"; echo "manifest: KURULUM \$kok/\$ad (surecin yolundan)"
+      fi
+    fi
+    break
   done
   if [ -z "\$APPPID" ]; then
     [ \$((gecen % 60)) -eq 0 ] && echo "bekle: \$gecen sn — hala kuruluyor (uygulama sureci yok)"
@@ -249,9 +367,9 @@ UZAKBETIK2
   [ "$i" -lt "$DENEME" ] && say "  icerik henuz yok — yeniden olculecek"
 done
 
-scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$HOST:/tmp/kabul-ekran.png" "$KANIT/ekran.png" 2>/dev/null
-scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$HOST:/tmp/kabul-masaustu.png" "$KANIT/masaustu.png" 2>/dev/null
-scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$HOST:/tmp/kabul-calisma.log" "$KANIT/calisma.log" 2>/dev/null
+kanit_al /tmp/kabul-ekran.png "$KANIT/ekran.png"
+kanit_al /tmp/kabul-masaustu.png "$KANIT/masaustu.png"
+kanit_al /tmp/kabul-calisma.log "$KANIT/calisma.log"
 
 # Beyaz ekran imzalari — K17 sinifinin konsol kaniti (nadiren stdout'a duser, yine de bak)
 if grep -qi "ImWin32.dll dosyası okunamadı\|assets not found in" "$KANIT/durum.txt" "$KANIT/calisma.log" 2>/dev/null; then

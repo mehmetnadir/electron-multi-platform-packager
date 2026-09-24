@@ -1,0 +1,13 @@
+#!/bin/bash
+# ProBook şeridi DOCKER ŞİMİ (geçici — plan C3 yaması uygulanana dek).
+# runner.js (DONDURULMUŞ) pardus işinden önce `ensureDockerReady()` ile `docker info`
+# sorar; ProBook'ta docker YOK ve gerekmiyor (PARDUS_BUILD_SCRIPT = pardus-yerel-build.sh,
+# yerli x64 derleme). Bu şim YALNIZ `info`ya 0 döner; başka her komut açıkça düşer ki
+# yanlışlıkla docker'a bağımlı bir yol sessizce "başarılı" görünmesin.
+# Kaldırma koşulu: scratchpad/probook-serit/runner-dockersiz.patch runner.js'e girince.
+if [ "${1:-}" = "info" ]; then
+  echo "empp-serit docker simi: yerel derleme (docker gerekmiyor)"
+  exit 0
+fi
+echo "empp-serit docker simi: '$*' desteklenmiyor — ProBook seridinde docker YOK" >&2
+exit 1
