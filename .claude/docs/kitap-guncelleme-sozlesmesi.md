@@ -219,6 +219,7 @@ node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → can
 - **Şema:** `{sema:1, kanal:"G", setKimligi, surum, onceki, uretim, anahtar, kabuk[], kitaplar[]}`. Windows istemcisiyle uyumlu; eklenen alanlar yok sayılır.
 - **Anahtar:** `--anahtar-zinciri` üretim anahtarını Anahtar Zinciri borusundan okur ve `31b8663b…2cf6` ile eşleşmesini ister. `--anahtar-dosya` yalnız TEST içindir; dosyada üretim anahtarı bulunursa araç reddeder.
 - R2 düzeni, yükleme sırası ve açık kararlar `g-yayin-r2-yol-tasarimi.md`'de. İstemci kuralları ve yerel HTTPS koşumu `tools/g-uctan-uca/README.md`'de.
+- **`ekle` içi imzalı dosya listesi (26.09):** her `kitaplar[]` `durum:"ekle"` girdisi artık isteğe bağlı `dosyalar:[{yol,sha256,boyut}]` taşıyabilir (arşivin İSTEMCİ okuyucusuyla türetilmiş birebir dökümü, yol kaçışı RED, alan yoksa eski istemci/eski manifest değişmeden çalışır) — amaç istemcinin arşivi AÇMADAN bu imzalı listeyle doğrulayabilmesi (mac/Pardus örtü kipindeki "açılışta yeniden doğrula → diskte ×2 yer" sorununu önler); `yayinla.js`'in `dogrula` (yerel ve `--uzak`) alt komutu listeyi arşivle kıyaslayıp uyuşmazsa RED verir.
 
 ## G istemcisi — kimlik, monoton sürüm, ya hep ya hiç (2026-09-26, dal `g-electron`)
 
@@ -227,8 +228,9 @@ mac/Pardus örtü) kapandı — `src/runtime/kitap-guncelleyici.js`:
 
 1. **Monoton sürüm.** İmzası doğru manifest de ancak `surum` G3 biçiminde ve KURULU sürümden
    KESİN büyükse uygulanır. Kurulu = max(`package.json` sürümü, `empp-set.json` `surum`u (claim'in
-   `surum`u, G3), son uygulanan G sürümü: Windows'ta damga, örtüde `etkin.json`). Damga eski pakete aitse (taban = `empp-set.json` özeti değişti) yok
-   sayılır. G3 olmayan paket sürümü (içerik-hash) kıyasa girmez — o paketin İLK G'si her G3'ü alır.
+   `surum`u, G3), son uygulanan G sürümü: Windows'ta damga, örtüde `etkin.json`). Damga eski
+   pakete aitse (taban = `empp-set.json` özeti değişti) yok sayılır.
+   G3 olmayan paket sürümü (içerik-hash) kıyasa girmez — o paketin İLK G'si her G3'ü alır.
 2. **Kimlik.** `kanal == "G"` ve `setKimligi == paketin gömülü kimliği` değilse ret. İmzasız
    `surum.json` yalnız tetiktir; asıl karar imzalı manifestte (`-tetik` senaryoları).
 3. **Ya hep ya hiç.** Windows: her şey önce `.empp-gecici/` altında hazırlanır (indir + sha256/boyut

@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const z = require('./zip-yaz');
 const kg = require('../../src/runtime/kitap-guncelleyici');
 
@@ -74,6 +75,43 @@ test('sembolik bağ içeren dizin RED (sessiz atlama yok)', () => {
   fs.writeFileSync(path.join(d, 'k', 'a.txt'), 'a');
   fs.symlinkSync('/etc/hosts', path.join(d, 'k', 'dis'));
   assert.throws(() => z.dizindenGirdiler(path.join(d, 'k')), /sembolik bağ/);
+});
+
+test('zipIcerigi: (yol,sha256,boyut) listesi sıralı ve doğru; güvensiz yol RED', () => {
+  const d = gecici();
+  const kok = path.join(d, 'book9');
+  fs.mkdirSync(path.join(kok, 'alt'), { recursive: true });
+  fs.writeFileSync(path.join(kok, 'index.html'), 'A');
+  fs.writeFileSync(path.join(kok, 'alt', 'b.txt'), 'BB');
+  const hedef = path.join(d, 'icerik.zip');
+  z.zipYaz(hedef, z.dizindenGirdiler(kok));
+  const liste = z.zipIcerigi(hedef);
+  assert.deepEqual(
+    liste.map((g) => g.yol),
+    ['alt/b.txt', 'index.html'],
+    'yol sırasına göre sıralı',
+  );
+  assert.deepEqual(liste.find((g) => g.yol === 'index.html'), {
+    yol: 'index.html',
+    sha256: crypto.createHash('sha256').update('A').digest('hex'),
+    boyut: 1,
+  });
+  assert.deepEqual(liste.find((g) => g.yol === 'alt/b.txt'), {
+    yol: 'alt/b.txt',
+    sha256: crypto.createHash('sha256').update('BB').digest('hex'),
+    boyut: 2,
+  });
+  assert.deepEqual(
+    z.zipDenetle(hedef).yollar.sort(),
+    liste.map((g) => g.yol).sort(),
+    'zipDenetle aynı kaynaktan (zipIcerigi) türetiliyor',
+  );
+
+  z.zipYaz(path.join(d, 'kacis2.zip'), [
+    { yol: 'index.html', veri: Buffer.from('x') },
+    { yol: '../kacti.txt', veri: Buffer.from('k') },
+  ]);
+  assert.throws(() => z.zipIcerigi(path.join(d, 'kacis2.zip')), /güvensiz yol/);
 });
 
 test('Zip64 sınırı: 65535 girdi RED (istemci açamaz)', () => {

@@ -118,6 +118,83 @@ test('çelişki ve boş değişiklik RED', () => {
   assert.throws(() => d.birlestir(onceki, { index: oz('a') }), /aynı içerik/);
 });
 
+test('dosyaGirdisiGecerliMi / dosyalarGecerliMi: yol kaçışı ve bozuk özet RED', () => {
+  const iyi = { yol: 'index.html', ...oz('a') };
+  assert.equal(d.dosyaGirdisiGecerliMi(iyi), true);
+  for (const kotu of [
+    { yol: '../kacis.txt', ...oz('a') },
+    { yol: '/mutlak.txt', ...oz('a') },
+    { yol: 'a/../../b.txt', ...oz('a') },
+    { yol: '', ...oz('a') },
+    { yol: 'a.txt', sha256: 'kısa', boyut: 1 },
+    { yol: 'a.txt', sha256: 'a'.repeat(64), boyut: -1 },
+    null,
+    undefined,
+  ]) {
+    assert.equal(d.dosyaGirdisiGecerliMi(kotu), false, JSON.stringify(kotu));
+  }
+  assert.equal(d.dosyalarGecerliMi([iyi]), true);
+  assert.equal(d.dosyalarGecerliMi([]), false, 'boş liste RED');
+  assert.equal(d.dosyalarGecerliMi(null), false);
+  assert.equal(d.dosyalarGecerliMi([iyi, { yol: '../kacis.txt', ...oz('a') }]), false);
+});
+
+test('birlestir: ekle girdisine dosyalar[] taşınır; bozuksa RED; sonraki sürümde de durur', () => {
+  const dosyalar = [
+    { yol: 'index.html', ...oz('e') },
+    { yol: 'assets/a.png', ...oz('f') },
+  ];
+  const r = d.birlestir(null, {
+    index: oz('a'),
+    ekle: { book4: { ...oz('c'), kaynak: 'https://x/k.zip', dosyalar } },
+  });
+  assert.deepEqual(r.kitaplar.find((k) => k.dizin === 'book4').dosyalar, dosyalar);
+
+  assert.throws(
+    () =>
+      d.birlestir(null, {
+        index: oz('b'),
+        ekle: {
+          book5: {
+            ...oz('c'),
+            kaynak: 'https://x/k5.zip',
+            dosyalar: [{ yol: '../k.txt', ...oz('x') }],
+          },
+        },
+      }),
+    /dosyalar listesi bozuk/,
+  );
+
+  // Birikimli: dosyalar'lı önceki kitap girdisi sonraki sürüme de taşınır (atlayan istemci).
+  const r2 = d.birlestir({ kabuk: r.kabuk, kitaplar: r.kitaplar }, { motorlar: { book1: oz('d') } });
+  assert.deepEqual(r2.kitaplar.find((k) => k.dizin === 'book4').dosyalar, dosyalar);
+});
+
+test('oncekiDurum: önceki manifestteki bozuk/kaçış yollu dosyalar[] RED (sessiz taşıma yok)', () => {
+  const oncekiBozuk = {
+    kabuk: [],
+    kitaplar: [
+      {
+        dizin: 'book4',
+        durum: 'ekle',
+        kaynak: 'https://x/k.zip',
+        ...oz('c'),
+        dosyalar: [{ yol: '../kacis.txt', ...oz('a') }],
+      },
+    ],
+  };
+  assert.throws(() => d.birlestir(oncekiBozuk, { index: oz('b') }), /bozuk kitap girdisi/);
+
+  // dosyalar alanı hiç YOKSA (eski manifest) sorunsuz taşınır — geriye uyumluluk.
+  const oncekiEski = {
+    kabuk: [],
+    kitaplar: [{ dizin: 'book4', durum: 'ekle', kaynak: 'https://x/k.zip', ...oz('c') }],
+  };
+  const r = d.birlestir(oncekiEski, { index: oz('b') });
+  const b4 = r.kitaplar.find((k) => k.dizin === 'book4');
+  assert.equal(b4.dosyalar, undefined);
+});
+
 test('önceki manifestte G kapsamı dışı yol RED (sessiz taşıma yok)', () => {
   assert.throws(
     () =>
