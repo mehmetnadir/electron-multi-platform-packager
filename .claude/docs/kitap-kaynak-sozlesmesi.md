@@ -105,6 +105,8 @@ düşer (eski kaynağa sessiz iniş yok). Dolu: 25.09 Üretim Masası zip'leri, 
 yansısı ve Windows işçisinin (srv21) aynı arşivi okuması açık. İlk kabul: 58336 (kesintisiz) + 58237 (kesintili) +
 bir aktivasyonlu set (45480).
 
+**Merdiven S0+S1 (26.09):** `src/agent/icerik-merdiven.js`, `EMPP_ARSIV_MERDIVEN=1` (varsayılan KAPALI) — arşiv ve exe yolunda iş kopyasına: menü sürümü İmpark'a sorulur, geride olan ZKitapZipH (önbellek `<ID>-<Vs>`) thumbs kimliğiyle doğrulanıp `bookN/assets/<ID>`'ye yazılır, kök dokunulmaz, ölçülemezse iş düşer; S2/S3 yok.
+
 **Bayat arşiv kapısı (26.09):** `kaynak.json` `impark_kaynagi` = arşivin kapsadığı İmpark kaynak kimliği (dize ya da
 liste; ilk öğe zip'in üretildiği kaynak). Kimlik = runner'ın `srcVersionTuret(job.downloadUrl)` değeri, yani köprü
 exe'sinin adı (ör. `ShallWe8-v47.exe`). İşin kimliği listede yoksa iş `kaynak arşivi BAYAT: İmpark kaynağı X → Y;
