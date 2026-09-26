@@ -30,6 +30,7 @@ node $G/tools/g-uctan-uca/dogrula.js <agac> --dizin $D      # kendi istemcinin s
 | `beklenen.json` | **2.90.3** sonrası: `gDosyalari`, `tabanDosyalari`, `olmamali` (`book3`), `kurulu` |
 | `hazirlik.json` | port, taban, açık anahtar + parmak izi, senaryo tabanları, TLS yolları |
 | `tls/ca.pem`, `tls/ca.der` | istemcinin güveneceği test CA — ad kısıtlı: yalnız 127.0.0.1, 10.0.2.2, localhost |
+| `tls-electron/ca.pem`, `tls-electron/ca.der` | Electron istemcileri için İKİNCİ test CA — ad kısıtı YOK, ≤7 gün ömürlü (bkz. TLS bölümü) |
 
 ## Senaryolar — taban `https://127.0.0.1:$P/<ad>/guncelleme`
 
@@ -91,7 +92,21 @@ Arşivdeki `index.html` paketleyicinin alt-kitap fs-shim etiketlerini taşır (`
 
 ## TLS
 
-- Node `https` (Electron ana süreç dahil): `NODE_EXTRA_CA_CERTS=$D/tls/ca.pem`, süreç başlarken verilmeli.
-- Electron `net`/Chromium: yalnız test kipinde `session.setCertificateVerifyProc` ile `$D/tls/ca.pem` zincirine izin ver.
-- Android: `adb reverse tcp:$P tcp:$P` (cihazda 127.0.0.1) ya da emülatörde `10.0.2.2`. Debug `network_security_config` → `res/raw/ca.der` (`$D/tls/ca.der`).
+- Node `https` (Windows/referans istemci `kos.js`): `NODE_EXTRA_CA_CERTS=$D/tls/ca.pem`, süreç başlarken verilmeli.
+- Android: `adb reverse tcp:$P tcp:$P` (cihazda 127.0.0.1) ya da emülatörde `10.0.2.2`. Debug `network_security_config` → `res/raw/ca.der` (`$D/tls/ca.der`); kurulum `src/platforms/android/g-katmani.js` (`EMPP_G_TEST_GUVEN_CA`).
+- **Electron — `$D/tls/` KULLANILAMAZ, `$D/tls-electron/` kullan** (26.09 canlı G testi:
+  `~/.empp-agent/arastirma/g-istemci-canli-kanit-20260926.md`, ölçüldü):
+  1. `$D/tls/ca.pem`'in kritik IP `nameConstraints`'i Electron/Chromium (BoringSSL) tarafından
+     **"unsupported name constraint type"** ile reddediliyor.
+  2. Electron'un node kipi (`ELECTRON_RUN_AS_NODE=1`) `NODE_EXTRA_CA_CERTS`'i **uygulamıyor**
+     ("unable to verify the first certificate", süreç başında bile).
+  3. Çalışan tek yol: **süreç içi CA listesi** — `https.globalAgent.options.ca = [...tls.rootCertificates, fs.readFileSync('$D/tls-electron/ca.pem','utf8')]`
+     (ya da Electron ana sürecinde `session.setCertificateVerifyProc`). `$D/tls-electron/ca.pem`
+     ad kısıtı TAŞIMAZ (bu yüzden kısıtsız CA'lar için standart olan **≤7 gün ömür** ve
+     "yalnız bu koşuma özel, hiçbir depoya eklenmez" kuralına tabidir); sunucu sertifikası yine
+     yalnız 127.0.0.1/10.0.2.2/localhost için (SAN, nameConstraints'ten bağımsız çalışır).
+  4. `$D/tls/` (ad kısıtlı, `kos.js`) **DOKUNULMADI** — iki zincir birbirinden bağımsız, aynı anda üretilir (`hazirla.js`), aynı port+içerikle ayrı ayrı sunulabilir (`sunucu.js --electron` ile `tls-electron/` cert'i seçilir).
+  5. **YAPMA:** `NODE_TLS_REJECT_UNAUTHORIZED=0`, `--ignore-certificate-errors`, `rejectUnauthorized:false` — hiçbiri bu depoda kullanılmaz (`tls-electron.test.js` bunu gate'ler); doğrulamayı GENEL olarak kapatmak yerine yukarıdaki gibi doğru CA'yı tanıt.
+  - Fikstür: `node tools/g-uctan-uca/hazirla.js --dizin $D --port $P` hem `tls/` hem `tls-electron/` üretir.
+  - Electron-uyumlu sunucu: `node tools/g-uctan-uca/sunucu.js --dizin $D --electron` (aynı port/içerik, `tls-electron/` sertifikası).
 - CA'yı sistem ya da Anahtar Zinciri deposuna EKLEME.

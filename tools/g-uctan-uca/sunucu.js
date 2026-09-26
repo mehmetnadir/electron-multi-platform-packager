@@ -123,9 +123,13 @@ function sunucuBaslat(s) {
   });
 }
 
-/** `<dizin>/tls/sunucu.{key,pem}` okunur; yoksa HATA (önce hazirla.js). */
-function tlsOku(dizin) {
-  const t = path.join(path.resolve(dizin), 'tls');
+/**
+ * `<dizin>/<altDizin>/sunucu.{key,pem}` okunur; yoksa HATA (önce hazirla.js). `altDizin`
+ * varsayılan `tls` (ad-kısıtlı, referans/Windows istemcisi); `tls-electron` verilirse
+ * Electron istemcileri için kısıtsız, kısa ömürlü zincir okunur (`--electron` bayrağı, aşağıda).
+ */
+function tlsOku(dizin, altDizin = 'tls') {
+  const t = path.join(path.resolve(dizin), altDizin);
   try {
     return {
       key: fs.readFileSync(path.join(t, 'sunucu.key')),
@@ -147,20 +151,22 @@ function hazirlikOku(dizin) {
 }
 
 async function main(argv) {
-  const a = { dizin: VARSAYILAN_DIZIN, port: null, host: '127.0.0.1', http: false };
+  const a = { dizin: VARSAYILAN_DIZIN, port: null, host: '127.0.0.1', http: false, electron: false };
   for (let i = 0; i < argv.length; i++) {
     const b = argv[i];
     if (b === '--dizin') a.dizin = argv[++i];
     else if (b === '--port') a.port = Number(argv[++i]);
     else if (b === '--host') a.host = argv[++i];
     else if (b === '--http') a.http = true;
+    else if (b === '--electron') a.electron = true;
     else throw new Error(`bilinmeyen argüman: ${b}`);
   }
   const hz = hazirlikOku(a.dizin);
   const port = a.port != null ? a.port : (hz && hz.port) || 8443;
-  const tls = a.http ? null : tlsOku(a.dizin);
+  const tls = a.http ? null : tlsOku(a.dizin, a.electron ? 'tls-electron' : 'tls');
   const s = await sunucuBaslat({ dizin: a.dizin, port, host: a.host, tls });
   const sema = tls ? 'https' : 'http';
+  if (a.electron) console.log('  (Electron-uyumlu, kısıtsız test CA — tls-electron/)');
   console.log(
     `G uçtan uca sunucusu: ${sema}://${a.host}:${s.port}/<senaryo>/guncelleme  ` +
       `(kök ${path.resolve(a.dizin)}/senaryolar)`,
