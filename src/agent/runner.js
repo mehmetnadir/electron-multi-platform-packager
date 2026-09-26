@@ -58,6 +58,7 @@ const {
 } = require('./serit-secimi');
 const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
+const { artefaktOzeti } = require('./artefakt-kaniti');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -547,6 +548,23 @@ async function postResultSuccess(auth, job, artifactPath) {
   // bypassing the Cloudflare edge body-size limit (~100MB) that 413s large APKs.
   // The server then settles the job from the JSON /result body (Decision A path).
   const size = fs.statSync(artifactPath).size;
+
+  // ARTEFAKT KANITI (2026-09-26): R2'ye yüklemeden ÖNCE sha256+boyut akışla hesaplanır
+  // (bkz. artefakt-kaniti.js — bellek şişirmeden, 1+ GB dosyalarda tek geçiş). Sonuç
+  // `/result` gövdesine fileSha256/fileSizeBytes olarak eklenir; book-update DB'ye
+  // yazar, `tests/e2e/paket-denetle.js` bunu CDN nesnesiyle karşılaştırıp "CDN'deki
+  // paket bizim ürettiğimiz mi" (T2) sorusunu cevaplar. Hesap hatası (silinmiş/
+  // okunamayan dosya) yüklemeyi DURDURMAZ — kanıtsız devam eder ama SESSİZCE
+  // yutulmaz: warn ile loglanır ve alanlar gövdeye hiç eklenmez.
+  let kanit = null;
+  try {
+    const oz = await artefaktOzeti(artifactPath);
+    kanit = { fileSha256: oz.sha256, fileSizeBytes: oz.boyut };
+    log(`artefakt kanıtı: sha256=${oz.sha256} boyut=${oz.boyut}`);
+  } catch (e) {
+    warn('artefakt sha256 hesaplanamadı — kanıtsız yüklenecek:', agHatasiOzeti(e));
+  }
+
   // Upload via curl, NOT axios: S21's gateway RESETS large sustained HTTPS transfers
   // (a 3.15GB axios PUT died with ECONNRESET ~2 min in — the same shaper that resets
   // big downloads, now outbound). A steady --limit-rate slips under it; on a reset we
@@ -592,6 +610,7 @@ async function postResultSuccess(auth, job, artifactPath) {
       buildMethod: 'build',
       r2ObjectKey: presigned.r2ObjectKey,
       publicUrl: presigned.publicUrl,
+      ...(kanit || {}),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );

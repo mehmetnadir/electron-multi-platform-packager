@@ -718,3 +718,134 @@ test('uçtan uca kısmi eşlik: CDN (Range) ↔ yerel üretilen aynı dosya SARI
     await farkli.kapat();
   }
 });
+
+/**
+ * db-kanit — book-update DB'sinden (sahte ssh/pipeline-sql) okunan file_sha256/file_size_bytes
+ * ile CDN kıyası. GERÇEK ssh/pipeline-sql hiçbir testte koşmaz (dbCalistirSsh her zaman sahte);
+ * db-kaniti.js'in kendi birim testleri tests/e2e/db-kaniti.test.js'te.
+ */
+test('db-kanit: --indir + kitapId/platform → DB sha256 = CDN tam sha256 → GECTI', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-gecti.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const gercekSha256 = require('crypto').createHash('sha256').update(fs.readFileSync(apk)).digest('hex');
+    let cagrildiKomut = null;
+    const r = await PD.paketDenetle({
+      url: s.url,
+      indir: true,
+      kitapId: '45482',
+      platform: 'android',
+      calisma: path.join(D, 'calisma-db-kanit-gecti'),
+      dbCalistirSsh: (komut) => {
+        cagrildiKomut = komut;
+        return { status: 0, stdout: `file_sha256\tfile_size_bytes\n${gercekSha256}\t${fs.statSync(apk).size}\n` };
+      },
+    });
+    assert.equal(durum(r, 'db-kanit'), 'GECTI');
+    assert.match(cagrildiKomut, /book_id='45482'/);
+    assert.match(cagrildiKomut, /platform='android'/);
+    const s0 = satir(r, 'db-kanit');
+    assert.equal(s0.kanit.olcum.yontem, 'sha256 (tam, --indir)');
+    assert.equal(s0.kanit.olcum.db_sha256, gercekSha256);
+    assert.equal(s0.kanit.olcum.cdn_sha256, gercekSha256);
+  } finally {
+    await s.kapat();
+  }
+});
+
+test('db-kanit: DB sha256 farklı (üretici ezmiş/bozuk yükleme) → KALDI', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-kaldi.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const r = await PD.paketDenetle({
+      url: s.url,
+      indir: true,
+      kitapId: '45482',
+      platform: 'android',
+      calisma: path.join(D, 'calisma-db-kanit-kaldi'),
+      dbCalistirSsh: () => ({
+        status: 0,
+        stdout: `file_sha256\tfile_size_bytes\n${'0'.repeat(64)}\t999\n`,
+      }),
+    });
+    assert.equal(durum(r, 'db-kanit'), 'KALDI');
+  } finally {
+    await s.kapat();
+  }
+});
+
+test('db-kanit: --indir YOK (yalnız --url) → hafif kip, boyut kıyası (yöntem: boyut)', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-boyut.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const r = await PD.paketDenetle({
+      url: s.url,
+      kitapId: '45482',
+      platform: 'android',
+      icerik: false,
+      calisma: path.join(D, 'calisma-db-kanit-boyut'),
+      dbCalistirSsh: () => ({
+        status: 0,
+        stdout: `file_sha256\tfile_size_bytes\n${'a'.repeat(64)}\t${fs.statSync(apk).size}\n`,
+      }),
+    });
+    assert.equal(durum(r, 'db-kanit'), 'GECTI');
+    assert.equal(satir(r, 'db-kanit').kanit.olcum.yontem, 'boyut (hafif — tam sha256 için --indir gerekir)');
+  } finally {
+    await s.kapat();
+  }
+});
+
+test('db-kanit: DB satırı yok (migration uygulanmamış / ajan henüz göndermedi) → ÖLÇÜLEMEDİ', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-yok.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const r = await PD.paketDenetle({
+      url: s.url,
+      kitapId: '45482',
+      platform: 'android',
+      icerik: false,
+      calisma: path.join(D, 'calisma-db-kanit-yok'),
+      dbCalistirSsh: () => ({ status: 0, stdout: 'file_sha256\tfile_size_bytes\n' }),
+    });
+    assert.equal(durum(r, 'db-kanit'), 'OLCULEMEDI');
+  } finally {
+    await s.kapat();
+  }
+});
+
+test('db-kanit: ssh/pipeline-sql hata verirse (ör. bağlantı kopuk) ÖLÇÜLEMEDİ — FIRLATMAZ, paket-denetle çökmez', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-hata.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const r = await PD.paketDenetle({
+      url: s.url,
+      kitapId: '45482',
+      platform: 'android',
+      icerik: false,
+      calisma: path.join(D, 'calisma-db-kanit-hata'),
+      dbCalistirSsh: () => ({ status: 255, stdout: '', stderr: 'ssh: connect timed out' }),
+    });
+    assert.equal(durum(r, 'db-kanit'), 'OLCULEMEDI');
+    assert.match(satir(r, 'db-kanit').kanit.olcum.sebep, /DB sorgusu:/);
+  } finally {
+    await s.kapat();
+  }
+});
+
+test('db-kanit: kitapId/platform verilmezse adım hiç koşmaz (mevcut davranış korunur)', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'db-kanit-yok-parametre.apk'), agac);
+  const s = await sunucu(apk);
+  try {
+    const r = await PD.paketDenetle({ url: s.url, icerik: false, calisma: path.join(D, 'calisma-db-kanit-param') });
+    assert.equal(satir(r, 'db-kanit'), undefined);
+  } finally {
+    await s.kapat();
+  }
+});
