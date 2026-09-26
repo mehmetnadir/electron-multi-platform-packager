@@ -137,6 +137,10 @@ export EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" EMPP_LINUX_DEB="${EMPP_LINUX_
 # paketine taslak içerik/SET güncelleme modülleri girer. Varsayılan KAPALI; kapsam `windows` gibi
 # platform listesiyse linux işinde zaten kapalı kalır (src/packaging/platform-kapisi.js).
 export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}"
+# G kanalı (26.09, g-electron a010cff/9075bd0) — docker `-e` listesiyle AYNI: açık anahtar + claim G
+# kimliği (runner `pardusBetikEnv` doğrular, env ile gelir); boşsa paketleyici G enjekte ETMEZ.
+export EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-}" EMPP_G_SET_KIMLIGI="${EMPP_G_SET_KIMLIGI:-}"
+export EMPP_G_GUNCELLEME_TABANI="${EMPP_G_GUNCELLEME_TABANI:-}" EMPP_G_SURUM="${EMPP_G_SURUM:-}"
 # İçerik güncellemesi (K) Pardus paketinde AÇIK — Mac docker şeridiyle BİREBİR (a0cc28d, Nadir 26.09:
 # "impark güncellemelerini alıyorlar"). Ortamdaki EMPP_ICERIK_GUNCELLEME (Mac'te 'windows') OKUNMAZ;
 # kapatmak: PARDUS_ICERIK_GUNCELLEME=0. Parite testi: pardus-yerel-build.test.js.
