@@ -51,6 +51,8 @@ ProBook kayıt sırrı.
 1. **Windows'ta açma testi (K3-K4) nerede?** Öneri: ofisteki imzalama Windows makinesinde başsız koşucu; yoksa statik K1-K2 + imza.
 2. **Gece koşu saati?** Öneri: 22:00 başlat, 07:30 doğrula (cron 06:20'den sonra).
 3. **Demo SET?** Öneri: 2. aşamada 74390'dan tek kitaplık demo set; index ile kitap ekle/çıkar ve 43e23 yönetimi o testte.
+4. **Gece G testi her gece yeni üretim-imzalı sürüm yayınlasın mı?** Öneri: evet, yalnız 74390 (beyaz liste); sürüm 2.p.s artar,
+   eski sürümler kaynak arşivi kuralıyla (son 2 + 60 gün) budanır. Araç hazır: `g-yayin` 023f9ad/ee31634, `yayinla.js e2e 74390 --onayli`.
 
 ## Yapılmayacaklar
 Gerçek yayın kitaplarında test yazımı · test için imza/kabul kapısı atlamak · kırmızı testi "biliyoruz" diye açık bırakmak.
