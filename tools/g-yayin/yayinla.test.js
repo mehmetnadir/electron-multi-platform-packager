@@ -12,6 +12,7 @@ const durum = require('./durum');
 const { MOTOR_DOSYA_ADI: M } = durum;
 const zip = require('./zip-yaz');
 const kg = require('../../src/runtime/kitap-guncelleyici');
+const { MENU_ISARETI } = require('../../src/packaging/set-menu-bicim');
 const { sunucuBaslat } = require('../g-uctan-uca/sunucu');
 
 /**
@@ -61,12 +62,17 @@ function ortam() {
   };
   const html = (t) =>
     `<!doctype html><html><head><title>${t}</title></head><body>${t}</body></html>`;
+  // Kök menü (K17 sade biçimi, kartsız): `--ekle`/`--cikar` menüsü tanınan bir kök ister.
+  const menu = (t) =>
+    `${MENU_ISARETI}\n<!DOCTYPE html>\n<html lang="tr">\n<head><title>${t}</title></head>\n` +
+    '<body>\n  <main>\n  </main>\n</body>\n</html>\n';
   return {
     d,
     anahtarYolu,
     acik: anahtar.acikAnahtarB64(privateKey),
     yaz,
     html,
+    menu,
     cikti: path.join(d, 'senaryolar', 's1'),
   };
 }
@@ -137,7 +143,7 @@ test('uçtan uca (http): iki yayın → Windows istemcisi 2.90.1 kurulumunu 2.90
         ilk: true,
         oncekiSurum: '2.90.1',
         panel: '90',
-        index: o.yaz('i2.html', o.html('v2')),
+        index: o.yaz('i2.html', o.menu('v2')),
         motorlar: { book2: o.yaz('m2.js', 'motor-v2') },
         ekle: { book4 },
         cikar: ['book3'],
@@ -455,7 +461,7 @@ test('yayinla: ekle girdisine imzalı dosyalar[] listesi eklenir (arşivle bireb
       ilk: true,
       oncekiSurum: '2.63.1',
       panel: 63,
-      index: o.yaz('i.html', o.html('a')),
+      index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
     }),
     sessiz,
@@ -511,7 +517,7 @@ test('eski manifest (dosyalar alanı yok) hâlâ doğrulanır — geriye uyumlul
       ilk: true,
       oncekiSurum: '2.65.1',
       panel: 65,
-      index: o.yaz('i.html', o.html('a')),
+      index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
     }),
     sessiz,
@@ -558,7 +564,7 @@ test('dogrula: dosyalar listesi arşivle uyuşmazsa RED (yerel ve uzak)', async 
       ilk: true,
       oncekiSurum: '2.66.1',
       panel: 66,
-      index: o.yaz('i.html', o.html('a')),
+      index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
     }),
     sessiz,
@@ -640,7 +646,7 @@ async function ekleYayinla(o, kaynak, ek = {}) {
       ilk: true,
       oncekiSurum: '2.65.1',
       panel: 65,
-      index: o.yaz('i.html', o.html('a')),
+      index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: kaynak },
       ...ek,
     }),
@@ -740,7 +746,7 @@ test('fs-shim: başka kitabın ad-alanını taşıyan sayfa RED; index.html yoks
       ilk: true,
       oncekiSurum: '2.66.1',
       panel: 66,
-      index: o2.yaz('i.html', o2.html('a')),
+      index: o2.yaz('i.html', o2.menu('a')),
       ekle: { book4: path.join(o2.d, 'girdi', 'book4') },
     }),
     { gunluk: (m) => uyarilar.push(m) },
@@ -759,4 +765,193 @@ test('kaynak-sentinel: g-yayin etiketi KENDİ kurmaz — paketleyicinin tek kayn
     'utf8',
   );
   assert.match(paketleyici, /injectFsShimIntoSubBookHtml\(bookHtml, relBookDir\)/);
+});
+
+/* ------------------------------------------------ --ekle/--cikar menüye yansır (26.09, menu.js) */
+
+/** Paketlenmiş Web-Z SET kökü (menü dosyaları + envanter) — `--menu-taban` girdisi. */
+function webzKok(o, kitaplar, setKimligi = '99901') {
+  const books = {};
+  kitaplar.forEach(([d, id, ad], i) => {
+    const coverUrl = `images/${d}.png`;
+    books[d] = { assetId: id, contentType: 'book', coverUrl, displayOrder: i, title: ad };
+  });
+  const ayar = JSON.stringify({ bookCount: kitaplar.length, books, setTitle: 'Set' }, null, 2);
+  o.yaz('kok/index.html', '<html><body><script src="scripts/language-set.js"></script></body>');
+  o.yaz('kok/scripts/cevrimdisi-yama.js', `(function () {\n  window.__setSettings = ${ayar};\n})();\n`);
+  o.yaz('kok/config/settings.json', ayar + '\n');
+  o.yaz(
+    'kok/set-menu.json',
+    JSON.stringify({ kitaplar: kitaplar.map(([d, id, ad]) => ({ ad, assetId: id, klasor: d })) }),
+  );
+  o.yaz('kok/empp-set.json', JSON.stringify({ sema: 2, setKimligi }));
+  return path.join(o.d, 'girdi', 'kok');
+}
+
+function webzKitapYaz(o, d, id, pdf) {
+  o.yaz(`${d}/index.html`, o.html(d));
+  o.yaz(`${d}/assets/${id}/data/BookContent.xml`, `<Book pdfUrl="pdf/${pdf}.pdf"/>`);
+  o.yaz(`${d}/assets/${id}/thumbs/1.jpg`, 'jpg');
+  return path.join(o.d, 'girdi', d);
+}
+
+const menuKitaplari = (setDizini, yol) => {
+  const v = fs.readFileSync(path.join(setDizini, 'dosya', ...yol.split('/')), 'utf8');
+  if (yol === 'set-menu.json') return JSON.parse(v).kitaplar.map((k) => k.klasor);
+  // Yama: `window.__setSettings = <JSON>;` — düz metinle ayrılır (menu.js'e başvurmadan).
+  const j =
+    yol === 'config/settings.json'
+      ? v
+      : v.slice(v.indexOf('window.__setSettings = ') + 23, v.lastIndexOf(';\n})();'));
+  return Object.keys(JSON.parse(j).books);
+};
+const WEBZ_DOSYALARI = ['config/settings.json', 'scripts/cevrimdisi-yama.js', 'set-menu.json'];
+
+test('argsAyristir: --menu-taban ve çoklu --baslik', () => {
+  const a = y.argsAyristir(['--menu-taban', '/k', '--baslik', 'book4=Ana Kitap', '--baslik', 'book5=B']);
+  assert.equal(a.menuTaban, '/k');
+  assert.deepEqual(a.baslik, { book4: 'Ana Kitap', book5: 'B' });
+});
+
+test('menü (Web-Z): ekle/çıkar menü dosyalarını imzalı kabuğa koyar; 2. yayın tabanı önceki G', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  const kok = webzKok(o, [['book1', '58336', 'SB'], ['book2', '73456', 'AB'], ['book3', '58237', 'TB']]);
+  const r1 = await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.70.1',
+      panel: 70,
+      menuTaban: kok,
+      baslik: { book4: 'Workbook' },
+      ekle: { book4: webzKitapYaz(o, 'book4', '59999', 'SUPER-MONSTERS-WB') },
+      cikar: ['book3'],
+    }),
+    sessiz,
+  );
+  assert.equal(r1.menu.bicim, 'webz');
+  assert.deepEqual(r1.menu.kitaplar, { book3: 'cikarildi', book4: 'eklendi' });
+  assert.deepEqual(r1.menu.degisen, WEBZ_DOSYALARI);
+  assert.equal(r1.menu.tabanlar['config/settings.json'].kaynak, '--menu-taban');
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const m1 = JSON.parse(fs.readFileSync(path.join(setDizini, 'manifest.json'), 'utf8'));
+  // Menü dosyaları İMZALI kabukta; sha256/boyut servis edilen baytla birebir.
+  for (const yol of WEBZ_DOSYALARI) {
+    const g = m1.kabuk.find((k) => k.yol === yol);
+    assert.ok(g, `${yol} imzalı kabukta`);
+    const v = fs.readFileSync(path.join(setDizini, 'dosya', ...yol.split('/')));
+    assert.deepEqual([g.sha256, g.boyut], [sha(v), v.length]);
+    assert.ok(fs.existsSync(path.join(setDizini, 'android', 'dosya', ...yol.split('/'))), 'android ucu');
+    assert.deepEqual(menuKitaplari(setDizini, yol), ['book1', 'book2', 'book4'], yol);
+  }
+  const ayar = JSON.parse(fs.readFileSync(path.join(setDizini, 'dosya', 'config', 'settings.json'), 'utf8'));
+  assert.deepEqual(ayar.books.book4, {
+    assetId: '59999',
+    contentType: 'book',
+    coverUrl: 'book4/assets/59999/thumbs/1.jpg',
+    displayOrder: 2,
+    title: 'Workbook',
+  });
+  assert.ok(!m1.kabuk.some((k) => k.yol === 'index.html'), "Web-Z'de index'e dokunulmaz");
+  assert.equal(y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik }).gecti, true);
+
+  // 2. yayın: --menu-taban YOK — taban önceki imzalı G durumundan (yerel dosya/ kopyası).
+  const r2 = await y.yayinla(temel(o, taban, { panel: 70, cikar: ['book2'] }), sessiz);
+  assert.deepEqual(r2.menu.kitaplar, { book2: 'cikarildi' });
+  assert.equal(r2.menu.tabanlar['scripts/cevrimdisi-yama.js'].kaynak, 'onceki-G');
+  for (const yol of WEBZ_DOSYALARI) assert.deepEqual(menuKitaplari(setDizini, yol), ['book1', 'book4'], yol);
+
+  // 3. yayın başka bir çıktı dizininde: taban CANLI uçtan iner ve imzalı sha256'yla doğrulanır.
+  const o3 = { ...o, cikti: path.join(o.d, 'senaryolar', 's3') };
+  const uzak = yerelUzakBaglantisi(o.cikti, '99901', taban);
+  const r3 = await y.yayinla(
+    temel(o3, taban, {
+      panel: 70,
+      oncekiManifest: path.join(setDizini, 'manifest.json'),
+      cikar: ['book1'],
+    }),
+    { ...sessiz, getir: uzak.getir },
+  );
+  assert.equal(r3.menu.tabanlar['config/settings.json'].kaynak, 'onceki-G');
+  assert.deepEqual(menuKitaplari(path.join(o3.cikti, 'set', '99901'), 'config/settings.json'), ['book4']);
+  // Uçtaki kopya kurcalanmışsa (imzalı sha256 tutmuyor) taban kurulmaz → RED.
+  fs.writeFileSync(path.join(setDizini, 'dosya', 'config', 'settings.json'), '{"books":{}}');
+  const o4 = { ...o, cikti: path.join(o.d, 'senaryolar', 's4') };
+  await assert.rejects(
+    y.yayinla(
+      temel(o4, taban, {
+        panel: 70,
+        oncekiManifest: path.join(setDizini, 'manifest.json'),
+        cikar: ['book4'],
+      }),
+      { ...sessiz, getir: uzak.getir },
+    ),
+    /imzalı sha256 ile tutmuyor/,
+  );
+});
+
+test('menü (K17): --index verilmişse kart o index üzerine eklenir; RED durumları sessiz geçmez', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  const kitap = webzKitapYaz(o, 'book4', '60001', 'SHALL-WE-5-WORKBOOK');
+  const r = await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.71.1',
+      panel: 71,
+      index: o.yaz('i.html', o.menu('a')),
+      ekle: { book4: kitap },
+    }),
+    sessiz,
+  );
+  assert.equal(r.menu.bicim, 'k17');
+  assert.equal(r.menu.tabanlar['index.html'].kaynak, '--index');
+  const idx = fs.readFileSync(path.join(o.cikti, 'set', '99901', 'dosya', 'index.html'), 'utf8');
+  assert.ok(
+    idx.includes(
+      '<a class="kart" href="book4/index.html"><img src="book4/assets/60001/thumbs/1.jpg" ' +
+        'alt="Shall We 5 Workbook"><span>Shall We 5 Workbook</span></a>',
+    ),
+    idx,
+  );
+
+  const yeni = (ad, ek) => temel({ ...o, cikti: path.join(o.d, 'senaryolar', ad) }, taban, {
+    ilk: true,
+    oncekiSurum: '2.71.1',
+    panel: 71,
+    ...ek,
+  });
+  // Taban yok (ne --index ne --menu-taban ne önceki G).
+  await assert.rejects(y.yayinla(yeni('t1', { cikar: ['book3'] }), sessiz), /menü tabanı yok/);
+  // Tanınmayan kök menü (yayıncının kendi menüsü).
+  await assert.rejects(
+    y.yayinla(yeni('t2', { index: o.yaz('ozel.html', o.html('flashy')), cikar: ['book3'] }), sessiz),
+    /menü biçimi tanınmadı/,
+  );
+  // Başka setin paketi taban verilmiş.
+  const baska = webzKok(o, [['book1', '1', 'A']], '99902');
+  await assert.rejects(
+    y.yayinla(yeni('t3', { menuTaban: baska, cikar: ['book1'] }), sessiz),
+    /başka setin paketi/,
+  );
+  // --baslik yalnız eklenen kitaba.
+  await assert.rejects(
+    y.yayinla(
+      yeni('t4', { index: o.yaz('i.html', o.menu('a')), cikar: ['book3'], baslik: { book3: 'x' } }),
+      sessiz,
+    ),
+    /--baslik book3: yalnız --ekle/,
+  );
+  // Web-Z'de kimliksiz kitap eklenemez (tema kartı eler).
+  o.yaz('book5/index.html', o.html('book5'));
+  await assert.rejects(
+    y.yayinla(
+      yeni('t5', {
+        menuTaban: webzKok(o, [['book1', '1', 'A']]),
+        ekle: { book5: path.join(o.d, 'girdi', 'book5') },
+      }),
+      sessiz,
+    ),
+    /assetId\) ister/,
+  );
 });

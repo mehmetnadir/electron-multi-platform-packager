@@ -11,8 +11,9 @@
  * modelinde örtü = tam olarak bu manifestin içeriği.
  *
  * G KAPSAMI (Nadir 26.09): kök `index.html`, set bileşimi (kitap ekle/çıkar) ve
- * `bookN/43e23fce2b7009474555a77.js`. Kapsam dışı bir yol önceki manifestte bile olsa
- * RED (sessiz taşıma yok).
+ * `bookN/43e23fce2b7009474555a77.js`. Set bileşimi MENÜYÜ de kapsar (2026-09-26): kartlar
+ * Web-Z kabuğunda `index.html`'de değil `MENU_YOLLARI`'nda yazılıdır; `--ekle`/`--cikar` onları
+ * günceller (`menu.js`). Kapsam dışı bir yol önceki manifestte bile olsa RED (sessiz taşıma yok).
  *
  * Saf modül (yalnız `kitap-guncelleyici`'nin saf yol-güvenliği yardımcısını kullanır —
  * ağ/fs YOK).
@@ -22,6 +23,17 @@ const kg = require('../../src/runtime/kitap-guncelleyici');
 
 const MOTOR_DOSYA_ADI = '43e23fce2b7009474555a77.js';
 const INDEX_YOLU = 'index.html';
+/**
+ * Web-Z (sf425) menü dosyaları — kartlar `index.html`'den DEĞİL bunlardan çizilir
+ * (Üretim Masası `WebZTemaUretici.swift`): `file://` altında tema `config/settings.json`'ı
+ * `fetch` edemez, `cevrimdisi-yama.js` içindeki gömülü `window.__setSettings` döner; http'de
+ * (Web-Z/Android) dosyanın kendisi okunur; `set-menu.json` masaüstünün menü tanımıdır (kabul
+ * araçları kitap adlarını oradan okur). K17 (paketleyici) menüsünde kartlar `index.html`'dedir.
+ */
+const MENU_WEBZ_YAMA = 'scripts/cevrimdisi-yama.js';
+const MENU_WEBZ_AYAR = 'config/settings.json';
+const MENU_MASA_TANIMI = 'set-menu.json';
+const MENU_YOLLARI = Object.freeze([MENU_WEBZ_YAMA, MENU_WEBZ_AYAR, MENU_MASA_TANIMI]);
 const KITAP_DIZIN_DESENI = /^book\d+$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
@@ -29,9 +41,9 @@ function siraliAnahtar(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Yol G kapsamında mı: `index.html` ya da `bookN/43e23….js`. */
+/** Yol G kapsamında mı: `index.html`, menü dosyası (`MENU_YOLLARI`) ya da `bookN/43e23….js`. */
 function gYoluMu(yol) {
-  if (yol === INDEX_YOLU) return true;
+  if (yol === INDEX_YOLU || MENU_YOLLARI.includes(yol)) return true;
   const p = String(yol).split('/');
   return p.length === 2 && KITAP_DIZIN_DESENI.test(p[0]) && p[1] === MOTOR_DOSYA_ADI;
 }
@@ -119,6 +131,7 @@ function oncekiDurum(onceki) {
  *   `motorlar` {bookN: {sha256, boyut}}
  *   `ekle`     {bookN: {kaynak, sha256, boyut}}
  *   `cikar`    [bookN]
+ *   `menu`     {<MENU_YOLLARI'ndan yol>: {sha256, boyut}} — `--ekle`/`--cikar`'ın menüye yansıması
  * @returns {{kabuk:object[], kitaplar:object[], ozet:{degisenKabuk:string[], dusenKabuk:string[],
  *   degisenKitap:string[], tasinanKabuk:string[]}}}
  */
@@ -127,6 +140,7 @@ function birlestir(onceki, d) {
   const motorlar = deg.motorlar || {};
   const ekle = deg.ekle || {};
   const cikar = Array.isArray(deg.cikar) ? deg.cikar : [];
+  const menu = deg.menu || {};
 
   for (const k of Object.keys(motorlar)) kitapDiziniDenetle(k, '--motor');
   for (const k of Object.keys(ekle)) kitapDiziniDenetle(k, '--ekle');
@@ -141,6 +155,10 @@ function birlestir(onceki, d) {
   if (deg.index !== undefined && !ozetGecerliMi(deg.index)) throw new Error('index özeti bozuk');
   for (const [k, v] of Object.entries(motorlar))
     if (!ozetGecerliMi(v)) throw new Error(`${k} motor özeti bozuk`);
+  for (const [y, v] of Object.entries(menu)) {
+    if (!MENU_YOLLARI.includes(y)) throw new Error(`menü yolu G kapsamında değil: ${y}`);
+    if (!ozetGecerliMi(v)) throw new Error(`${y} menü özeti bozuk`);
+  }
   for (const [k, v] of Object.entries(ekle)) {
     if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak)
       throw new Error(`${k} arşiv özeti bozuk`);
@@ -151,7 +169,8 @@ function birlestir(onceki, d) {
     deg.index === undefined &&
     !Object.keys(motorlar).length &&
     !Object.keys(ekle).length &&
-    !cikar.length
+    !cikar.length &&
+    !Object.keys(menu).length
   ) {
     throw new Error('değişiklik yok: --index, --motor, --ekle ya da --cikar verin');
   }
@@ -180,6 +199,9 @@ function birlestir(onceki, d) {
     kabuk.set(INDEX_YOLU, { yol: INDEX_YOLU, sha256: deg.index.sha256, boyut: deg.index.boyut });
   for (const [k, v] of Object.entries(motorlar)) {
     kabuk.set(motorYolu(k), { yol: motorYolu(k), sha256: v.sha256, boyut: v.boyut });
+  }
+  for (const [y, v] of Object.entries(menu)) {
+    kabuk.set(y, { yol: y, sha256: v.sha256, boyut: v.boyut });
   }
 
   const kabukListe = [...kabuk.values()].sort((a, b) => siraliAnahtar(a.yol, b.yol));
@@ -210,6 +232,10 @@ function birlestir(onceki, d) {
 module.exports = {
   MOTOR_DOSYA_ADI,
   INDEX_YOLU,
+  MENU_WEBZ_YAMA,
+  MENU_WEBZ_AYAR,
+  MENU_MASA_TANIMI,
+  MENU_YOLLARI,
   KITAP_DIZIN_DESENI,
   gYoluMu,
   motorYolu,

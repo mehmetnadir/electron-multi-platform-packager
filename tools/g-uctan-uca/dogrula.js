@@ -19,12 +19,12 @@ const path = require('path');
 const o = require('./ortak');
 const { VARSAYILAN_DIZIN } = require('./sunucu');
 
-function beklenenOku(dizin) {
-  const y = path.join(path.resolve(dizin), 'beklenen.json');
+function beklenenOku(dizin, ad = 'beklenen.json') {
+  const y = path.join(path.resolve(dizin), ad);
   try {
     return JSON.parse(fs.readFileSync(y, 'utf8'));
   } catch (e) {
-    throw new Error(`beklenen.json okunamadı (${y}) — önce hazirla.js`);
+    throw new Error(`${ad} okunamadı (${y}) — önce hazirla.js`);
   }
 }
 

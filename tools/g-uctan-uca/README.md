@@ -23,7 +23,8 @@ node $G/tools/g-uctan-uca/dogrula.js <agac> --dizin $D      # kendi istemcinin s
 
 | Yol | İçerik |
 |---|---|
-| `kurulu/` | paket **2.90.1**'in kurulu ağacı: `index.html` v1, `book1..3/` (motor v1), `package.json`, `empp-set.json` (set **99901**, `taban`, TEST açık anahtarı `imza.acikAnahtar`) |
+| `kurulu/` | paket **2.90.1**'in kurulu ağacı: Web-Z kök menüsü (`index.html` v1 + `scripts/cevrimdisi-yama.js` + `config/settings.json` + `set-menu.json`), `book1..3/` (motor v1, `assets/<kimlik>/`), `package.json`, `empp-set.json` (set **99901**, `taban`, TEST açık anahtarı `imza.acikAnahtar`) |
+| `kurulu-k17/` | aynı paket, kök menü K17 (paketleyici sade menüsü, kartlar `index.html`'de) — yalnız `menu-k17` |
 | `kaynak/` | yayının girdileri (index v2/v3, `motor-v2.js`, `book4/`) |
 | `senaryolar/<ad>/set/99901/` | sunucunun verdiği uçlar |
 | `beklenen.json` | **2.90.3** sonrası: `gDosyalari`, `tabanDosyalari`, `olmamali` (`book3`), `kurulu` |
@@ -34,7 +35,8 @@ node $G/tools/g-uctan-uca/dogrula.js <agac> --dizin $D      # kendi istemcinin s
 
 | Ad | Beklenen | Zorunlu | Ne sınanır |
 |---|---|---|---|
-| `gecerli` | 2.90.3, sonra 2. koşu `guncel` | herkes | 2.90.2 atlanır: index v3, book1+book2 motor v2, book4 eklenir, book3 çıkar |
+| `gecerli` | 2.90.3, sonra 2. koşu `guncel` | herkes | 2.90.2 atlanır: index v3, book1+book2 motor v2, book4 eklenir, book3 çıkar; Web-Z menü dosyaları book4'ü gösterir, book3'ü göstermez |
+| `menu-k17` | 2.90.2, sonra 2. koşu `guncel` | herkes | K17 menülü pakette book4 eklenir (kök `index.html` kartı), book3 çıkar (kartı kalkar); beklenen `beklenen-menu-k17.json` |
 | `imza-bozuk` | değişmez | herkes | manifest imzadan sonra değişmiş |
 | `imzasiz` | değişmez | herkes | `.sig` yok |
 | `sha-uyusmaz` | değişmez | herkes | `dosya/index.html` sha256 tutmuyor; eklenen/çıkarılan kitap geri alınır |

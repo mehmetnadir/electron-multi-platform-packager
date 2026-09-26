@@ -24,6 +24,7 @@ const anahtar = require('./anahtar');
 const { MOTOR_DOSYA_ADI: M } = require('./durum');
 const G = require('../../src/platforms/android/empp-g-istemci.js');
 const kabuk = require('../../src/packaging/set-kabuk');
+const { MENU_ISARETI } = require('../../src/packaging/set-menu-bicim');
 
 const SET_KIMLIGI = '81900';
 const TABAN = 'https://ornek.invalid/guncelleme';
@@ -47,12 +48,18 @@ function ortam() {
   const html = (t) =>
     `<!doctype html><html><head><title>${t}</title>` +
     `<script src="empp-android-shim.js"></script></head><body>${t}</body></html>`;
+  // Kök MENÜ (K17 sade biçimi): `--ekle` menüye yansır (menu.js) — tanınmayan kök RED.
+  const menu = (t) =>
+    `${MENU_ISARETI}\n<!doctype html><html><head><title>${t}</title>` +
+    '<script src="empp-android-shim.js"></script></head><body>\n  <main>\n  </main>\n' +
+    '</body></html>\n';
   return {
     d,
     anahtarYolu,
     acik: anahtar.acikAnahtarB64(privateKey),
     yaz,
     html,
+    menu,
     cikti: path.join(d, 'cikti'),
   };
 }
@@ -71,7 +78,7 @@ async function uretimYap(o) {
       ilk: true,
       oncekiSurum: '2.81.1',
       panel: 81,
-      index: o.yaz('i.html', o.html('menu')),
+      index: o.yaz('i.html', o.menu('menu')),
       motorlar: {},
       ekle: { book7: path.join(o.d, 'girdi', 'book7') },
       cikar: [],
@@ -191,6 +198,14 @@ test('android e2e: g-yayin üretimi Android istemcisine (empp-g-istemci) besleni
   // book7'nin motoru YENİ eklenen arşivin İÇİNDE gelir (durum.js: "yeni arşiv kendi motorunu
   // taşır") — bu yayında kabuk yalnız kök `index.html`'i taşır, `book7/<motor>` ayrı gelmez.
   assert.deepEqual(p.dosyalar.map((d) => d.yol), ['index.html']);
+  // O index, eklenen kitabın KARTINI taşır (menu.js, K17): Android de aynı menüyü alır.
+  assert.deepEqual(r.menu.kitaplar, { book7: 'eklendi' });
+  const sunulan = fs.readFileSync(
+    path.join(o.cikti, 'set', SET_KIMLIGI, 'android', 'dosya', 'index.html'),
+    'utf8',
+  );
+  assert.match(sunulan, /<a class="kart" href="book7\/index\.html">/);
+  assert.equal(p.dosyalar[0].sha256, crypto.createHash('sha256').update(sunulan).digest('hex'));
   assert.equal(kayit.kitapKur.length, 1);
   assert.equal(kayit.kitapKur[0].dizin, 'book7');
   assert.equal(kayit.kitapKur[0].sha256, p.kitaplar[0].sha256);

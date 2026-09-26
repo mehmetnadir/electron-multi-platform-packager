@@ -140,6 +140,46 @@ test(
       if (kip === 'ortu') {
         assert.equal(fs.existsSync(path.join(yer, 'kurulu', 'book4')), false, 'gövdeye yazılmadı');
       }
+
+      // MENÜ — eklenen kitap menüde görünür, çıkarılan menüden kalkar. İki biçim; düz JSON/metin
+      // (menu.js'e başvurmadan): istemcinin sunduğu ağaçta temanın okuyacağı dosyalar.
+      const agac = (ad) => path.join(k.calisma, ad, kip === 'ortu' ? 'gorunum' : 'kurulu');
+      const oku = (ad, y) => fs.readFileSync(path.join(agac(ad), ...y.split('/')), 'utf8');
+      // Web-Z: tema kartları `window.__setSettings.books` anahtarlarından çizer (file:// altında
+      // yama; http'de settings.json); set-menu.json masaüstü tanımı.
+      const yama = oku('gecerli', 'scripts/cevrimdisi-yama.js');
+      const gomulu = JSON.parse(
+        yama.slice(
+          yama.indexOf('window.__setSettings = ') + 'window.__setSettings = '.length,
+          yama.indexOf(';\n  window.__cevrimdisi'),
+        ),
+      );
+      const ayar = JSON.parse(oku('gecerli', 'config/settings.json'));
+      for (const [ne, books] of [['yama', gomulu.books], ['settings.json', ayar.books]]) {
+        assert.deepEqual(Object.keys(books), ['book1', 'book2', 'book4'], `${kip} ${ne}`);
+        assert.equal(books.book4.assetId, '58104', `${kip} ${ne}`);
+        assert.equal(books.book4.coverUrl, 'book4/assets/58104/thumbs/1.jpg', `${kip} ${ne}`);
+      }
+      assert.equal(ayar.bookCount, 3);
+      assert.ok(
+        fs.existsSync(path.join(agac('gecerli'), 'book4', 'assets', '58104', 'thumbs', '1.jpg')),
+        kip + ': menü kapağı ağaçta',
+      );
+      assert.deepEqual(
+        JSON.parse(oku('gecerli', 'set-menu.json')).kitaplar.map((x) => x.klasor),
+        ['book1', 'book2', 'book4'],
+      );
+      // K17: kartlar kök index.html'de.
+      const k17 = oku('menu-k17', 'index.html');
+      assert.ok(
+        k17.includes(
+          '<a class="kart" href="book4/index.html"><img src="book4/assets/58104/thumbs/1.jpg"',
+        ),
+        kip + ': book4 kartı',
+      );
+      assert.doesNotMatch(k17, /href="book3\/index\.html"/);
+      assert.match(k17, /href="book1\/index\.html"[\s\S]*href="book2\/index\.html"[\s\S]*href="book4\//);
+      assert.equal(fs.existsSync(path.join(agac('menu-k17'), 'book3')), false, kip + ': book3 gitti');
     }
 
     // dogrula.js: kurulu ağaç 'degismez' kipinde geçer, 'tam' kipinde kalır.

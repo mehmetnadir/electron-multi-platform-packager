@@ -135,7 +135,9 @@ async function kos(s = {}) {
     for (const sen of h.senaryolar) {
       const yer = path.join(calisma, sen.ad);
       const kok = path.join(yer, 'kurulu');
-      fs.cpSync(h.kurulu, kok, { recursive: true });
+      // Senaryo kendi kurulu ağacını/beklenenini taşıyabilir (menu-k17: K17 kök menülü paket).
+      fs.cpSync(sen.kurulu || h.kurulu, kok, { recursive: true });
+      const bek = sen.beklenenDosyasi ? beklenenOku(dizin, sen.beklenenDosyasi) : beklenen;
       // --kip ortu (mac/Pardus): yazmalar örtüye gider; sınanan ağaç örtünün ETKİN görünümüdür
       // ve paket gövdesi (kurulu/) HER senaryoda birebir aynı kalmalıdır.
       const ortuKoku = s.kip === 'ortu' ? path.join(yer, 'ortu') : '';
@@ -143,9 +145,9 @@ async function kos(s = {}) {
       const c = await istemciKos(kok, sen.taban, h.tls.ca, undefined, ekEnv);
       const kip = sen.beklenen === 'guncellendi' ? 'tam' : 'degismez';
       const agac = ortuKoku ? gorunumuYaz(kok, ortuKoku, path.join(yer, 'gorunum')) : kok;
-      const d = agaciDogrula(agac, beklenen, kip);
+      const d = agaciDogrula(agac, bek, kip);
       if (ortuKoku) {
-        const g = agaciDogrula(kok, beklenen, 'degismez');
+        const g = agaciDogrula(kok, bek, 'degismez');
         if (!g.gecti) d.gecti = false;
         d.farkli = d.farkli.concat(g.farkli.map((y) => 'GÖVDE:' + y));
         d.fazla = d.fazla.concat(g.fazla.map((y) => 'GÖVDE:' + y));
@@ -163,7 +165,7 @@ async function kos(s = {}) {
         gecti =
           ikinci.durum === 'guncel' &&
           ikinci.istek === 1 &&
-          agaciDogrula(agac2, beklenen, 'tam').gecti;
+          agaciDogrula(agac2, bek, 'tam').gecti;
       }
       const sonuc = gecti ? 'GEÇTİ' : sen.zorunlu === 'yeni' ? 'AÇIK' : 'KALDI';
       sonuclar.push({
