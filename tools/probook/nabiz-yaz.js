@@ -5,6 +5,12 @@
  * yazar. Mac tarafı (`src/agent/serit-secimi.js`) bu dosyanın ZAMANINA ve disk alanına
  * bakarak Pardus şeridini devralır/bırakır.
  * "Cevap veriyor mu" değil "beklenen kopya mı": pid + commit + başlama zamanı taşır.
+ * 2026-09-26 eklemeleri:
+ *  - `api`: ajan KENDİ jetonuyla sunucuya ulaşıyor mu (salt-okur `peek?n=1`, 5 dk'da bir;
+ *    iki ardışık hata → 'hata', 401/403 → 'yetkisiz', jeton yok → 'jetonsuz'). Nabız taze,
+ *    süreç ayakta ama internet/jeton yoksa ProBook iş kiralayamaz — Mac devralmalı.
+ *  - `arsivOzeti`: ~/.empp-agent/kaynak-arsivi özeti; Mac'inkiyle farklıysa Mac alır
+ *    (ProBook arşivdeki kitabı İmpark exe'sinden, ESKİ arayüzle üretmesin).
  */
 const fs = require('fs');
 const os = require('os');
@@ -40,8 +46,11 @@ function pidCanli(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-function nabizOlustur({ simdi, runnerPid, runnerCanli, commit, baslama, disk, kabulgizli, bayraklar }) {
+function nabizOlustur({ simdi, runnerPid, runnerCanli, commit, baslama, disk, kabulgizli, bayraklar, api, arsivOzeti, kuyrukta }) {
   return {
+    api: api || 'olculmedi',
+    arsivOzeti: arsivOzeti || null,
+    kuyrukta: Number.isFinite(kuyrukta) ? kuyrukta : null,
     zaman: new Date(simdi).toISOString(),
     ajan: runnerCanli ? 'active' : 'olu',
     runnerPid: runnerPid || null,
@@ -61,8 +70,53 @@ function atomikYaz(dosya, nesne) {
   fs.renameSync(tmp, dosya);
 }
 
-function birKez({ dosya, runnerPid, commit, baslama, serit, home, simdi = Date.now() }) {
+/** ProBook'taki kaynak arşivinin özeti (kaynak-arsivi.js yoksa null — eski kurulum). */
+function arsivOzetiOku(kok) {
+  try {
+    return require(path.join(__dirname, '..', '..', 'src', 'agent', 'kaynak-arsivi.js')).arsivOzeti(kok).ozet;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * API yoklayıcı: ajan jetonuyla salt-okur `GET {api}/agents/<id>/peek?n=1`. Tek hata durumu
+ * değiştirmez (geçici dalga), `esikArdisik` ardışık hata → 'hata'. İlk başarıdan önce 'olculmedi'.
+ */
+function apiYoklayici({ api, tokenDosyasi, fetchImpl = (...a) => fetch(...a), esikArdisik = 2, zamanAsimiMs = 20000 }) {
+  let ardisik = 0;
+  let durum = 'olculmedi';
+  let kuyrukta = null;
+  async function yokla() {
+    let tok = null;
+    try { tok = JSON.parse(fs.readFileSync(tokenDosyasi, 'utf8')); } catch (_) { tok = null; }
+    if (!tok || !tok.agentId || !tok.token) { durum = 'jetonsuz'; return durum; }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), zamanAsimiMs);
+    try {
+      const r = await fetchImpl(`${String(api).replace(/\/+$/, '')}/agents/${tok.agentId}/peek?n=1`, {
+        headers: { 'X-Agent-Token': tok.token }, signal: ctrl.signal,
+      });
+      if (r.status === 401 || r.status === 403) { ardisik = 0; durum = 'yetkisiz'; return durum; }
+      if (r.status < 200 || r.status >= 300) throw new Error(`HTTP ${r.status}`);
+      let govde = null;
+      try { govde = await r.json(); } catch (_) { govde = null; }
+      kuyrukta = govde && Array.isArray(govde.jobs) ? govde.jobs.length : null;
+      ardisik = 0; durum = 'ok';
+    } catch (_) {
+      ardisik += 1;
+      if (ardisik >= esikArdisik) durum = 'hata';
+    } finally {
+      clearTimeout(t);
+    }
+    return durum;
+  }
+  return { yokla, durum: () => durum, kuyrukta: () => kuyrukta };
+}
+
+function birKez({ dosya, runnerPid, commit, baslama, serit, home, simdi = Date.now(), api = null, arsivKok = null, kuyrukta = null }) {
   const n = nabizOlustur({
+    api, kuyrukta, arsivOzeti: arsivOzetiOku(arsivKok || path.join(home, '.empp-agent', 'kaynak-arsivi')),
     simdi, runnerPid, runnerCanli: pidCanli(runnerPid), commit, baslama,
     disk: diskOlc(path.join(serit, 'work')), kabulgizli: kabulgizliSay(home),
     bayraklar: {
@@ -83,13 +137,21 @@ if (require.main === module) {
     dosya: path.join(serit, 'log', 'nabiz.json'), runnerPid, commit,
     baslama: new Date().toISOString(), serit, home: os.homedir(),
   };
+  const yoklayici = apiYoklayici({
+    api: process.env.BOOKUPDATE_API || 'https://akillitahta.ndr.ist/api/v1',
+    tokenDosyasi: process.env.AGENT_TOKEN_FILE || path.join(os.homedir(), '.empp-agent', 'token.json'),
+  });
   const tik = () => {
-    const n = birKez(ops);
+    const n = birKez({ ...ops, api: yoklayici.durum(), kuyrukta: yoklayici.kuyrukta() });
     // Runner öldüyse son bir 'olu' nabzı yazıp çık — bayat dosya zaten Mac'i devrettirir.
     if (n.ajan !== 'active') process.exit(0);
   };
-  tik();
-  setInterval(tik, Number(process.env.EMPP_NABIZ_MS || 60000));
+  // İlk nabızdan ÖNCE API bir kez yoklanır (en fazla 20 sn) — 'olculmedi' nabzı Mac'e "alma" dedirtmez.
+  yoklayici.yokla().catch(() => {}).finally(() => {
+    tik();
+    setInterval(tik, Number(process.env.EMPP_NABIZ_MS || 60000));
+    setInterval(() => { yoklayici.yokla().catch(() => {}); }, Number(process.env.EMPP_NABIZ_API_MS || 300000));
+  });
 }
 
-module.exports = { diskOlc, kabulgizliSay, pidCanli, nabizOlustur, atomikYaz, birKez };
+module.exports = { diskOlc, kabulgizliSay, pidCanli, nabizOlustur, atomikYaz, birKez, apiYoklayici, arsivOzetiOku };

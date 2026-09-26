@@ -84,7 +84,7 @@ Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 
 ## Pardus şeridi (23.09 + 24.09 kararları)
 | Şerit | Karar | Bugün |
 |---|---|---|
-| ProBook yerli (birincil) | 24.09 karar 1-5: kendi jetonu, otomatik eşikli devir, sıkı sıra, Tailscale | kod 420f21e; `build_agents`'ta ProBook YOK (kayıt sırrı Nadir'de); `serit-secimi.js` runner'a bağlı değil (`serit-secimi.js:11-12`) |
+| ProBook yerli (birincil) | 24.09 karar 1-5: kendi jetonu, otomatik eşikli devir, sıkı sıra, Tailscale | kod 420f21e + dal `probook-serit` (26.09, commitsiz): runner bağlantısı `EMPP_PROBOOK_SERIT=1` (kod varsayılanı KAPALI), karar = nabız ≤10 dk + ajan ayakta + API (`peek`) + disk + kaynak arşivi özeti eşit; arşiv Mac→ProBook `arsiv-esle.sh`. ProBook'ta kurulu, birim etkin, BAŞLATILMADI; `build_agents`'ta ProBook YOK (kayıt sırrı Nadir'de). Rapor `~/.empp-agent/arastirma/probook-serit-hazirlik-20260926.md` |
 | Mac Docker (yedek; bugün tek şerit) | 24.09 karar 2 | canlı; DEB kapalı (`pardus-packager-build.sh:121`) |
 | Hazır devralma (srv21 şeridi) | 17.09 | 16 paket (18-20.09, 13 GB) bekliyor; 5'i kuyruktaki işe ait (11811, 11845, 45481, 45541, 59834); devralma yalnız `srcVersion` kıyaslar, paketleyici commit'ine bakmaz (`runner.js:1662-1680`) |
 | Kanal 1 zorlama bekçisi | 23.09 §1 | YOK: `pardus-hat-bekcisi.sh` ve `com.empp.pardus-hat` yok |

@@ -182,3 +182,14 @@ Açık kararlar (≤5):
 Ölçüm notu (PROBOOK-KAPASITE.md): internet indirme ProBook 1,14 MB/s = Mac 1,04 MB/s (aynı hat, kontrol grubu);
 mksquashfs gzip ProBook yerli 55 MB/s, Mac Rosetta 72 MB/s; zstd her ikisinde 3,6× yavaş → gzip kalır.
 Durum: `[PLAN: KARARLAR ALINDI — uygulama başladı]`
+
+## Uygulama durumu (26.09, dal `probook-serit`, commitsiz)
+- C7 runner bağlantısı: `EMPP_PROBOOK_SERIT=1` (kod varsayılanı KAPALI). Karar ölçütleri:
+  - nabız ≤10 dk · ajan ayakta · API (`peek`, ProBook jetonuyla) · disk ≥25 GB ve ≤%85.
+  - Kaynak arşivi özeti Mac'le eşit olmalı. Fark varsa Mac alır ve `tools/probook/arsiv-esle.sh`'ı başlatır.
+- B.2 derleme boyunca `~/.kabul.lock` tutuluyor (`EMPP_DERLEME_KABUL_KILIDI`). B.3 açılış onarımı `yetim-onar.sh`. B.1 kanıt 14 gün.
+- C1 RAR SFX ölçüldü: 7z listeliyor, AÇAMIYOR. Kullanıcı düzeyi unrar kuruldu; Debian .deb imza zinciriyle doğrulandı.
+- D kıyası (73581, 742 MB → 803 MB): ProBook derleme 120 sn · yerel kabul 42 sn · kaynak hazır → kabul ~170 sn.
+  - Mac Docker aynı boy sınıfında derleme 79-93 sn · uzak kabul 79-376 sn.
+  - Bulut CDN ProBook'a 40 MB/s, LAN rsync 9,3 MB/s.
+- Rapor: `~/.empp-agent/arastirma/probook-serit-hazirlik-20260926.md`. Eksik: enroll sırrı (Nadir), commit ve birleştirme.

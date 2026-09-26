@@ -14,7 +14,7 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
   const pb = path.join(repo, 'tools', 'probook');
   fs.mkdirSync(path.join(pb, 'bin'), { recursive: true });
   fs.mkdirSync(path.join(repo, 'src', 'agent'), { recursive: true });
-  for (const f of ['serit-ajan.sh', 'logo-sunucu.js', 'nabiz-yaz.js', 'bin/docker']) {
+  for (const f of ['serit-ajan.sh', 'serit-ortam.sh', 'logo-sunucu.js', 'nabiz-yaz.js', 'bin/docker', 'yetim-onar.sh']) {
     fs.copyFileSync(path.join(__dirname, f), path.join(pb, f));
     fs.chmodSync(path.join(pb, f), 0o755);
   }
@@ -27,14 +27,18 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
       caps: e.AGENT_CAPS, host: e.PROBOOK_HOST, build: e.PARDUS_BUILD_SCRIPT, kabul: e.EMPP_PARDUS_KABUL,
       deb: e.EMPP_LINUX_DEB, api: e.PACKAGER_API, tmp: e.TMPDIR, cache: e.EMPP_SOURCE_CACHE,
       dockerInfo: d.status, dockerPs: p.status, kabulTimeout: e.AGENT_PARDUS_KABUL_TIMEOUT_MS,
+      derlemeKilidi: e.EMPP_DERLEME_KABUL_KILIDI, indirme: e.AGENT_DOWNLOAD_RATE || '', kanitArsiv: e.EMPP_KANIT_ARSIV, path: e.PATH, nodeOpt: e.NODE_OPTIONS, upload: e.AGENT_UPLOAD_RATE,
+      yetimKaldi: require('fs').existsSync(e.EMPP_SERIT_KOK + '/work/empp-agent-eski'),
     }));
     setTimeout(() => process.exit(0), 1500);
   `);
   fs.writeFileSync(path.join(repo, '.serit-surum'), 'abc1234');
+  fs.mkdirSync(path.join(serit, 'work', 'empp-agent-eski'), { recursive: true }); // önceki SIGKILL'in artığı
   const r = spawnSync('bash', [path.join(pb, 'serit-ajan.sh')], {
     encoding: 'utf8', timeout: 20000,
     env: { ...process.env, EMPP_SERIT_KOK: serit, EMPP_LOGO_PORT: '0', HOME: serit,
-      AGENT_CAPS: '', PROBOOK_HOST: '', PARDUS_BUILD_SCRIPT: '', EMPP_PARDUS_KABUL: '', EMPP_LINUX_DEB: '', PACKAGER_API: '' },
+      AGENT_CAPS: '', PROBOOK_HOST: '', PARDUS_BUILD_SCRIPT: '', EMPP_PARDUS_KABUL: '', EMPP_LINUX_DEB: '', PACKAGER_API: '',
+      NODE_OPTIONS: '', AGENT_UPLOAD_RATE: '', EMPP_DERLEME_KABUL_KILIDI: '', EMPP_KANIT_ARSIV: '', AGENT_DOWNLOAD_RATE: '' },
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
@@ -52,4 +56,12 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
   assert.equal(nabiz.commit, 'abc1234');
   assert.equal(nabiz.bayraklar.probookHost, 'yerel');
   assert.match(r.stdout, /runner cikti rc=0/);
+  assert.equal(o.derlemeKilidi, '1', 'derleme boyunca kabul kilidi (B.2)');
+  assert.equal(o.kanitArsiv, path.join(serit, 'kanit'), 'kabul kanıtı 14 gün (B.1)');
+  assert.ok(o.path.split(':').includes(path.join(serit, 'opt', 'bin')), 'kullanıcı düzeyi unrar PATH\'te');
+  assert.match(o.nodeOpt, /--dns-result-order=ipv4first/);
+  assert.match(o.upload, /^(25M|4M)$/);
+  assert.equal(o.indirme, o.upload === '25M' ? '25M' : '', 'ofiste indirme 25M, dışarıda runner varsayılanı');
+  assert.equal(o.yetimKaldi, false, 'yetim iş dizini runner başlamadan kaldırıldı (B.3)');
+  assert.match(r.stdout, /yetim is dizini kaldiriliyor: work\/empp-agent-eski/);
 });

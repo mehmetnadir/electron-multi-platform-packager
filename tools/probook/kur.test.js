@@ -42,3 +42,33 @@ test('systemd birimi: Restart=always, jeton yoksa baslamaz, X oturumu ortami', (
   assert.match(BIRIM, /^ExecStart=%h\/empp-serit\/repo\/tools\/probook\/serit-ajan\.sh$/m);
   assert.match(KUR, /loginctl enable-linger/);
 });
+
+test('kurulum kaynak arşivini eşler (eski arayüz kapısı); --arsivsiz yalnız bilerek atlar', () => {
+  assert.match(KUR, /tools\/probook\/arsiv-esle\.sh" --host "\$HOST"/);
+  assert.match(KUR, /--arsivsiz\) ARSIV=0/);
+});
+
+test('package-lock.json yoksa (gitignore, worktree) rsync --delete ÖNCESİ durur', () => {
+  const iLock = KUR.indexOf('[ -f "$REPO/package-lock.json" ] || die');
+  const iRsync = KUR.indexOf('rsync -a --delete');
+  assert.ok(iLock > 0 && iLock < iRsync, 'kilit dosyası kapısı rsync --delete\'ten önce');
+});
+
+test('unrar kullanıcı düzeyinde, imza zinciriyle (InRelease gpgv → Packages.xz → .deb sha256); apt YOK', () => {
+  const g = KUR.slice(KUR.indexOf('unrar_kur(){'), KUR.indexOf('probook_kur(){'));
+  assert.match(g, /gpgv --keyring \/usr\/share\/keyrings\/debian-archive-keyring\.gpg/);
+  assert.match(g, /Packages\.xz sha256 TUTMADI/);
+  assert.match(g, /\.deb sha256 TUTMADI/);
+  assert.match(g, /dpkg-deb -x/);
+  assert.doesNotMatch(g, /apt(-get)? install|dpkg -i|sudo/);
+  assert.match(KUR, /unrar_kur "\$S"/);
+  const ortam = fs.readFileSync(path.join(__dirname, 'serit-ortam.sh'), 'utf8');
+  assert.match(ortam, /export PATH="[^"]*\$SERIT\/opt\/bin/);
+});
+
+test('pipefail tuzağı: unrar_kur boruda erken kapanan süzgeç (| grep -q, | awk ...exit) KULLANMAZ', () => {
+  const g = KUR.slice(KUR.indexOf('unrar_kur(){'), KUR.indexOf('probook_kur(){'));
+  assert.doesNotMatch(g, /\|\s*grep -q/);
+  assert.doesNotMatch(g, /xz -dc[^\n|]*\|(?!\|)/, 'xz çıktısı boruya değil dosyaya');
+  assert.match(g, /ln -sfn "\$S\/opt\/unrar\/usr\/bin\/unrar-nonfree" "\$BIN\/unrar"/);
+});

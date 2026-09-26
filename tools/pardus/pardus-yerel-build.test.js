@@ -19,6 +19,8 @@ module.exports = { startPackaging: async (job, info) => {
   const up = p.join('uploads', info.sessionId);
   fs.writeFileSync(p.join(d, 'ozet.json'), JSON.stringify({
     deb: process.env.EMPP_LINUX_DEB, setMenu: process.env.EMPP_SET_MENU,
+    icerik: process.env.EMPP_ICERIK_GUNCELLEME, setGuncelleme: process.env.EMPP_SET_GUNCELLEME,
+    kabulKilidi: process.env.KABUL_KILIT ? (fs.existsSync(process.env.KABUL_KILIT) ? fs.readFileSync(process.env.KABUL_KILIT, 'utf8') : 'YOK') : null,
     cache: process.env.ELECTRON_CACHE, cwdBin: fs.existsSync('node_modules/.bin/electron-builder'),
     info, girdi: fs.readdirSync(up).sort(),
   }));
@@ -125,11 +127,51 @@ test('electron-builder yoksa (npm ci yapilmamis) net hata', () => {
 
 // Kapı sızıntısı (2026-09-26): iki Pardus şeridi de içerik ve SET güncelleme bayraklarını
 // paketleyiciye KAPALI varsayılanla geçirmeli; geçirmezse paketleyici varsayılanı AÇIK okur.
-test('pardus seritleri icerik+SET guncelleme bayraklarini varsayilan KAPALI gecirir', () => {
+// 2026-09-26 (a0cc28d): İçerik güncellemesi (K) Pardus'ta AÇIK (PARDUS_ICERIK_GUNCELLEME, varsayılan
+// linux); SET güncelleme KAPALI. İKİ şerit AYNI paketi üretmeli: docker `-e` listesindeki HER bayrak
+// yerel betikte AYNI ifadeyle dışa aktarılır (eski test K'yı 0 bekliyordu, a0cc28d'de kırmızıydı).
+test('parite: docker şeridinin paketleyiciye geçtiği her EMPP_ bayrağı yerel şeritte aynı ifadeyle', () => {
   const docker = fs.readFileSync(path.join(__dirname, 'pardus-packager-build.sh'), 'utf8');
   const yerel = fs.readFileSync(BETIK, 'utf8');
-  for (const ad of ['EMPP_SET_GUNCELLEME', 'EMPP_ICERIK_GUNCELLEME']) {
-    assert.match(docker, new RegExp(`-e ${ad}="\\$\\{${ad}:-0\\}"`), `docker: ${ad}`);
-    assert.match(yerel, new RegExp(`${ad}="\\$\\{${ad}:-0\\}"`), `yerel: ${ad}`);
+  const ciftler = [...docker.matchAll(/-e (EMPP_[A-Z_]+)="(\$\{[^}]+\})"/g)].map((m) => [m[1], m[2]]);
+  assert.ok(ciftler.length >= 6, `docker bayrakları okunamadı: ${ciftler.length}`);
+  for (const [ad, ifade] of ciftler) {
+    assert.ok(yerel.includes(`${ad}="${ifade}"`), `yerel şeritte eksik/farklı: ${ad}="${ifade}"`);
   }
+  assert.match(docker, /-e EMPP_ICERIK_GUNCELLEME="\$\{PARDUS_ICERIK_GUNCELLEME:-linux\}"/);
+  assert.match(docker, /-e EMPP_SET_GUNCELLEME="\$\{EMPP_SET_GUNCELLEME:-0\}"/);
+});
+
+test('davranış: Mac ortamındaki EMPP_ICERIK_GUNCELLEME=windows yerel pardus paketine sızmaz (K=linux)', () => {
+  const o = ortam();
+  const r = kos(o, o.kaynak, { EMPP_ICERIK_GUNCELLEME: 'windows', EMPP_SET_GUNCELLEME: '' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const oz = JSON.parse(fs.readFileSync(path.join(o.cikti, 'raw', 'linux', 'ozet.json'), 'utf8'));
+  assert.equal(oz.icerik, 'linux');
+  assert.equal(oz.setGuncelleme, '0');
+});
+
+test('kabul kilidi: derleme BOYUNCA tutulur, sonunda bırakılır', () => {
+  const o = ortam();
+  const kilit = path.join(o.kok, 'kabul.lock');
+  const r = kos(o, o.kaynak, { EMPP_DERLEME_KABUL_KILIDI: '1', KABUL_KILIT: kilit });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const oz = JSON.parse(fs.readFileSync(path.join(o.cikti, 'raw', 'linux', 'ozet.json'), 'utf8'));
+  assert.match(oz.kabulKilidi, /damga=derleme-\d+-\d+ /, 'paketleyici koşarken kilit bizde');
+  assert.equal(fs.existsSync(kilit), false, 'derleme bitince bırakıldı');
+  assert.match(log(o), /kabul kilidi alindi/);
+});
+
+test('kabul kilidi: süren kabul varsa bekler; boşalmazsa ERTELENEBİLİR işaretle çıkar, kilide dokunmaz', () => {
+  const o = ortam();
+  const kilit = path.join(o.kok, 'kabul.lock');
+  const icerik = `pid=${process.pid} damga=1790000000 kaynak=baska-ajan zaman=${Math.floor(Date.now() / 1000)}\n`;
+  fs.writeFileSync(kilit, icerik);
+  const r = kos(o, o.kaynak, { EMPP_DERLEME_KABUL_KILIDI: '1', KABUL_KILIT: kilit, KABUL_BOSLUK_TAVAN: '2', KABUL_BOSLUK_ARALIK: '1' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /\[ertelenebilir-probook-erisimi\] kabul kilidi 2 sn bosalmadi/);
+  const { ertelenebilirKaynakHatasi } = require('../../src/agent/runner-helpers');
+  assert.equal(ertelenebilirKaynakHatasi(`pardus-packager-build.sh rc=1: ${r.stdout.slice(-1500)}`), true, 'runner failed YAZMAZ');
+  assert.equal(fs.readFileSync(kilit, 'utf8'), icerik, 'başkasının kilidi aynen');
+  assert.equal(fs.existsSync(path.join(o.cikti, 'raw', 'linux', 'ozet.json')), false, 'paketleyici hiç koşmadı');
 });

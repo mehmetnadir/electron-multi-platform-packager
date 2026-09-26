@@ -168,3 +168,28 @@ test('ortak kilit: yerel kapi bitince kendi kilidini birakir ve manifest kalmaz'
   assert.equal(fs.existsSync(path.join(o.home, '.kabul.lock')), false);
   assert.deepEqual(fs.readdirSync(o.home).filter((f) => f.startsWith('.kabul-')), []);
 });
+
+test('kanıt arşivi (B.1): EMPP_KANIT_ARSIV verilirse kanıt kopyalanır, 14 günden eski kabul-* kaldırılır', () => {
+  const o = yerelOrtam();
+  const arsiv = path.join(o.kok, 'kanit-arsiv');
+  const eski = path.join(arsiv, 'kabul-20260901-000000-1');
+  const baska = path.join(arsiv, 'kuru-73581');
+  fs.mkdirSync(eski, { recursive: true });
+  fs.mkdirSync(baska, { recursive: true });
+  const yirmiGun = (Date.now() - 20 * 86400 * 1000) / 1000;
+  fs.utimesSync(eski, yirmiGun, yirmiGun);
+  fs.utimesSync(baska, yirmiGun, yirmiGun);
+  const kanit = path.join(o.kok, 'kanit');
+  const r = spawnSync('bash', [BETIK, o.paket, kanit], { encoding: 'utf8', env: { ...o.env, EMPP_KANIT_ARSIV: arsiv }, timeout: 60000 });
+  assert.notEqual(r.status, 0);
+  const yeni = fs.readdirSync(arsiv).filter((d) => d.startsWith('kabul-') && d !== path.basename(eski));
+  assert.equal(yeni.length, 1, fs.readdirSync(arsiv).join(','));
+  assert.ok(fs.existsSync(path.join(arsiv, yeni[0], 'temizlik.log')));
+  assert.match(fs.readFileSync(path.join(arsiv, yeni[0], 'paket.txt'), 'utf8'), /paket=.*Deneme-1\.0\.0\.impark/);
+  assert.equal(fs.existsSync(eski), false, '14 günden eski kabul kanıtı kaldırılır');
+  assert.ok(fs.existsSync(baska), 'kabul-* dışı dizine dokunulmaz');
+});
+
+test('kanıt arşivi verilmezse davranış aynı (arşiv yazılmaz)', () => {
+  assert.match(kaynak(), /\[ -n "\$\{EMPP_KANIT_ARSIV:-\}" \] \|\| return 0/);
+});
