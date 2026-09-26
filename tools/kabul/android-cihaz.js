@@ -239,8 +239,46 @@ function kirp(veri, genislik, yukseklik, s) {
 // I/O
 // ---------------------------------------------------------------------------
 
+/**
+ * `adb install` sonucundan tek satırlık sebep: çıkış kodu + stdout + stderr BİRLİKTE, son 300 karakter.
+ * adb gerçek hatayı ("adb: failed to install …: Failure […]") stderr'e, "Performing Streamed Install"
+ * satırını stdout'a basar — yalnız stdout gösterilince kök neden gizleniyordu (45482, 26.09). Saf.
+ */
+function kurulumSebebi(r) {
+  const x = r || {};
+  const parcalar = [x.stdout, x.stderr].map((v) => String(v || '').trim()).filter(Boolean);
+  if (x.error) parcalar.push(`(${x.error.code || x.error.message || x.error})`);
+  if (x.signal) parcalar.push(`(sinyal ${x.signal})`);
+  const govde = parcalar.join(' | ').replace(/\s+/g, ' ').trim() || 'çıktı yok';
+  return `rc=${x.status === undefined ? '?' : x.status} ${govde}`.slice(-300);
+}
+
 function adbKos(arac, seri, argumanlar, secenek = {}) {
   return kos(arac.adb, ['-s', seri, ...argumanlar], secenek);
+}
+
+/**
+ * Kurulum düşünce kök nedeni ÖLÇÜLEBİLİR kılan döküm (kanıta `kurulum-tani.txt`): bağlantı durumu,
+ * açılış bayrağı, system_server başlatma sayacı (yük altında yeniden başladıysa >1), /data boşluğu
+ * ve PackageManager logcat satırları. 45482'de (26.09) emülatör kapandıktan sonra hiçbiri yoktu.
+ */
+function kurulumTanisi(arac, seri, dosya) {
+  const k = (argumanlar, ms = 15000) => {
+    const r = adbKos(arac, seri, argumanlar, { zamanAsimiMs: ms });
+    return `${String(r.stdout || '').trim()} ${String(r.stderr || '').trim()}`.trim();
+  };
+  const tani = {
+    durum: k(['get-state']),
+    bootTamam: k(['shell', 'getprop', 'sys.boot_completed']),
+    systemServerBaslatma: k(['shell', 'getprop', 'sys.system_server.start_count']),
+    data: k(['shell', 'df', '/data']).split('\n').pop(),
+  };
+  const lc = k(['logcat', '-d', '-v', 'time', 'PackageManager:V', 'PackageInstaller:V', 'PackageInstallerSession:V',
+    'InstallPackageHelper:V', 'AndroidRuntime:E', '*:S'], 30000);
+  try {
+    fs.writeFileSync(dosya, `${JSON.stringify(tani, null, 2)}\n--- logcat (PackageManager)\n${lc.split('\n').slice(-300).join('\n')}\n`);
+  } catch (_) { /* kanıt dizini yazılamadı — tanı sonuçta yine var */ }
+  return tani;
 }
 
 /**
@@ -465,7 +503,8 @@ async function cihazKabulu(p) {
       const kur = adbKos(arac, seri, ['install', '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
       sonuc.kurulumSn = Math.round((Date.now() - kurBas) / 1000);
       if (kur.status !== 0 || !/Success/.test(String(kur.stdout))) {
-        sonuc.sebepler.push(`adb install düştü: ${String(kur.stdout || kur.stderr).trim().slice(-200)}`);
+        sonuc.sebepler.push(`adb install düştü: ${kurulumSebebi(kur)}`);
+        sonuc.kurulumTanisi = kurulumTanisi(arac, seri, path.join(kanitDizin, 'kurulum-tani.txt'));
         return sonuc;
       }
       kurulu = true;
@@ -597,6 +636,7 @@ module.exports = {
   VARSAYILAN_AVD,
   avdAdaylari,
   badgingCoz,
+  kurulumSebebi,
   cihazlariCoz,
   bosPortSec,
   uiDugumleri,
