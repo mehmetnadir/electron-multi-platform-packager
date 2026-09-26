@@ -25,6 +25,9 @@ const kapi = require('./olu-yol-kapisi');
 const BEYAN_CANLI = [
   'platforms/android/ag-bilgisi.js', // 0a55136 (K7-K9) packagingService.js:4415'ten canlı; beyan 24.09'da güncellendi
   'platforms/android/empp-android-shim.js',
+  'platforms/android/empp-g-istemci.js', // G (26.09): packagingService.configureAndroidG varlık olarak kopyalar
+  'platforms/android/g-katmani.js', // G (26.09): packagingService.configureAndroidG require eder
+  'platforms/android/vendor/tweetnacl-1.0.3/nacl.min.js', // G (26.09): aynı yerden varlık, sha256 çivili
   'platforms/common/ag-politikasi.js',
   'platforms/common/fs-shim.js',
   'platforms/macos/dmg-layout.js',

@@ -753,6 +753,40 @@
     return true;
   }
 
+  // G — NEDEN (2026-09-26, Nadir): "Tum paketlerde bizim guncelleme istemcimiz (G kanali) olacak."
+  // Istemci ayri dosyadir (`/empp-g-istemci.js`, www koku) ve YALNIZ pakette EmppG yerel eklentisi
+  // varsa yuklenir: sayfa acildiktan G_GECIKME ms sonra, ust pencerede, sayfa basina bir kez.
+  // Acilisi bloklamaz; eklentisiz pakette hic istek atilmaz (konsolda 404 gurultusu olmaz).
+  // Kitap sayfalarindaki shim kopyalari da ayni kokteki istemciyi yukler (mutlak yol).
+  // BOZARSAN: `empp-android-shim-g.test.js` kirilir.
+  var G_GECIKME = 10000;
+  var G_ISTEMCI = '/empp-g-istemci.js';
+  function gEklentisiVar() {
+    try {
+      var C = isBrowser ? win.Capacitor : null;
+      if (!C) return false;
+      if (typeof C.isPluginAvailable === 'function') return !!C.isPluginAvailable('EmppG');
+      return !!(C.Plugins && C.Plugins.EmppG);
+    } catch (e) { return false; }
+  }
+  function gYukle() {
+    try {
+      if (win.__emppGYuklendi || !gEklentisiVar()) return false;
+      win.__emppGYuklendi = true;
+      var s = win.document.createElement('script');
+      s.src = G_ISTEMCI;
+      s.async = true;
+      (win.document.head || win.document.documentElement).appendChild(s);
+      return true;
+    } catch (e) { return false; }
+  }
+  function installG() {
+    if (!isBrowser || !win.setTimeout || !win.document) return false;
+    try { if (win.top && win.top !== win) return false; } catch (e) { return false; }
+    win.setTimeout(gYukle, G_GECIKME);
+    return true;
+  }
+
   var modules = { fs: fsMod, path: pathMod, os: osMod, electron: electronMod, 'adm-zip': AdmZip, https: httpsMod, http: httpsMod };
 
   function requireFn(name) {
@@ -920,6 +954,7 @@
     installSlashFix();
     installBuffer();
     installOtoGuncelleme();
+    installG();
     try { if (win.navigator && win.navigator.storage && win.navigator.storage.persist) win.navigator.storage.persist(); } catch (e) {}
     return win.__emppAndroidShim;
   }
@@ -930,7 +965,8 @@
     indirilmis: indirilmis, indirilenYanit: indirilenYanit, mutlakYol: mutlakYol, bellekDosyalari: bellekDosyalari,
     ortam: ortam, BufferShim: BufferShim,
     imwinCoz: imwinCoz, imwinYaz: imwinYaz, menuKitaplari: menuKitaplari, menuSurumYamasi: menuSurumYamasi,
-    menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz, motorZipIndirmesi: motorZipIndirmesi } };
+    menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz, motorZipIndirmesi: motorZipIndirmesi,
+    gYukle: gYukle, installG: installG, gEklentisiVar: gEklentisiVar, G_GECIKME: G_GECIKME, G_ISTEMCI: G_ISTEMCI } };
   }
   if (isBrowser) install();
 })(typeof window !== 'undefined' ? window : undefined);

@@ -4574,6 +4574,7 @@ if (!window.cordova) {
     // Tam ekran (immersive) — status + navigation bar'ı native gizle
     await this.configureAndroidFullscreen(webAppPath);
     await this.configureAndroidAgBilgisi(webAppPath);
+    await this.configureAndroidG(webAppPath, wwwPath);
 
     // www/index.html'e viewport + fullscreen enjekte et (cap sync bunu kopyalar)
     await this.enableAndroidFullscreen(wwwPath);
@@ -4683,6 +4684,31 @@ if (!window.cordova) {
     } catch (error) {
       console.error('❌ K9: ağ bilgisi eklentisi eklenemedi:', error.message);
       return false;
+    }
+  }
+
+  // G — Android uzaktan güncelleme istemcisi (Nadir 2026-09-26: "Tüm paketlerde bizim güncelleme
+  // istemcimiz (G kanalı) olacak"). Ayrıntı + gerekçe: src/platforms/android/g-katmani.js.
+  // KAPI: www kökünde `empp-set.json` (EMPP_SET_GUNCELLEME — Windows'la aynı, platform kapsamlı).
+  // Fullscreen MainActivity'yi baştan yazdığı ve K9 kaydını eklediği için ONLARDAN SONRA çağrılır.
+  // Build düşürülmez: kurulamazsa APK G'siz çıkar (shim eklentiyi görmez, istek atmaz) ve günlüğe
+  // yazılır. `EMPP_G_TEST_GUVEN_CA` YALNIZ yerel uçtan uca sınama derlemesinde verilir.
+  async configureAndroidG(webAppPath, wwwPath) {
+    const g = require('../platforms/android/g-katmani');
+    try {
+      const sonuc = await g.kur(webAppPath, wwwPath, {
+        log: (s) => console.log(s),
+        testCaYolu: process.env.EMPP_G_TEST_GUVEN_CA || null,
+        kaynaklar: {
+          istemci: path.join(__dirname, '../platforms/android/empp-g-istemci.js'),
+          nacl: path.join(__dirname, '../platforms/android/vendor/tweetnacl-1.0.3/nacl.min.js'),
+        },
+      });
+      if (!sonuc.kuruldu) console.log(`ℹ️ G: Android güncelleme istemcisi kurulmadı — ${sonuc.sebep}`);
+      return sonuc;
+    } catch (error) {
+      console.error('❌ G: Android güncelleme istemcisi kurulamadı (APK G\'siz çıkar):', error.message);
+      return { kuruldu: false, sebep: error.message, test: false };
     }
   }
 
