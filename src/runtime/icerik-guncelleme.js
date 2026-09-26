@@ -375,6 +375,22 @@ function protokolKur(o) {
   var log = o.log || function () {};
   var yontem = o.yontem || (typeof protocol.interceptFileProtocol === 'function' ? 'intercept' : 'handle');
   var sayac = { work: 0 };
+  // PAYLAŞILAN ÖRTÜ ZİNCİRİ (2026-09-26, G kanalı mac + Pardus): Electron'da `file` şemasına
+  // TEK kayıt yapılabilir. Pakette G örtüsü etkinse (`empp-set-guncelleyici.js` →
+  // `global.__emppDosyaOrtusu`) K çözücüsü zincire ÖNCE (öncelik 10) eklenir, kaydı zincir
+  // yapar; K'nin eşlemesi birebir aynıdır. Zincir YOKSA (Windows, G'siz paket, örtüsüz açılış)
+  // aşağıdaki eski doğrudan kayıt HİÇ DEĞİŞMEDEN koşar.
+  var kapsam = o.kapsam || (typeof global !== 'undefined' ? global : null);
+  var zincir = kapsam && kapsam.__emppDosyaOrtusu;
+  if (zincir && typeof zincir.ekle === 'function' && typeof zincir.kur === 'function') {
+    zincir.ekle('icerik', 10, function (p) {
+      var w = dosyaEsle(fsMod, pathMod, o.baseKok, o.workKok, p);
+      if (w) { sayac.work += 1; if (sayac.work <= 20) log('[empp-icerik] örtü: ' + pathMod.relative(o.workKok, w)); }
+      return w ? { yol: w } : null;
+    });
+    var zr = zincir.kur({ protocol: protocol, net: net, yontem: o.yontem, log: log });
+    return { yontem: 'zincir-' + zr.yontem, sayac: sayac };
+  }
   function esle(adres) {
     var p = dosyaUrlYolu(urlMod, adres);
     var w = p ? dosyaEsle(fsMod, pathMod, o.baseKok, o.workKok, p) : null;
