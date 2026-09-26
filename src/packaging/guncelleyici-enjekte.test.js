@@ -254,3 +254,70 @@ test('PLATFORM KAPSAMI: EMPP_SET_GUNCELLEME bilinmeyen platform adı → görün
   assert.match(uyarilar[0], /^UYARI: EMPP_SET_GUNCELLEME tanınmayan platform adı: mac /);
   assert.strictEqual(ge.acikMi({ EMPP_SET_GUNCELLEME: 'windows,mac' }, ['windows'], s), true, 'tanınan ad çalışmaya devam eder');
 });
+
+// ─── ÖRTÜ (mac + Pardus, 2026-09-26) ───────────────────────────────────────────
+// Blok, main.js YÜKLENİRKEN örtü sunucusunu kurar (pencere yüklenmeden önce kanca şart);
+// güncelleme yine whenReady + setTimeout arkasında. Sahte `require` ile blok GERÇEKTEN koşturulur.
+function blokuKostur(kod, { modul, app }) {
+  const cagrilar = [];
+  const sahteElectron = { app, protocol: {}, net: {} };
+  const sahteRequire = (ad) => {
+    if (ad === 'electron') return sahteElectron;
+    if (ad === `./${ge.MODUL_ADI}`) return modul(cagrilar);
+    throw new Error('beklenmeyen require: ' + ad);
+  };
+  new Function('require', '__dirname', 'setTimeout', kod)(sahteRequire, '/paket/app.asar', (fn) => fn());
+  return { cagrilar, sahteElectron };
+}
+
+function sahteApp() {
+  let cozucu;
+  const hazir = new Promise((c) => { cozucu = c; });
+  return { whenReady: () => hazir, hazirla: () => cozucu() };
+}
+
+test('ÖRTÜ: blok yüklenirken ortuSunucusunuKur SENKRON çağrılır (whenReady beklenmez), kök = __dirname', async () => {
+  const app = sahteApp();
+  const { cagrilar, sahteElectron } = blokuKostur(ge.blokUret(0), {
+    app,
+    modul: (c) => ({
+      ortuSunucusunuKur: (o) => c.push(['ortu', o]),
+      guncellemeyiBaslat: (o) => { c.push(['baslat', o]); return Promise.resolve(); },
+    }),
+  });
+  assert.strictEqual(cagrilar.length, 1, 'ready gelmeden yalnız örtü kurulumu koşmalı');
+  assert.strictEqual(cagrilar[0][0], 'ortu');
+  assert.strictEqual(cagrilar[0][1].kok, '/paket/app.asar');
+  assert.strictEqual(cagrilar[0][1].electron, sahteElectron, 'electron modülü verilmeli (userData/protocol)');
+  app.hazirla();
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(cagrilar.length, 2, 'ready sonrası güncelleme başlamalı');
+  assert.strictEqual(cagrilar[1][0], 'baslat');
+  assert.strictEqual(cagrilar[1][1].electron, sahteElectron, 'güncelleyici aynı electron ile kip seçer');
+});
+
+test('ÖRTÜ: örtü kurulumu patlasa da güncelleme akışı ve uygulama açılışı sürer', async () => {
+  const app = sahteApp();
+  const { cagrilar } = blokuKostur(ge.blokUret(0), {
+    app,
+    modul: (c) => ({
+      ortuSunucusunuKur: () => { throw new Error('örtü patladı'); },
+      guncellemeyiBaslat: (o) => { c.push(['baslat', o]); return Promise.resolve(); },
+    }),
+  });
+  app.hazirla();
+  await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual(cagrilar.map((x) => x[0]), ['baslat']);
+});
+
+test('ÖRTÜ: blok GERÇEK modülle Windows kipinde protokole dokunmaz (yerinde)', () => {
+  const kg = require(ge.KAYNAK_MODUL);
+  const kayit = [];
+  const electron = {
+    app: { whenReady: () => new Promise(() => {}), isReady: () => false, getPath: () => '/tmp/yok' },
+    protocol: { interceptFileProtocol: () => { kayit.push('intercept'); return true; } },
+  };
+  const r = kg.ortuSunucusunuKur({ electron, kok: 'C:\\Program Files\\Kitap\\resources\\app', platform: 'win32', env: {} });
+  assert.strictEqual(r.durum, 'yerinde');
+  assert.deepStrictEqual(kayit, [], 'Windows yolunda file: kancası KURULMAZ');
+});
