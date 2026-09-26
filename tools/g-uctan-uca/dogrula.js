@@ -21,7 +21,9 @@ const { VARSAYILAN_DIZIN } = require('./sunucu');
 
 function beklenenOku(dizin) {
   const y = path.join(path.resolve(dizin), 'beklenen.json');
-  try { return JSON.parse(fs.readFileSync(y, 'utf8')); } catch (e) {
+  try {
+    return JSON.parse(fs.readFileSync(y, 'utf8'));
+  } catch (e) {
     throw new Error(`beklenen.json okunamadı (${y}) — önce hazirla.js`);
   }
 }
@@ -44,13 +46,17 @@ function agaciDogrula(agac, beklenen, kip = 'tam') {
   } else {
     fark = o.ozetFarki({ ...beklenen.tabanDosyalari, ...beklenen.gDosyalari }, gercek);
   }
-  const olmamaliVar = kip === 'degismez' ? []
-    : (beklenen.olmamali || []).filter((d) => fs.existsSync(path.join(path.resolve(agac), d)));
+  const olmamaliVar =
+    kip === 'degismez'
+      ? []
+      : (beklenen.olmamali || []).filter((d) => fs.existsSync(path.join(path.resolve(agac), d)));
   return { gecti: o.farkBosMu(fark) && !olmamaliVar.length, ...fark, olmamaliVar };
 }
 
 function main(argv) {
-  let agac = null; let dizin = VARSAYILAN_DIZIN; let kip = 'tam';
+  let agac = null;
+  let dizin = VARSAYILAN_DIZIN;
+  let kip = 'tam';
   for (let i = 0; i < argv.length; i++) {
     const b = argv[i];
     if (b === '--dizin') dizin = argv[++i];
@@ -61,16 +67,29 @@ function main(argv) {
   }
   if (!agac) throw new Error('kullanım: dogrula.js <agac> [--dizin D] [--yalniz-g | --degismez]');
   const s = agaciDogrula(agac, beklenenOku(dizin), kip);
-  if (s.gecti) { console.log(`GEÇTİ (${kip})`); return 0; }
+  if (s.gecti) {
+    console.log(`GEÇTİ (${kip})`);
+    return 0;
+  }
   console.log(`KALDI (${kip})`);
-  for (const [ad, l] of [['eksik', s.eksik], ['fazla', s.fazla], ['farklı', s.farkli], ['olmamalı ama var', s.olmamaliVar]]) {
+  for (const [ad, l] of [
+    ['eksik', s.eksik],
+    ['fazla', s.fazla],
+    ['farklı', s.farkli],
+    ['olmamalı ama var', s.olmamaliVar],
+  ]) {
     if (l.length) console.log(`  ${ad}: ${l.join(', ')}`);
   }
   return 1;
 }
 
 if (require.main === module) {
-  try { process.exitCode = main(process.argv.slice(2)); } catch (e) { console.error('HATA: ' + e.message); process.exitCode = 2; }
+  try {
+    process.exitCode = main(process.argv.slice(2));
+  } catch (e) {
+    console.error('HATA: ' + e.message);
+    process.exitCode = 2;
+  }
 }
 
 module.exports = { beklenenOku, agaciDogrula };

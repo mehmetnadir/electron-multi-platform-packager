@@ -1,7 +1,8 @@
 # G yayını: R2 yol tasarımı  `[TASARIM]`
 
-> 2026-09-26, oturum nadir-b8 (dal `g-yayin`). Yalnız tasarım: R2'ye yazan kod ve API/presign
-> kodu YOK. Sunucu tarafı Nadir'in "güncelleme arayüzden nasıl yönetilecek" kararından sonra yazılır.
+> 2026-09-26, oturum nadir-b8 (dal `g-yayin`). API/presign kodu YOK; sunucu tarafı Nadir'in
+> "güncelleme arayüzden nasıl yönetilecek" kararından sonra yazılır. Geçiş aracı olarak bu Mac'ten
+> iki kapılı `yukle` var (aşağıda); 74390 yayını Nadir onayını bekliyor, hiçbir yükleme koşmadı.
 > Kaynaklar: `windows-paketleme-sozlesmesi.md` (G3, G4, "Üç parça"), `platform-kanallari-sozlesmesi.md`
 > (O3, O4), `kitap-guncelleme-sozlesmesi.md` (uçlar, "Sunucu tarafı — TASARIM"). Araç: `tools/g-yayin/`.
 
@@ -46,6 +47,31 @@ manifestle yeni `dosya/*` yarışında sha256 tutmaz, sonuç yine "atla".
   / `nadir`); imza burada atılır. srv21 özel anahtar görmez, yalnız yükleme adresi verir.
 - **Saklama:** güncel manifestin gösterdiği her `kitap/*.zip` kalır; gerisi için süre sunucu kararı.
 
+## Bu Mac'ten yükleme — `yukle` ve gece testi `e2e` (Şef talimatı, 26.09)
+```
+node tools/g-yayin/yayinla.js yukle --set-kimligi 74390 --cikti ~/.empp-agent/g-yayin [--onayli]
+node tools/g-yayin/yayinla.js e2e 74390 [--onayli] [--index <74390 index.html> --onceki-surum 2.p.s]
+node tools/g-yayin/yayinla.js dogrula --uzak https://cdn.ydspublishing.com/guncelleme --set-kimligi 74390 [--surum 2.p.s] [--arsivler]
+```
+- **Kapı 1, beyaz liste (kodda):** `YUKLEME_BEYAZ_LISTE` yalnız `74390 → ydsr2:ydsdigital` +
+  `https://cdn.ydspublishing.com/guncelleme`. Başka kimlik `400 — … beyaz listesinde değil`. Kova ve
+  taban komut satırından alınmaz. Liste genişletmek = kod değişikliği + Nadir onayı.
+- **Kapı 2, onay:** `--onayli` yoksa kuru. Plan (sıra, anahtar, boyut) basılır, canlıya yazılmaz.
+- **Ek kapı:** yerel durum ÜRETİM açık anahtarıyla doğrulanmazsa, yani TEST imzalıysa, yükleme reddedilir.
+- **Taşıyıcı:** bu Mac'teki rclone uzağı `ydsr2:` (`rclone copyto`, `Content-Type` + `Cache-Control`
+  başlıklarıyla). Kimlik bilgisi rclone yapılandırmasında kalır; kod onu okumaz, basmaz.
+- **Ne yüklenir:** plan dosyası değil; yerel imzalı durum ile canlı `lsjson` (md5) kıyaslanır, eksik ya
+  da farklı olan yüklenir. Değişmez anahtar canlıda farklıysa hiçbir şey yüklenmez. Böylece yükleme
+  tekrar koşulabilir. Bir adım düşerse sonraki adımlar, `surum.json` dahil, yüklenmez.
+- **Yükleme sonrası:** `dogrula --uzak` otomatik koşar; kitap arşivleri de akışla indirilip sha256'ları
+  kıyaslanır.
+- **`e2e`:** `index.html`'e `<!-- empp-g-e2e <zaman> -->` işareti koyarak yeni sürüm üretir; işaret tek
+  kalır. Sonra `yukle` (onaysız kuru) ve `dogrula --uzak` koşar. Çıktı JSON + rc; rc 0 = üret + yükle
+  + (onaylıysa) canlı doğrulama geçti. İlk koşu önceki durum ister: yerel çıktı, canlı manifest ya da
+  `--index` + `--onceki-surum`.
+- **Gece koşusu için karar gerekir:** onaylı `e2e` her gece yeni bir sürüm yayınlar. 74390'ın üretim
+  anahtarı gömülü paketleri varsa bu gerçek bir güncellemedir. İşaret HTML yorumu olduğu için görünmez.
+
 ## Presign (gelecek iş, bugün kod yok)
 `POST /api/v1/agents/:agentId/result/presign-guncelleme`
 `{setKimligi, dosyalar:[{anahtar, boyut, sha256, contentType, cacheControl}]}` → her dosya için presigned PUT.
@@ -54,6 +80,7 @@ Sunucu şunları denetler: önek `guncelleme/set/<setKimligi>/`, kova kitabın y
 sunucu `manifest.json`'u üretim açık anahtarıyla doğrulasın. Girdi, planın `yukle[]` listesidir.
 
 ## Ölçülen (26.09)
+- 74390 canlı: `guncelleme/set/74390/` boş (rclone lsjson `{}`), CDN `surum.json` 404. Salt okuma.
 - Anahtar Zinciri yolu: `node tools/g-yayin/yayinla.js kuru-imza` → **GEÇTİ** (üretim anahtarı okundu,
   test gövdesi imzalandı, `31b8663b…2cf6` açık anahtarıyla doğrulandı; manifest yayınlanmadı).
 - Uçtan uca (`tools/g-uctan-uca/`): bugünkü Windows istemcisi gerçek HTTPS'le 6 zorunlu senaryoyu geçer.

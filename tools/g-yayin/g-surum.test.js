@@ -7,7 +7,18 @@ const s = require('./g-surum');
 test('coz: G3 biçimi 2.<panel>.<sayaç>', () => {
   assert.deepEqual(s.coz('2.51.4'), { ana: 2, panel: 51, sayac: 4 });
   assert.deepEqual(s.coz(' 2.0.0 '), { ana: 2, panel: 0, sayac: 0 });
-  for (const kotu of ['1.51.4', '2.51', '2.051.1', '2.51.04', '2.51.4.1', 'v2.51.4', '', null, 2.5, 'a'.repeat(64)]) {
+  for (const kotu of [
+    '1.51.4',
+    '2.51',
+    '2.051.1',
+    '2.51.04',
+    '2.51.4.1',
+    'v2.51.4',
+    '',
+    null,
+    2.5,
+    'a'.repeat(64),
+  ]) {
     assert.equal(s.coz(kotu), null, String(kotu));
   }
 });

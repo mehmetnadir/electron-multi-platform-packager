@@ -32,12 +32,19 @@ test('dizinden zip → istemcinin okuyucusu birebir açar (UTF-8 ad, stored + de
   assert.deepEqual(Object.keys(harita).sort(), ['index.html', 'rastgele.bin', 'sayfa/ölçü.txt']);
   assert.equal(harita['sayfa/ölçü.txt'].toString('utf8'), 'ç');
   assert.deepEqual(harita['rastgele.bin'], fs.readFileSync(path.join(kok, 'rastgele.bin')));
-  assert.deepEqual(z.zipDenetle(hedef).yollar.sort(), ['index.html', 'rastgele.bin', 'sayfa/ölçü.txt']);
+  assert.deepEqual(z.zipDenetle(hedef).yollar.sort(), [
+    'index.html',
+    'rastgele.bin',
+    'sayfa/ölçü.txt',
+  ]);
 });
 
 test('belirlenimci: aynı içerik aynı sha256', () => {
   const d = gecici();
-  const g = [{ yol: 'a.txt', veri: Buffer.from('a') }, { yol: 'b/c.txt', veri: Buffer.from('c'.repeat(100)) }];
+  const g = [
+    { yol: 'a.txt', veri: Buffer.from('a') },
+    { yol: 'b/c.txt', veri: Buffer.from('c'.repeat(100)) },
+  ];
   const r1 = z.zipYaz(path.join(d, '1.zip'), g);
   const r2 = z.zipYaz(path.join(d, '2.zip'), g);
   assert.equal(r1.sha256, r2.sha256);
@@ -45,9 +52,15 @@ test('belirlenimci: aynı içerik aynı sha256', () => {
 
 test('zipDenetle: kaçış yolu, tek sarmal dizin, boş arşiv ve bozuk dosya RED', () => {
   const d = gecici();
-  z.zipYaz(path.join(d, 'kacis.zip'), [{ yol: 'index.html', veri: Buffer.from('x') }, { yol: '../../kacti.txt', veri: Buffer.from('k') }]);
+  z.zipYaz(path.join(d, 'kacis.zip'), [
+    { yol: 'index.html', veri: Buffer.from('x') },
+    { yol: '../../kacti.txt', veri: Buffer.from('k') },
+  ]);
   assert.throws(() => z.zipDenetle(path.join(d, 'kacis.zip')), /güvensiz yol/);
-  z.zipYaz(path.join(d, 'sarmal.zip'), [{ yol: 'book4/index.html', veri: Buffer.from('x') }, { yol: 'book4/a/b.txt', veri: Buffer.from('y') }]);
+  z.zipYaz(path.join(d, 'sarmal.zip'), [
+    { yol: 'book4/index.html', veri: Buffer.from('x') },
+    { yol: 'book4/a/b.txt', veri: Buffer.from('y') },
+  ]);
   assert.throws(() => z.zipDenetle(path.join(d, 'sarmal.zip')), /tek sarmal dizin/);
   z.zipYaz(path.join(d, 'bos.zip'), []);
   assert.throws(() => z.zipDenetle(path.join(d, 'bos.zip')), /boş/);

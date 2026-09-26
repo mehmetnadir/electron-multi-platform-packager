@@ -201,8 +201,10 @@ node tools/g-yayin/yayinla.js --set-kimligi <id> --taban <https taban> --cikti <
   --panel <kod|ad> [--surum 2.p.s] [--onceki-surum 2.p.s] [--onceki-manifest <yol|https>] [--ilk] \
   [--index <html>] [--motor bookN=<js>]... [--ekle bookN=<zip|dizin>]... [--cikar bookN[,bookM]] \
   (--anahtar-zinciri | --anahtar-dosya [yol])
-node tools/g-yayin/yayinla.js dogrula --cikti <dizin> --set-kimligi <id> [--acik-anahtar <b64> | --anahtar-dosya [yol]]
+node tools/g-yayin/yayinla.js dogrula (--cikti <dizin> | --uzak <taban>) --set-kimligi <id> [--surum 2.p.s] [--arsivler]
 node tools/g-yayin/yayinla.js kuru-imza        # yalnız GEÇTİ/KALDI
+node tools/g-yayin/yayinla.js yukle --set-kimligi 74390 --cikti <dizin> [--onayli]   # beyaz liste + onay kapısı
+node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → canlıdan doğrula; JSON + rc
 ```
 
 - **Sürüm:** `2.<panel>.<sayaç>`, bilinen bütün önceki sürümlerden kesin büyük olmalı. Önceki sürüm kaynakları: imzalı önceki manifest, `--onceki-surum` (kurulu paket), yerel `surum.json`.

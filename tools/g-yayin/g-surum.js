@@ -98,5 +98,12 @@ function monotonDenetle(yeni, oncekiler) {
 }
 
 module.exports = {
-  DESEN, coz, gecerliMi, kiyasla, enBuyuk, panelKoduCoz, sonraki, monotonDenetle,
+  DESEN,
+  coz,
+  gecerliMi,
+  kiyasla,
+  enBuyuk,
+  panelKoduCoz,
+  sonraki,
+  monotonDenetle,
 };
