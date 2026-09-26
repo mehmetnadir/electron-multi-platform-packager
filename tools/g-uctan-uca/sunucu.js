@@ -24,12 +24,21 @@ const SENARYO_DESENI = /^[a-z0-9-]{1,40}$/;
 
 function istekHedefi(senaryoKoku, ham) {
   let p;
-  try { p = decodeURIComponent(new URL(ham, 'http://yerel').pathname); } catch (e) { return { durum: 400 }; }
+  try {
+    p = decodeURIComponent(new URL(ham, 'http://yerel').pathname);
+  } catch (e) {
+    return { durum: 400 };
+  }
   if (p.includes('\0')) return { durum: 400 };
   if (p === '/saglik') return { saglik: true };
   const parca = p.split('/');
   // ['', senaryo, 'guncelleme', 'set', ...]
-  if (parca.length < 5 || parca[2] !== 'guncelleme' || parca[3] !== 'set' || !SENARYO_DESENI.test(parca[1])) {
+  if (
+    parca.length < 5 ||
+    parca[2] !== 'guncelleme' ||
+    parca[3] !== 'set' ||
+    !SENARYO_DESENI.test(parca[1])
+  ) {
     return { durum: 404 };
   }
   if (parca.slice(4).some((s) => s === '..' || s === '.' || s === '')) return { durum: 400 };
@@ -40,7 +49,8 @@ function istekHedefi(senaryoKoku, ham) {
 }
 
 /**
- * @param {{dizin:string, port?:number, host?:string, tls?:{key:Buffer, cert:Buffer}|null, gunluk?:Function}} s
+ * @param {{dizin:string, port?:number, host?:string, tls?:{key:Buffer, cert:Buffer}|null,
+ *   gunluk?:Function}} s
  * @returns {Promise<{port:number, sunucu:import('http').Server, kapat:()=>Promise<void>}>}
  */
 function sunucuBaslat(s) {
@@ -48,30 +58,54 @@ function sunucuBaslat(s) {
   const senaryoKoku = path.join(dizin, 'senaryolar');
   const gunluk = typeof s.gunluk === 'function' ? s.gunluk : (m) => console.log(m);
   const isleyici = (istek, yanit) => {
-    const yaz = (durum, bayt) => gunluk(`${new Date().toISOString()} ${istek.method} ${istek.url} ${durum} ${bayt}`);
+    const yaz = (durum, bayt) =>
+      gunluk(`${new Date().toISOString()} ${istek.method} ${istek.url} ${durum} ${bayt}`);
     if (istek.method !== 'GET' && istek.method !== 'HEAD') {
-      yanit.writeHead(405, { Allow: 'GET, HEAD' }); yanit.end(); yaz(405, 0); return;
+      yanit.writeHead(405, { Allow: 'GET, HEAD' });
+      yanit.end();
+      yaz(405, 0);
+      return;
     }
     const h = istekHedefi(senaryoKoku, istek.url);
     if (h.saglik) {
       const g = Buffer.from(JSON.stringify({ gUctanUca: true, dizin }));
       yanit.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': g.length });
-      yanit.end(istek.method === 'HEAD' ? undefined : g); yaz(200, g.length); return;
+      yanit.end(istek.method === 'HEAD' ? undefined : g);
+      yaz(200, g.length);
+      return;
     }
-    if (!h.hedef) { yanit.writeHead(h.durum); yanit.end(); yaz(h.durum, 0); return; }
+    if (!h.hedef) {
+      yanit.writeHead(h.durum);
+      yanit.end();
+      yaz(h.durum, 0);
+      return;
+    }
     fs.stat(h.hedef, (hata, st) => {
-      if (hata || !st.isFile()) { yanit.writeHead(404); yanit.end(); yaz(404, 0); return; }
+      if (hata || !st.isFile()) {
+        yanit.writeHead(404);
+        yanit.end();
+        yaz(404, 0);
+        return;
+      }
       yanit.writeHead(200, {
-        'Content-Type': icerikTuru(h.hedef), 'Content-Length': st.size, 'Cache-Control': 'no-store',
+        'Content-Type': icerikTuru(h.hedef),
+        'Content-Length': st.size,
+        'Cache-Control': 'no-store',
       });
-      if (istek.method === 'HEAD') { yanit.end(); yaz(200, 0); return; }
+      if (istek.method === 'HEAD') {
+        yanit.end();
+        yaz(200, 0);
+        return;
+      }
       const akis = fs.createReadStream(h.hedef);
       akis.on('error', () => yanit.destroy());
       akis.on('end', () => yaz(200, st.size));
       akis.pipe(yanit);
     });
   };
-  const sunucu = s.tls ? https.createServer({ key: s.tls.key, cert: s.tls.cert }, isleyici) : http.createServer(isleyici);
+  const sunucu = s.tls
+    ? https.createServer({ key: s.tls.key, cert: s.tls.cert }, isleyici)
+    : http.createServer(isleyici);
   return new Promise((coz, red) => {
     sunucu.once('error', red);
     sunucu.listen(s.port == null ? 8443 : s.port, s.host || '127.0.0.1', () => {
@@ -79,7 +113,11 @@ function sunucuBaslat(s) {
       coz({
         port: sunucu.address().port,
         sunucu,
-        kapat: () => new Promise((k) => { sunucu.closeAllConnections && sunucu.closeAllConnections(); sunucu.close(() => k()); }),
+        kapat: () =>
+          new Promise((k) => {
+            sunucu.closeAllConnections && sunucu.closeAllConnections();
+            sunucu.close(() => k());
+          }),
       });
     });
   });
@@ -89,14 +127,23 @@ function sunucuBaslat(s) {
 function tlsOku(dizin) {
   const t = path.join(path.resolve(dizin), 'tls');
   try {
-    return { key: fs.readFileSync(path.join(t, 'sunucu.key')), cert: fs.readFileSync(path.join(t, 'sunucu.pem')) };
+    return {
+      key: fs.readFileSync(path.join(t, 'sunucu.key')),
+      cert: fs.readFileSync(path.join(t, 'sunucu.pem')),
+    };
   } catch (e) {
-    throw new Error(`TLS dosyaları yok (${t}) — önce: node tools/g-uctan-uca/hazirla.js --dizin ${dizin}`);
+    throw new Error(
+      `TLS dosyaları yok (${t}) — önce: node tools/g-uctan-uca/hazirla.js --dizin ${dizin}`,
+    );
   }
 }
 
 function hazirlikOku(dizin) {
-  try { return JSON.parse(fs.readFileSync(path.join(path.resolve(dizin), 'hazirlik.json'), 'utf8')); } catch (e) { return null; }
+  try {
+    return JSON.parse(fs.readFileSync(path.join(path.resolve(dizin), 'hazirlik.json'), 'utf8'));
+  } catch (e) {
+    return null;
+  }
 }
 
 async function main(argv) {
@@ -114,13 +161,24 @@ async function main(argv) {
   const tls = a.http ? null : tlsOku(a.dizin);
   const s = await sunucuBaslat({ dizin: a.dizin, port, host: a.host, tls });
   const sema = tls ? 'https' : 'http';
-  console.log(`G uçtan uca sunucusu: ${sema}://${a.host}:${s.port}/<senaryo>/guncelleme  (kök ${path.resolve(a.dizin)}/senaryolar)`);
-  if (hz && hz.port && hz.port !== s.port) console.log(`UYARI: hazirlik.json portu ${hz.port}; manifestteki kitap adresleri o portu gösterir`);
+  console.log(
+    `G uçtan uca sunucusu: ${sema}://${a.host}:${s.port}/<senaryo>/guncelleme  ` +
+      `(kök ${path.resolve(a.dizin)}/senaryolar)`,
+  );
+  if (hz && hz.port && hz.port !== s.port)
+    console.log(
+      `UYARI: hazirlik.json portu ${hz.port}; manifestteki kitap adresleri o portu gösterir`,
+    );
 }
 
 if (require.main === module) {
   main(process.argv.slice(2)).catch((e) => {
-    console.error('HATA: ' + (e && e.code === 'EADDRINUSE' ? `port dolu (${e.port}) — --port ile başka port ya da çalışan sunucuyu kullanın` : e.message));
+    console.error(
+      'HATA: ' +
+        (e && e.code === 'EADDRINUSE'
+          ? `port dolu (${e.port}) — --port ile başka port ya da çalışan sunucuyu kullanın`
+          : e.message),
+    );
     process.exitCode = 1;
   });
 }

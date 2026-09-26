@@ -23,7 +23,7 @@ const kg = require('../../src/runtime/kitap-guncelleyici');
 
 const ZIP32_TAVAN = 0xffffffff;
 const GIRDI_TAVAN = 0xffff;
-const DOS_SAAT = 0;            // 00:00:00
+const DOS_SAAT = 0; // 00:00:00
 const DOS_TARIH = (0 << 9) | (1 << 5) | 1; // 1980-01-01
 const UTF8_BAYRAGI = 0x0800;
 
@@ -31,7 +31,7 @@ const CRC_TABLO = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
     let c = n;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     t[n] = c >>> 0;
   }
   return t;
@@ -75,7 +75,8 @@ function dizindenGirdiler(dizin) {
  */
 function zipYaz(hedef, girdiler) {
   const liste = Array.isArray(girdiler) ? girdiler : [];
-  if (liste.length >= GIRDI_TAVAN) throw new Error(`arşivde ${liste.length} dosya — Zip64 gerekir, istemci açamaz`);
+  if (liste.length >= GIRDI_TAVAN)
+    throw new Error(`arşivde ${liste.length} dosya — Zip64 gerekir, istemci açamaz`);
   const fd = fs.openSync(hedef, 'w');
   const ozetci = crypto.createHash('sha256');
   let konum = 0;
@@ -109,7 +110,9 @@ function zipYaz(hedef, girdiler) {
       yerel.writeUInt16LE(ad.length, 26);
       yerel.writeUInt16LE(0, 28);
       merkez.push({ ad, yontem, crc, sikisik: govde.length, acik: veri.length, yerelKonum: konum });
-      yaz(yerel); yaz(ad); yaz(govde);
+      yaz(yerel);
+      yaz(ad);
+      yaz(govde);
     }
     const merkezBas = konum;
     for (const m of merkez) {
@@ -131,10 +134,12 @@ function zipYaz(hedef, girdiler) {
       b.writeUInt16LE(0, 36);
       b.writeUInt32LE(0, 38);
       b.writeUInt32LE(m.yerelKonum, 42);
-      yaz(b); yaz(m.ad);
+      yaz(b);
+      yaz(m.ad);
     }
     const merkezBoy = konum - merkezBas;
-    if (konum >= ZIP32_TAVAN) throw new Error('arşiv 4 GB sınırını aşıyor — Zip64 gerekir, istemci açamaz');
+    if (konum >= ZIP32_TAVAN)
+      throw new Error('arşiv 4 GB sınırını aşıyor — Zip64 gerekir, istemci açamaz');
     const son = Buffer.alloc(22);
     son.writeUInt32LE(0x06054b50, 0);
     son.writeUInt16LE(0, 4);
@@ -172,12 +177,19 @@ function zipDenetle(zipYolu) {
   const kokDosyasi = yollar.some((y) => !y.includes('/'));
   const kokDallari = new Set(yollar.map((y) => y.split('/')[0]));
   if (!kokDosyasi && kokDallari.size === 1) {
-    throw new Error(`arşiv tek sarmal dizin içeriyor (${[...kokDallari][0]}/…) — arşiv kökü kitap `
-      + 'dizininin İÇİ olmalı; istemci onu bookN/bookN/… diye açar');
+    throw new Error(
+      `arşiv tek sarmal dizin içeriyor (${[...kokDallari][0]}/…) — arşiv kökü kitap ` +
+        'dizininin İÇİ olmalı; istemci onu bookN/bookN/… diye açar',
+    );
   }
   return { adet: girdiler.length, yollar };
 }
 
 module.exports = {
-  ZIP32_TAVAN, GIRDI_TAVAN, crc32, dizindenGirdiler, zipYaz, zipDenetle,
+  ZIP32_TAVAN,
+  GIRDI_TAVAN,
+  crc32,
+  dizindenGirdiler,
+  zipYaz,
+  zipDenetle,
 };

@@ -28,7 +28,7 @@ function sahteCalistir(cikti, ek = {}) {
   return f;
 }
 
-test('üretim açık anahtarının parmak izi Şef\'in verdiği 31b8663b…2cf6', () => {
+test("üretim açık anahtarının parmak izi Şef'in verdiği 31b8663b…2cf6", () => {
   assert.equal(a.parmakIzi(a.URETIM_ACIK_ANAHTAR), a.URETIM_PARMAK_IZI);
   assert.ok(a.URETIM_PARMAK_IZI.startsWith('31b8663b') && a.URETIM_PARMAK_IZI.endsWith('2cf6'));
   assert.ok(kg.acikAnahtarCoz(a.URETIM_ACIK_ANAHTAR), 'istemci üretim anahtarını çözebilmeli');
@@ -45,14 +45,19 @@ test('dosya kaynağı: ed25519 okunur; RSA ve bozuk dosya RED, hata metninde iç
   fs.writeFileSync(path.join(d, 'rsa.key'), pem(rsa));
   assert.throws(() => a.dosyadanOku(path.join(d, 'rsa.key')), /ed25519/);
   fs.writeFileSync(path.join(d, 'bozuk.key'), 'GIZLI-DEGER-123');
-  assert.throws(() => a.dosyadanOku(path.join(d, 'bozuk.key')), (e) => !e.message.includes('GIZLI-DEGER-123'));
+  assert.throws(
+    () => a.dosyadanOku(path.join(d, 'bozuk.key')),
+    (e) => !e.message.includes('GIZLI-DEGER-123'),
+  );
   assert.throws(() => a.dosyadanOku(path.join(d, 'yok.key')), /okunamadı/);
   // Üretim anahtarı dosyada duramaz (üretim açık anahtarı yerine bu anahtar enjekte edilir).
-  assert.throws(() => a.dosyadanOku(path.join(d, 'test.key'), { uretimAcik: a.acikAnahtarB64(privateKey) }),
-    /ÜRETİM anahtarı dosyada/);
+  assert.throws(
+    () => a.dosyadanOku(path.join(d, 'test.key'), { uretimAcik: a.acikAnahtarB64(privateKey) }),
+    /ÜRETİM anahtarı dosyada/,
+  );
 });
 
-test('Anahtar Zinciri kaynağı: doğru komut, base64(PEM) çözülür, beklenen açık anahtar denetlenir', async () => {
+test('Anahtar Zinciri: doğru komut, base64(PEM) çözülür, açık anahtar denetlenir', async () => {
   const { privateKey } = crypto.generateKeyPairSync('ed25519');
   const deger = Buffer.from(pem(privateKey)).toString('base64') + '\n';
   const c = sahteCalistir(deger);
@@ -60,20 +65,40 @@ test('Anahtar Zinciri kaynağı: doğru komut, base64(PEM) çözülür, beklenen
   const k = await a.anahtarZincirindenOku({ calistir: c, beklenenAcik: acik });
   assert.equal(a.acikAnahtarB64(k), acik);
   assert.equal(c.cagri[0].komut, '/usr/bin/security');
-  assert.deepEqual(c.cagri[0].argumanlar,
-    ['find-generic-password', '-s', 'empp-guncelleme-ed25519-uretim', '-a', 'nadir', '-w']);
+  assert.deepEqual(c.cagri[0].argumanlar, [
+    'find-generic-password',
+    '-s',
+    'empp-guncelleme-ed25519-uretim',
+    '-a',
+    'nadir',
+    '-w',
+  ]);
 
   // Varsayılan beklenen = ÜRETİM anahtarı → rastgele anahtar RED; hata metninde değer yok.
-  await assert.rejects(a.anahtarZincirindenOku({ calistir: sahteCalistir(deger) }),
-    (e) => /eşleşmiyor/.test(e.message) && !e.message.includes(deger.trim().slice(10, 40)));
+  await assert.rejects(
+    a.anahtarZincirindenOku({ calistir: sahteCalistir(deger) }),
+    (e) => /eşleşmiyor/.test(e.message) && !e.message.includes(deger.trim().slice(10, 40)),
+  );
 });
 
 test('Anahtar Zinciri hataları: kayıt yok, zaman aşımı, bozuk değer — sır sızmaz', async () => {
-  await assert.rejects(a.anahtarZincirindenOku({ calistir: sahteCalistir('', { kod: 44, stderr: 'The specified item could not be found in the keychain.' }) }),
-    /okunamadı.*çıkış 44/);
-  await assert.rejects(a.anahtarZincirindenOku({ calistir: sahteCalistir('', { zamanAsimi: true }) }), /yanıt vermedi/);
-  await assert.rejects(a.anahtarZincirindenOku({ calistir: sahteCalistir('U0VDUkVULVNJUi1ERUdFUg==') }),
-    (e) => /PKCS8/.test(e.message) && !e.message.includes('U0VDUkVU'));
+  await assert.rejects(
+    a.anahtarZincirindenOku({
+      calistir: sahteCalistir('', {
+        kod: 44,
+        stderr: 'The specified item could not be found in the keychain.',
+      }),
+    }),
+    /okunamadı.*çıkış 44/,
+  );
+  await assert.rejects(
+    a.anahtarZincirindenOku({ calistir: sahteCalistir('', { zamanAsimi: true }) }),
+    /yanıt vermedi/,
+  );
+  await assert.rejects(
+    a.anahtarZincirindenOku({ calistir: sahteCalistir('U0VDUkVULVNJUi1ERUdFUg==') }),
+    (e) => /PKCS8/.test(e.message) && !e.message.includes('U0VDUkVU'),
+  );
 });
 
 test('anahtarYukle: tam olarak bir kaynak; üretim anahtarı dosyadan RED', async () => {

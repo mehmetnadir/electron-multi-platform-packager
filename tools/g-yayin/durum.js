@@ -38,8 +38,13 @@ function motorYolu(dizin) {
 }
 
 function ozetGecerliMi(o) {
-  return !!o && typeof o.sha256 === 'string' && SHA256_RE.test(o.sha256)
-    && Number.isSafeInteger(o.boyut) && o.boyut >= 0;
+  return (
+    !!o &&
+    typeof o.sha256 === 'string' &&
+    SHA256_RE.test(o.sha256) &&
+    Number.isSafeInteger(o.boyut) &&
+    o.boyut >= 0
+  );
 }
 
 function kitapDiziniDenetle(d, ne) {
@@ -58,7 +63,10 @@ function oncekiDurum(onceki) {
   if (!onceki) return { kabuk, kitaplar };
   for (const g of Array.isArray(onceki.kabuk) ? onceki.kabuk : []) {
     if (!g || !gYoluMu(g.yol) || !ozetGecerliMi(g)) {
-      throw new Error(`önceki manifestte G kapsamı dışında ya da bozuk kabuk girdisi: ${JSON.stringify(g && g.yol)}`);
+      throw new Error(
+        'önceki manifestte G kapsamı dışında ya da bozuk kabuk girdisi: ' +
+          JSON.stringify(g && g.yol),
+      );
     }
     kabuk.set(g.yol, { yol: g.yol, sha256: g.sha256, boyut: g.boyut });
   }
@@ -68,7 +76,13 @@ function oncekiDurum(onceki) {
     }
     if (g.durum === 'cikar') kitaplar.set(g.dizin, { dizin: g.dizin, durum: 'cikar' });
     else if (g.durum === 'ekle' && ozetGecerliMi(g) && typeof g.kaynak === 'string') {
-      kitaplar.set(g.dizin, { dizin: g.dizin, durum: 'ekle', kaynak: g.kaynak, sha256: g.sha256, boyut: g.boyut });
+      kitaplar.set(g.dizin, {
+        dizin: g.dizin,
+        durum: 'ekle',
+        kaynak: g.kaynak,
+        sha256: g.sha256,
+        boyut: g.boyut,
+      });
     } else throw new Error(`önceki manifestte bozuk kitap girdisi: ${g.dizin}`);
   }
   return { kabuk, kitaplar };
@@ -101,11 +115,18 @@ function birlestir(onceki, d) {
     if (cikarKume.has(k)) throw new Error(`${k} çıkarılıyor; aynı yayında motoru güncellenemez`);
   }
   if (deg.index !== undefined && !ozetGecerliMi(deg.index)) throw new Error('index özeti bozuk');
-  for (const [k, v] of Object.entries(motorlar)) if (!ozetGecerliMi(v)) throw new Error(`${k} motor özeti bozuk`);
+  for (const [k, v] of Object.entries(motorlar))
+    if (!ozetGecerliMi(v)) throw new Error(`${k} motor özeti bozuk`);
   for (const [k, v] of Object.entries(ekle)) {
-    if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak) throw new Error(`${k} arşiv özeti bozuk`);
+    if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak)
+      throw new Error(`${k} arşiv özeti bozuk`);
   }
-  if (deg.index === undefined && !Object.keys(motorlar).length && !Object.keys(ekle).length && !cikar.length) {
+  if (
+    deg.index === undefined &&
+    !Object.keys(motorlar).length &&
+    !Object.keys(ekle).length &&
+    !cikar.length
+  ) {
     throw new Error('değişiklik yok: --index, --motor, --ekle ya da --cikar verin');
   }
 
@@ -118,11 +139,18 @@ function birlestir(onceki, d) {
     kabuk.delete(motorYolu(k));
   }
   for (const [k, v] of Object.entries(ekle)) {
-    kitaplar.set(k, { dizin: k, durum: 'ekle', kaynak: v.kaynak, sha256: v.sha256, boyut: v.boyut });
+    kitaplar.set(k, {
+      dizin: k,
+      durum: 'ekle',
+      kaynak: v.kaynak,
+      sha256: v.sha256,
+      boyut: v.boyut,
+    });
     // Yeni arşiv kendi motorunu taşır; eski (taşınan) motor girdisi onu ezmesin.
     kabuk.delete(motorYolu(k));
   }
-  if (deg.index !== undefined) kabuk.set(INDEX_YOLU, { yol: INDEX_YOLU, sha256: deg.index.sha256, boyut: deg.index.boyut });
+  if (deg.index !== undefined)
+    kabuk.set(INDEX_YOLU, { yol: INDEX_YOLU, sha256: deg.index.sha256, boyut: deg.index.boyut });
   for (const [k, v] of Object.entries(motorlar)) {
     kabuk.set(motorYolu(k), { yol: motorYolu(k), sha256: v.sha256, boyut: v.boyut });
   }
@@ -131,7 +159,10 @@ function birlestir(onceki, d) {
   const kitapListe = [...kitaplar.values()].sort((a, b) => siraliAnahtar(a.dizin, b.dizin));
 
   const degisenKabuk = kabukListe
-    .filter((g) => { const o = eski.kabuk.get(g.yol); return !o || o.sha256 !== g.sha256 || o.boyut !== g.boyut; })
+    .filter((g) => {
+      const o = eski.kabuk.get(g.yol);
+      return !o || o.sha256 !== g.sha256 || o.boyut !== g.boyut;
+    })
     .map((g) => g.yol);
   const tasinanKabuk = kabukListe.filter((g) => !degisenKabuk.includes(g.yol)).map((g) => g.yol);
   const dusenKabuk = [...eski.kabuk.keys()].filter((y) => !kabuk.has(y)).sort(siraliAnahtar);
@@ -150,5 +181,11 @@ function birlestir(onceki, d) {
 }
 
 module.exports = {
-  MOTOR_DOSYA_ADI, INDEX_YOLU, KITAP_DIZIN_DESENI, gYoluMu, motorYolu, oncekiDurum, birlestir,
+  MOTOR_DOSYA_ADI,
+  INDEX_YOLU,
+  KITAP_DIZIN_DESENI,
+  gYoluMu,
+  motorYolu,
+  oncekiDurum,
+  birlestir,
 };

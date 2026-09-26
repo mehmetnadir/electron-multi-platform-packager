@@ -5,10 +5,11 @@
  * G UÇTAN UCA — fikstür hazırlayıcı. TEST anahtarıyla imzalı örnek güncellemeyi, kurulu
  * sayılacak örnek SET ağacını, olumsuz senaryoları ve yerel TLS sertifikasını üretir.
  *
- *   <dizin>/kurulu/        paket 2.90.1'in kurulu ağacı (set 99901; empp-set.json'da TEST açık anahtarı)
+ *   <dizin>/kurulu/        paket 2.90.1'in kurulu ağacı (set 99901; empp-set.json'da TEST
+ *                          açık anahtarı)
  *   <dizin>/kaynak/        yayının girdileri (index v2/v3, motor v2, book4/)
  *   <dizin>/senaryolar/<ad>/set/99901/…   sunucu.js'in servis ettiği ağaçlar
- *   <dizin>/beklenen.json  güncelleme sonrası beklenen ağaç (gDosyalari + tabanDosyalari + olmamali)
+ *   <dizin>/beklenen.json  güncelleme sonrası ağaç (gDosyalari + tabanDosyalari + olmamali)
  *   <dizin>/hazirlik.json  port, taban, senaryolar, TLS ve anahtar bilgisi
  *   <dizin>/tls/           ca.pem, ca.der (istemci güveni), sunucu.pem/.key
  *
@@ -41,13 +42,18 @@ function yaz(kok, goreli, icerik) {
 
 function indexHtml(baslik, kitaplar, surum) {
   const li = kitaplar.map((k) => `<li><a href="${k}/index.html">${k}</a></li>`).join('');
-  return '<!doctype html>\n<html lang="tr"><head><meta charset="utf-8">'
-    + `<title>${baslik}</title></head><body data-g-surum="${surum}"><h1>${baslik}</h1>`
-    + `<ul id="kitaplar">${li}</ul></body></html>\n`;
+  return (
+    '<!doctype html>\n<html lang="tr"><head><meta charset="utf-8">' +
+    `<title>${baslik}</title></head><body data-g-surum="${surum}"><h1>${baslik}</h1>` +
+    `<ul id="kitaplar">${li}</ul></body></html>\n`
+  );
 }
 
 function motor(s) {
-  return `/* ${MOTOR_DOSYA_ADI} — G uçtan uca sahte motoru */\nwindow.__EMPP_MOTOR_SURUMU = '${s}';\n`;
+  return (
+    `/* ${MOTOR_DOSYA_ADI} — G uçtan uca sahte motoru */\n` +
+    `window.__EMPP_MOTOR_SURUMU = '${s}';\n`
+  );
 }
 
 function kitapYaz(kok, dizin, motorSurumu, ekSayfa) {
@@ -68,7 +74,11 @@ CN = EMPP G uctan uca TEST CA (yalniz 127.0.0.1)
 basicConstraints = critical,CA:TRUE,pathlen:0
 keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
-nameConstraints = critical,permitted;IP:127.0.0.1/255.255.255.255,permitted;IP:10.0.2.2/255.255.255.255,permitted;DNS:localhost
+nameConstraints = critical,@ad_kisiti
+[ad_kisiti]
+permitted;IP.1 = 127.0.0.1/255.255.255.255
+permitted;IP.2 = 10.0.2.2/255.255.255.255
+permitted;DNS.1 = localhost
 `;
 
 const SUNUCU_EXT = `basicConstraints = critical,CA:FALSE
@@ -86,7 +96,8 @@ authorityKeyIdentifier = keyid
 function tlsHazirla(dizin, { yenile = false, openssl = process.env.OPENSSL || 'openssl' } = {}) {
   const t = path.join(dizin, 'tls');
   const gerekli = ['ca.pem', 'ca.der', 'sunucu.pem', 'sunucu.key'];
-  if (!yenile && gerekli.every((f) => fs.existsSync(path.join(t, f)))) return { dizin: t, yeni: false };
+  if (!yenile && gerekli.every((f) => fs.existsSync(path.join(t, f))))
+    return { dizin: t, yeni: false };
   if (fs.existsSync(t)) {
     const eski = path.join(dizin, '_eski', `${zamanDamgasi()}-tls`);
     fs.mkdirSync(path.dirname(eski), { recursive: true });
@@ -103,13 +114,59 @@ function tlsHazirla(dizin, { yenile = false, openssl = process.env.OPENSSL || 'o
       throw new Error(`openssl ${args[0]} başarısız: ${iz}`);
     }
   };
-  kos(['req', '-x509', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem',
-    '-days', '825', '-sha256', '-config', 'ca.cnf', '-extensions', 'v3_ca']);
-  kos(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'sunucu.key', '-out', 'sunucu.csr',
-    '-config', 'ca.cnf', '-subj', '/CN=127.0.0.1']);
-  kos(['x509', '-req', '-in', 'sunucu.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key',
-    '-set_serial', '0x' + crypto.randomBytes(12).toString('hex'), '-days', '825', '-sha256',
-    '-extfile', 'sunucu.ext', '-out', 'sunucu.pem']);
+  kos([
+    'req',
+    '-x509',
+    '-new',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    'ca.key',
+    '-out',
+    'ca.pem',
+    '-days',
+    '825',
+    '-sha256',
+    '-config',
+    'ca.cnf',
+    '-extensions',
+    'v3_ca',
+  ]);
+  kos([
+    'req',
+    '-new',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    'sunucu.key',
+    '-out',
+    'sunucu.csr',
+    '-config',
+    'ca.cnf',
+    '-subj',
+    '/CN=127.0.0.1',
+  ]);
+  kos([
+    'x509',
+    '-req',
+    '-in',
+    'sunucu.csr',
+    '-CA',
+    'ca.pem',
+    '-CAkey',
+    'ca.key',
+    '-set_serial',
+    '0x' + crypto.randomBytes(12).toString('hex'),
+    '-days',
+    '825',
+    '-sha256',
+    '-extfile',
+    'sunucu.ext',
+    '-out',
+    'sunucu.pem',
+  ]);
   kos(['x509', '-in', 'ca.pem', '-outform', 'der', '-out', 'ca.der']);
   for (const f of ['ca.key', 'sunucu.key']) fs.chmodSync(path.join(t, f), 0o600);
   return { dizin: t, yeni: true };
@@ -118,8 +175,15 @@ function tlsHazirla(dizin, { yenile = false, openssl = process.env.OPENSSL || 'o
 /* ------------------------------------------------------------------ fikstür */
 
 function nesliKenaraAl(dizin) {
-  const adlar = ['kurulu', 'kaynak', 'senaryolar', 'calisma', 'beklenen.json', 'hazirlik.json', 'son-kosu.json']
-    .filter((a) => fs.existsSync(path.join(dizin, a)));
+  const adlar = [
+    'kurulu',
+    'kaynak',
+    'senaryolar',
+    'calisma',
+    'beklenen.json',
+    'hazirlik.json',
+    'son-kosu.json',
+  ].filter((a) => fs.existsSync(path.join(dizin, a)));
   if (!adlar.length) return null;
   const hedef = path.join(dizin, '_eski', zamanDamgasi());
   fs.mkdirSync(hedef, { recursive: true });
@@ -132,8 +196,14 @@ function imzaliManifestYaz(setDizini, manifest, ozel, acik) {
   fs.mkdirSync(setDizini, { recursive: true });
   fs.writeFileSync(path.join(setDizini, 'manifest.json'), govde);
   fs.writeFileSync(path.join(setDizini, 'manifest.json.sig'), anahtar.imzala(govde, ozel, acik));
-  fs.writeFileSync(path.join(setDizini, 'surum.json'),
-    JSON.stringify({ surum: manifest.surum, uretim: manifest.uretim, setKimligi: manifest.setKimligi }));
+  fs.writeFileSync(
+    path.join(setDizini, 'surum.json'),
+    JSON.stringify({
+      surum: manifest.surum,
+      uretim: manifest.uretim,
+      setKimligi: manifest.setKimligi,
+    }),
+  );
 }
 
 function setKopyala(dizin, kaynakSenaryo, hedefSenaryo, filtre) {
@@ -144,7 +214,8 @@ function setKopyala(dizin, kaynakSenaryo, hedefSenaryo, filtre) {
 }
 
 /**
- * @param {{dizin?:string, port?:number, anahtarDosya?:string, tlsYenile?:boolean, gunluk?:Function}} s
+ * @param {{dizin?:string, port?:number, anahtarDosya?:string, tlsYenile?:boolean,
+ *   gunluk?:Function}} s
  * @returns {Promise<object>} hazirlik.json içeriği
  */
 async function hazirla(s = {}) {
@@ -165,24 +236,48 @@ async function hazirla(s = {}) {
 
   // 1) Kurulu paket (2.90.1): book1-3, index v1.
   const kurulu = path.join(dizin, 'kurulu');
-  yaz(kurulu, 'index.html', indexHtml('G Test Seti v1', ['book1', 'book2', 'book3'], o.PAKET_SURUMU));
+  yaz(
+    kurulu,
+    'index.html',
+    indexHtml('G Test Seti v1', ['book1', 'book2', 'book3'], o.PAKET_SURUMU),
+  );
   for (const b of ['book1', 'book2', 'book3']) kitapYaz(kurulu, b, 'v1');
-  yaz(kurulu, 'package.json', JSON.stringify({ name: 'g-uctan-uca-seti', productName: 'G Uçtan Uca Seti', version: o.PAKET_SURUMU }, null, 2) + '\n');
-  yaz(kurulu, kg.VARSAYILAN_SET_ADI, JSON.stringify({
-    sema: 2,
-    setKimligi: o.SET_KIMLIGI,
-    taban: taban('gecerli'),
-    damga: o.PAKET_SURUMU,
-    kabukDosyalari: ['index.html'],
-    kapsamDisiDallar: [],
-    kitapDizinleri: ['book1', 'book2', 'book3'],
-    imza: { alg: kg.IMZA_ALG, acikAnahtar: acik },
-  }, null, 2) + '\n');
+  yaz(
+    kurulu,
+    'package.json',
+    JSON.stringify(
+      { name: 'g-uctan-uca-seti', productName: 'G Uçtan Uca Seti', version: o.PAKET_SURUMU },
+      null,
+      2,
+    ) + '\n',
+  );
+  yaz(
+    kurulu,
+    kg.VARSAYILAN_SET_ADI,
+    JSON.stringify(
+      {
+        sema: 2,
+        setKimligi: o.SET_KIMLIGI,
+        taban: taban('gecerli'),
+        damga: o.PAKET_SURUMU,
+        kabukDosyalari: ['index.html'],
+        kapsamDisiDallar: [],
+        kitapDizinleri: ['book1', 'book2', 'book3'],
+        imza: { alg: kg.IMZA_ALG, acikAnahtar: acik },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
 
   // 2) Yayın girdileri.
   const kaynak = path.join(dizin, 'kaynak');
   yaz(kaynak, 'index-v2.html', indexHtml('G Test Seti v2', ['book1', 'book2', 'book4'], '2.90.2'));
-  yaz(kaynak, 'index-v3.html', indexHtml('G Test Seti v3', ['book1', 'book2', 'book4'], o.SON_SURUM));
+  yaz(
+    kaynak,
+    'index-v3.html',
+    indexHtml('G Test Seti v3', ['book1', 'book2', 'book4'], o.SON_SURUM),
+  );
   yaz(kaynak, 'index-eski.html', indexHtml('G Test Seti ESKİ (geri alma)', ['book1'], '2.90.0'));
   yaz(kaynak, 'index-baska.html', indexHtml('BAŞKA SET 99902', ['book9'], '2.90.5'));
   yaz(kaynak, 'motor-v2.js', motor('v2'));
@@ -190,22 +285,51 @@ async function hazirla(s = {}) {
 
   // 3) gecerli — yayın aracının iki gerçek koşusu (birikimli durum).
   const ortak = (ad, ek) => ({
-    komut: 'yayinla', setKimligi: o.SET_KIMLIGI, taban: taban(ad), cikti: senaryoDizini(ad),
-    anahtarDosya, anahtarZinciri: false, motorlar: {}, ekle: {}, cikar: [], ...ek,
+    komut: 'yayinla',
+    setKimligi: o.SET_KIMLIGI,
+    taban: taban(ad),
+    cikti: senaryoDizini(ad),
+    anahtarDosya,
+    anahtarZinciri: false,
+    motorlar: {},
+    ekle: {},
+    cikar: [],
+    ...ek,
   });
   const k = (ad) => path.join(kaynak, ad);
-  const r1 = await yayin.yayinla(ortak('gecerli', {
-    ilk: true, oncekiSurum: o.PAKET_SURUMU, panel: o.PANEL, index: k('index-v2.html'),
-    motorlar: { book2: k('motor-v2.js') }, ekle: { book4: k('book4') }, cikar: ['book3'],
-  }), { gunluk });
-  const r2 = await yayin.yayinla(ortak('gecerli', {
-    panel: o.PANEL, index: k('index-v3.html'), motorlar: { book1: k('motor-v2.js') },
-  }), { gunluk });
-  if (r1.surum !== '2.90.2' || r2.surum !== o.SON_SURUM) throw new Error(`beklenmeyen sürüm: ${r1.surum}, ${r2.surum}`);
+  const r1 = await yayin.yayinla(
+    ortak('gecerli', {
+      ilk: true,
+      oncekiSurum: o.PAKET_SURUMU,
+      panel: o.PANEL,
+      index: k('index-v2.html'),
+      motorlar: { book2: k('motor-v2.js') },
+      ekle: { book4: k('book4') },
+      cikar: ['book3'],
+    }),
+    { gunluk },
+  );
+  const r2 = await yayin.yayinla(
+    ortak('gecerli', {
+      panel: o.PANEL,
+      index: k('index-v3.html'),
+      motorlar: { book1: k('motor-v2.js') },
+    }),
+    { gunluk },
+  );
+  if (r1.surum !== '2.90.2' || r2.surum !== o.SON_SURUM)
+    throw new Error(`beklenmeyen sürüm: ${r1.surum}, ${r2.surum}`);
 
   // 4) Olumsuz senaryolar.
   const uretim = new Date().toISOString();
-  const temel = { sema: 1, kanal: 'G', setKimligi: o.SET_KIMLIGI, onceki: o.PAKET_SURUMU, uretim, anahtar: iz };
+  const temel = {
+    sema: 1,
+    kanal: 'G',
+    setKimligi: o.SET_KIMLIGI,
+    onceki: o.PAKET_SURUMU,
+    uretim,
+    anahtar: iz,
+  };
 
   const bozukDizin = setKopyala(dizin, 'gecerli', 'imza-bozuk');
   const bm = JSON.parse(fs.readFileSync(path.join(bozukDizin, 'manifest.json'), 'utf8'));
@@ -214,18 +338,34 @@ async function hazirla(s = {}) {
 
   setKopyala(dizin, 'gecerli', 'imzasiz', (y) => !y.endsWith('.sig'));
 
-  await yayin.yayinla(ortak('sha-uyusmaz', {
-    ilk: true, oncekiSurum: o.PAKET_SURUMU, panel: o.PANEL, index: k('index-v2.html'),
-    ekle: { book4: k('book4') }, cikar: ['book3'],
-  }), { gunluk });
-  fs.writeFileSync(path.join(senaryoDizini('sha-uyusmaz'), 'set', o.SET_KIMLIGI, 'dosya', 'index.html'),
-    '<!doctype html><html><body>SAHTE</body></html>\n');
+  await yayin.yayinla(
+    ortak('sha-uyusmaz', {
+      ilk: true,
+      oncekiSurum: o.PAKET_SURUMU,
+      panel: o.PANEL,
+      index: k('index-v2.html'),
+      ekle: { book4: k('book4') },
+      cikar: ['book3'],
+    }),
+    { gunluk },
+  );
+  fs.writeFileSync(
+    path.join(senaryoDizini('sha-uyusmaz'), 'set', o.SET_KIMLIGI, 'dosya', 'index.html'),
+    '<!doctype html><html><body>SAHTE</body></html>\n',
+  );
 
   const kacis = Buffer.from('kacis\n');
-  imzaliManifestYaz(path.join(senaryoDizini('yol-kacisi'), 'set', o.SET_KIMLIGI), {
-    ...temel, surum: '2.90.2',
-    kabuk: [{ yol: '../kacis.txt', sha256: o.sha256(kacis), boyut: kacis.length }], kitaplar: [],
-  }, ozel, acik);
+  imzaliManifestYaz(
+    path.join(senaryoDizini('yol-kacisi'), 'set', o.SET_KIMLIGI),
+    {
+      ...temel,
+      surum: '2.90.2',
+      kabuk: [{ yol: '../kacis.txt', sha256: o.sha256(kacis), boyut: kacis.length }],
+      kitaplar: [],
+    },
+    ozel,
+    acik,
+  );
 
   const zkSet = path.join(senaryoDizini('zip-kacisi'), 'set', o.SET_KIMLIGI);
   fs.mkdirSync(path.join(zkSet, 'kitap'), { recursive: true });
@@ -233,22 +373,52 @@ async function hazirla(s = {}) {
     { yol: 'index.html', veri: Buffer.from('<!doctype html><html><body>book4</body></html>\n') },
     { yol: '../../kacti.txt', veri: Buffer.from('kacti\n') },
   ]);
-  imzaliManifestYaz(zkSet, {
-    ...temel, surum: '2.90.2', kabuk: [],
-    kitaplar: [{ dizin: 'book4', durum: 'ekle', kaynak: `${taban('zip-kacisi')}/set/${o.SET_KIMLIGI}/kitap/book4-kacis.zip`, sha256: zk.sha256, boyut: zk.boyut }],
-  }, ozel, acik);
+  imzaliManifestYaz(
+    zkSet,
+    {
+      ...temel,
+      surum: '2.90.2',
+      kabuk: [],
+      kitaplar: [
+        {
+          dizin: 'book4',
+          durum: 'ekle',
+          kaynak: `${taban('zip-kacisi')}/set/${o.SET_KIMLIGI}/kitap/book4-kacis.zip`,
+          sha256: zk.sha256,
+          boyut: zk.boyut,
+        },
+      ],
+    },
+    ozel,
+    acik,
+  );
 
   const kismi = setKopyala(dizin, 'gecerli', 'kismi-bozuk');
   fs.writeFileSync(path.join(kismi, 'dosya', 'book2', MOTOR_DOSYA_ADI), motor('BOZUK'));
   // Arşiv adresleri 'gecerli' tabanını gösterir; kitap arşivi oradan iner (aynı sunucu).
 
-  await yayin.yayinla(ortak('geri-alma', { ilk: true, surum: '2.90.0', index: k('index-eski.html') }), { gunluk });
+  await yayin.yayinla(
+    ortak('geri-alma', { ilk: true, surum: '2.90.0', index: k('index-eski.html') }),
+    { gunluk },
+  );
 
   const baskaKaynak = path.join(dizin, 'senaryolar', '_baska-set-kaynak');
-  await yayin.yayinla({ ...ortak('baska-set', {}), setKimligi: o.BASKA_SET, cikti: baskaKaynak,
-    ilk: true, surum: '2.90.5', index: k('index-baska.html') }, { gunluk });
-  fs.cpSync(path.join(baskaKaynak, 'set', o.BASKA_SET),
-    path.join(senaryoDizini('baska-set'), 'set', o.SET_KIMLIGI), { recursive: true });
+  await yayin.yayinla(
+    {
+      ...ortak('baska-set', {}),
+      setKimligi: o.BASKA_SET,
+      cikti: baskaKaynak,
+      ilk: true,
+      surum: '2.90.5',
+      index: k('index-baska.html'),
+    },
+    { gunluk },
+  );
+  fs.cpSync(
+    path.join(baskaKaynak, 'set', o.BASKA_SET),
+    path.join(senaryoDizini('baska-set'), 'set', o.SET_KIMLIGI),
+    { recursive: true },
+  );
 
   // 5) Beklenen son ağaç — girdilerden BAĞIMSIZ hesaplanır (aracın çıktısından değil).
   const taban0 = o.agacOzeti(kurulu);
@@ -266,8 +436,13 @@ async function hazirla(s = {}) {
     tabanDosyalari[y] = s;
   }
   const beklenen = {
-    setKimligi: o.SET_KIMLIGI, paketSurumu: o.PAKET_SURUMU, surum: o.SON_SURUM,
-    gDosyalari, tabanDosyalari, olmamali: ['book3'], yoksay: o.DURUM_DOSYALARI,
+    setKimligi: o.SET_KIMLIGI,
+    paketSurumu: o.PAKET_SURUMU,
+    surum: o.SON_SURUM,
+    gDosyalari,
+    tabanDosyalari,
+    olmamali: ['book3'],
+    yoksay: o.DURUM_DOSYALARI,
     kurulu: taban0,
   };
   fs.writeFileSync(path.join(dizin, 'beklenen.json'), JSON.stringify(beklenen, null, 2) + '\n');
@@ -312,14 +487,20 @@ async function main(argv) {
   }
   const h = await hazirla({ ...s, gunluk: (m) => console.warn(m) });
   console.log(`hazır: ${h.dizin}`);
-  console.log(`  set ${h.setKimligi}, paket ${h.paketSurumu} → ${h.sonSurum}, anahtar ${anahtar.kisaIz(h.anahtarParmakIzi)} (TEST)`);
+  console.log(
+    `  set ${h.setKimligi}, paket ${h.paketSurumu} → ${h.sonSurum}, ` +
+      `anahtar ${anahtar.kisaIz(h.anahtarParmakIzi)} (TEST)`,
+  );
   console.log(`  taban ${h.taban}`);
   console.log(`  sunucu:  node tools/g-uctan-uca/sunucu.js --dizin ${h.dizin}`);
   console.log(`  referans: node tools/g-uctan-uca/kos.js --dizin ${h.dizin}`);
 }
 
 if (require.main === module) {
-  main(process.argv.slice(2)).catch((e) => { console.error('HATA: ' + (e && e.message ? e.message : e)); process.exitCode = 1; });
+  main(process.argv.slice(2)).catch((e) => {
+    console.error('HATA: ' + (e && e.message ? e.message : e));
+    process.exitCode = 1;
+  });
 }
 
 module.exports = { hazirla, tlsHazirla, indexHtml, motor, CA_CNF, SUNUCU_EXT };

@@ -41,7 +41,10 @@ function acikAnahtarB64(anahtar) {
 
 /** sha256(SPKI DER) hex. */
 function parmakIzi(acikB64) {
-  return crypto.createHash('sha256').update(Buffer.from(String(acikB64), 'base64')).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(Buffer.from(String(acikB64), 'base64'))
+    .digest('hex');
 }
 
 function kisaIz(iz) {
@@ -68,8 +71,10 @@ function dosyadanOku(yol, s = {}) {
   }
   if (!ed25519OzelMi(k)) throw new Error(`anahtar dosyası ed25519 özel anahtarı değil: ${y}`);
   if (acikAnahtarB64(k) === uretimAcik) {
-    throw new Error('ÜRETİM anahtarı dosyada bulundu — üretim anahtarı yalnız Anahtar Zinciri\'nden '
-      + 'okunur (--anahtar-zinciri); dosyayı Nadir\'e bildir');
+    throw new Error(
+      "ÜRETİM anahtarı dosyada bulundu — üretim anahtarı yalnız Anahtar Zinciri'nden " +
+        "okunur (--anahtar-zinciri); dosyayı Nadir'e bildir",
+    );
   }
   return k;
 }
@@ -94,20 +99,28 @@ function varsayilanCalistir(komut, argumanlar, { zamanAsimiMs = ZINCIR_ZAMAN_ASI
     const sayac = setTimeout(() => {
       if (bitti) return;
       bitti = true;
-      try { cocuk.kill('SIGKILL'); } catch (e) { /* zaten bitmiş */ }
+      try {
+        cocuk.kill('SIGKILL');
+      } catch (e) {
+        /* zaten bitmiş */
+      }
       for (const p of parcalar) p.fill(0);
       coz({ kod: -1, stdout: Buffer.alloc(0), stderr: '', zamanAsimi: true });
     }, zamanAsimiMs);
     cocuk.stdout.on('data', (p) => parcalar.push(p));
-    cocuk.stderr.on('data', (p) => { if (hata.length < 400) hata += p.toString('utf8'); });
+    cocuk.stderr.on('data', (p) => {
+      if (hata.length < 400) hata += p.toString('utf8');
+    });
     cocuk.on('error', () => {
       if (bitti) return;
-      bitti = true; clearTimeout(sayac);
+      bitti = true;
+      clearTimeout(sayac);
       coz({ kod: -1, stdout: Buffer.alloc(0), stderr: 'çalıştırılamadı', zamanAsimi: false });
     });
     cocuk.on('close', (kod) => {
       if (bitti) return;
-      bitti = true; clearTimeout(sayac);
+      bitti = true;
+      clearTimeout(sayac);
       const stdout = Buffer.concat(parcalar);
       for (const p of parcalar) p.fill(0);
       coz({ kod, stdout, stderr: hata.slice(0, 400), zamanAsimi: false });
@@ -119,7 +132,8 @@ function varsayilanCalistir(komut, argumanlar, { zamanAsimiMs = ZINCIR_ZAMAN_ASI
  * Üretim anahtarını Anahtar Zinciri'nden okur. Dönen KeyObject dışında hiçbir iz kalmaz
  * (ara Buffer'lar sıfırlanır). Açık anahtar üretim anahtarıyla eşleşmezse HATA.
  * @param {object} [s]
- * @param {Function} [s.calistir] test enjeksiyonu: `(komut, argumanlar, {zamanAsimiMs}) → {kod, stdout, stderr, zamanAsimi}`
+ * @param {Function} [s.calistir] test enjeksiyonu:
+ *   `(komut, argumanlar, {zamanAsimiMs}) → {kod, stdout, stderr, zamanAsimi}`
  * @param {string} [s.beklenenAcik] eşleşmesi gereken açık anahtar (varsayılan üretim)
  */
 async function anahtarZincirindenOku(s = {}) {
@@ -128,18 +142,27 @@ async function anahtarZincirindenOku(s = {}) {
   const calistir = typeof s.calistir === 'function' ? s.calistir : varsayilanCalistir;
   const beklenen = s.beklenenAcik === undefined ? URETIM_ACIK_ANAHTAR : s.beklenenAcik;
 
-  const y = await calistir(GUVENLIK_ARACI,
+  const y = await calistir(
+    GUVENLIK_ARACI,
     ['find-generic-password', '-s', servis, '-a', hesap, '-w'],
-    { zamanAsimiMs: s.zamanAsimiMs || ZINCIR_ZAMAN_ASIMI_MS });
+    { zamanAsimiMs: s.zamanAsimiMs || ZINCIR_ZAMAN_ASIMI_MS },
+  );
   const ham = Buffer.isBuffer(y && y.stdout) ? y.stdout : Buffer.alloc(0);
   try {
     if (y && y.zamanAsimi) {
-      throw new Error(`Anahtar Zinciri yanıt vermedi (${servis}) — izin penceresi bekliyor olabilir`);
+      throw new Error(
+        `Anahtar Zinciri yanıt vermedi (${servis}) — izin penceresi bekliyor olabilir`,
+      );
     }
     if (!y || y.kod !== 0) {
-      const iz = String((y && y.stderr) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-      throw new Error(`Anahtar Zinciri kaydı okunamadı (servis ${servis}, hesap ${hesap}, `
-        + `çıkış ${y ? y.kod : 'yok'}${iz ? ': ' + iz : ''})`);
+      const iz = String((y && y.stderr) || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160);
+      throw new Error(
+        `Anahtar Zinciri kaydı okunamadı (servis ${servis}, hesap ${hesap}, ` +
+          `çıkış ${y ? y.kod : 'yok'}${iz ? ': ' + iz : ''})`,
+      );
     }
     let pem = null;
     let k = null;
@@ -152,11 +175,15 @@ async function anahtarZincirindenOku(s = {}) {
       if (pem) pem.fill(0);
     }
     if (!ed25519OzelMi(k)) {
-      throw new Error(`Anahtar Zinciri değeri base64(PKCS8 PEM) ed25519 özel anahtarı değil (${servis})`);
+      throw new Error(
+        `Anahtar Zinciri değeri base64(PKCS8 PEM) ed25519 özel anahtarı değil (${servis})`,
+      );
     }
     if (beklenen && acikAnahtarB64(k) !== beklenen) {
-      throw new Error(`Anahtar Zinciri anahtarı beklenen açık anahtarla eşleşmiyor `
-        + `(${kisaIz(parmakIzi(acikAnahtarB64(k)))} ≠ ${kisaIz(parmakIzi(beklenen))})`);
+      throw new Error(
+        `Anahtar Zinciri anahtarı beklenen açık anahtarla eşleşmiyor ` +
+          `(${kisaIz(parmakIzi(acikAnahtarB64(k)))} ≠ ${kisaIz(parmakIzi(beklenen))})`,
+      );
     }
     return k;
   } finally {
@@ -173,8 +200,10 @@ async function anahtarYukle(kaynak = {}) {
   const zincir = !!kaynak.zincir;
   const dosyaVar = kaynak.dosya !== undefined && kaynak.dosya !== null && kaynak.dosya !== false;
   if (zincir === dosyaVar) {
-    throw new Error('anahtar kaynağı tam olarak bir tane olmalı: --anahtar-zinciri (üretim) '
-      + 'ya da --anahtar-dosya [yol] (test)');
+    throw new Error(
+      'anahtar kaynağı tam olarak bir tane olmalı: --anahtar-zinciri (üretim) ' +
+        'ya da --anahtar-dosya [yol] (test)',
+    );
   }
   let ozel;
   let etiket;
@@ -212,12 +241,16 @@ function dogrula(govde, imzaMetni, acikB64) {
 async function kuruImza(s = {}) {
   try {
     const ozel = await anahtarZincirindenOku({ calistir: s.calistir });
-    const govde = Buffer.from(`empp-g-yayin kuru imza ${new Date().toISOString()} `
-      + crypto.randomBytes(8).toString('hex'), 'utf8');
+    const govde = Buffer.from(
+      `empp-g-yayin kuru imza ${new Date().toISOString()} ` + crypto.randomBytes(8).toString('hex'),
+      'utf8',
+    );
     const imza = crypto.sign(null, govde, ozel).toString('base64');
-    if (!dogrula(govde, imza, URETIM_ACIK_ANAHTAR)) return { gecti: false, sebep: 'imza doğrulanmadı' };
+    if (!dogrula(govde, imza, URETIM_ACIK_ANAHTAR))
+      return { gecti: false, sebep: 'imza doğrulanmadı' };
     const bozuk = Buffer.concat([govde, Buffer.from('x')]);
-    if (dogrula(bozuk, imza, URETIM_ACIK_ANAHTAR)) return { gecti: false, sebep: 'bozuk gövde de geçti' };
+    if (dogrula(bozuk, imza, URETIM_ACIK_ANAHTAR))
+      return { gecti: false, sebep: 'bozuk gövde de geçti' };
     return { gecti: true, sebep: '' };
   } catch (e) {
     return { gecti: false, sebep: e && e.message ? e.message : 'bilinmeyen' };
