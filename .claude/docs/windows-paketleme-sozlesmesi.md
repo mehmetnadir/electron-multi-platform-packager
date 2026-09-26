@@ -49,6 +49,13 @@ yayımcı adı sonra) bizim paket imzayı İmpark imza yuvasından (66902, ofist
 alır; imzasız paket indirmeye çıkmaz, o sürede indirme İmpark exe'sidir. Panelde tek "Windows" satırı;
 hangi kaynağın verildiği ayrı alanda tutulur (`build_method`: `passthrough` | `build`).
 
+**İmza bekleme kuralı — KARARLANDI (Nadir, 2026-09-26):** İmpark imza kuyruğunun süresi onların yüküne
+bağlıdır; tek ölçüm (26.09: tetikten imzaya ~6 dk) norm DEĞİLDİR, plan ve raporda "bu koşuda" diye geçer.
+Paket **imzalanmadan dönmez**: 1. deneme 3 saate kadar bekler; imza gelmezse yuva temizlenip (exe-remove)
+**bir kez** yeniden denenir, 2. deneme 1 saat bekler; yine gelmezse iş hata verir ve Nadir'e bildirim
+gider ("imza kuyruğunda sorun olabilir — İmpark'tan düzeltme talebi"). İmzasız paket hiçbir koşulda
+yayına/R2'ye çıkmaz; o sürede indirme İmpark exe'sidir.
+
 ## Kimlik ve kitap türü — KARARLANDI (Nadir, 2026-09-25)
 Kimlik = setin/kitabın kendi `book_id`'si; elle girilen alan YOK. Tür **deterministik** türetilir:
 - kitap sayısı > 1 → `set`, değilse `tek`;
