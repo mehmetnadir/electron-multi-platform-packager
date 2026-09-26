@@ -501,7 +501,10 @@ app.post('/api/package', async (req, res) => {
       // İkisi de İSTEĞE BAĞLI; geçersizse istek DÜŞÜRÜLMEZ, alan yok sayılır ve
       // sebebi empp-set.json'a yazılır (sessiz yutma yok).
       setKimligi,
-      guncellemeTabani
+      guncellemeTabani,
+      // Paketin G sürümü (claim `surum`, G3 — 2026-09-26 madde 3): empp-set.json `surum` →
+      // istemcinin monoton tabanı. appVersion'dan AYRI (sürüm etkisi ayrı karar).
+      surum
     } = req.body;
     
     // Debug: PWA config kontrolü
@@ -531,6 +534,12 @@ app.post('/api/package', async (req, res) => {
     if (guncellemeTabani !== undefined && guncellemeTabani !== null && !guncellemeTabaniGecerli) {
       setKimligiSebepleri.push(`istekteki guncellemeTabani geçersiz (${JSON.stringify(guncellemeTabani)}) — yok sayıldı`);
       console.warn('⚠️ /api/package: geçersiz guncellemeTabani yok sayıldı:', JSON.stringify(guncellemeTabani));
+    }
+
+    const surumCozum = setKimlikleri.surumCoz(surum);
+    if (surumCozum.sebep) {
+      setKimligiSebepleri.push(surumCozum.sebep);
+      console.warn('⚠️ /api/package:', surumCozum.sebep);
     }
 
     const jobId = uuidv4();
@@ -564,6 +573,7 @@ app.post('/api/package', async (req, res) => {
       // SET güncelleme kanalı alanları — paketleme anında empp-set.json'a yazılır.
       setKimligi: setKimligiGecerli ? String(setKimligi).trim() : null,
       guncellemeTabani: guncellemeTabaniGecerli ? guncellemeTabani.trim() : null,
+      surum: surumCozum.surum,
       setKimligiSebebi: setKimligiSebepleri.length ? setKimligiSebepleri.join('; ') : null,
       priority,
       status: 'queued',

@@ -6,6 +6,7 @@
  * testler DÜŞMELİ ("öldü"). Hayatta kalan mutant = testin görmediği kural.
  * M45–M67 (2026-09-26): Pardus Docker G anahtarı + claim kimliği, taban yoksa enjeksiyon yok,
  * paketin G sürümü tabanı, renderer fs-shim örtü okuması, imzalı dosyalar[] (arşiv saklanmaz).
+ * M68–M73: HTTP yolu (mac/Windows/android) claim surum → empp-set.json / empp-g-paket.json tabanı.
  * `UU` / `UUO` test adı = G uçtan uca 11 senaryo koşumu (`tools/g-uctan-uca/kos.js`, yerinde /
  * örtü kipi) — fikstür `--uu-dizin` (varsayılan ~/.empp-agent/g-uctan-uca/g-electron, hazirla ile).
  *
@@ -40,6 +41,10 @@ const SH = 'src/platforms/common/fs-shim.js';
 const T_PG = 'tools/pardus/pardus-g-anahtar.test.js';
 const T_KR = 'src/packaging/guncelleyici-enjekte-karar.test.js';
 const T_SHIM = 'src/platforms/common/fs-shim-ortu.test.js';
+// Madde 3 (2026-09-26): HTTP yolu claim surum → empp-set.json / android empp-g-paket.json
+const AP = 'src/server/app.js';
+const GK = 'src/platforms/android/g-katmani.js';
+const T_GSH = 'src/packaging/g-surum-http.test.js';
 /** G uçtan uca koşumu (yerinde / örtü) — `testKos` bunları kos.js ile koşar. */
 const UU = 'UU';
 const UUO = 'UUO';
@@ -211,6 +216,20 @@ const MUTANTLAR = [
     eski: '        if (eksik) {\n', yeni: '        if (true) {\n', test: [T_GV] },
   { id: 'M67', ne: 'imzalı listede arşivdeki listesiz dosya kabul edilir', dosya: KG,
     eski: "            if (!d) throw new Error('arsivde-listesiz-dosya:' + y);", yeni: '            if (!d) continue;', test: [T_GV] },
+  // ---- madde 3: mac/android G tabanı = claim surum (appVersion değişmeden)
+  { id: 'M68', ne: 'runner claim surum\'unu paketleyici isteğine koymaz', dosya: RN,
+    eski: '      ...(surum ? { surum } : {}),\n', yeni: '', test: [T_GSH] },
+  { id: 'M69', ne: 'runner HTTP yolunda claim surum\'unu geçirmez', dosya: RN,
+    eski: '        gSurum.surum);', yeni: '        null);', test: [T_GSH] },
+  { id: 'M70', ne: '/api/package surum\'u jobInfo\'ya koymaz', dosya: AP,
+    eski: '      surum: surumCozum.surum,\n', yeni: '      surum: null,\n', test: [T_GSH] },
+  { id: 'M71', ne: 'claim surum düşer: empp-set.json surum yazılmaz (eski manifest reddi kırılmalı)', dosya: SK,
+    eski: '    surum: surumCozum.surum,\n', yeni: '    surum: null,\n', test: [T_GSH] },
+  { id: 'M72', ne: 'android empp-g-paket.json set surum\'unu yok sayar (appVersion 1.0.0)', dosya: GK,
+    eski: '    if (s && kg.gSurumCoz(s.surum)) setSurumu = String(s.surum).trim();\n', yeni: '', test: [T_GSH] },
+  { id: 'M73', ne: 'runner G3 olmayan claim surum\'unu da gönderir', dosya: RH,
+    eski: "  if (!require('../runtime/kitap-guncelleyici').gSurumCoz(v)) return { surum: null, sebep: 'g3-degil' };\n",
+    yeni: '', test: [T_GSH] },
 ];
 
 function arg(ad) { const i = process.argv.indexOf(ad); return i === -1 ? null : process.argv[i + 1]; }

@@ -107,6 +107,10 @@ kaynak `varsayilan` DEĞİL) ya da imza anahtarı yoksa güncelleyici pakete ENJ
 uyarı olarak yazılır (`guncelleyici-enjekte.js` `enjeksiyonKarari`) — güncelleme alamayan "G'li" paket
 üretilmez. Pardus Docker yolu claim'in `setKimligi`/`guncellemeTabani`/`surum`unu runner'da doğrulayıp
 `EMPP_G_*` ile konteynere, oradan jobInfo'ya taşır (`pardusGKimligi`, `packager-run-linux.js`).
+HTTP yolu (mac/Windows/android) claim `surum`unu (G3) `/api/package` gövdesinde AYRI alanla taşır
+(`claimGSurumu` → `surumCoz` → jobInfo.surum → `empp-set.json` `surum`); Android'de `empp-g-paket.json`
+`surum`u da odur (`g-katmani.paketSurumuSec`). appVersion DEĞİŞMEZ (mac/android '1.0.0'); claim surum
+yoksa bugünkü davranış + uyarı (monoton alt sınır yok).
 
 
 ---

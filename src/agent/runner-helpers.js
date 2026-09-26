@@ -1059,7 +1059,21 @@ function pardusGKimligi(job) {
   return { kimlik, sebepler };
 }
 
+/**
+ * Claim'in G sürümü (`surum`, G3 `2.<panel>.<sayaç>`; 2026-09-26 madde 3). HTTP yolunda
+ * paketleyiciye AYRI alan olarak gider (empp-set.json `surum` → istemcinin monoton tabanı);
+ * appVersion'ı DEĞİŞTİRMEZ. Saf.
+ * @returns {{surum: string|null, sebep: ''|'yok'|'g3-degil'}}
+ */
+function claimGSurumu(job) {
+  const v = job && job.surum != null ? String(job.surum).trim() : '';
+  if (!v) return { surum: null, sebep: 'yok' };
+  if (!require('../runtime/kitap-guncelleyici').gSurumCoz(v)) return { surum: null, sebep: 'g3-degil' };
+  return { surum: v, sebep: '' };
+}
+
 module.exports = {
+  claimGSurumu,
   pardusBetikEnv,
   pardusGKimligi,
   PARDUS_G_ENV,
