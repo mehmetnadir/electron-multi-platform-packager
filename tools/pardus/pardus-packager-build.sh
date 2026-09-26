@@ -52,7 +52,10 @@ elif ! mkdir "$LOCK" 2>/dev/null; then
   kill -0 "$OLDPID" 2>/dev/null && die "baska bir build calisiyor (pid $OLDPID, $LOCK)"
   rm -rf "$LOCK"; mkdir "$LOCK" || die "kilit alinamadi"
 fi
-echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT
+# Kilit sahipliği YALNIZ kilidi alan (paralel olmayan) koşuda (2026-09-26, ölçüldü): eskiden bu satır
+# PARALEL modda da koşuyordu — kilit dizini yoksa `set -e` betiği burada düşürüyordu; varsa BAŞKA
+# build'in pid'inin üstüne yazıp çıkışta ONUN kilidini siliyordu.
+if [ "${PARDUS_PARALEL:-0}" != "1" ]; then echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT; fi
 [ "${PARDUS_PARALEL:-0}" = "1" ] || { docker ps --format '{{.Names}}' | grep -q '^pardus-pack-' && die "calisan pardus-pack-* konteyneri var"; }
 
 # --- girdi ---
