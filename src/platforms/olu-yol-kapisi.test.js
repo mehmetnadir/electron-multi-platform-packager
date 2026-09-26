@@ -24,6 +24,7 @@ const kapi = require('./olu-yol-kapisi');
 // ya dosya gerçekten canlıya bağlandı (beyanı güncelle), ya da yanlışlıkla koptu.
 const BEYAN_CANLI = [
   'platforms/android/ag-bilgisi.js', // 0a55136 (K7-K9) packagingService.js:4415'ten canlı; beyan 24.09'da güncellendi
+  'platforms/android/cevrimici-yoklama.js', // 26.09 android-cevrimici: packagingService shim'i bu kapıdan kopyalar
   'platforms/android/empp-android-shim.js',
   'platforms/android/empp-g-istemci.js', // G (26.09): packagingService.configureAndroidG varlık olarak kopyalar
   'platforms/android/g-katmani.js', // G (26.09): packagingService.configureAndroidG require eder

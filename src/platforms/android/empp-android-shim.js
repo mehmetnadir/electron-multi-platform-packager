@@ -12,6 +12,8 @@
  *   - os/electron/adm-zip/https: zararsiz stub'lar (guncelleme indirme akisi hata verip gecer)
  *   - fetch: VFS'te olan goreli yol oradan servis edilir (ImWin32.dll fetch ile okunuyor)
  *   - window.__dirname = '' -> getFilePath goreli yol uretir
+ *   - cevrimici yoklamasi (KAPI, varsayilan KAPALI): motorun no-cors HEAD canlilik yoklamasi
+ *     WebView/kopru yerine yerel CapacitorHttp eklentisiyle GET olarak sorulur (bkz. installFetch)
  * Electron fs-shim'i (empp-fs-shim.js) window.__emppFsShim gorunce kendini kurmaz.
  */
 (function (win) {
@@ -19,6 +21,62 @@
   var VFS_PREFIX = 'empp_vfs:';
   var storage = null;
   try { storage = isBrowser ? win.localStorage : null; } catch (e) { storage = null; }
+
+  // CEVRIMICI YOKLAMASI — NEDEN (2026-09-26, webview-ag bulgusu, paket 74451): Impark motoru
+  // acilista BIR KEZ `fetch(AppConfig.baseEndpointUrl, {method:'HEAD', mode:'no-cors'})` atar;
+  // soz tutulursa window.isOnline=true, reddedilirse false ve sonraki HER http fetch'i
+  // "Network is offline" ile keser (guncelleme sorusu GetKitapGuncellemeBilgi, cevrimici
+  // aktivasyon, IsZKitapKurumAktif, cozum/konu linkleri, bizim oto-guncelleme taramamiz).
+  // Yayinci koku (besegitim.com, mec.yayincilik.net, sorucoz.tv) tarayici benzeri istege
+  // Cloudflare challenge 403 doner ve `Cross-Origin-Resource-Policy: same-origin` tasir. Iki yol da
+  // duser (emulatorde olculdu 26.09): (1) CapacitorHttp koprusu (_capacitor_http_interceptor_,
+  // HttpURLConnection + WebView UA) govdesiz HEAD 403'te getInputStream FileNotFoundException ->
+  // fetch reddi; (2) WebView'in yamasiz fetch'i (CapacitorWebFetch) no-cors cevabi CORP yuzunden
+  // ag hatasina cevirir. Electron'da webSecurity:false -> CORS/CORP denetimi yok -> 403 opak
+  // cevapla COZULUR, bu yuzden masaustu etkilenmez.
+  // COZUM: yalniz `mode:'no-cors'` + HEAD + dis http(s) istegi (motorun canlilik yoklamasi) yerel
+  // CapacitorHttp eklentisine GET olarak, WebView basliklari OLMADAN sorulur: HERHANGI bir HTTP
+  // cevabi (403 dahil, govdeli) -> cozulur (cevrimici); ag hatasi / navigator.onLine=false ->
+  // reddedilir (cevrimdisi). Electron'la ayni anlam. Motorun `timeout`u (5 sn) baglanti+okuma
+  // sinirina cevrilir (tarayici yok sayar; ust duzey await acilisi kilitlemesin).
+  // Aktivasyon/API istekleri (cors GET/POST) CapacitorHttp koprusunde KALIR.
+  // KAPI: varsayilan KAPALI. Paketleyici EMPP_ANDROID_CEVRIMICI=1 ile derlerken asagidaki satiri
+  // `true` yapar (cevrimici-yoklama.js shimMetni — satir METNI birebir eslesir, degistirme).
+  // BOZARSAN: empp-android-shim-cevrimici.test.js kirilir.
+  var CEVRIMICI_YOKLAMA = false; // EMPP_ANDROID_CEVRIMICI
+  function cevrimiciYoklamaMi(input, init, origin) {
+    var istek = (input && typeof input === 'object') ? input : null;
+    var url = istek && 'url' in istek ? String(istek.url) : String(input);
+    var yontem = String((init && init.method) || (istek && istek.method) || 'GET').toUpperCase();
+    var kip = String((init && init.mode) || (istek && istek.mode) || '').toLowerCase();
+    return kip === 'no-cors' && yontem === 'HEAD' && /^https?:\/\//i.test(url)
+      && !(origin && url.indexOf(origin) === 0);
+  }
+  function yerelHttp(C) {
+    if (C && typeof C.nativePromise === 'function') return function (o) { return C.nativePromise('CapacitorHttp', 'request', o); };
+    var P = C && C.Plugins && C.Plugins.CapacitorHttp;
+    if (P && typeof P.request === 'function') return function (o) { return P.request(o); };
+    return null;
+  }
+  // Donus: Promise<Response> ya da (eklenti yoksa) null -> cagiran eski yola duser.
+  function cevrimiciYokla(input, init) {
+    var iste = yerelHttp(isBrowser ? win.Capacitor : null);
+    if (!iste) return null;
+    var url = (input && typeof input === 'object' && 'url' in input) ? String(input.url) : String(input);
+    try { console.log('[empp-android] cevrimici yoklamasi yerel GET ile (kopru/WebView disi): ' + url); } catch (e) {}
+    if (win.navigator && win.navigator.onLine === false) return Promise.reject(new TypeError('Failed to fetch'));
+    var o = { url: url, method: 'GET', headers: {} };
+    var sure = Number(init && init.timeout);
+    if (sure > 0) { o.connectTimeout = sure; o.readTimeout = sure; }
+    return Promise.resolve().then(function () { return iste(o); }).then(function (r) {
+      var st = Number(r && r.status);
+      try { console.log('[empp-android] cevrimici yoklamasi: HTTP ' + st + ' -> cevrimici'); } catch (e) {}
+      return new win.Response(null, { status: st >= 200 && st <= 599 ? st : 200 });
+    }, function (e) {
+      try { console.log('[empp-android] cevrimici yoklamasi: ag hatasi -> cevrimdisi (' + ((e && e.message) || e) + ')'); } catch (x) {}
+      throw new TypeError('Failed to fetch');
+    });
+  }
 
   // ---- path (posix) ----
   function normalize(p) {
@@ -799,6 +857,10 @@
     if (typeof real !== 'function' || real.__emppAndroid) return;
     var wrapped = function (input, init) {
       try {
+        if (CEVRIMICI_YOKLAMA && cevrimiciYoklamaMi(input, init, win.location && win.location.origin)) {
+          var yk = cevrimiciYokla(input, init);
+          if (yk) return yk;
+        }
         var url = (input && typeof input === 'object' && 'url' in input) ? input.url : String(input);
         if (!/^(https?|data|blob):/i.test(url) || url.indexOf(win.location.origin) === 0) {
           var rel = url.replace(win.location.origin, '').split(/[?#]/)[0];
@@ -966,7 +1028,8 @@
     ortam: ortam, BufferShim: BufferShim,
     imwinCoz: imwinCoz, imwinYaz: imwinYaz, menuKitaplari: menuKitaplari, menuSurumYamasi: menuSurumYamasi,
     menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz, motorZipIndirmesi: motorZipIndirmesi,
-    gYukle: gYukle, installG: installG, gEklentisiVar: gEklentisiVar, G_GECIKME: G_GECIKME, G_ISTEMCI: G_ISTEMCI } };
+    gYukle: gYukle, installG: installG, gEklentisiVar: gEklentisiVar, G_GECIKME: G_GECIKME, G_ISTEMCI: G_ISTEMCI,
+    cevrimiciYoklamaMi: cevrimiciYoklamaMi, cevrimiciYokla: cevrimiciYokla, CEVRIMICI_YOKLAMA: CEVRIMICI_YOKLAMA } };
   }
   if (isBrowser) install();
 })(typeof window !== 'undefined' ? window : undefined);

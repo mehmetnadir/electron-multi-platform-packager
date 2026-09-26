@@ -42,6 +42,7 @@ const kokIndexDenetimi = require('./kok-index-denetimi');
 const nsisKurulum = require('./nsis-kurulum');
 const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
+const { shimKopyala: androidShimKopyala } = require('../platforms/android/cevrimici-yoklama');
 
 class PackagingService {
   constructor() {
@@ -4536,7 +4537,10 @@ if (!window.cordova) {
     // yerel asset okuma). readdir için manifest üretilir. (Önceki ?app=1 yaklaşımı kaldırıldı:
     // mobil mod farklı bir akış; Mac ile aynı masaüstü modu hedeflenir.)
     try {
-      await fs.copy(path.join(__dirname, '../platforms/android/empp-android-shim.js'), path.join(wwwPath, 'empp-android-shim.js'));
+      // Kapı EMPP_ANDROID_CEVRIMICI (varsayılan KAPALI → birebir kopya): motorun çevrimiçi
+      // yoklaması CapacitorHttp dışından gider. Neden + kanıt: platforms/android/cevrimici-yoklama.js.
+      await androidShimKopyala(path.join(wwwPath, 'empp-android-shim.js'),
+        { kaynakYolu: path.join(__dirname, '../platforms/android/empp-android-shim.js') });
       const manifest = await this.buildAndroidManifest(wwwPath);
       await fs.writeJson(path.join(wwwPath, 'empp-manifest.json'), manifest, { spaces: 0 });
       const idx = path.join(wwwPath, 'index.html');
@@ -4854,7 +4858,8 @@ public class MainActivity extends BridgeActivity {
 
         // --- empp-android-shim.js + kitabın kendi empp-manifest.json'ı (K3) ---
         try {
-          await fs.copy(path.join(__dirname, '../platforms/android/empp-android-shim.js'), path.join(bookDir, 'empp-android-shim.js'));
+          await androidShimKopyala(path.join(bookDir, 'empp-android-shim.js'),
+            { kaynakYolu: path.join(__dirname, '../platforms/android/empp-android-shim.js') });
           const bookManifest = await this.buildAndroidManifest(bookDir);
           await fs.writeJson(path.join(bookDir, 'empp-manifest.json'), bookManifest, { spaces: 0 });
         } catch (shimErr) {
