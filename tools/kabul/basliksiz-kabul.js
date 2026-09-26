@@ -16,12 +16,17 @@
  *            ilk kitap kartına tıkla → okuyucu sayfa çizdi mi
  *   cihaz    (android) pencerisiz emülatörde kur/aç/ekran/ui dökümü/kaldır
  *   odak     `lsappinfo front` önce = sonra; kapının süreci hiç öne geçmedi
+ *   k4       (KABUL_K4=1 / --k4, varsayılan KAPALI) güncellik: ayrı boş profil + CDP ile ilk
+ *            kitaba girilir, motorun GetKitapGuncellemeBilgi sorusu ve cevabı yakalanır
+ *            (ProBook E6/E7/E8'in eşi — k4-guncellik.js). Android'de ek olarak cihaz WebView'ı.
  *
  * Kullanım:
  *   node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip]
  *        [--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut]
- *        [--ag] [--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn]
+ *        [--ag] [--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4]
  * Çıkış: 0 GEÇTİ · 1 RED · 3 ÖLÇÜLEMEDİ · 2 kullanım hatası.
+ *   K4 AÇIKKEN sözlük ProBook kapısıyla (kabul-karar.sh) aynı: 0 GEÇTİ · 1 RED · 3 GÜNCEL-DEĞİL
+ *   (stdout "GUNCEL-DEGIL: …" + "yeniden kuyruk onerisi: …") · 4 ÖLÇÜLEMEDİ.
  * Kanıt: ~/.empp-agent/kabul-kanit/<bookId>-<platform>-<tarih>/ (EMPP_KABUL_KANIT_KOK ile değişir).
  */
 const fs = require('fs');
@@ -34,14 +39,15 @@ const { calismaZamaniHazirla, odakCaldiIsaretle } = require('./calisma-zamani');
 const { onUygulama, uygulamaTuru, odakIzleyici } = require('./odak');
 const { macImzaDenetle, imzaKarari } = require('./imza-denetimi');
 const { motorKopyasiMi } = require('../../src/packaging/set-menu');
+const K4 = require('./k4-guncellik');
 
-const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ' };
+const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
 function argumanCoz(argv) {
   const s = {
     paket: null, platform: null, kitapSayisi: null, kitapId: null, kanit: null, calisma: null,
     tut: false, ag: false, aktivasyon: false, cihaz: true, avd: null, menuBekle: 45, kitapBekle: 60,
-    yardim: false,
+    k4: false, yardim: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -54,6 +60,7 @@ function argumanCoz(argv) {
     else if (a === '--tut') s.tut = true;
     else if (a === '--ag') s.ag = true;
     else if (a === '--aktivasyon') s.aktivasyon = true;
+    else if (a === '--k4') s.k4 = true;
     else if (a === '--cihaz-yok') s.cihaz = false;
     else if (a === '--cihaz') s.cihaz = true;
     else if (a === '--avd') s.avd = sonraki();
@@ -225,7 +232,7 @@ async function calis(argv, yazici) {
   if (s.yardim || !s.paket) {
     yaz('Kullanım: node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip] '
       + '[--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut] [--ag] '
-      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn]');
+      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4]');
     return { kod: 2 };
   }
   const paket = path.resolve(s.paket);
@@ -256,6 +263,12 @@ async function calis(argv, yazici) {
   let kosumSureci = null;
   let kosumSonucu = null;
   let calismaZamani = null;
+  const k4Acik = K4.k4Etkin({ bayrak: s.k4 });
+  const k4Kararlar = [];
+  const k4Olcumleri = [];
+  let k4Olcum = null;
+  let paketSurum = null;
+  const aktOlc = process.env.KABUL_AKTIVASYON_OLCULEMEDI === '1';
   try {
     // 1. Çıkarma
     try {
@@ -367,6 +380,30 @@ async function calis(argv, yazici) {
           + ` · ağ engellenen ${rapor.katmanlar.icerik.agEngellenen}`);
         say(`içerik katmanı: ${DURUM_TR[k.durum]}${k.sebepler.length ? ` — ${k.sebepler.join(' | ')}` : ''}`);
       }
+
+      // 3b. K4 güncellik (KABUL_K4=1): ayrı boş profil + CDP, motorun güncelleme sorusu ve cevabı.
+      if (k4Acik) {
+        paketSurum = K4.paketSurumleriOku(acilis.kok, acilis.asar, envanter.kitapDizinleri);
+        say(`K4: paketteki kapak sürümleri ${JSON.stringify(paketSurum.surumler)}`
+          + `${paketSurum.okunamayan.length ? ` (menü okunamadı: ${paketSurum.okunamayan.join(', ')})` : ''}`);
+        k4Olcum = await K4.electronK4Olc({
+          ikili: zaman && zaman.ikili,
+          girisYolu: path.join(acilis.kok, 'index.html'),
+          kurulumKoku: acilis.kok,
+          kanit,
+          calisma,
+          log: say,
+          kitapSn: s.kitapBekle,
+        });
+        k4Olcumleri.push(k4Olcum);
+        const kk = K4.k4Karari({
+          olcum: k4Olcum, paketSurumleri: paketSurum.surumler, aktivasyon: s.aktivasyon,
+          aktivasyonOlculemedi: aktOlc, profilBos: k4Olcum.profilBos, kaynak: 'electron',
+        });
+        k4Kararlar.push(kk);
+        say(`K4 (electron, ${k4Olcum.sureSn} sn): E6=${k4Olcum.e6 && k4Olcum.e6.durum} E7=${k4Olcum.e7 && k4Olcum.e7.durum}`
+          + ` → ${K4.K4_TR[kk.durum]} — ${kk.sebep}`);
+      }
     }
 
     // 4. Android cihaz katmanı (pencerisiz emülatör)
@@ -383,8 +420,20 @@ async function calis(argv, yazici) {
         aktivasyon: s.aktivasyon,
         durumDosyasi: path.join(calisma, 'emulator.json'),
         log: say,
+        k4Olc: k4Acik ? (ctx) => K4.cihazK4Olc({ ...ctx, kitapSn: s.kitapBekle }) : undefined,
       });
       const c = rapor.katmanlar.cihaz;
+      if (k4Acik && c.k4) {
+        k4Olcumleri.push(c.k4);
+        const ck = K4.k4Karari({
+          olcum: c.k4, paketSurumleri: paketSurum ? paketSurum.surumler : {}, aktivasyon: s.aktivasyon,
+          aktivasyonOlculemedi: aktOlc, profilBos: true, kaynak: 'cihaz',
+        });
+        // Cihaz WebView ölçümü EK kanıttır: kendi başına ÖLÇÜLEMEDİ engellemez (soket yoksa kırmızı değil).
+        if (ck.durum === K4.K4_DURUM.OLCULEMEDI) ck.engeller = false;
+        k4Kararlar.push(ck);
+        say(`K4 (cihaz WebView): E6=${c.k4.e6 && c.k4.e6.durum} E7=${c.k4.e7 && c.k4.e7.durum} → ${K4.K4_TR[ck.durum]} — ${ck.sebep}`);
+      }
       say(`cihaz katmanı: ${DURUM_TR[c.durum]}${c.sebepler && c.sebepler.length ? ` — ${c.sebepler.join(' | ')}` : ''}`);
     }
   } finally {
@@ -394,8 +443,9 @@ async function calis(argv, yazici) {
     const izler = await izleyici.durdur();
     const odakSonra = onUygulama();
     const kendiPidler = kosumSureci && kosumSureci.pid ? [kosumSureci.pid] : [];
+    if (k4Olcum && k4Olcum.pid) kendiPidler.push(k4Olcum.pid);
     const ok = O.odakKarari({ once: odakOnce, sonra: odakSonra, ornekler: izler.ornekler, kendiPidler });
-    const etkinlesme = (kosumSonucu && kosumSonucu.etkinlesme) || [];
+    const etkinlesme = [...((kosumSonucu && kosumSonucu.etkinlesme) || []), ...((k4Olcum && k4Olcum.etkinlesme) || [])];
     rapor.odak = {
       once: odakOnce, sonra: odakSonra, ornekler: izler.ornekler, orneklemeSayisi: izler.orneklemeSayisi,
       kapiSureciPid: kosumSureci ? kosumSureci.pid : null,
@@ -427,17 +477,55 @@ async function calis(argv, yazici) {
     }
   }
 
+  // K4 genel karara katman listesinden DEĞİL genelKararK4 ile katılır (kendi sözlüğü: GÜNCEL-DEĞİL,
+  // engellemeyen ÖLÇÜLEMEDİ). `katmanlar.guncellik` yalnız okuyucular (uçtan uca) içindir.
   const katmanListesi = Object.values(rapor.katmanlar);
-  const genel = O.genelKarar(katmanListesi);
+  rapor.k4 = k4Acik ? k4Raporu(k4Kararlar, k4Olcumleri, paketSurum)
+    : { durum: K4.K4_DURUM.ATLANDI, sebep: 'KABUL_K4=1 değil (varsayılan kapalı)' };
+  const genel = k4Acik ? K4.genelKararK4(O.genelKarar(katmanListesi), rapor.k4) : O.genelKarar(katmanListesi);
+  const guncellik = K4.guncellikKatmani(rapor.k4);
+  if (guncellik) rapor.katmanlar.guncellik = guncellik;
   rapor.karar = genel;
   rapor.sebepler = Object.entries(rapor.katmanlar)
     .flatMap(([ad, k]) => (k.sebepler || []).map((x) => `${ad}: ${x}`));
   rapor.sureSn = Math.round((Date.now() - baslangic) / 1000);
   rapor.bitis = new Date().toISOString();
   fs.writeFileSync(path.join(kanit, 'karar.json'), JSON.stringify(rapor, null, 2));
+  if (k4Acik) {
+    say(`K4 güncellik: ${K4.K4_TR[rapor.k4.durum]} (kod ${rapor.k4.kod}${rapor.k4.durum === K4.K4_DURUM.OLCULEMEDI
+      ? `, ${rapor.k4.engeller ? 'yüklemeyi ENGELLER' : 'yüklemeyi engellemez'}` : ''}) — ${rapor.k4.sebep}`);
+    for (const n of rapor.k4.notlar || []) say(`  k4 not: ${n}`);
+  }
   say(`SONUÇ: ${DURUM_TR[genel]} (${rapor.sureSn} sn) — kanıt: ${kanit}`);
+  if (genel === K4.K4_DURUM.GUNCEL_DEGIL) {
+    // probook-kabul.sh ile AYNI iki satır — runner-helpers.pardusKabulSinifi bunları okur.
+    say(`GUNCEL-DEGIL: ${rapor.k4.sebep}`);
+    say(`yeniden kuyruk onerisi: ${rapor.k4.oneri || 'kaynak yenilenince yeniden kuyruga al'}`);
+  }
   if (genel !== O.DURUM.GECTI) for (const x of rapor.sebepler.slice(0, 8)) say(`  - ${x}`);
-  return { kod: O.cikisKodu(genel), rapor };
+  return { kod: K4.k4CikisKodu(genel, k4Acik, O.cikisKodu), rapor };
+}
+
+/** karar.json `k4` alanı: birleşik karar + ölçüm özetleri (kanıt yolları, E6/E7, cevaplar). */
+function k4Raporu(kararlar, olcumler, paketSurum) {
+  const k = K4.k4Birlestir(...kararlar) || {
+    durum: K4.K4_DURUM.OLCULEMEDI,
+    kod: K4.K4_KOD.OLCULEMEDI,
+    sebep: 'K4 koşmadı (paket açılamadı)',
+    oneri: '',
+    notlar: [],
+    engeller: true,
+    kaynak: '-',
+  };
+  return {
+    ...k,
+    paketSurumleri: paketSurum ? paketSurum.surumler : null,
+    olcumler: olcumler.map((o) => ({
+      kaynak: o.kaynak, e6: o.e6, e7: o.e7, cevaplar: o.cevaplar, cdpPort: o.cdpPort || null, sureSn: o.sureSn,
+      kanit: o.kanit, profil: o.profil || null, profilBos: o.profilBos, soket: o.soket || null,
+      indirmeKesildi: o.indirmeKesildi || [], etkinlesme: (o.etkinlesme || []).length, kaydedici: o.kaydedici || null,
+    })),
+  };
 }
 
 function ozetle(a) {

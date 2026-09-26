@@ -12,6 +12,12 @@
  *
  * Girdi: EMPP_KOSUM_GIRDI (JSON dosyası). Çıktı: girdi.sonucYolu (JSON) + kanıt PNG'leri.
  * Karar VERMEZ — ham ölçüm yazar; karar `../olcutler.js` ile CLI'dadır.
+ *
+ * K4 KİPİ (`girdi.k4`, ../k4-guncellik.js): ölçüm akışı KOŞMAZ. Kök sayfa yüklenir, uygulama
+ * `--remote-debugging-port=<girdi.cdpPort>` ile dinler; kitaba girme ve güncelleme sorusunu
+ * yakalama dışarıdaki CDP istemcisinin (tools/pardus/cdp-kitap-ac.js) işidir. Ağ AÇIK (motor
+ * güncelleme sorusunu ancak ağ varken sorar) ama ZKitapZip(H)/*.zip indirmesi kesilir; Node
+ * http(s) preload'da kapalı kalır (EMPP_KABUL_AG_KAPALI=1). `girdi.durDosyasi` belirince çıkar.
  */
 const fs = require('fs');
 const path = require('path');
@@ -24,6 +30,9 @@ const {
 
 const G = JSON.parse(fs.readFileSync(process.env.EMPP_KOSUM_GIRDI, 'utf8'));
 const GENISLIK = G.genislik || 1366;
+const K4 = Boolean(G.k4);
+/** K4 kipinde kesilen indirmeler: İmpark içerik zip'i (ZKitapZip / ZKitapZipH) ve her .zip. */
+const K4_INDIRME_DESENI = /\/ZKitapZipH?\/|\.zip(?:[?#]|$)/i;
 const YUKSEKLIK = G.yukseklik || 768;
 
 const sonuc = {
@@ -63,6 +72,7 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('force-device-scale-factor', '1');
 app.commandLine.appendSwitch('mute-audio');
+if (K4 && Number(G.cdpPort) > 0) app.commandLine.appendSwitch('remote-debugging-port', String(G.cdpPort));
 app.setPath('userData', G.profilDizin);
 try { app.setPath('sessionData', path.join(G.profilDizin, 'oturum')); } catch (_) { /* eski sürüm */ }
 try { app.setPath('crashDumps', path.join(G.profilDizin, 'cokme')); } catch (_) { /* eski sürüm */ }
@@ -216,6 +226,18 @@ async function kos() {
         cb({ cancel: true });
       },
     );
+  } else if (K4) {
+    session.defaultSession.webRequest.onBeforeRequest(
+      { urls: ['http://*/*', 'https://*/*'] },
+      (ayrinti, cb) => {
+        if (K4_INDIRME_DESENI.test(String(ayrinti.url))) {
+          if (sonuc.agEngellenen.length < 200) sonuc.agEngellenen.push(String(ayrinti.url).slice(0, 200));
+          cb({ cancel: true });
+          return;
+        }
+        cb({});
+      },
+    );
   }
 
   // Alt kaynak hataları (file:// dahil) — preload'ın yakalama dinleyicisine ek, gerçek ağ kodu.
@@ -259,6 +281,10 @@ async function kos() {
     // loadURL, sayfa içindeki bir alt kaynak ya da gezinme iptalinde de reddedebilir;
     // ana çerçeve hatası did-fail-load ile ayrıca kaydedilir.
     sonuc.loadUrlHatasi = String(e && e.message).slice(0, 300);
+  }
+  if (K4) {
+    await k4Bekle();
+    return;
   }
 
   const setMi = Boolean(G.setMi);
@@ -340,6 +366,18 @@ async function kitaplikIleriAdim(win, menu) {
   if (url) await yuklenmeBekle(win, 30000);
   const kitapYeterli = (o) => !(o.yukleniyor || []).length && pikselKarari(o.piksel).gecti && sayfaIzi(o) > 0;
   sonuc.asamalar.kitap = await asamaOlc(win, 'kitap', G.kitapBekleSn || 60, kitapYeterli);
+}
+
+/** K4 kipi: dışarıdaki CDP istemcisi işini bitirip dur dosyasını yazana dek (ya da süre dolana dek). */
+async function k4Bekle() {
+  sonuc.k4 = { cdpPort: Number(G.cdpPort) || null };
+  const sinirMs = Math.max(10, (G.toplamSn || 240) - 10) * 1000;
+  const bas = Date.now();
+  while (Date.now() - bas < sinirMs) {
+    if (G.durDosyasi && fs.existsSync(G.durDosyasi)) { sonuc.k4.durduruldu = true; return; }
+    await bekle(300);
+  }
+  sonuc.k4.durduruldu = false;
 }
 
 kos()

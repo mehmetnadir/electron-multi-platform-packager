@@ -18,11 +18,18 @@
  *                 → HATA fırlatılır (yükleme YOK) ama `BASLIKSIZ_KABUL_ISARETI` ile: bu paket
  *                   kusuru DEĞİL (Electron/emülatör/hdiutil altyapısı), `failed` yazılmaz,
  *                   kira dolunca iş kuyruğa döner — ProBook erişilemezliğiyle aynı ayrım.
+ *
+ * K4 güncellik katmanı (`KABUL_K4=1`, varsayılan KAPALI; env CLI'a olduğu gibi geçer —
+ * tools/kabul/k4-guncellik.js). Açıkken CLI ProBook sözlüğüyle çıkar ve iki kod eklenir:
+ *   3 + stdout "GUNCEL-DEGIL: …" → GÜNCEL-DEĞİL: HATA, paket YÜKLENMEZ, ertelenebilir DEĞİL
+ *                   (`failed`, last_error "güncel değil: …" + yeniden kuyruk önerisi) — Pardus K18
+ *                   rc 3 ile AYNI mesaj ve sınıf (runner.js pardusKabulKapisi, pardusKabulSinifi).
+ *   4               → ÖLÇÜLEMEDİ (yukarıdaki gibi ertelenebilir). İşaretsiz 3 eski sözlüktür (ÖLÇÜLEMEDİ).
  */
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { BASLIKSIZ_KABUL_ISARETI } = require('./runner-helpers');
+const { BASLIKSIZ_KABUL_ISARETI, pardusKabulSinifi } = require('./runner-helpers');
 
 const VARSAYILAN_PLATFORMLAR = ['macos', 'android', 'windows', 'pardus'];
 const CLI = path.join(__dirname, '..', '..', 'tools', 'kabul', 'basliksiz-kabul.js');
@@ -44,7 +51,15 @@ function kapiArgumanlari({ artifactPath, platform, bookId, aktivasyon, calismaDi
   return a;
 }
 
-/** Çıkış → karar. Saf. @returns {{durum:'GECTI'|'RED'|'OLCULEMEDI', sebep:string}} */
+/** stdout'ta probook-kabul.sh biçimli "GUNCEL-DEGIL:" satırı var mı (K4). Saf. */
+function guncelDegilIsaretliMi(cikti) {
+  return String(cikti || '').split('\n').some((l) => /^(\[kabul\]\s*)?GUNCEL-DEGIL:/.test(l.trim()));
+}
+
+/**
+ * Çıkış → karar. Saf.
+ * @returns {{durum:'GECTI'|'RED'|'GUNCEL_DEGIL'|'OLCULEMEDI', sebep:string, oneri?:string}}
+ */
 function sonucYorumla({ kod, zamanAsimi, cikti, hata }, zamanAsimiMs) {
   const son = String(cikti || '').split('\n').filter((l) => /SONUÇ|^\[kabul\]\s+-/.test(l)).slice(0, 6).join(' | ')
     || String(cikti || '').split('\n').filter(Boolean).slice(-3).join(' | ');
@@ -52,6 +67,10 @@ function sonucYorumla({ kod, zamanAsimi, cikti, hata }, zamanAsimiMs) {
   if (zamanAsimi) return { durum: 'OLCULEMEDI', sebep: `kapı ${Math.round(zamanAsimiMs / 60000)} dk içinde bitmedi` };
   if (kod === 0) return { durum: 'GECTI', sebep: son };
   if (kod === 1) return { durum: 'RED', sebep: son };
+  if (kod === 3 && guncelDegilIsaretliMi(cikti)) {
+    const s = pardusKabulSinifi({ code: 3, stdout: cikti, timedOut: false });
+    return { durum: 'GUNCEL_DEGIL', sebep: s.sebep, oneri: s.oneri };
+  }
   return { durum: 'OLCULEMEDI', sebep: `rc=${kod}: ${son}` };
 }
 
@@ -121,7 +140,7 @@ async function basliksizKabulKapisi(p) {
   const calistir = p.calistir || varsayilanCalistir;
   const r = await calistir(argumanlar, { zamanAsimiMs, env, satir: (s) => log('  ', s) });
   const k = sonucYorumla(r, zamanAsimiMs);
-  if (r.zamanAsimi || ![0, 1, 3].includes(r.kod)) artikTemizle(kapiDizini, log);
+  if (r.zamanAsimi || ![0, 1, 3, 4].includes(r.kod)) artikTemizle(kapiDizini, log);
   if (k.durum === 'GECTI') {
     log(`${p.platform}: başsız kabul kapısı GEÇTİ`);
     return { durum: 'GECTI' };
@@ -129,10 +148,15 @@ async function basliksizKabulKapisi(p) {
   if (k.durum === 'RED') {
     throw new Error(`${p.platform} paketi başsız kabul kapısından geçemedi (RED) — R2'ye YÜKLENMEDİ: ${k.sebep}`);
   }
+  if (k.durum === 'GUNCEL_DEGIL') {
+    // Pardus K18 rc 3 ile AYNI biçim (runner.js pardusKabulKapisi): failed + yeniden kuyruk önerisi.
+    throw new Error(`güncel değil: ${k.sebep} — yeniden üretilmeli; yeniden kuyruk önerisi: ${k.oneri || '-'}`);
+  }
   throw new Error(`${BASLIKSIZ_KABUL_ISARETI} başsız kabul ÖLÇÜLEMEDİ — paket kusuru DEĞİL, yükleme YOK, `
     + `iş ertelenmeli: ${k.sebep}`);
 }
 
 module.exports = {
   VARSAYILAN_PLATFORMLAR, CLI, kapiEtkinMi, kapiArgumanlari, sonucYorumla, artikTemizle, basliksizKabulKapisi,
+  guncelDegilIsaretliMi,
 };
