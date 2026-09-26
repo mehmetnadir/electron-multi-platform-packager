@@ -9,7 +9,11 @@
  *   butunluk   NSIS firstheader+imza yerleşimi · squashfs bytes_used · UDIF koly · zip merkez dizini
  *   imza       Authenticode (PE güvenlik dizini): osslsigncode verify (yerel dosya + araç varsa);
  *              yoksa dizin + WIN_CERTIFICATE başlığı → SARI (doğrulanmadı)
- *   indir      yalnız `--indir`: tam indirme + md5 (CDN md5 = üretilen md5 kıyası için)
+ *   indir      yalnız `--indir`: tam indirme + md5 + sha256 (CDN md5/sha256 = üretilen kıyası için)
+ *   db-kanit   yalnız `--kitap-id`+`--platform`: book-update DB'sinden (pipeline-sql, salt-okur
+ *              ssh sarmalayıcı) `file_sha256`/`file_size_bytes` okunur — CDN'in TAM sha256'sı
+ *              (yalnız `--indir` ile) ya da HEAD boyutu ile kıyaslanır. T2 "CDN'deki paket
+ *              bizim ürettiğimiz mi?" — bkz. db-kaniti.js, migration book-update/024
  *   icerik-ac  paketten gereken dosyalar çıkarıldı mı (araç yoksa OLCULEMEDI + eksik araç)
  *   index      kök index.html md5 (= beklenen)                                 — K1
  *   43e23      kitap ANA klasörlerindeki 43e23fce…js md5 (= kanonik); etk/ alt kopyaları KAPSAM DIŞI — K2
@@ -22,6 +26,7 @@
  *   node tests/e2e/adimlar/paket-denetle.js (--paket <yol> | --url <url>) [--indir] [--test T1]
  *     [--beklenen-43e23 md5] [--beklenen-index md5] [--beklenen-taban url] [--beklenen-parmak-izi hex]
  *     [--beklenen-aile nsis|sfx-rar5|appimage|dmg|apk] [--icerik 0] [--calisma dizin] [--json]
+ *     [--kitap-id id] [--platform android|mac|pardus|windows]   — bkz. 'db-kanit' adımı
  */
 const fs = require('fs');
 const os = require('os');
@@ -30,6 +35,7 @@ const O = require('./ortak');
 const { aileTespit } = require('./aile');
 const { yerelOkuyucu, uzakOkuyucu, indir } = require('./okuyucu');
 const { icerikTopla } = require('./icerik');
+const { dbDosyaKanitiOku } = require('./db-kaniti');
 
 const { DURUM } = O;
 const BILINEN_AILELER = new Set(['nsis', 'sfx-rar5', 'sfx-rar4', 'appimage', 'dmg', 'apk']);
@@ -415,7 +421,8 @@ async function imzaDenetle(test, okuyucu, pe, { yerelYol, araclar }) {
 
 /**
  * @param {{paket?:string, url?:string, indir?:boolean, test?:string, beklenen?:Object, araclar?:Object,
- *          calisma?:string, icerik?:boolean, log?:Function}} p
+ *          calisma?:string, icerik?:boolean, log?:Function, kitapId?:string, platform?:string,
+ *          dbCalistirSsh?:Function}} p
  * @returns {Promise<{satirlar:Array, ozet:Object}>}
  */
 async function paketDenetle(p) {
@@ -560,13 +567,17 @@ async function paketDenetle(p) {
       const r = await indir(p.url, hedef);
       yerelYol = r.yol;
       ozet.md5 = r.md5;
+      ozet.sha256 = r.sha256;
       const durum = r.boyut === okuyucu.boyut ? DURUM.GECTI : DURUM.KALDI;
       satirlar.push(
         O.sonuc(
           test,
           ad('indir'),
           durum,
-          { dosya: r.yol, olcum: { md5: r.md5, boyut: r.boyut, head_boyut: okuyucu.boyut } },
+          {
+            dosya: r.yol,
+            olcum: { md5: r.md5, sha256: r.sha256, boyut: r.boyut, head_boyut: okuyucu.boyut },
+          },
           Date.now() - t0,
         ),
       );
@@ -577,6 +588,91 @@ async function paketDenetle(p) {
           ad('indir'),
           DURUM.OLCULEMEDI,
           { olcum: { sebep: e.message } },
+          Date.now() - t0,
+        ),
+      );
+    }
+  }
+
+  // 3b) db-kanit (yalnız kitapId+platform verildiyse) — T2 "CDN'deki paket bizim ürettiğimiz mi?"
+  // DB'deki file_sha256 ile ya CDN'in TAM sha256'sı (yalnız --indir, ozet.sha256 varsa) ya da
+  // CDN HEAD boyutu (okuyucu.boyut) kıyaslanır. Sütun/satır yoksa (migration 024 uygulanmamış ya
+  // da agent henüz kanıt göndermemiş) OLCULEMEDI — "paket yanlış" DEMEK DEĞİL.
+  if (p.kitapId && p.platform) {
+    t0 = Date.now();
+    try {
+      const dbKanit = await dbDosyaKanitiOku(p.kitapId, p.platform, {
+        calistirSsh: p.dbCalistirSsh,
+      });
+      if (!dbKanit) {
+        satirlar.push(
+          O.sonuc(
+            test,
+            ad('db-kanit'),
+            DURUM.OLCULEMEDI,
+            {
+              olcum: {
+                sebep: 'DB satırı yok / file_sha256 NULL (migration 024 uygulanmamış olabilir, ya da ajan henüz kanıt göndermedi)',
+                kitap_id: p.kitapId,
+                platform: p.platform,
+              },
+            },
+            Date.now() - t0,
+          ),
+        );
+      } else if (ozet.sha256) {
+        const durum2 = ozet.sha256 === dbKanit.sha256 ? DURUM.GECTI : DURUM.KALDI;
+        satirlar.push(
+          O.sonuc(
+            test,
+            ad('db-kanit'),
+            durum2,
+            {
+              olcum: {
+                yontem: 'sha256 (tam, --indir)',
+                db_sha256: dbKanit.sha256,
+                cdn_sha256: ozet.sha256,
+                db_boyut: dbKanit.boyut,
+              },
+            },
+            Date.now() - t0,
+          ),
+        );
+      } else if (Number.isFinite(okuyucu.boyut)) {
+        const durum2 = okuyucu.boyut === dbKanit.boyut ? DURUM.GECTI : DURUM.KALDI;
+        satirlar.push(
+          O.sonuc(
+            test,
+            ad('db-kanit'),
+            durum2,
+            {
+              olcum: {
+                yontem: 'boyut (hafif — tam sha256 için --indir gerekir)',
+                db_boyut: dbKanit.boyut,
+                cdn_boyut: okuyucu.boyut,
+              },
+            },
+            Date.now() - t0,
+          ),
+        );
+      } else {
+        satirlar.push(
+          O.sonuc(
+            test,
+            ad('db-kanit'),
+            DURUM.OLCULEMEDI,
+            { olcum: { sebep: 'ne tam sha256 (--indir) ne CDN boyutu (HEAD) mevcut' } },
+            Date.now() - t0,
+          ),
+        );
+      }
+    } catch (e) {
+      satirlar.push(
+        O.sonuc(
+          test,
+          ad('db-kanit'),
+          DURUM.OLCULEMEDI,
+          { olcum: { sebep: `DB sorgusu: ${e.message}` } },
           Date.now() - t0,
         ),
       );
@@ -677,6 +773,8 @@ function argumanlar(argv) {
     else if (k === '--beklenen-taban') a.beklenen.taban = v();
     else if (k === '--beklenen-parmak-izi') a.beklenen.parmak_izi = v();
     else if (k === '--beklenen-aile') a.beklenen.aile = v();
+    else if (k === '--kitap-id') a.kitapId = v();
+    else if (k === '--platform') a.platform = v();
     else throw new Error(`bilinmeyen argüman: ${k}`);
   }
   return a;

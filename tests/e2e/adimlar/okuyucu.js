@@ -141,7 +141,12 @@ async function uzakOkuyucu(url, { zamanAsimiMs = 30000 } = {}) {
   return okuyucu;
 }
 
-/** Tam indirme (yalnız --indir): akışla diske, md5 ile. */
+/**
+ * Tam indirme (yalnız --indir): akışla diske, md5 + sha256 ile (tek geçiş, bellek şişirmeden).
+ * sha256 (2026-09-26, ARTEFAKT KANITI): DB'deki `file_sha256` (book-update migration 024) ile
+ * kıyaslanır — "CDN'deki paket bizim ürettiğimiz mi?" (T2). md5 zaten CDN üretim md5'i için
+ * kullanılıyordu; sha256 AYNI akıştan bedavaya eklendi, ikinci bir indirme YOK.
+ */
 function indir(url, hedef, { zamanAsimiMs = 60000 } = {}) {
   return new Promise((coz, reddet) => {
     const u = new URL(url);
@@ -153,14 +158,18 @@ function indir(url, hedef, { zamanAsimiMs = 60000 } = {}) {
         return;
       }
       const h = crypto.createHash('md5');
+      const sh = crypto.createHash('sha256');
       let boyut = 0;
       const yaz = fs.createWriteStream(hedef);
       res.on('data', (p) => {
         h.update(p);
+        sh.update(p);
         boyut += p.length;
       });
       res.pipe(yaz);
-      yaz.on('finish', () => coz({ md5: h.digest('hex'), boyut, yol: hedef }));
+      yaz.on('finish', () =>
+        coz({ md5: h.digest('hex'), sha256: sh.digest('hex'), boyut, yol: hedef }),
+      );
       yaz.on('error', reddet);
       res.on('error', reddet);
     });
