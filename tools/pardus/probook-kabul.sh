@@ -12,6 +12,7 @@
 #         3 = RED-GUNCEL-DEGIL (stdout "GUNCEL-DEGIL: ..." + "yeniden kuyruk onerisi: ..."; yuklenmez)
 #         4 = OLCULEMEDI (stdout "OLCULEMEDI: ..."; paket kusuru DEGIL, runner failed YAZMAZ)
 # Ortam: PROBOOK_HOST (varsayilan etapadmin@100.73.161.76 — Tailscale), PROBOOK_KEY (~/.ssh/id_ed25519),
+#        PROBOOK_AKTARIM (bos = eski tek scp; scp|srv21|oto → probook-aktarim.sh, sha256 iki uc),
 #        PROBOOK_BEKLE (acilis icin ust sinir sn, varsayilan 300),
 #        PROBOOK_PENCERE (surec gorulduikten sonra cizim payi sn, varsayilan 25)
 #
@@ -336,8 +337,20 @@ if [ "$KOPYALA" = "1" ]; then
     BEKLE="$OLCEKLI"
   fi
   say "kopyalaniyor: $AD ($((BOYUT/1000000)) MB)"
-  scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$GIRDI" "$HOST:$UZAK" \
-    || { say "RED: kopyalanamadi"; exit 1; }
+  if [ -n "${PROBOOK_AKTARIM:-}" ]; then
+    # AKTARIM YOLU (2026-09-26, olcumle; varsayilan KAPALI): evden Tailscale rolesi ~240 kB/s,
+    # srv21 atlamasi ~1400 kB/s. Govde + olcum tablosu: tools/pardus/probook-aktarim.sh.
+    # Hangi yol secilirse secilsin sha256 Mac + ProBook'ta alinir; eslesmezse RED (test edilen
+    # bayt = yayinlanacak bayt). Kanit: $KANIT/aktarim.txt.
+    # shellcheck source=probook-aktarim.sh
+    . "$BETIK_DIZIN/probook-aktarim.sh"
+    probook_aktar "$GIRDI" "$UZAK" "$KANIT"; AKT_RC=$?
+    [ "$AKT_RC" = 2 ] && { say "RED: aktarim dogrulanamadi (sha256 Mac != ProBook)"; exit 1; }
+    [ "$AKT_RC" = 0 ] || { say "RED: kopyalanamadi"; exit 1; }
+  else
+    scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$GIRDI" "$HOST:$UZAK" \
+      || { say "RED: kopyalanamadi"; exit 1; }
+  fi
 fi
 
 {
