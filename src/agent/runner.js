@@ -51,6 +51,9 @@ const {
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
+const {
+  seritDenetcisiKur, arsivEsleyici, olayBildirici, probookHostSec,
+} = require('./serit-secimi');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -279,9 +282,26 @@ function macAraciSaglamMi() {
   return saglam;
 }
 
+// PROBOOK ŞERİDİ (2026-09-26, plan karar 2): ProBook sağlıklıyken (nabız ≤10 dk, ajan ayakta,
+// API erişilebilir, disk kapısı, kaynak arşivi eşit) Mac `pardus` yeteneğini DÜŞÜRÜR; değilse
+// alır. Kod varsayılanı KAPALI (EMPP_PROBOOK_SERIT=1 ile açılır) → kapalıyken null, davranış aynı.
+// Nabız ARKA PLANDA okunur (heartbeat beklemez); ilk karar main()'de ilk heartbeat'ten önce.
+let seritDenetcisi = seritDenetcisiKur({
+  env: process.env,
+  caps: CONFIG.caps,
+  log,
+  olayBildir: olayBildirici({ env: process.env, log: warn }),
+  arsivOzetiFn: () => require('./kaynak-arsivi').arsivOzeti().ozet,
+  arsivEsle: arsivEsleyici({
+    betik: path.join(__dirname, '..', '..', 'tools', 'probook', 'arsiv-esle.sh'),
+    host: probookHostSec(process.env),
+    log,
+  }),
+});
+
 let _sonYetenek = '';
 function guncelYetenekler() {
-  const caps = etkinYetenekler(CONFIG.caps, {
+  let caps = etkinYetenekler(CONFIG.caps, {
     ofiste: ofisteMi(),
     macSerbest: pauseRequested(CONFIG.macSerbestFlag),
     macDurdur: pauseRequested(CONFIG.macDurdurFlag),
@@ -289,10 +309,15 @@ function guncelYetenekler() {
     // boşuna xcrun çağırmayalım.
     macAraci: CONFIG.caps.some((c) => c === 'macos' || c === 'mac') ? macAraciSaglamMi() : undefined,
   });
+  if (seritDenetcisi) {
+    seritDenetcisi.tazele().catch(() => {}); // kendini 60 sn'de bir kısar; beklenmez
+    caps = seritDenetcisi.uygula(caps);
+  }
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
     log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,
       '| macAraç=' + (_macArac.saglam === null ? 'ölçülmedi' : (_macArac.saglam ? 'sağlam' : 'BOZUK')),
+      ...(seritDenetcisi ? ['| pardus şeridi=' + seritDenetcisi.ozet()] : []),
       '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
@@ -1934,6 +1959,8 @@ async function main() {
   log('starting. API:', CONFIG.apiBase, '| packager:', CONFIG.packagerApi, '| caps:', CONFIG.caps.join(','));
   const auth = await enrollOrLoad();
   // İlk next-job'dan ÖNCE yetenekleri bildir: sunucu eski listeyle (evde macos dahil) iş kiralamasın.
+  // ProBook şeridi açıksa ilk karar BEKLENİR — sağlıklı ProBook varken Mac ilk pardus işini kapmasın.
+  if (seritDenetcisi) await seritDenetcisi.tazele({ zorla: true });
   guncelYetenekler();
   await heartbeat(auth);
 
@@ -2061,6 +2088,9 @@ module.exports = {
   packagerReleaseJob,
   touchCacheEntry,
   ensureDockerReady, runPardusScript, runKabulBetigi, buildPardusArtifact, hazirPardusPaketi, pardusKabulKapisi, heartbeat, injectPardusIcon,
+  // ProBook şeridi (2026-09-26) — testler denetçiyi değiştirip yetenek kararını ölçer.
+  guncelYetenekler,
+  _seritDenetcisiAyarla: (d) => { seritDenetcisi = d; _sonYetenek = ''; },
   // SET güncelleme kanalı (2026-09-23) — testler için dışa açık.
   guncellemeSetiYukleVeDogrula, guncellemeTarIndir, presignGuncelleme, guncellemeDosyaYukle, guncellemeSurumDogrula,
   packagerStartPackage,

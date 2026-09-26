@@ -1,12 +1,13 @@
 #!/bin/bash
 # ProBook Pardus şeridi KURULUMU — idempotent (plan C1+C2, 2026-09-24).
 #
-# Mac'te koşturulur:  tools/probook/kur.sh [--host etapadmin@100.73.161.76]
+# Mac'te koşturulur:  tools/probook/kur.sh [--host etapadmin@100.73.161.76] [--arsivsiz]
 #   1) depo çalışma ağacını rsync'ler (node_modules/.git/.env/çıktılar HARİÇ) + .serit-surum
 #   2) appimagetool'u ve electron/electron-builder önbelleğini Mac'in pardus docker imajı/
 #      volume'ünden aktarır (Mac şeridiyle BİREBİR aynı ikililer; ProBook'ta indirme yok)
 #   3) kayıtlı logoları (Mac paketleyici /api/logos) ~/empp-serit/logolar'a eşler
 #   4) kendini ProBook'ta `probook` kipinde koşturur (aşağıda)
+#   5) kaynak arşivini eşler (arsiv-esle.sh; Mac arşivi otorite, ProBook birebir kopya)
 # ProBook kipi (ssh ile):
 #   disk kapısı · ~/empp-serit ağacı · Node 22 x64 resmi tarball (sha256 doğrulamalı, SİSTEME
 #   KURULMAZ) · npm ci (lock değiştiyse) · /usr/local/bin/appimagetool sarmalayıcısı (tek dosya;
@@ -22,6 +23,47 @@ log(){ printf '[kur %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die(){ log "HATA: $*"; exit 1; }
 
 # ------------------------------------------------------------------ ProBook kipi
+# unrar — KULLANICI düzeyinde (2026-09-26, ölçüldü): ProBook'taki 7z WinRAR SFX'i LİSTELİYOR ama
+# AÇAMIYOR ("Unsupported Method"; Debian p7zip'te RAR çözücü yok). runner kaynak doğrulamasını
+# `7z l` ile geçip çıkarmada düşüyordu → arşivde olmayan HER pardus işi 1+ GB indirip `failed`
+# yazacaktı. Mac'teki araçla aynı: unrar. Sistem paketi KURULMAZ: Debian bookworm non-free
+# .deb'i imza zinciriyle (InRelease gpgv → Packages.xz sha256 → .deb sha256) doğrulanıp
+# ~/empp-serit/opt/unrar altına açılır; PATH'e serit-ortam.sh ($SERIT/opt/bin) ekler.
+unrar_kur(){
+  local S="$1" BIN="$1/opt/bin" M="${DEBIAN_AYNA:-https://deb.debian.org/debian}"
+  mkdir -p "$BIN"
+  # pipefail + erken kapanan süzgeç (grep -q / awk exit) üreticiye SIGPIPE → sessiz set -e çıkışı
+  # (26.09 ölçüldü). Çıktılar önce dosyaya alınır, süzgeç dosyada koşar.
+  local SUR; SUR="$("$BIN/unrar" 2>&1 || true)"
+  if [[ "$SUR" == *UNRAR* ]]; then log "unrar zaten kurulu: $(printf '%s\n' "$SUR" | sed -n '/UNRAR/{p;q;}' | cut -c1-40)"; return 0; fi
+  local T; T="$(mktemp -d "$S/work/unrar-XXXXXX")"
+  trap 'rm -rf "$T"' EXIT   # die'da da kendi mktemp dizinimiz kalmasın (26.09: 3 yetim dizin)
+  curl -fsSL -o "$T/InRelease" "$M/dists/bookworm/InRelease" || die "unrar: InRelease indirilemedi"
+  gpgv --keyring /usr/share/keyrings/debian-archive-keyring.gpg --output "$T/Release" "$T/InRelease" 2>/dev/null \
+    || die "unrar: InRelease imzasi DOGRULANAMADI"
+  local PX_SHA; PX_SHA=$(awk '/^SHA256:/{f=1;next} /^[A-Z]/{f=0} f && $3=="non-free/binary-amd64/Packages.xz"{print $1}' "$T/Release")
+  [ -n "$PX_SHA" ] || die "unrar: Release'te Packages.xz ozeti yok"
+  curl -fsSL -o "$T/Packages.xz" "$M/dists/bookworm/non-free/binary-amd64/Packages.xz" || die "unrar: Packages.xz indirilemedi"
+  echo "$PX_SHA  $T/Packages.xz" | sha256sum -c --status - || die "unrar: Packages.xz sha256 TUTMADI"
+  local DOSYA DEB_SHA
+  xz -dc "$T/Packages.xz" > "$T/Packages" || die "unrar: Packages.xz acilamadi"
+  DOSYA=$(awk '/^Package: /{p=($2=="unrar")} p && /^Filename: /{print $2; exit}' "$T/Packages")
+  DEB_SHA=$(awk '/^Package: /{p=($2=="unrar")} p && /^SHA256: /{print $2; exit}' "$T/Packages")
+  [ -n "$DOSYA" ] && [ -n "$DEB_SHA" ] || die "unrar: Packages'ta unrar yok"
+  curl -fsSL -o "$T/unrar.deb" "$M/$DOSYA" || die "unrar: .deb indirilemedi"
+  echo "$DEB_SHA  $T/unrar.deb" | sha256sum -c --status - || die "unrar: .deb sha256 TUTMADI"
+  dpkg-deb -x "$T/unrar.deb" "$T/x" || die "unrar: .deb acilamadi"
+  # Debian ikiliyi `unrar-nonfree` adıyla koyar (sistemde update-alternatives bağlar; biz kurmuyoruz).
+  SUR="$("$T/x/usr/bin/unrar-nonfree" 2>&1 || true)"
+  [[ "$SUR" == *UNRAR* ]] || die "unrar: ikili calismiyor"
+  [ -e "$S/opt/unrar" ] && mv "$S/opt/unrar" "$S/opt/unrar.kaldirildi-$DAMGA"
+  mv "$T/x" "$S/opt/unrar"
+  ln -sfn "$S/opt/unrar/usr/bin/unrar-nonfree" "$BIN/unrar"
+  rm -rf "$T"   # kendi mktemp dizinimiz
+  trap - EXIT
+  log "unrar kuruldu (imza zinciri dogrulandi): $(basename "$DOSYA") -> $BIN/unrar"
+}
+
 probook_kur(){
   local S="$HOME/$SERIT_ADI"
   mkdir -p "$S"/{repo,cache,work,out,log,kanit,opt,logolar}
@@ -79,9 +121,10 @@ exec $S/opt/appimagetool/AppRun \"\$@\""
     log "appimagetool sarmalayicisi kuruldu: /usr/local/bin/appimagetool"
   fi
   /usr/local/bin/appimagetool --version 2>&1 | head -1 | sed 's/^/  /'
-  for arac in zenity mksquashfs unsquashfs 7z zip unzip xdotool import convert python3 file flock; do
+  for arac in zenity mksquashfs unsquashfs 7z zip unzip xdotool import convert python3 file flock gpgv dpkg-deb xz; do
     command -v "$arac" >/dev/null || die "arac yok: $arac"
   done
+  unrar_kur "$S"
   log "araclar tamam (zenity/mksquashfs/7z/xdotool/imagemagick/flock)"
 
   # systemd kullanıcı birimi + linger (X oturumu kapansa da ajan ayakta).
@@ -110,11 +153,14 @@ exec $S/opt/appimagetool/AppRun \"\$@\""
 
 # ------------------------------------------------------------------ Mac kipi
 mac_kur(){
-  local HOST="${PROBOOK_SSH:-etapadmin@100.73.161.76}"
-  while [ $# -gt 0 ]; do case "$1" in --host) HOST="$2"; shift 2;; *) die "bilinmeyen: $1";; esac; done
+  local HOST="${PROBOOK_SSH:-etapadmin@100.73.161.76}" ARSIV=1
+  while [ $# -gt 0 ]; do case "$1" in --host) HOST="$2"; shift 2;; --arsivsiz) ARSIV=0; shift;; *) die "bilinmeyen: $1";; esac; done
   local SSH=(ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST")
   local REPO; REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
   bash -n "$0" || die "betik sozdizimi hatali"
+  # package-lock.json .gitignore'da: git worktree'den koşunca yoktur ve `rsync --delete` ProBook'taki
+  # kopyayı SİLER → ProBook kipi "repo yok" der (26.09 ölçüldü). rsync'ten ÖNCE dur.
+  [ -f "$REPO/package-lock.json" ] || die "package-lock.json yok ($REPO) — worktree ise ana depodan kopyala; rsync --delete ProBook'takini silerdi"
   "${SSH[@]}" "mkdir -p ~/$SERIT_ADI/repo ~/$SERIT_ADI/opt ~/$SERIT_ADI/cache ~/$SERIT_ADI/logolar" || die "ProBook'a baglanilamadi ($HOST)"
 
   log "depo aktariliyor: $REPO -> $HOST:~/$SERIT_ADI/repo"
@@ -157,6 +203,15 @@ mac_kur(){
 
   log "ProBook kipi baslatiliyor"
   "${SSH[@]}" "bash -s -- probook" < "$0"
+
+  # Kaynak arşivi (2026-09-26): ProBook, Mac'in onaylı build zip arşivinin BİREBİR kopyasını tutar;
+  # yoksa arşivdeki kitabı İmpark exe'sinden (eski arayüz) üretir. Mac ajanı fark görünce aynı betiği
+  # kendisi de koşturur. İlk eşleme büyük (~20 GB, LAN) — --arsivsiz ile atlanır.
+  if [ "$ARSIV" = "1" ]; then
+    bash "$REPO/tools/probook/arsiv-esle.sh" --host "$HOST" || log "UYARI: arsiv eslenemedi — Mac ajani pardus'u ProBook'a BIRAKMAZ"
+  else
+    log "kaynak arsivi eslemesi atlandi (--arsivsiz): Mac ajani ozet esitlenene kadar pardus'u kendisi alir"
+  fi
 }
 
 if [ "${1:-}" = "probook" ]; then

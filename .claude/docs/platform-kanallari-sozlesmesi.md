@@ -15,7 +15,7 @@ Nadir'in beyanı spec'tir; Windows (`windows-paketleme-sozlesmesi.md`) dahil dö
 
 | # | Kural | Bugün (26.09 15:10, ölçüldü) | Eksik |
 |---|---|---|---|
-| O1 | **Üretim yeri:** Pardus ProBook'ta (indir, paketle, kabul, temizlik, yükle); ProBook'a ulaşılamazsa Mac Docker. Windows, dmg, apk bu Mac'te. | Pardus fiilen Mac Docker'da; ProBook yalnız kabul. ProBook şeridi hazırlanıyor (runner bağlantısı, kurulum, kuru koşu) | ProBook `build_agents` kaydı: enroll sırrı srv21 `.env`'de, Nadir verir |
+| O1 | **Üretim yeri:** Pardus ProBook'ta (indir, paketle, kabul, temizlik, yükle); ProBook'a ulaşılamazsa Mac Docker. Windows, dmg, apk bu Mac'te. | Pardus fiilen Mac Docker'da; ProBook yalnız kabul. ProBook şeridi kodda, kapalı (13acb01; kuru koşu 73581 geçti) | ProBook `build_agents` kaydı: enroll sırrı srv21 `.env`'de, Nadir verir |
 | O2 | **Motor temizliği Windows'taki gibi:** index'ten ulaşılmayan, üst üste yazılmış webpack çıktıları (her kitapta 13 `*.main.js`) atılır; pakete girmeyecekler listesi tek kaynaktan. | Dört platformda açık: `olu-motor-temizligi.js` (varsayılan açık, pardus konteynerine `EMPP_OLU_TEMIZLIK=1` geçer) + `paket-disi-liste.js` (f63500c) | — |
 | O3 | **Uzaktan güncelleme (G), bizim kanalımız:** kök `index.html`, index'le eklenen/çıkarılan kitaplar (set bileşimi) ve her kitabın **ANA klasöründeki** `43e23fce2b7009474555a77.js` değişir (kapsam detayı O4). Arayüzden nasıl tetikleneceği **SONRA** kararlaştırılacak (Nadir 26.09); sunucuda manifest yokken istemci sessizdir (hata basmaz, bekler). | Yalnız Windows'ta kod var (`src/runtime/kitap-guncelleyici.js`), KAPALI | Üretim ed25519 anahtarı **ÜRETİLDİ** (karar defteri A5, KAPANDI); `EMPP_SET_GUNCELLEME=windows`. mac/android/pardus'ta istemci hâlâ yok — anahtar hazır, sarmalayıcı eksik. Gövde salt-okunur: mac `.app` imzası, APK assets, AppImage squashfs; **"kurulum klasörü" tanımı (Nadir 26.09):** Windows/Pardus'ta kurulum dizini (yazılabilir), macOS'ta `.app` imzalı + yazılabilir yer `~/Library/Application Support/<app>/`, Android'de uygulamanın kendi veri alanı. G bu yazılabilir yere imzalı bir örtü yazar; kabuk açılışta imzası geçerli ve daha yeni örtü varsa onu yükler |
 | O4 | **Motor `43e23fce…js` güncelliği index'le birlikte bizde:** bizim derlememiz kanonik (24.09 karar 2, `tek-kabuk-ve-guncelleme-plani-2026-09-24.md`), G kanalıyla dağıtılır. **Kapsam (Nadir 26.09):** G yalnız kitabın **ANA** klasöründeki kopyayı değiştirir; kitap index'i yalnız kendi dizinindekini çağırır. `htmletk/…/etk/` kopyaları **KAPSAM DIŞI**, G dokunmaz. | 73581 ölçümü: kök kopya `1bcb5b8c…`, dört kitap kopyası `f4437153…` (aynı, ANA klasör — G burayı hedefler), etkinlik kopyası `1c6096ef…` (üç farklı sürüm tek pakette, `htmletk/…/etk/` — kapsam dışı) | G istemcisi (O3) |
@@ -77,11 +77,16 @@ Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 
 ## Pardus şeridi (23.09 + 24.09 kararları)
 | Şerit | Karar | Bugün |
 |---|---|---|
-| ProBook yerli (birincil) | 24.09 karar 1-5: kendi jetonu, otomatik eşikli devir, sıkı sıra, Tailscale | kod 420f21e; `build_agents`'ta ProBook YOK (kayıt sırrı Nadir'de); `serit-secimi.js` runner'a bağlı değil (`serit-secimi.js:11-12`) |
+| ProBook yerli (birincil) | 24.09 karar 1-5: kendi jetonu, otomatik eşikli devir, sıkı sıra, Tailscale | kod 420f21e + 13acb01: runner bağlantısı `EMPP_PROBOOK_SERIT=1` (kod varsayılanı KAPALI); ProBook'ta kurulu, BAŞLATILMADI; `build_agents`'ta ProBook YOK (kayıt sırrı Nadir'de) |
 | Mac Docker (yedek; bugün tek şerit) | 24.09 karar 2 | canlı; DEB kapalı (`pardus-packager-build.sh:121`) |
 | Hazır devralma (srv21 şeridi) | 17.09 | 16 paket (18-20.09, 13 GB) bekliyor; 5'i kuyruktaki işe ait (11811, 11845, 45481, 45541, 59834); devralma yalnız `srcVersion` kıyaslar, paketleyici commit'ine bakmaz (`runner.js:1662-1680`) |
 | Kanal 1 zorlama bekçisi | 23.09 §1 | YOK: `pardus-hat-bekcisi.sh` ve `com.empp.pardus-hat` yok |
 | srv21 fallback | 23.09 §2-3 | kod YOK (API'de `srv21-fallback` 0 eşleşme); "aynı üretim" ön şartı sağlanmıyor (`tek-kabuk-…plani:35-41`) |
+
+ProBook şeridi kuralları (13acb01, `serit-secimi.js`):
+- Mac pardus işini ProBook'a yalnız beş koşul birlikte tutarsa bırakır: nabız ≤10 dk · ajan ayakta · API `peek` (ProBook jetonu) · disk ≥25 GB ve ≤%85 · kaynak arşivi özeti eşit. Biri tutmazsa Mac alır.
+- Arşiv özeti kayıt başına md5 + boyut taşır. Fark varsa Mac `arsiv-esle.sh` koşturur: Mac otoritedir, aktarım yalnız LAN'da, eşitlenene dek ProBook duraklatılır.
+- K kanalı iki şeritte eşit: yerel derleme Docker'ın her `-e EMPP_` bayrağını taşır (parite testi `pardus-yerel-build.test.js`).
 
 Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar. srv21 fallback açık karar 5'tedir.
 
@@ -128,7 +133,7 @@ Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon k
 
 ## Uygulama durumu (26.09)
 - Kod var ve canlı: noter kapısı, Pardus disk kapısı, ProBook kabulü, başsız kabul (macos+android), SET düzeltmeleri, sürüm türetme, Android K8/K9.
-- Kod var, devrede değil: ProBook şeridi (kayıt + runner yaması), `serit-secimi.js`.
+- Kod var, devrede değil: ProBook şeridi (`EMPP_PROBOOK_SERIT`, arşiv eşleme, yetim onarımı; bekleyen: kayıt sırrı + ilk arşiv eşleme).
 - Kod yok: build zip'i kaynak alma (runner SFX bekliyor), hold durumu, kabul kanıtı ekranı, artefakt geçmişi, srv21 fallback, kanal 1 bekçisi, hazır devralmada commit kontrolü, Android versionCode, AppRun hash-güvenli kıyas.
 
 ## Eskiyen belgeler

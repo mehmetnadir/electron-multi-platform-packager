@@ -111,6 +111,19 @@ temizle(){
     "${SSH[@]}" "rm -f '$UZAK'" >/dev/null 2>&1
   fi
   [ "$KILIT" = "1" ] && kilit birak >>"$KANIT/temizlik.log"
+  kanit_sakla
+  return 0
+}
+# KANIT ARŞİVİ (plan B.1, 2026-09-26): runner iş sonunda çalışma dizinini — kanıt dahil — siler.
+# EMPP_KANIT_ARSIV verilirse (ProBook şeridi: ~/empp-serit/kanit) kanıt oraya kopyalanır ve
+# 14 günden eski kanıt dizinleri kaldırılır. Verilmezse davranış eskisi gibi.
+kanit_sakla(){
+  [ -n "${EMPP_KANIT_ARSIV:-}" ] || return 0
+  local h="$EMPP_KANIT_ARSIV/kabul-$(date +%Y%m%d-%H%M%S)-$DAMGA"
+  mkdir -p "$h" && cp -a "$KANIT"/. "$h"/ 2>/dev/null
+  printf 'paket=%s\nboyut=%s\n' "$GIRDI" "${BOYUT:-?}" > "$h/paket.txt"
+  find "$EMPP_KANIT_ARSIV" -mindepth 1 -maxdepth 1 -type d -name 'kabul-*' -mtime +"${EMPP_KANIT_GUN:-14}" \
+    -exec rm -rf {} + 2>/dev/null
   return 0
 }
 trap 'temizle' EXIT

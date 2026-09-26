@@ -14,6 +14,8 @@
 #   EMPP_SET_MENU (1) / EMPP_SAYFA_WEBP (0) / EMPP_OLU_TEMIZLIK (1) — Mac seridiyle ayni varsayilan
 #   PARDUS_DISK_KAT (5) / PARDUS_DISK_TABAN_GB (15) / PARDUS_MIN_FREE_GB (acik override)
 #   PARDUS_DOGRULA   (impark-dogrula.sh) — test icin degistirilebilir
+#   PARDUS_ICERIK_GUNCELLEME (linux) — K kanali, Mac docker seridiyle ayni
+#   EMPP_DERLEME_KABUL_KILIDI (0) — 1: derleme boyunca ~/.kabul.lock tutulur (serit-ajan.sh acar)
 # Cikti: <cikti>/<ad>.impark, <cikti>/dogrula/rapor.txt, <cikti>/raw/packager.log,
 #        <cikti>/pardus-packager-build.log (her asama `ASAMA <ad> <sn>` satiriyla damgali).
 set -euo pipefail
@@ -51,6 +53,32 @@ else
   echo $$ > "$KILIT_D/pid"
 fi
 
+# --- KABUL KILIDI derleme boyunca (plan B.2, 2026-09-26): ProBook'ta derleme ile kabul ASLA
+# cakismaz. 4 is parcacigi derlemede doluyken baska ajanin UZAK kabulu (Mac yedek seridi) acilis
+# penceresini kacirip yanlis RED yazar; tersine, suren bir kabulun ortasinda derleme baslarsa ayni
+# sey olur. Ortak ~/.kabul.lock (probook-kilit.sh) alinir, EXIT'te birakilir. Bos kalmazsa
+# ERTELENEBILIR isaretiyle cikilir (runner 'failed' YAZMAZ, kira dolunca is kuyruga doner).
+KABUL_KILIDI_ALINDI=0
+KABUL_DAMGA="derleme-$$-$(date +%s)"
+kabul_kilidi_birak(){
+  [ "$KABUL_KILIDI_ALINDI" = "1" ] && bash "$TOOLS/probook-kilit.sh" birak "$KABUL_DAMGA" >/dev/null 2>&1
+  KABUL_KILIDI_ALINDI=0
+  return 0
+}
+if [ "${EMPP_DERLEME_KABUL_KILIDI:-0}" = "1" ]; then
+  KK_TAVAN="${KABUL_BOSLUK_TAVAN:-1800}"; KK_ARALIK="${KABUL_BOSLUK_ARALIK:-15}"; KK_BEKLENEN=0
+  until KK_C=$(bash "$TOOLS/probook-kilit.sh" al "$KABUL_DAMGA" "$(hostname)" "$$" 2>&1); do
+    if [ "$KK_BEKLENEN" -ge "$KK_TAVAN" ]; then
+      die "[ertelenebilir-probook-erisimi] kabul kilidi ${KK_TAVAN} sn bosalmadi (${KK_C##*KILIT_MESGUL }) — derleme baslatilmadi"
+    fi
+    [ $((KK_BEKLENEN % 60)) -eq 0 ] && log "kabul suruyor, derleme bekliyor: ${KK_C##*KILIT_MESGUL }"
+    sleep "$KK_ARALIK"; KK_BEKLENEN=$((KK_BEKLENEN + KK_ARALIK))
+  done
+  KABUL_KILIDI_ALINDI=1
+  trap kabul_kilidi_birak EXIT
+  log "kabul kilidi alindi (derleme boyunca; ${KK_BEKLENEN} sn beklendi)"
+fi
+
 # --- girdi + disk kapisi (pardus-packager-build.sh ile ayni formul) ---
 [ -e "$IN" ] || die "girdi yok: $IN"
 IN_KB=$(du -sk "$IN" 2>/dev/null | awk '{print $1}')
@@ -71,6 +99,7 @@ WORKAPP="$(mktemp -d "$SERIT/work/app-XXXXXX")"
 temizle(){
   rm -rf "$WORKAPP"
   [ -n "${KILIT_D:-}" ] && rm -rf "$KILIT_D"
+  kabul_kilidi_birak
   return 0
 }
 trap temizle EXIT
@@ -105,7 +134,11 @@ export EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" EMPP_LINUX_DEB="${EMPP_LINUX_
 # Kapı sızıntısı (26.09): bu iki bayrak geçirilmezse paketleyici varsayılanı AÇIK okur ve Pardus
 # paketine taslak içerik/SET güncelleme modülleri girer. Varsayılan KAPALI; kapsam `windows` gibi
 # platform listesiyse linux işinde zaten kapalı kalır (src/packaging/platform-kapisi.js).
-export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" EMPP_ICERIK_GUNCELLEME="${EMPP_ICERIK_GUNCELLEME:-0}"
+export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}"
+# İçerik güncellemesi (K) Pardus paketinde AÇIK — Mac docker şeridiyle BİREBİR (a0cc28d, Nadir 26.09:
+# "impark güncellemelerini alıyorlar"). Ortamdaki EMPP_ICERIK_GUNCELLEME (Mac'te 'windows') OKUNMAZ;
+# kapatmak: PARDUS_ICERIK_GUNCELLEME=0. Parite testi: pardus-yerel-build.test.js.
+export EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}"
 log "paketleyici basliyor (job $JOB, DEB=$EMPP_LINUX_DEB) — log: $OUT/raw/packager.log"
 set +e
 ( cd "$WORKAPP" && node "$TOOLS/packager-run-yerel.js" "$REPO" "$SID" "$APP_NAME" "$VER" "$JOB" ) \

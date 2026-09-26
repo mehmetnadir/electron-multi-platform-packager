@@ -179,4 +179,31 @@ async function arsivKaynagi(bookId, {
   };
 }
 
-module.exports = { arsivKaynagi, arsivKoku, md5Hesapla, imparkKaynagiKiyasla };
+/**
+ * Arşivin KİMLİK özeti (2026-09-26, ProBook şeridi): `<id> <md5> <boyut>` satırları sıralı,
+ * sha256'nın ilk 16 hanesi. Zip OKUNMAZ — yalnız kaynak.json kayıtları (ucuz, her nabızda).
+ * İki makinenin özeti eşitse aynı kitaplar aynı zip'ten üretilir. Kayıt bozuksa satırı
+ * `<id> BOZUK` olur (fark görünür kalsın, sessizce düşmesin). Kök yoksa/boşsa: 'bos'.
+ * @param {string} [kok]
+ * @returns {{ ozet: string, adet: number, kitaplar: string[] }}
+ */
+function arsivOzeti(kok = arsivKoku()) {
+  let adlar = [];
+  try { adlar = fs.readdirSync(kok, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch (_) { adlar = []; }
+  const satirlar = [];
+  for (const ad of adlar.sort()) {
+    let ham;
+    try { ham = fs.readFileSync(path.join(kok, ad, 'kaynak.json'), 'utf8'); } catch (_) { continue; } // kayıt yok = arşivde değil
+    try {
+      const k = JSON.parse(ham);
+      satirlar.push(`${ad} ${String(k.md5 || '').toLowerCase()} ${Number(k.boyut) || 0}`);
+    } catch (_) {
+      satirlar.push(`${ad} BOZUK`);
+    }
+  }
+  if (!satirlar.length) return { ozet: 'bos', adet: 0, kitaplar: [] };
+  const ozet = crypto.createHash('sha256').update(satirlar.join('\n')).digest('hex').slice(0, 16);
+  return { ozet, adet: satirlar.length, kitaplar: satirlar.map((l) => l.split(' ')[0]) };
+}
+
+module.exports = { arsivKaynagi, arsivKoku, md5Hesapla, imparkKaynagiKiyasla, arsivOzeti };

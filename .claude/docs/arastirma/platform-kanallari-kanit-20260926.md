@@ -44,3 +44,13 @@ kuyrukta (`agent.log`).
 - `uretim-masasi-mac/docs/sozlesmeler/04-bu-mac-guncelleme.md:70` ve `05-yayinla.md:63` "Pardus her zaman bu
   Mac'te" → hazır devralma + ProBook.
 - `book-update/CLAUDE.md:124` (SET açılmıyor) ve `:131` (noter onaysız dmg) → bu belge; noter artık zorunlu.
+
+## ProBook şeridi — kuru koşu ve parite (26.09, 13acb01; `birlesik-20260926`'ya birleşti)
+- Ajan raporu: 431/431 test, 18/18 mutasyon. Kuru koşu 73581 (742 MB → 803 MB): ProBook derleme 120 sn, yerel
+  kabul 42 sn, kaynak hazırken kabul dahil ~170 sn. Mac Docker aynı boy sınıfında derleme 79-93 sn, uzak kabul
+  79-376 sn. Bulut CDN → ProBook 40 MB/s, LAN rsync 9,3 MB/s; evden Tailscale DERP rölesi 0,18 MB/s (aktarım
+  bu yüzden yalnız LAN).
+- K kanalı sapması: a0cc28d Mac Docker şeridinde K'yı açtı (`PARDUS_ICERIK_GUNCELLEME:-linux`), yerel şerit 0
+  geçiyordu; agent-mode'da `pardus-yerel-build.test.js` bu yüzden kırmızıydı. 13acb01 iki şeride aynı ifadeyi
+  verdi.
+- Kaynak: `~/.empp-agent/arastirma/probook-serit-hazirlik-20260926.md`.
