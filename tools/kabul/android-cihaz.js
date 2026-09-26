@@ -7,7 +7,7 @@
  *   emulator -avd <ad> -no-window -no-audio -no-boot-anim -read-only -port <boş port>
  *   → adb install → am start → bekle → screencap (ham RGBA) + uiautomator dump
  *   → aynı ölçütler (WebView alanında sapma/koyu/renk, kart, yükleniyor) → ilk karta dokun
- *   → okuyucu ölçümü → adb uninstall → (biz başlattıysak) adb emu kill.
+ *   → okuyucu ölçümü → [K4: `p.k4Olc` kancası, WebView CDP] → adb uninstall → (biz başlattıysak) adb emu kill.
  *
  * Kurallar (Nadir 2026-09-26):
  *   • Emülatör penceresi AÇILMAZ (-no-window). -read-only: AVD kalıcı değişmez.
@@ -477,6 +477,18 @@ async function cihazKabulu(p) {
       dosyaBulunamadi: konsol.dosyaBulunamadi.length, jsHatalari: konsol.jsHatalari.length,
       ornekDosya: konsol.dosyaBulunamadi.slice(0, 5), ornekJs: konsol.jsHatalari.slice(0, 5),
     };
+
+    // K4 (güncellik) kancası — uygulama hâlâ açıkken, kaldırmadan ÖNCE. Cihaz kararını
+    // DEĞİŞTİRMEZ; ölçüm `sonuc.k4`'e yazılır, kararı basliksiz-kabul.js (k4-guncellik.js) verir.
+    if (typeof p.k4Olc === 'function') {
+      try {
+        sonuc.k4 = await p.k4Olc({
+          paket: paketBilgi.paket, kanitDizin, log, adbKos: (argumanlar, secenek) => adbKos(arac, seri, argumanlar, secenek),
+        });
+      } catch (e) {
+        sonuc.k4 = { kaynak: 'cihaz', e6: { durum: 'OLCULEMEDI', sebep: `K4 kancası düştü: ${e.message}` }, cevaplar: [] };
+      }
+    }
 
     // Karar (Electron katmanıyla aynı ölçüt kümesi, cihazda görülebilen kadarı).
     const sebepler = [];

@@ -32,6 +32,16 @@
  *             [--kurulum-koku </home/.../DijiTap>] [--baglan-sn 20] [--menu-sn 30]
  *             [--gezinme-sn 15] [--kitap-sn 60] [--e7-sn 20] [--toplam-sn 200]
  *             [--yeniden-yukle 0|1] [--aralik-ms 1000]
+ *             [--hedef-deseni <regex>] [--kaydedici 0|1]
+ *
+ * K4 eki (başsız kabul, tools/kabul/k4-guncellik.js — ikisi de varsayılan KAPALI, ProBook yolu
+ * birebir aynı kalır):
+ *   --hedef-deseni  file: dışı sayfa hedefi (Android WebView `https://localhost/...`): URL'si bu
+ *                   düzenli ifadeye uyan ilk 'page'.
+ *   --kaydedici 1   belge-başı fetch/XHR kaydedicisi (Page.addScriptToEvaluateOnNewDocument + bir kez
+ *                   yeniden yükleme). CapacitorHttp fetch'i yerel köprüden geçirir, Network olayı
+ *                   DOĞMAZ; kaydedici cevabı sayfa içinde yakalar (sessionStorage, gezinmede
+ *                   kaybolmaz). Kayıtlar Network cevaplarıyla aynı yorumlayıcıdan geçer.
  */
 const fs = require('fs');
 const path = require('path');
@@ -60,13 +70,15 @@ function argumanlar(argv) {
     toplamSn: 200,
     yenidenYukle: true,
     aralikMs: 1000,
+    hedefDeseni: '',
+    kaydedici: false,
   };
   const sayi = { '--port': 'port', '--baglan-sn': 'baglanSn', '--menu-sn': 'menuSn', '--gezinme-sn': 'gezinmeSn',
     '--kitap-sn': 'kitapSn', '--e7-sn': 'e7Sn', '--toplam-sn': 'toplamSn', '--aralik-ms': 'aralikMs' };
   for (let i = 0; i < argv.length; i += 1) {
     const k = argv[i];
     const v = argv[i + 1];
-    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; }
+    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; } else if (k === '--hedef-deseni') { a.hedefDeseni = v || ''; i += 1; } else if (k === '--kaydedici') { a.kaydedici = v === '1'; i += 1; }
   }
   return a;
 }
@@ -186,6 +198,114 @@ function tiklamaIfadesi(kart) {
 
 const bekle = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** sessionStorage anahtarı — kaydedici yazar, `kaydediciOku` okur. */
+const KAYDEDICI_ANAHTAR = 'empp-k4-kayit';
+
+/**
+ * Belge-başı kaydedici (sayfa betiklerinden ÖNCE koşar). window.fetch bir erişimciyle sarılır:
+ * sonradan atanan fetch (CapacitorHttp köprüsü, ag-politikasi sarmalı) da sarılır. XHR open/send
+ * de izlenir. Yalnız güncelleme ucu kaydedilir; cevap klonlanıp okunur, sayfanın akışı değişmez.
+ */
+const KAYDEDICI_KAYNAK = `(function () {
+  if (window.__emppK4Kaydedici) return;
+  window.__emppK4Kaydedici = true;
+  var ANAHTAR = ${JSON.stringify(KAYDEDICI_ANAHTAR)};
+  var DESEN = ${GUNCELLEME_DESENI.toString()};
+  function mutlak(u) { try { return new URL(String(u), location.href).href; } catch (e) { return String(u); } }
+  function kaydet(k) {
+    try {
+      var l = JSON.parse(sessionStorage.getItem(ANAHTAR) || '[]');
+      if (l.length < 50) { l.push(k); sessionStorage.setItem(ANAHTAR, JSON.stringify(l)); }
+    } catch (e) { /* depolama yok */ }
+  }
+  function hata(e) { return String((e && e.message) || e); }
+  function sar(f) {
+    if (typeof f !== 'function' || f.__emppK4) return f;
+    var s = function (girdi) {
+      var url = '';
+      try { url = mutlak(typeof girdi === 'string' ? girdi : ((girdi && girdi.url) || girdi)); } catch (e) { url = ''; }
+      var p = f.apply(this, arguments);
+      if (DESEN.test(url) && p && typeof p.then === 'function') {
+        p.then(function (r) {
+          try {
+            r.clone().text().then(function (t) { kaydet({ url: url, http: r.status, govde: t, kanal: 'fetch' }); },
+              function (e) { kaydet({ url: url, http: r.status, hata: hata(e), kanal: 'fetch' }); });
+          } catch (e) { kaydet({ url: url, hata: hata(e), kanal: 'fetch' }); }
+        }, function (e) { kaydet({ url: url, durum: 'basarisiz', hata: hata(e), kanal: 'fetch' }); });
+      }
+      return p;
+    };
+    s.__emppK4 = true;
+    return s;
+  }
+  var ic = sar(window.fetch);
+  try {
+    Object.defineProperty(window, 'fetch', { configurable: true, enumerable: true,
+      get: function () { return ic; }, set: function (v) { ic = sar(v); } });
+  } catch (e) { window.fetch = ic; }
+  try {
+    var X = window.XMLHttpRequest.prototype;
+    var ac = X.open;
+    var yolla = X.send;
+    X.open = function (m, u) { this.__emppK4Url = mutlak(u); return ac.apply(this, arguments); };
+    X.send = function () {
+      var x = this;
+      if (DESEN.test(x.__emppK4Url || '')) {
+        x.addEventListener('loadend', function () {
+          var t;
+          try {
+            if (x.responseType === '' || x.responseType === 'text') t = x.responseText;
+            else if (x.responseType === 'json') t = JSON.stringify(x.response);
+          } catch (e) { t = undefined; }
+          if (x.status) kaydet({ url: x.__emppK4Url, http: x.status, govde: t, kanal: 'xhr' });
+          else kaydet({ url: x.__emppK4Url, durum: 'basarisiz', hata: 'XHR durum 0', kanal: 'xhr' });
+        });
+      }
+      return yolla.apply(this, arguments);
+    };
+  } catch (e) { /* XHR yok */ }
+}());`;
+
+/** Kaydedicinin sessionStorage'daki ham kayıtları (okunamazsa boş). */
+async function kaydediciOku(cdp) {
+  try {
+    const ham = await cdp.degerlendir(
+      `(() => { try { return sessionStorage.getItem(${JSON.stringify(KAYDEDICI_ANAHTAR)}) || '[]'; } catch (e) { return '[]'; } })()`,
+      5000,
+    );
+    const l = JSON.parse(String(ham || '[]'));
+    return Array.isArray(l) ? l.filter((k) => k && typeof k.url === 'string') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Network kayıtlarına kaydedicinin gördüklerini ekler: aynı URL Network'te GÖVDESİYLE varsa
+ * kaydedicininki atlanır (çift sayılmasın). Saf.
+ */
+function kayitlariBirlestir(ag = [], kayit = []) {
+  const govdeli = new Set(ag.filter((k) => k.govde !== undefined && k.govde !== null).map((k) => k.url));
+  const gorulen = new Set();
+  const ek = [];
+  for (const k of kayit) {
+    const anahtar = `${k.url}|${k.govde === undefined ? '' : k.govde}`;
+    if (govdeli.has(k.url) || gorulen.has(anahtar)) continue;
+    gorulen.add(anahtar);
+    ek.push(k);
+  }
+  return [...ag, ...ek];
+}
+
+/** --hedef-deseni: URL'si desene uyan ilk 'page' hedefi (file: şartı yok). Saf. */
+function desenleHedefSec(hedefler, desen) {
+  let re;
+  try { re = new RegExp(desen, 'i'); } catch (_) { return null; }
+  const h = (Array.isArray(hedefler) ? hedefler : [])
+    .find((x) => x && x.type === 'page' && x.webSocketDebuggerUrl && re.test(String(x.url || '')));
+  return h ? { hedef: h, eslesti: null } : null;
+}
+
 /** Motorun güncelleme isteklerini dinler (ön uçuş/Preflight sayılmaz). */
 class GuncellemeDinleyici {
   constructor(cdp) {
@@ -223,11 +343,13 @@ class GuncellemeDinleyici {
 
   goruldu() { return this.kayit.size > 0; }
 
+  hamlar() { return [...this.kayit.values()]; }
+
   suruyor() { return [...this.kayit.values()].some((k) => ['istek', 'cevap', 'govde-bekleniyor'].includes(k.durum)); }
 
   async tamamla() { await Promise.all([...this.kayit.values()].map((k) => k.soz).filter(Boolean)); }
 
-  cevaplar() { return [...this.kayit.values()].map(guncellemeCevabiCoz); }
+  cevaplar() { return this.hamlar().map(guncellemeCevabiCoz); }
 }
 
 async function yokla(cdp) {
@@ -334,9 +456,10 @@ async function kos(a, sonuc) {
   while (Date.now() < bitis) {
     try {
       const liste = await jsonGetir(`http://${a.host}:${a.port}/json/list`, 3000);
-      secim = hedefSec(liste, a.kurulumKoku);
+      secim = a.hedefDeseni ? desenleHedefSec(liste, a.hedefDeseni) : hedefSec(liste, a.kurulumKoku);
       if (secim) break;
-      sonHata = `file: sayfa hedefi yok (${(liste || []).length} hedef)`;
+      sonHata = a.hedefDeseni ? `/${a.hedefDeseni}/ sayfa hedefi yok (${(liste || []).length} hedef)`
+        : `file: sayfa hedefi yok (${(liste || []).length} hedef)`;
     } catch (e) {
       sonHata = e.message;
     }
@@ -375,12 +498,24 @@ async function kos(a, sonuc) {
     cdp.gonder('Log.enable', {}, 10000).catch(() => {}),
     cdp.gonder('Page.enable', {}, 10000).catch(() => {}),
   ]);
+  // --kaydedici: belge-başı kaydedici + bir kez yeniden yükleme (açılıştaki soru da kaydedilsin).
+  if (a.kaydedici) {
+    try {
+      await cdp.gonder('Page.addScriptToEvaluateOnNewDocument', { source: KAYDEDICI_KAYNAK }, 10000);
+      await cdp.gonder('Page.reload', { ignoreCache: false }, 10000);
+      sonuc.kaydedici = { kuruldu: true };
+      sonuc.yenidenYuklendi = true;
+      await bekle(Math.max(200, a.aralikMs * 2));
+    } catch (e) {
+      sonuc.kaydedici = { kuruldu: false, hata: tekSatir(e.message, 200) };
+    }
+  }
 
   // 2. İlk yoklama. Kart yoksa kök sayfa kitabın kendisidir (tek kitap): güncelleme sorusu
   //    açılışta sorulup biz bağlanmadan bitmiş olabilir → bir kez yeniden yükle.
   const ilk = await yokla(cdp);
   sonuc.ilkUrl = ilk.url || '';
-  if (a.yenidenYukle && !(ilk.kartlar || []).length && !dinleyici.goruldu()) {
+  if (a.yenidenYukle && sonuc.yenidenYuklendi !== true && !(ilk.kartlar || []).length && !dinleyici.goruldu()) {
     try {
       await cdp.gonder('Page.reload', { ignoreCache: false }, 10000);
       sonuc.yenidenYuklendi = true;
@@ -468,11 +603,15 @@ async function kos(a, sonuc) {
   await kanitYaz(cdp, a, 'kitap-cdp', false);
 }
 
-/** E7 penceresi: istek hiç görülmediyse ya da sürüyorsa e7Sn kadar daha bekler. */
-async function e7Bekle(dinleyici, a) {
+/**
+ * E7 penceresi: istek hiç görülmediyse ya da sürüyorsa e7Sn kadar daha bekler. `ekGoruldu`
+ * (kaydedici) verilirse Network görmese de kaydedicideki kayıt "görüldü" sayılır.
+ */
+async function e7Bekle(dinleyici, a, ekGoruldu = null) {
   if (!dinleyici) return;
   const bas = Date.now();
-  while ((Date.now() - bas) / 1000 < a.e7Sn && (!dinleyici.goruldu() || dinleyici.suruyor())) {
+  const goruldu = async () => dinleyici.goruldu() || Boolean(ekGoruldu && await ekGoruldu());
+  while ((Date.now() - bas) / 1000 < a.e7Sn && (!(await goruldu()) || dinleyici.suruyor())) {
     await bekle(Math.min(500, a.aralikMs));
   }
   await Promise.race([dinleyici.tamamla(), bekle(10000)]);
@@ -496,13 +635,19 @@ async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.wri
     if (r === 'zaman' && sonuc.e6.durum !== 'RED' && sonuc.e6.durum !== 'GECTI') {
       sonuc.e6 = { durum: 'OLCULEMEDI', sebep: `CDP koşusu ${a.toplamSn} sn içinde bitmedi (${sonuc.e6.sebep})` };
     }
-    if (r === 'bitti') await Promise.race([e7Bekle(sonuc.dinleyici, a), sure]);
+    const ekGoruldu = a.kaydedici && sonuc.cdp ? async () => (await kaydediciOku(sonuc.cdp)).length > 0 : null;
+    if (r === 'bitti') await Promise.race([e7Bekle(sonuc.dinleyici, a, ekGoruldu), sure]);
   } catch (e) {
     if (sonuc.e6.durum !== 'RED') sonuc.e6 = { durum: 'OLCULEMEDI', sebep: `CDP hatası: ${e.message}` };
   } finally {
     clearTimeout(bekci);
   }
-  const cevaplar = sonuc.dinleyici ? sonuc.dinleyici.cevaplar() : [];
+  let cevaplar = sonuc.dinleyici ? sonuc.dinleyici.cevaplar() : [];
+  if (a.kaydedici && sonuc.cdp && sonuc.dinleyici) {
+    const kayit = await kaydediciOku(sonuc.cdp);
+    sonuc.kaydedici = { ...(sonuc.kaydedici || {}), kayit: kayit.length };
+    cevaplar = kayitlariBirlestir(sonuc.dinleyici.hamlar(), kayit).map(guncellemeCevabiCoz);
+  }
   const e7 = sonuc.dinleyici ? e7Ozetle(cevaplar) : { durum: 'OLCULEMEDI', ayrinti: 'CDP oturumu kurulamadı', oneri: '' };
   try { if (sonuc.cdp) sonuc.cdp.kapat(); } catch (_) { /* kapalı */ }
 
@@ -534,4 +679,5 @@ if (require.main === module) {
 module.exports = {
   GUNCELLEME_DESENI, KITAP_URL_DESENI, CIKIS, argumanlar, tekSatir, guncellemeCevabiCoz, e7Ozetle,
   sayfaTuru, kartSec, tiklamaIfadesi, ana,
+  KAYDEDICI_ANAHTAR, KAYDEDICI_KAYNAK, kayitlariBirlestir, desenleHedefSec,
 };

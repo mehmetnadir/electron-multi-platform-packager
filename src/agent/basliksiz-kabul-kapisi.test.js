@@ -119,3 +119,40 @@ test('kapiArgumanlari: cli varsayılanı tools/kabul CLI; yalnız verilince ezil
   assert.equal(K.kapiArgumanlari({ ...temel, env: {} })[0], K.CLI);
   assert.equal(K.kapiArgumanlari({ ...temel, env: {}, cli: '/sahte/kabul.js' })[0], '/sahte/kabul.js');
 });
+
+// --- K4 güncellik (KABUL_K4=1; CLI ProBook sözlüğüyle çıkar: 3 GÜNCEL-DEĞİL · 4 ÖLÇÜLEMEDİ) ---------
+
+test('K4: rc 3 + "GUNCEL-DEGIL:" satırı → "güncel değil:" hatası, YÜKLEME YOK, ertelenebilir DEĞİL (Pardus K18 rc 3 ile aynı)', async () => {
+  const cikti = '[kabul] K4 güncellik: GÜNCEL-DEĞİL (kod 3) — E7 44187 v33 < İmpark v36\n'
+    + '[kabul] SONUÇ: GÜNCEL-DEĞİL (80 sn) — kanıt: /k\n'
+    + '[kabul] GUNCEL-DEGIL: E7 44187 v33 < İmpark v36 (Data=https://cdn.x/ZKitapZipH/44187-36.zip)\n'
+    + '[kabul] yeniden kuyruk onerisi: kaynak S1 ile yenilenmeli (ZKitapZipH/44187-36.zip)\n';
+  const s = sahte({ kod: 3, cikti });
+  await assert.rejects(
+    K.basliksizKabulKapisi({ ...temel, env: { EMPP_BASLIKSIZ_KABUL: '1', KABUL_K4: '1' }, calistir: s.calistir }),
+    (e) => {
+      assert.match(e.message, /^güncel değil: E7 44187 v33 < İmpark v36/);
+      assert.match(e.message, /yeniden kuyruk önerisi: kaynak S1 ile yenilenmeli \(ZKitapZipH\/44187-36\.zip\)/);
+      assert.equal(ertelenebilirKaynakHatasi(e), false, 'güncel değil → failed yazılmalı (ertelenmez)');
+      return true;
+    },
+  );
+});
+
+test('K4: rc 4 → ÖLÇÜLEMEDİ (ertelenebilir); işaretsiz rc 3 eski sözlükte ÖLÇÜLEMEDİ kalır', async () => {
+  for (const sonuc of [{ kod: 4, cikti: '[kabul] SONUÇ: ÖLÇÜLEMEDİ' }, { kod: 3, cikti: '[kabul] SONUÇ: ÖLÇÜLEMEDİ' }]) {
+    const s = sahte(sonuc);
+    await assert.rejects(
+      K.basliksizKabulKapisi({
+        ...temel, env: { EMPP_BASLIKSIZ_KABUL: '1' }, calistir: s.calistir, calismaDizini: '/tmp/yok-empp-kapi-test',
+      }),
+      (e) => {
+        assert.ok(e.message.includes(BASLIKSIZ_KABUL_ISARETI), e.message);
+        assert.doesNotMatch(e.message, /^güncel değil/);
+        return true;
+      },
+    );
+  }
+  assert.equal(K.sonucYorumla({ kod: 3, cikti: 'GUNCEL-DEGIL: x' }, 1000).durum, 'GUNCEL_DEGIL');
+  assert.equal(K.guncelDegilIsaretliMi('[kabul]   - k4: GUNCEL-DEGIL: x'), false, 'sebep satırı içindeki dizge işaret sayılmaz');
+});
