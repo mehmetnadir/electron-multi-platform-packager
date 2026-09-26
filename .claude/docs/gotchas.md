@@ -128,3 +128,12 @@
   manifest yanında `ANDROID-DONUK.txt`), dal `g-yayin-android-kapi` (`233854f`, agent-mode'a
   merge bekliyor). Kalıcı çözüm Nadir A/B seçimi — bkz. changelog (7), `g-android-kitap-ekleme-onerisi-20260926.md`.
 
+- **Android'de motor ağ varken "Network is offline" der (2026-09-26, ölçüldü 74451):** İmpark motoru
+  açılışta bir kez `fetch(baseEndpointUrl, {method:'HEAD', mode:'no-cors'})` ile `window.isOnline`
+  hesaplar (`baseEndpointUrl` yoksa varsayılan besegitim.com). Yayıncı kökleri Cloudflare challenge
+  403 + `Cross-Origin-Resource-Policy: same-origin` döner. İki tuzak: (1) CapacitorHttp köprüsü
+  (`_capacitor_http_interceptor_`) gövdesiz HEAD 403'te `getInputStream` FileNotFoundException →
+  `null` → fetch reddi; (2) WebView'in yamasız fetch'i (`CapacitorWebFetch`) no-cors cevabı CORP
+  yüzünden ağ hatasına çevirir — emülatörde denendi, İŞE YARAMAZ. Electron `webSecurity:false`
+  (CORS/CORP yok) → 403 çözülür, masaüstü etkilenmez. Kapı `EMPP_ANDROID_CEVRIMICI=1` (varsayılan
+  KAPALI): shim yalnız bu yoklamayı yerel CapacitorHttp eklentisine GET (başlıksız) olarak sorar.
