@@ -100,7 +100,7 @@
 | `.claude/docs/deploy.md` | srv21 dağıtım kuralları (ff-only, restart-yalnız-kuyruk-boşken, iki ayrı kopya uyarısı) |
 | `project-switch.md` | Librarian pointer |
 
-Son Güncelleme: 2026-09-26 — akşam canlıya alma: G kanalı (mac/Pardus/Windows istemci, Android EKLEME kapalı), Windows şeridi (imza yuvası+Authenticode+R2), içerik kapısı, İmpark içerik merdiveni S0/S1, kabul E6/E7/E8 (KABUL_CDP), motor kanonik, WebP içerik önbelleği, D-2 eski G üreticisi karantinası, yükleme kanıtı (sha256+boyut) — önceki: 2026-09-09 (K11b-K16)
+Son Güncelleme: 2026-09-26 — akşam canlıya alma: G kanalı (mac/Pardus/Windows/Android istemci; Android EKLEME g-yayin kapısında RED), Windows şeridi (imza yuvası+Authenticode+R2), içerik kapısı, İmpark içerik merdiveni S0/S1, kabul E6/E7/E8 (KABUL_CDP), motor kanonik, WebP içerik önbelleği, D-2 eski G üreticisi karantinası, yükleme kanıtı (sha256+boyut) — önceki: 2026-09-09 (K11b-K16)
 
 - **Ajan logo/ikon (2026-09-12):** `pickLogoId` yayıncı ADINI `/api/logos` kayıtlarıyla eşler — kayıt yoksa/ad farklıysa sessizce varsayılan ikon. Pardus için zip kökünde `ico.png` şart → `injectPardusIcon` (runner.js) kayıtlı logoyu ekler. Yeniden başlatma: `touch ~/.empp-agent/yeniden-baslat.istek` (işler arasında temiz çıkış).
 - **Ajan duraklatma bayrağı (2026-09-12):** `~/.empp-agent/duraklat.istek` durdukça ajan yeni iş almaz (süren iş biter); kaldıran çağırandır. Bu Mac'te elle üretim koşarken (paketleyici 4 paralel iş kabul ediyor, iki Gradle aynı `@capacitor/android` build dizinini paylaşıp R.jar yarışıyla düşüyor) bayrağı koy, paketleyici boşalınca üret, sonra kaldır. `yeniden-baslat.istek` ise tek kullanımlık restart.
@@ -173,5 +173,8 @@ Son Güncelleme: 2026-09-26 — akşam canlıya alma: G kanalı (mac/Pardus/Wind
   `kanal-g-degil` ile RED eder, bu bilinçli bir kapı.
 - **Android G EKLEME kalıcı donma riski (2026-09-26, karar bekliyor):** G manifesti her
   eklemeyi sonraki yayınlara taşıdığından bir kitap eklendikten sonra o setin Android'i
-  hiçbir G güncellemesini (motor dahil) alamıyor. Android G İSTEMCİSİ canlıda ama EKLEME
-  akışı Nadir A/B/C/D seçene kadar KAPALI — bkz. changelog (7), `g-android-kitap-ekleme-onerisi-20260926.md`.
+  hiçbir G güncellemesini (motor dahil) alamıyor. Android G istemcisi paketlerde AÇIK
+  (`EMPP_SET_GUNCELLEME=windows,macos,linux,android`); koruma g-yayin `--ekle` KAPISINDA:
+  anahtarsız `--ekle` RED, bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` (rapor +
+  manifest yanında `ANDROID-DONUK.txt`), dal `g-yayin-android-kapi` (`233854f`, agent-mode'a
+  merge bekliyor). Kalıcı çözüm Nadir A/B seçimi — bkz. changelog (7), `g-android-kitap-ekleme-onerisi-20260926.md`.

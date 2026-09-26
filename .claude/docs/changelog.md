@@ -7,14 +7,17 @@ akşam boyunca art arda canlıya alındı; son durum `agent-mode` = `cdb5ed4`, s
 `~/.empp-agent/yedek/run-agent.sh.20260926-canliya-alma-oncesi`.
 
 **Canlıya alınan parçalar:**
-- **G kanalı istemcileri — mac/Pardus örtü + Windows yerinde, Android EKLEME kapalı:**
+- **G kanalı istemcileri — mac/Pardus örtü + Windows yerinde + Android; Android EKLEME kapıda RED:**
   monoton sürüm + set kimliği + "ya hep ya hiç" tüm kiplerde birleşti (`e07bc37`, `445fed5`,
   `9d49ead`); üç güvenlik açığı kapandı — Docker'a claim alanları+açık anahtar, tabansız/
   anahtarsız pakete enjeksiyon YOK, renderer fs-shim örtü okuma (`b82f76d`..`3a37126`,
   `95b879e`). Android istemcisi (RouteProcessor katmanı, EmppG eklentisi, üç güvenlik kuralı)
-  geldi (`8101b3e`, `a7ff0b6`) ama **G EKLEME akışı Nadir A/B seçene kadar KAPALI**: manifest
-  her eklemeyi sonraki yayınlara taşıdığından bir ekleme sonrası o setin Android'i hiçbir G
-  güncellemesini (motor dahil) alamıyor — kalıcı donma riski (öneri:
+  geldi (`8101b3e`, `a7ff0b6`) ve Android paketlerinde AÇILDI (`EMPP_SET_GUNCELLEME`'ye `android`,
+  Nadir: "tüm paketlerde güncelleme istemcisi olsun"). Manifest her eklemeyi sonraki yayınlara
+  taşıdığından bir ekleme sonrası o setin Android'i hiçbir G güncellemesini (motor dahil)
+  alamıyor — kalıcı donma riski; koruma g-yayin `--ekle` KAPISINDA: anahtarsız `--ekle` RED,
+  bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` (dal `g-yayin-android-kapi`,
+  `233854f`, agent-mode'a merge bekliyor). Kalıcı çözüm Nadir A/B seçimi (öneri:
   `~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md`).
 - **Claim sürüm / monoton taban:** mac ve Android G tabanı artık HTTP yolunda claim sürümünü
   `empp-set.json`/`empp-g-paket.json`'a yazıyor (`012760d`, merge `0959b20`); ProBook yerel
@@ -76,7 +79,7 @@ akşam boyunca art arda canlıya alındı; son durum `agent-mode` = `cdb5ed4`, s
   `launchctl bootstrap` bilerek ERTELENDİ (plist hazır: `~/Library/LaunchAgents/
   com.empp.e2e-saglik.plist`, `plutil` ile doğrulandı).
 
-**Canlı env (run-agent.sh, bu akşam eklenen/değişen):** `EMPP_SET_GUNCELLEME=windows,macos,linux`
+**Canlı env (run-agent.sh, bu akşam eklenen/değişen):** `EMPP_SET_GUNCELLEME=windows,macos,linux,android`
 · `EMPP_ICERIK_GUNCELLEME=mac,windows` · `EMPP_ARSIV_MERDIVEN=1` · `KABUL_CDP=1` ·
 `EMPP_RUNNER_WINDOWS=1` + `AGENT_CAPS` içine `windows` eklendi. `EMPP_ICERIK_KAPISI` ve
 `EMPP_WEBP_ONBELLEK` run-agent.sh'ta tanımlı değil — kod varsayılanları zaten AÇIK.
