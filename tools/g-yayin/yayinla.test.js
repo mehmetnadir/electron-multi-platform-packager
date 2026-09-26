@@ -155,10 +155,16 @@ test('uçtan uca (http): iki yayın → Windows istemcisi 2.90.1 kurulumunu 2.90
     assert.equal(r2.kabuk, 2, 'book2 motoru taşındı');
     assert.equal(r2.kitaplar, 2, 'ekle/çıkar kararları taşındı');
 
-    // Yükleme planı: içerik → sürüm arşivi → manifest → surum.json EN SON.
+    // Yükleme planı: içerik → sürüm arşivi → manifest → surum.json EN SON (canonical + android).
     const plan = JSON.parse(fs.readFileSync(r2.plan, 'utf8'));
     const anahtarlar = plan.yukle.map((p) => p.anahtar);
-    assert.equal(anahtarlar[anahtarlar.length - 1], 'guncelleme/set/99901/surum.json');
+    assert.deepEqual(
+      anahtarlar.slice(-2).sort(),
+      ['guncelleme/set/99901/android/surum.json', 'guncelleme/set/99901/surum.json'],
+      'iki surum.json (canonical + android) plan sonunda, TEK imza paylaşılıyor',
+    );
+    assert.ok(anahtarlar.includes('guncelleme/set/99901/android/manifest.json'));
+    assert.ok(anahtarlar.includes('guncelleme/set/99901/android/dosya/index.html'));
     assert.ok(
       anahtarlar.indexOf('guncelleme/set/99901/dosya/index.html') <
         anahtarlar.indexOf('guncelleme/set/99901/manifest.json'),
@@ -518,8 +524,14 @@ test('eski manifest (dosyalar alanı yok) hâlâ doğrulanır — geriye uyumlul
   delete b4.dosyalar; // eski istemci/eski manifest simülasyonu (alan hiç yok)
   const ozel = anahtar.dosyadanOku(o.anahtarYolu);
   const govde = Buffer.from(JSON.stringify(m), 'utf8');
+  const imza = anahtar.imzala(govde, ozel, o.acik);
   fs.writeFileSync(manifestYolu, govde);
-  fs.writeFileSync(manifestYolu + kg.IMZA_UZANTI, anahtar.imzala(govde, ozel, o.acik));
+  fs.writeFileSync(manifestYolu + kg.IMZA_UZANTI, imza);
+  // Android mirror'ı da AYNI baytlarla güncelle (TEK imza paylaşılıyor — gerçek bir yayın
+  // canonical ve android/ manifestini birlikte yazar, bu yüzden test de ikisini birlikte tutar).
+  const androidDizini = path.join(setDizini, 'android');
+  fs.writeFileSync(path.join(androidDizini, 'manifest.json'), govde);
+  fs.writeFileSync(path.join(androidDizini, 'manifest.json' + kg.IMZA_UZANTI), imza);
 
   const d1 = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
   assert.equal(d1.gecti, true, d1.hatalar.join('; '));
