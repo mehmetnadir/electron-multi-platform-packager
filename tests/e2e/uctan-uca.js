@@ -5,7 +5,7 @@
  * Nadir'in beş sorusu T1-T5; her soru adımlardan oluşur, her adım `tests/e2e/adimlar/<ad>.js`.
  *
  *   plan   [--test T1,T3] [--json]                 hangi test hangi adımla koşar (kuru, ölçüm yok)
- *   kos    --test T1,T3 --kitap 74390 [--kuru] [--bildir]
+ *   kos    --test T1,T3 --kitap 74390 [--kuru] [--bildir] [--kesifsiz]
  *          [--paket <yol>]... [--url <cdn>]... [--indir]
  *          [--beklenen-43e23 md5] [--beklenen-index md5] [--beklenen-taban url] [--uretilen-md5 md5]
  *          [--uretilen-sha256 hex] [--uretilen-boyut bayt]
@@ -13,7 +13,13 @@
  *
  * Rapor: ~/.empp-agent/e2e/<YYYYMMDD-HHMM>.json + aynı adla .md (EMPP_E2E_DIZIN ile değişir).
  * Bildirim yalnız --bildir: GECTI → `bildir kosucu`, diğer → `bildir bekci` (madde + kanıt yolu).
- * Kuru koşu: yazan/tetikleyen adım koşmaz, tam indirme yok (yalnız HEAD + Range + yerel okuma).
+ * GİRDİ KEŞFİ (adimlar/kesif.js): her koşuda kitabın pipeline satırları srv21 `pipeline-sql` ile
+ * SALT-OKUNUR okunur (runner-is-kaydi, uretim-yeri, kabul-kapisi, t5-* aynı kaydı kullanır);
+ * --paket/--url verilmediyse girdiler r2_object_key → CDN URL'lerinden kurulur. --kesifsiz kapatır.
+ * Kuru koşu (--kuru): YALNIZ yazan/tetikleyen adımlar (t5-tetik, g-uygula) koşmaz. Salt-okuma
+ * ölçümler (paket-statik, cdn-md5-kiyas, g-dogrula, k-icerik, kabul kanıtı, t5 sorguları) kuruda da
+ * koşar; --indir (CDN'den tam indirme, salt okuma) kuruyla birlikte verilebilir.
+ * Ağ ölçümleri (İmpark ucu, canlı G manifesti) EMPP_E2E_AG=0 ile kapanır (testler).
  * Ağır adım (yerel paket açma) `~/.empp-agent/agir.sh e2e-paket-denetle …` semaforundan geçer
  * (EMPP_E2E_AGIR=0 kapatır — testler için).
  */
@@ -23,6 +29,7 @@ const os = require('os');
 const { spawn, spawnSync } = require('child_process');
 const O = require('./adimlar/ortak');
 const PD = require('./adimlar/paket-denetle');
+const K = require('./adimlar/kesif');
 
 const { DURUM } = O;
 
@@ -41,7 +48,14 @@ const TESTLER = Object.freeze({
   },
   T4: {
     soru: 'DMG ve APK aynı sözleşmeyle üretiliyor ve güncelleme alabiliyor mu?',
-    adimlar: ['ortak-temizlik', 'paket-statik', 'kabul-kapisi', 'g-uygula', 'k-icerik'],
+    adimlar: [
+      'ortak-temizlik',
+      'paket-statik',
+      'kabul-kapisi',
+      'g-dogrula',
+      'g-uygula',
+      'k-icerik',
+    ],
   },
   T5: {
     soru: "İmpark'ta içerik güncellemesi olunca otomasyon paketleri kendisi güncelliyor mu?",
@@ -79,6 +93,7 @@ function argumanlar(argv) {
     else if (k === '--paket') a.paketler.push(v());
     else if (k === '--url') a.urller.push(v());
     else if (k === '--indir') a.indir = true;
+    else if (k === '--kesifsiz') a.kesifsiz = true;
     else if (k === '--json') a.json = true;
     else if (k === '--dosya') a.dosya = v();
     else if (k === '--liste') a.liste = true;
@@ -191,18 +206,34 @@ function altSurecteDenetle(girdi, a, calisma) {
   });
 }
 
-async function paketleriDenetle(a, testler) {
-  const statikGerek = testler.some(
-    (t) =>
-      TESTLER[t].adimlar.includes('paket-statik') || TESTLER[t].adimlar.includes('cdn-md5-kiyas'),
+/** Paket denetimi gereken adım var mı (paket-statik, cdn-md5-kiyas ya da `paketIster`). */
+function paketGerekir(testler) {
+  return testler.some((t) =>
+    TESTLER[t].adimlar.some(
+      (ad) => ad === 'paket-statik' || ad === 'cdn-md5-kiyas' || adimYukle(ad).paketIster,
+    ),
   );
-  if (!statikGerek) return [];
+}
+
+/** Girdiler: argüman (--paket/--url) varsa onlar; yoksa keşfin CDN URL'leri. */
+function girdileriKur(a, kesif) {
+  const arguman = [
+    ...a.paketler.map((d) => ({ tur: 'paket', deger: path.resolve(d), kaynak: 'arguman' })),
+    ...a.urller.map((d) => ({ tur: 'url', deger: d, kaynak: 'arguman' })),
+  ];
+  if (arguman.length || !kesif) return arguman;
+  return kesif.urller.map((u) => ({
+    tur: 'url',
+    deger: u.url,
+    platform: u.platform,
+    kaynak: 'kesif',
+  }));
+}
+
+async function paketleriDenetle(a, testler, girdiler) {
+  if (!paketGerekir(testler) || !girdiler.length) return [];
   const calisma = O.calismaDizini();
   fs.mkdirSync(calisma, { recursive: true });
-  const girdiler = [
-    ...a.paketler.map((d) => ({ tur: 'paket', deger: path.resolve(d) })),
-    ...a.urller.map((d) => ({ tur: 'url', deger: d })),
-  ];
   const sonuclar = [];
   for (const g of girdiler) {
     const t0 = Date.now();
@@ -225,12 +256,35 @@ async function paketleriDenetle(a, testler) {
 async function kos(a) {
   const testler = testListesi(a.test);
   const kitap = String(a.kitap || O.DEMO_KITAP);
-  if (a.kuru && a.indir)
-    throw new Error('kuru koşuda tam indirme yok (--indir ile --kuru birlikte olmaz)');
   const baslangic = new Date();
   const beklenen = { ...PD.varsayilanBeklenen(), ...a.beklenen };
-  const paketSonuclari = await paketleriDenetle({ ...a, beklenen }, testler);
+  // Salt-okuma kayıtlar bir kez okunur; testler enjekte eder (a.kesif / a.kapilar / a.windowsKaniti).
+  let kesif = a.kesif;
+  if (kesif === undefined) {
+    if (a.kesifsiz) kesif = null;
+    else {
+      try {
+        kesif = K.kesfet({ kitap });
+      } catch (e) {
+        kesif = {
+          durum: 'olculemedi',
+          sebep: `keşif hata verdi: ${e.message}`,
+          kitap,
+          satirlar: [],
+          urller: [],
+          probook: { durum: 'olculemedi', sebep: e.message },
+        };
+      }
+    }
+  }
+  const kapilar = a.kapilar !== undefined ? a.kapilar : K.canliKapilar();
+  const windowsKaniti = a.windowsKaniti !== undefined ? a.windowsKaniti : K.windowsKaniti(kitap);
+  const girdiler = girdileriKur(a, kesif);
+  const girdiArguman = girdiler.some((g) => g.kaynak === 'arguman');
+  const paketSonuclari = await paketleriDenetle({ ...a, beklenen }, testler, girdiler);
   const statik = adimYukle('paket-statik');
+  const paylasim = {};
+  const ag = process.env.EMPP_E2E_AG !== '0';
 
   const satirlar = [];
   for (const test of testler) {
@@ -246,6 +300,17 @@ async function kos(a) {
           beklenen,
           paketSonuclari,
           testeUygun: (s) => statik.testeUygun(test, s),
+          kesif,
+          kapilar,
+          windowsKaniti,
+          girdiArguman,
+          paylasim,
+          ag,
+          calisma: O.calismaDizini(),
+          istek: a.istek,
+          indir: a.indirFn,
+          kAraci: a.kAraci,
+          gUzakDogrula: a.gUzakDogrula,
         });
       } catch (e) {
         r = [
@@ -274,6 +339,23 @@ async function kos(a) {
     kitap,
     testler,
     kuru: !!a.kuru,
+    kesif: kesif
+      ? {
+          durum: kesif.durum,
+          sebep: kesif.sebep || null,
+          komut: kesif.komut || null,
+          probook: kesif.probook ? kesif.probook.durum : null,
+          satirlar: (kesif.satirlar || []).map((x) => ({
+            platform: x.platform,
+            status: x.status,
+            build_method: x.build_method,
+            r2_object_key: x.r2_object_key,
+            last_run_at: x.last_run_at,
+            last_queued_at: x.last_queued_at,
+          })),
+        }
+      : null,
+    girdi_kaynagi: girdiArguman ? 'arguman' : kesif && girdiler.length ? 'kesif' : 'yok',
     girdiler: paketSonuclari.map((s) => ({
       ...s.girdi,
       aile: s.ozet.aile || null,
@@ -312,10 +394,11 @@ function kanitKisa(s) {
   const k = s.kanit || {};
   const o = k.olcum || {};
   const parca = [];
+  if (o.kuru) parca.push(o.kuru);
   if (o.sebep) parca.push(o.sebep);
   else if (o.bekliyor) parca.push(`bekliyor: ${o.bekliyor}`);
-  if (o.kuru) parca.push(o.kuru);
   if (o.reddedildi) parca.push(o.reddedildi);
+  if (o.ayrinti) parca.push(o.ayrinti);
   if (!o.sebep) {
     if (o.aile) parca.push(`aile=${o.aile}`);
     if (o.md5) parca.push(`md5=${o.md5}`);
@@ -332,8 +415,9 @@ function kanitKisa(s) {
     if (o.boyut && !o.aile) parca.push(`boyut=${o.boyut}`);
     if (o.son_degisiklik) parca.push(`son=${o.son_degisiklik}`);
   }
+  if (o.not) parca.push(o.not);
   if (k.dosya) parca.push(`dosya: ${k.dosya}`);
-  return parca.join(' · ').replace(/\|/g, '\\|').slice(0, 300);
+  return parca.join(' · ').replace(/\|/g, '\\|').slice(0, 400);
 }
 
 function mdUret(r) {
@@ -350,6 +434,16 @@ function mdUret(r) {
   s.push('| Test | Hüküm | Soru |');
   s.push('|---|---|---|');
   for (const t of r.testler) s.push(`| ${t} | ${r.test_ozet[t]} | ${TESTLER[t].soru} |`);
+  if (r.kesif) {
+    s.push('');
+    const pl = (r.kesif.satirlar || [])
+      .map((x) => `${x.platform}=${x.status}${x.build_method ? `/${x.build_method}` : ''}`)
+      .join(' ');
+    s.push(
+      `Keşif: ${r.kesif.durum}${r.kesif.sebep ? ` — ${r.kesif.sebep}` : ''}${pl ? ` · ${pl}` : ''} · ` +
+        `ProBook ajanı ${r.kesif.probook || '-'} · girdi kaynağı ${r.girdi_kaynagi || '-'}`,
+    );
+  }
   if (r.girdiler.length) {
     s.push('');
     s.push('| Girdi | Aile | Boyut | İndirilen (Range) | Semafor |');
@@ -503,4 +597,16 @@ if (require.main === module) {
     });
 }
 
-module.exports = { TESTLER, plan, kos, ana, mdUret, bildirimMesaji, testListesi, argumanlar };
+module.exports = {
+  TESTLER,
+  plan,
+  kos,
+  ana,
+  mdUret,
+  bildirimMesaji,
+  testListesi,
+  argumanlar,
+  girdileriKur,
+  paketGerekir,
+  kanitKisa,
+};

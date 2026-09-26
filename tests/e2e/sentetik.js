@@ -301,9 +301,59 @@ function betikYaz(yol, govde) {
   return yol;
 }
 
+/**
+ * Ağsız keşif ortamı: pipeline-sql gibi davranan sahte betik (SQL tek argüman; build_agents
+ * sorgusu → `probook.tsv`, platform sorgusu → `pipeline.tsv`; dosya boşsa 0 satır = rc 1 + boş
+ * çıktı, gerçeği gibi) + canlı kayıt yolları geçici dizine. Dönen env koşucuya/alt sürece verilir.
+ * @param {string} dizin
+ * @param {{pipeline?:string, probook?:string, runAgent?:string, agentLog?:string}} [v] TSV/metin
+ */
+function kesifOrtami(dizin, v = {}) {
+  fs.mkdirSync(dizin, { recursive: true });
+  const tsv = path.join(dizin, 'pipeline.tsv');
+  const pb = path.join(dizin, 'probook.tsv');
+  fs.writeFileSync(tsv, v.pipeline || '');
+  fs.writeFileSync(pb, v.probook || '');
+  const kayit = path.join(dizin, 'sql-kayit.txt');
+  const betik = betikYaz(
+    path.join(dizin, 'pipeline-sql-sahte'),
+    [
+      `printf '%s\\n' "$1" >> "${kayit}"`,
+      `case "$1" in *"FROM build_agents WHERE"*) f="${pb}" ;; *) f="${tsv}" ;; esac`,
+      '[ -s "$f" ] || exit 1',
+      'cat "$f"',
+    ].join('\n'),
+  );
+  const runAgent = path.join(dizin, 'run-agent.sh');
+  fs.writeFileSync(
+    runAgent,
+    v.runAgent !== undefined
+      ? v.runAgent
+      : 'export AGENT_CAPS="mac,android,pardus"\nexport EMPP_ICERIK_GUNCELLEME=windows,macos\nexport KABUL_CDP=1\n',
+  );
+  const agentLog = path.join(dizin, 'agent.log');
+  fs.writeFileSync(agentLog, v.agentLog || '');
+  const kanitKok = path.join(dizin, 'kabul-kanit');
+  fs.mkdirSync(kanitKok, { recursive: true });
+  return {
+    kayit,
+    tsv,
+    pb,
+    env: {
+      EMPP_E2E_PIPELINE_SQL: betik,
+      EMPP_E2E_AG: '0',
+      EMPP_E2E_RUN_AGENT: runAgent,
+      EMPP_E2E_AGENT_LOG: agentLog,
+      EMPP_KABUL_KANIT_KOK: kanitKok,
+      EMPP_E2E_WIN_KANIT: path.join(dizin, 'windows-kanit'),
+    },
+  };
+}
+
 module.exports = {
   KOK,
   geciciDizin,
+  kesifOrtami,
   androidAgaci,
   nsisYap,
   sfxYap,

@@ -15,6 +15,7 @@ const D = S.geciciDizin('gece');
 const BETIK = path.join(__dirname, 'gece', 'e2e-gece.sh');
 const SABLON = path.join(__dirname, 'gece', 'com.empp.e2e-saglik.plist.sablon');
 const KAYIT = path.join(D, 'bildir-kayit.txt');
+const KO = S.kesifOrtami(path.join(D, 'kesif'));
 const AGIR_KAYIT = path.join(D, 'agir-kayit.txt');
 
 // bildir sözleşmesi: bildir <kanal> <mesaj> [-p ...]; <2 argüman → kullanım + rc=2 (gerçeği gibi)
@@ -60,6 +61,7 @@ function kos(kip, ek = {}) {
     EMPP_E2E_DIZIN: path.join(D, 'rapor'),
     EMPP_E2E_CALISMA: path.join(D, 'calisma'),
     EMPP_E2E_AGIR: '0',
+    ...KO.env,
     ...ek,
   };
   const r = spawnSync('/bin/bash', [BETIK, ...(kip ? [kip] : [])], {
@@ -135,6 +137,28 @@ test('bildir sözleşmesi: tek argüman rc=2 (sahte ve gerçek bildir — gerçe
   );
   if (gercek)
     assert.equal(spawnSync(gercek, ['tek'], { encoding: 'utf8', timeout: 10000 }).status, 2);
+});
+
+test('varsayılan --kuru --indir geçer (E2E_INDIR=0 kapatır); dış semafor varken iç denetim semaforsuz', () => {
+  const kayit = path.join(D, 'kosucu-arg.json');
+  const kosucu = path.join(D, 'kosucu-arg.js');
+  fs.writeFileSync(
+    kosucu,
+    `require('fs').writeFileSync(${JSON.stringify(kayit)}, JSON.stringify({ argv: process.argv.slice(2), agir: process.env.EMPP_E2E_AGIR }));\n` +
+      "console.log('T5  GECTI\\nGENEL GECTI — /r/20260926-0730.md');",
+  );
+  const r = kos('sabah', {
+    E2E_KOSUCU: kosucu,
+    E2E_GECE_AGIR: '1',
+    E2E_AGIR_BETIK: AGIR,
+    EMPP_E2E_AGIR: '1',
+  });
+  assert.equal(r.rc, 0, r.cikti);
+  const k = JSON.parse(fs.readFileSync(kayit, 'utf8'));
+  assert.ok(k.argv.includes('--kuru') && k.argv.includes('--indir'), k.argv.join(' '));
+  assert.equal(k.agir, '0', 'agir.sh slotu tutulurken iç paket denetimi ikinci slot istememeli');
+  kos('sabah', { E2E_KOSUCU: kosucu, E2E_INDIR: '0' });
+  assert.ok(!JSON.parse(fs.readFileSync(kayit, 'utf8')).argv.includes('--indir'));
 });
 
 test(

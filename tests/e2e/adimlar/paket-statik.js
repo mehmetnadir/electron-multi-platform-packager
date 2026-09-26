@@ -8,6 +8,7 @@
  * Uygun girdi yoksa tek satır OLCULEMEDI ("girdi yok") — test sessizce yeşile dönmez.
  */
 const O = require('./ortak');
+const K = require('./kesif');
 
 const PE_AILELERI = new Set(['nsis', 'sfx-rar5', 'sfx-rar4', 'pe-bilinmeyen']);
 const T_AILE = {
@@ -16,18 +17,21 @@ const T_AILE = {
     uygun: (a) => PE_AILELERI.has(a),
     uzanti: /\.exe$/i,
     ad: 'Windows (NSIS)',
+    platformlar: ['windows'],
   },
   T2: {
     beklenen: 'appimage',
     uygun: (a) => a === 'appimage' || a === 'elf-bilinmeyen',
     uzanti: /\.(impark|appimage)$/i,
     ad: 'Pardus (.impark)',
+    platformlar: ['pardus'],
   },
   T4: {
     beklenen: null,
     uygun: (a) => a === 'dmg' || a === 'apk' || a === 'zip',
     uzanti: /\.(dmg|apk)$/i,
     ad: 'DMG/APK',
+    platformlar: ['mac', 'android'],
   },
 };
 const T_ALTLAR = {
@@ -82,11 +86,15 @@ module.exports = {
     const uygun = (baglam.paketSonuclari || []).filter((s) => testeUygun(test, s));
     if (!uygun.length) {
       const ne = test === 'T3' ? 'herhangi bir paket' : T_AILE[test].ad;
-      return [
-        O.sonuc(test, this.ad, O.DURUM.OLCULEMEDI, {
-          olcum: { sebep: `girdi yok: ${test} için ${ne} verilmedi (--paket / --url)` },
-        }),
-      ];
+      const sebep =
+        baglam.girdiArguman || !baglam.kesif
+          ? `girdi yok: ${test} için ${ne} verilmedi (--paket / --url)`
+          : K.girdiYokSebebi(
+              baglam.kesif,
+              test === 'T3' ? K.PAKET_PLATFORMLARI : T_AILE[test].platformlar,
+              `${test} için ${ne}`,
+            );
+      return [O.sonuc(test, this.ad, O.DURUM.OLCULEMEDI, { olcum: { sebep } })];
     }
     const cikti = [];
     for (const s of uygun) {
