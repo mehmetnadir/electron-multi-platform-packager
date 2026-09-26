@@ -86,4 +86,61 @@ async function findSubBookDirs(rootPath, opts = {}) {
   return results;
 }
 
-module.exports = { findSubBookDirs, hasEngineSignature, SKIP_DIR_NAMES };
+/**
+ * `findSubBookDirs`'in ARŞİV (asar/zip listPackage tarzı) ikizi — GERÇEK bir dizin
+ * yoksa (örn. `@electron/asar` `listPackage()` bütün arşivi ZATEN düz, tekrarlı bir
+ * yol dizisi olarak döndürür) `fs.readdir` çağrılamaz. Aynı K8 kuralını (motor imzası:
+ * kök-göreli bir dizinin kendi `index.html` VE `app.config.js` dosyalarına BİRLİKTE
+ * sahip olması, bulunan dizinin İÇİNE inilmemesi, `SKIP_DIR_NAMES` hiç aday sayılmaması)
+ * salt dizi işlemleriyle uygular. Tüketici: `tools/kabul/paket-cikar.js` `kokEnvanteri()`
+ * (asar-modu) — dizin modu ise gerçek fs kullandığından burada AYNI algoritma dosya
+ * listesi üstünden tekrarlanır (bkz. çağıran taraf).
+ *
+ * BOZARSAN: ad desenine (`^book\d+$`) dönersen `sub-book-dirs.test.js`'teki K8
+ * regresyon testi VE `tools/kabul/yardimcilar.test.js`'teki eşdeğer test kırılır.
+ *
+ * @param {string[]} allRelPaths kök-göreli, POSIX ayraçlı dosya (ve/veya dizin) yolları
+ *   — asar `listPackage()` çıktısı gibi TÜM ağacı düz listeleyen bir kaynak.
+ * @param {{ maxDepth?: number }} [opts] `findSubBookDirs` ile aynı anlam.
+ * @returns {string[]} sıralı, kök-göreli motor-imzalı dizin yolları
+ */
+function findEngineDirsInPathList(allRelPaths, opts = {}) {
+  const maxDepth = opts.maxDepth != null ? opts.maxDepth : 2;
+  const dosyalar = new Set(
+    (allRelPaths || []).map((p) => String(p).replace(/\\/g, '/').replace(/^\/+/, '')).filter(Boolean),
+  );
+
+  // 1) Kök hariç, en fazla maxDepth seviye derinlikteki TÜM dizin adaylarını topla
+  //    (bir dosyanın üst yol parçalarından türetilir — gerçek readdir yok).
+  const adaylar = new Set();
+  for (const p of dosyalar) {
+    const parcalar = p.split('/');
+    const derinlikSiniri = Math.min(maxDepth, parcalar.length - 1);
+    for (let d = 1; d <= derinlikSiniri; d += 1) adaylar.add(parcalar.slice(0, d).join('/'));
+  }
+
+  // 2) SKIP_DIR_NAMES'te geçen HERHANGİ bir yol parçasını taşıyan adayı ele — gerçek
+  //    walk() bu dizinlerin İÇİNE hiç inmediği için onların altındaki hiçbir şey aday
+  //    OLAMAZ.
+  const gecerliAdaylar = [...adaylar].filter(
+    (d) => !d.split('/').some((parca) => SKIP_DIR_NAMES.has(parca)),
+  );
+
+  // 3) Motor imzası: aday/index.html VE aday/app.config.js birlikte var mı?
+  const imzali = gecerliAdaylar.filter(
+    (d) => dosyalar.has(`${d}/index.html`) && dosyalar.has(`${d}/app.config.js`),
+  );
+
+  // 4) Bulunan bir dizinin İÇİNE inilmez — kendisinden daha derin, onu önek olarak
+  //    taşıyan başka bir "bulunan" varsa (kitabın kendi core/assets'i içinde tesadüfen
+  //    aynı ikili bulunsa bile) o iç sonuç ELENİR.
+  const sonuc = imzali.filter(
+    (d) => !imzali.some((digeri) => digeri !== d && d.startsWith(`${digeri}/`)),
+  );
+  sonuc.sort();
+  return sonuc;
+}
+
+module.exports = {
+  findSubBookDirs, findEngineDirsInPathList, hasEngineSignature, SKIP_DIR_NAMES,
+};
