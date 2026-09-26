@@ -85,7 +85,7 @@ Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 
 
 ProBook şeridi kuralları (13acb01, `serit-secimi.js`):
 - Mac pardus işini ProBook'a yalnız beş koşul birlikte tutarsa bırakır: nabız ≤10 dk · ajan ayakta · API `peek` (ProBook jetonu) · disk ≥25 GB ve ≤%85 · kaynak arşivi özeti eşit. Biri tutmazsa Mac alır.
-- Arşiv özeti kayıt başına md5 + boyut taşır. Fark varsa Mac `arsiv-esle.sh` koşturur: Mac otoritedir, aktarım yalnız LAN'da, eşitlenene dek ProBook duraklatılır.
+- Arşiv özeti kayıt başına md5 + boyut + `impark_kaynagi` taşır: zip aynı, İmpark kaynağı farklıysa da eşit sayılmaz (bayat arşiv kararı iki şeritte ayrışmaz). Fark varsa Mac `arsiv-esle.sh` koşturur: Mac otoritedir, aktarım yalnız LAN'da, eşitlenene dek ProBook duraklatılır.
 - K kanalı iki şeritte eşit: yerel derleme Docker'ın her `-e EMPP_` bayrağını taşır (parite testi `pardus-yerel-build.test.js`).
 
 Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar. srv21 fallback açık karar 5'tedir.

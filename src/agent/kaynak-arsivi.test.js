@@ -191,3 +191,34 @@ test('liste: köprü İmpark\'ın gerisindeyken arşiv kapsadığı her kaynakta
       + ' → MP11-v49.exe; build zip yeniden üretilmeli'),
   );
 });
+
+// ---------------------------------------------------------------------------
+// arsivOzeti × impark_kaynagi (birleştirme 26.09: probook-serit + bayat arşiv kapısı).
+// ProBook şeridi iki makinenin arşiv özetini kıyaslar. Özet yalnız md5+boyut taşısaydı zip
+// aynı, impark_kaynagi farklıyken "eşit" derdi: bir makine işi BAYAT diye düşürür, öteki üretirdi.
+// ---------------------------------------------------------------------------
+const { arsivOzeti } = require('./kaynak-arsivi');
+
+test('arsivOzeti: zip aynı, impark_kaynagi farklı → özet FARKLI', () => {
+  const mac = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v48.exe' });
+  const pb = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v47.exe' });
+  assert.notEqual(arsivOzeti(mac.kok).ozet, arsivOzeti(pb.kok).ozet);
+  const kapsayan = kur('ayni-zip', { impark_kaynagi: ['ShallWe8-v48.exe', 'ShallWe8-v47.exe'] });
+  assert.notEqual(arsivOzeti(kapsayan.kok).ozet, arsivOzeti(mac.kok).ozet,
+    'kapsanan kaynak listesi de özete girer (v47 işinde biri üretir, öteki BAYAT der)');
+});
+
+test('arsivOzeti: aynı İmpark kimliği (ad ya da imzalı köprü URL\'si) → özet EŞİT', () => {
+  const a = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v48.exe' });
+  const b = kur('ayni-zip', { impark_kaynagi: kopruUrl('ShallWe8-v48.exe', 'baska-imza') });
+  assert.equal(arsivOzeti(a.kok).ozet, arsivOzeti(b.kok).ozet);
+});
+
+test('arsivOzeti: alan yoksa satır eski biçimde (özet değişmez); alan bozuksa BOZUK', () => {
+  const { kok, md5 } = kur('z');
+  const eski = crypto.createHash('sha256').update(`45482 ${md5} 1`).digest('hex').slice(0, 16);
+  assert.equal(arsivOzeti(kok).ozet, eski);
+  const bozuk = kur('z', { impark_kaynagi: '' });
+  const beklenen = crypto.createHash('sha256').update('45482 BOZUK').digest('hex').slice(0, 16);
+  assert.deepEqual(arsivOzeti(bozuk.kok), { ozet: beklenen, adet: 1, kitaplar: ['45482'] });
+});

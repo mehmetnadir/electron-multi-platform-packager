@@ -180,9 +180,13 @@ async function arsivKaynagi(bookId, {
 }
 
 /**
- * Arşivin KİMLİK özeti (2026-09-26, ProBook şeridi): `<id> <md5> <boyut>` satırları sıralı,
- * sha256'nın ilk 16 hanesi. Zip OKUNMAZ — yalnız kaynak.json kayıtları (ucuz, her nabızda).
- * İki makinenin özeti eşitse aynı kitaplar aynı zip'ten üretilir. Kayıt bozuksa satırı
+ * Arşivin KİMLİK özeti (2026-09-26, ProBook şeridi): `<id> <md5> <boyut>[ <impark_kaynagi>]`
+ * satırları sıralı, sha256'nın ilk 16 hanesi. Zip OKUNMAZ — yalnız kaynak.json kayıtları (ucuz,
+ * her nabızda). İki makinenin özeti eşitse aynı kitaplar aynı zip'ten, aynı İmpark kaynağına
+ * karşı üretilir. `impark_kaynagi` (bayat arşiv kapısı) satıra kimlik listesi olarak (`|` ile,
+ * sıra korunur) girer: zip aynı ama impark_kaynagi farklıysa bir makine işi BAYAT diye
+ * düşürürken öteki üretir — özet farkı bunu şerit kararına taşır. Alan yoksa satır eski
+ * biçimdedir (alanı olmayan arşivde özet değişmez). Kayıt ya da impark_kaynagi bozuksa satır
  * `<id> BOZUK` olur (fark görünür kalsın, sessizce düşmesin). Kök yoksa/boşsa: 'bos'.
  * @param {string} [kok]
  * @returns {{ ozet: string, adet: number, kitaplar: string[] }}
@@ -196,7 +200,9 @@ function arsivOzeti(kok = arsivKoku()) {
     try { ham = fs.readFileSync(path.join(kok, ad, 'kaynak.json'), 'utf8'); } catch (_) { continue; } // kayıt yok = arşivde değil
     try {
       const k = JSON.parse(ham);
-      satirlar.push(`${ad} ${String(k.md5 || '').toLowerCase()} ${Number(k.boyut) || 0}`);
+      const impark = kayitliKimlikler(k.impark_kaynagi); // bozuksa atar → BOZUK
+      const ek = impark ? ` ${impark.join('|')}` : '';
+      satirlar.push(`${ad} ${String(k.md5 || '').toLowerCase()} ${Number(k.boyut) || 0}${ek}`);
     } catch (_) {
       satirlar.push(`${ad} BOZUK`);
     }

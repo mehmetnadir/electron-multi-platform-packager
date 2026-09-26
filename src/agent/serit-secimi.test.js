@@ -231,3 +231,29 @@ test('denetçi: zorla çağrısı uçuştaki ESKİ okumayı paylaşmaz, bitmesin
   assert.equal(okuma, 2);
   assert.equal(d.karar().probookSaglikli, true);
 });
+
+test('birleştirme 26.09: zip aynı, impark_kaynagi farklı → bayat kararı ayrışırdı, Mac alır', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const crypto = require('crypto');
+  const { arsivOzeti, arsivKaynagi } = require('./kaynak-arsivi');
+  const arsiv = (impark) => {
+    const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'serit-arsiv-'));
+    fs.mkdirSync(path.join(kok, '45482'));
+    fs.writeFileSync(path.join(kok, '45482', 'build.zip'), 'ayni-zip');
+    const md5 = crypto.createHash('md5').update('ayni-zip').digest('hex');
+    fs.writeFileSync(path.join(kok, '45482', 'kaynak.json'),
+      JSON.stringify({ dosya: 'build.zip', md5, boyut: 8, impark_kaynagi: impark }));
+    return kok;
+  };
+  const mac = arsiv('ShallWe8-v48.exe');
+  const pb = arsiv('ShallWe8-v47.exe');
+  // Güncel iş v48: Mac arşivden üretir, ProBook aynı zip'i BAYAT diye düşürür.
+  const s = { imparkKaynagi: 'ShallWe8-v48.exe', uyar: () => {} };
+  assert.ok(await arsivKaynagi(45482, { kok: mac, ...s }));
+  await assert.rejects(() => arsivKaynagi(45482, { kok: pb, ...s }), /BAYAT/);
+  const k = seritKarari({ nabiz: nabiz({ arsivOzeti: arsivOzeti(pb).ozet }), simdi: T, arsivOzeti: arsivOzeti(mac).ozet });
+  assert.equal(k.macPardusAlsin, true);
+  assert.match(k.sebep, /kaynak arşivi farklı/);
+});
