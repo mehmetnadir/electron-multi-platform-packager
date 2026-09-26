@@ -19,11 +19,14 @@
  *   k4       (KABUL_K4=1 / --k4, varsayılan KAPALI) güncellik: ayrı boş profil + CDP ile ilk
  *            kitaba girilir, motorun GetKitapGuncellemeBilgi sorusu ve cevabı yakalanır
  *            (ProBook E6/E7/E8'in eşi — k4-guncellik.js). Android'de ek olarak cihaz WebView'ı.
+ *            + KABUL_SET_TUM=1 / --set-tum (K4 açıkken, varsayılan KAPALI): SET'in HER alt kitabının
+ *            menü sürümü İmpark'a doğrudan sorulur (motor yalnız açılan kitabı sorar — set-guncellik.js).
  *
  * Kullanım:
  *   node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip]
  *        [--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut]
  *        [--ag] [--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4]
+ *        [--set-tum]
  * Çıkış: 0 GEÇTİ · 1 RED · 3 ÖLÇÜLEMEDİ · 2 kullanım hatası.
  *   K4 AÇIKKEN sözlük ProBook kapısıyla (kabul-karar.sh) aynı: 0 GEÇTİ · 1 RED · 3 GÜNCEL-DEĞİL
  *   (stdout "GUNCEL-DEGIL: …" + "yeniden kuyruk onerisi: …") · 4 ÖLÇÜLEMEDİ.
@@ -40,6 +43,7 @@ const { onUygulama, uygulamaTuru, odakIzleyici } = require('./odak');
 const { macImzaDenetle, imzaKarari } = require('./imza-denetimi');
 const { motorKopyasiMi } = require('../../src/packaging/set-menu');
 const K4 = require('./k4-guncellik');
+const ST = require('./set-guncellik');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
@@ -47,7 +51,7 @@ function argumanCoz(argv) {
   const s = {
     paket: null, platform: null, kitapSayisi: null, kitapId: null, kanit: null, calisma: null,
     tut: false, ag: false, aktivasyon: false, cihaz: true, avd: null, menuBekle: 45, kitapBekle: 60,
-    k4: false, yardim: false,
+    k4: false, setTum: false, yardim: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -61,6 +65,7 @@ function argumanCoz(argv) {
     else if (a === '--ag') s.ag = true;
     else if (a === '--aktivasyon') s.aktivasyon = true;
     else if (a === '--k4') s.k4 = true;
+    else if (a === '--set-tum') s.setTum = true;
     else if (a === '--cihaz-yok') s.cihaz = false;
     else if (a === '--cihaz') s.cihaz = true;
     else if (a === '--avd') s.avd = sonraki();
@@ -232,7 +237,7 @@ async function calis(argv, yazici) {
   if (s.yardim || !s.paket) {
     yaz('Kullanım: node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip] '
       + '[--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut] [--ag] '
-      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4]');
+      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4] [--set-tum]');
     return { kod: 2 };
   }
   const paket = path.resolve(s.paket);
@@ -264,6 +269,8 @@ async function calis(argv, yazici) {
   let kosumSonucu = null;
   let calismaZamani = null;
   const k4Acik = K4.k4Etkin({ bayrak: s.k4 });
+  const setTumAcik = k4Acik && ST.setTumEtkin({ bayrak: s.setTum });
+  let setTumKarar = null;
   const k4Kararlar = [];
   const k4Olcumleri = [];
   let k4Olcum = null;
@@ -394,6 +401,7 @@ async function calis(argv, yazici) {
           calisma,
           log: say,
           kitapSn: s.kitapBekle,
+          setTum: setTumAcik,
         });
         k4Olcumleri.push(k4Olcum);
         const kk = K4.k4Karari({
@@ -403,6 +411,13 @@ async function calis(argv, yazici) {
         k4Kararlar.push(kk);
         say(`K4 (electron, ${k4Olcum.sureSn} sn): E6=${k4Olcum.e6 && k4Olcum.e6.durum} E7=${k4Olcum.e7 && k4Olcum.e7.durum}`
           + ` → ${K4.K4_TR[kk.durum]} — ${kk.sebep}`);
+        if (setTumAcik) {
+          // SET: motor yalnız açılan kitabı sordu; her alt kitap cdp-kitap-ac --set-tum ile doğrudan.
+          setTumKarar = (k4Olcum.setTum && k4Olcum.setTum.karar)
+            || ST.setTumKarari({ hata: `SET ölçümü koşmadı (${(k4Olcum.e6 && k4Olcum.e6.sebep) || 'CDP sonucu yok'})` });
+          for (const x of setTumKarar.satirlar || []) say(`K4 SET: ${ST.satirOzeti(x)}`);
+          say(`K4 SET tüm alt kitaplar: ${K4.K4_TR[setTumKarar.durum]} — ${setTumKarar.sebep}`);
+        }
       }
     }
 
@@ -480,7 +495,7 @@ async function calis(argv, yazici) {
   // K4 genel karara katman listesinden DEĞİL genelKararK4 ile katılır (kendi sözlüğü: GÜNCEL-DEĞİL,
   // engellemeyen ÖLÇÜLEMEDİ). `katmanlar.guncellik` yalnız okuyucular (uçtan uca) içindir.
   const katmanListesi = Object.values(rapor.katmanlar);
-  rapor.k4 = k4Acik ? k4Raporu(k4Kararlar, k4Olcumleri, paketSurum)
+  rapor.k4 = k4Acik ? k4Raporu(k4Kararlar, k4Olcumleri, paketSurum, setTumKarar)
     : { durum: K4.K4_DURUM.ATLANDI, sebep: 'KABUL_K4=1 değil (varsayılan kapalı)' };
   const genel = k4Acik ? K4.genelKararK4(O.genelKarar(katmanListesi), rapor.k4) : O.genelKarar(katmanListesi);
   const guncellik = K4.guncellikKatmani(rapor.k4);
@@ -506,9 +521,14 @@ async function calis(argv, yazici) {
   return { kod: K4.k4CikisKodu(genel, k4Acik, O.cikisKodu), rapor };
 }
 
-/** karar.json `k4` alanı: birleşik karar + ölçüm özetleri (kanıt yolları, E6/E7, cevaplar). */
-function k4Raporu(kararlar, olcumler, paketSurum) {
-  const k = K4.k4Birlestir(...kararlar) || {
+/**
+ * karar.json `k4` alanı: birleşik karar + ölçüm özetleri (kanıt yolları, E6/E7, cevaplar).
+ * SET tüm alt kitaplar (KABUL_SET_TUM=1) motor ölçümleri birleştikten SONRA en kötüsüyle katılır
+ * (cihaz GEÇTİ'si ölçülemeyen alt kitabı örtmesin).
+ */
+function k4Raporu(kararlar, olcumler, paketSurum, setTumKarar = null) {
+  const motor = K4.k4Birlestir(...kararlar);
+  const k = (motor || setTumKarar ? ST.setTumBirlestir(motor, setTumKarar) : null) || {
     durum: K4.K4_DURUM.OLCULEMEDI,
     kod: K4.K4_KOD.OLCULEMEDI,
     sebep: 'K4 koşmadı (paket açılamadı)',
@@ -520,6 +540,9 @@ function k4Raporu(kararlar, olcumler, paketSurum) {
   return {
     ...k,
     paketSurumleri: paketSurum ? paketSurum.surumler : null,
+    setTum: setTumKarar ? {
+      durum: setTumKarar.durum, sebep: setTumKarar.sebep, satirlar: setTumKarar.satirlar || [],
+    } : null,
     olcumler: olcumler.map((o) => ({
       kaynak: o.kaynak, e6: o.e6, e7: o.e7, cevaplar: o.cevaplar, cdpPort: o.cdpPort || null, sureSn: o.sureSn,
       kanit: o.kanit, profil: o.profil || null, profilBos: o.profilBos, soket: o.soket || null,

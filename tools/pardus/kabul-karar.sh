@@ -18,7 +18,11 @@
 #   AYRI_EV    1 = uygulama ayrı ev diziniyle açıldı (E8; CDP=1 iken varsayılan)
 #   E6 E6_SEBEP      GECTI | RED | OLCULEMEDI | ATLANDI
 #   E7 E7_AYRINTI E7_ONERI   DOLU | BOS | YOK | OLCULEMEDI | ATLANDI
-# Çıktı: KARAR_KOD, KARAR (GECTI|RED-KUSUR|RED-GUNCEL-DEGIL|OLCULEMEDI), KARAR_SEBEP, KARAR_NOT
+#   SET_TUM SET_TUM_AYRINTI SET_TUM_ONERI SET_TUM_NOT   (KABUL_SET_TUM=1; yoksa boş → etkisiz)
+#              GECTI | GUNCEL_DEGIL | OLCULEMEDI | ATLANDI — SET'in HER alt kitabının menü sürümü
+#              İmpark'a doğrudan soruldu (cdp-kitap-ac --set-tum 1 → tools/kabul/set-guncellik.js)
+# Çıktı: KARAR_KOD, KARAR (GECTI|RED-KUSUR|RED-GUNCEL-DEGIL|OLCULEMEDI), KARAR_SEBEP, KARAR_NOT,
+#        KARAR_ONERI (GÜNCEL-DEĞİL'de yeniden kuyruk önerisi)
 #
 # Öncelik (gerekçeli):
 #  0. CDP açık ama ayrı ev YOK (KABUL_AYRI_EV=0) → ÖLÇÜLEMEDİ, ASLA GEÇTİ. Canlı ölçüm 26.09 (45482,
@@ -33,7 +37,37 @@
 #  3. CDP kapalı → bugünkü kapı (piksel) GEÇTİ.
 #  4. E6 GEÇTİ → GEÇTİ.  5. Aktivasyon serisinde E6 geçmediyse (diyalog kitabı açtırmaz) → 2 gibi.
 #  6. E6 RED → RED-KUSUR.  7. Geri kalan (CDP bağlanamadı, menü tanınmadı) → ÖLÇÜLEMEDİ.
+#  S. SET_TUM (1-7'den SONRA, kabul_karar sarmalı): motor yalnız AÇILAN kitabı sorar — SM2 Set
+#     26.09: 58336 soruldu (güncel), 58237 v7 hiç sorulmadı, İmpark v14. SET_TUM paketin kendi
+#     menülerinden ölçer (ev/örtüden bağımsız):
+#     GUNCEL_DEGIL → GEÇTİ / ÖLÇÜLEMEDİ / GÜNCEL-DEĞİL kararı RED-GUNCEL-DEGIL (3) olur, hangi alt
+#       kitap(lar) sebepte. RED-KUSUR (E6) KALIR (açılan kitap kusurlu — eskilik onu açıklamaz), not düşülür.
+#     OLCULEMEDI → karar DEĞİŞMEZ (E7 ÖLÇÜLEMEDİ/YOK ile aynı politika), KARAR_NOT'a satır.
+#     GECTI / ATLANDI → karar değişmez, KARAR_NOT'a satır.
 kabul_karar(){
+  kabul_karar_temel
+  KARAR_ONERI="${E7_ONERI:-}"
+  local st="${SET_TUM_AYRINTI:-}"
+  case "${SET_TUM:-}" in
+    GUNCEL_DEGIL)
+      if [ "$KARAR_KOD" = "1" ]; then
+        KARAR_NOT="${KARAR_NOT:+$KARAR_NOT; }SET_TUM GÜNCEL-DEĞİL: $st"
+        return 0
+      fi
+      if [ "$KARAR_KOD" = "3" ]; then
+        KARAR_SEBEP="$KARAR_SEBEP; $st"
+        KARAR_ONERI="${E7_ONERI:+$E7_ONERI | }${SET_TUM_ONERI:-}"
+      else
+        [ "$KARAR_KOD" = "0" ] || KARAR_NOT="${KARAR_NOT:+$KARAR_NOT; }SET_TUM oncesi karar: $KARAR ($KARAR_SEBEP)"
+        KARAR_KOD=3; KARAR="RED-GUNCEL-DEGIL"; KARAR_SEBEP="$st"; KARAR_ONERI="${SET_TUM_ONERI:-}"
+      fi
+      ;;
+    OLCULEMEDI) KARAR_NOT="${KARAR_NOT:+$KARAR_NOT; }SET_TUM ÖLÇÜLEMEDİ (karar değişmez): $st" ;;
+    GECTI|ATLANDI) KARAR_NOT="${KARAR_NOT:+$KARAR_NOT; }SET_TUM ${SET_TUM}: $st" ;;
+  esac
+  return 0
+}
+kabul_karar_temel(){
   KARAR_NOT=""
   if [ "${CDP:-0}" = "1" ] && [ "${AYRI_EV:-0}" != "1" ]; then
     KARAR_KOD=4; KARAR="OLCULEMEDI"

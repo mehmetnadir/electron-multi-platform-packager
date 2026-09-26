@@ -42,6 +42,13 @@
  *                   yeniden yükleme). CapacitorHttp fetch'i yerel köprüden geçirir, Network olayı
  *                   DOĞMAZ; kaydedici cevabı sayfa içinde yakalar (sessionStorage, gezinmede
  *                   kaybolmaz). Kayıtlar Network cevaplarıyla aynı yorumlayıcıdan geçer.
+ *
+ * SET TÜM ALT KİTAPLAR (KABUL_SET_TUM=1 → `--set-tum 1`, varsayılan KAPALI; iki kapı da bu bayrakla
+ * çağırır): motor yalnız açılan kitabı sorar (SM2 Set: 58237 hiç sorulmadı). E7'den sonra, oturum
+ * açıkken sayfanın Node fs'iyle (paketler nodeIntegration:true) hedef sayfanın dizinindeki her alt
+ * kitabın menüsü okunur, motorun sorusu doğrudan sorulur (tools/kabul/set-guncellik.js — içerik
+ * merdiveni S0 ile tek kaynak). Çıktı `SET_TUM=GECTI|GUNCEL_DEGIL|OLCULEMEDI|ATLANDI` +
+ * `SET_TUM_AYRINTI/ONERI/NOT`; cdp-sonuc.json `setTum`. E6 çıkış kodunu DEĞİŞTİRMEZ.
  */
 const fs = require('fs');
 const path = require('path');
@@ -50,6 +57,7 @@ const {
 } = require('../kabul/cdp-istemci');
 const { domYokla } = require('../kabul/kosum/dom-yoklama');
 const { sayfaIzi, konsolSiniflandir } = require('../kabul/olcutler');
+const setTum = require('../kabul/set-guncellik');
 
 const GUNCELLEME_DESENI = /\/GetKitapGuncellemeBilgi(?:[/?#]|$)/i;
 const KITAP_URL_DESENI = /\/book\d+\//i;
@@ -72,13 +80,16 @@ function argumanlar(argv) {
     aralikMs: 1000,
     hedefDeseni: '',
     kaydedici: false,
+    setTum: false,
+    setTumSn: 90,
   };
   const sayi = { '--port': 'port', '--baglan-sn': 'baglanSn', '--menu-sn': 'menuSn', '--gezinme-sn': 'gezinmeSn',
-    '--kitap-sn': 'kitapSn', '--e7-sn': 'e7Sn', '--toplam-sn': 'toplamSn', '--aralik-ms': 'aralikMs' };
+    '--kitap-sn': 'kitapSn', '--e7-sn': 'e7Sn', '--toplam-sn': 'toplamSn', '--aralik-ms': 'aralikMs',
+    '--set-tum-sn': 'setTumSn' };
   for (let i = 0; i < argv.length; i += 1) {
     const k = argv[i];
     const v = argv[i + 1];
-    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; } else if (k === '--hedef-deseni') { a.hedefDeseni = v || ''; i += 1; } else if (k === '--kaydedici') { a.kaydedici = v === '1'; i += 1; }
+    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; } else if (k === '--hedef-deseni') { a.hedefDeseni = v || ''; i += 1; } else if (k === '--kaydedici') { a.kaydedici = v === '1'; i += 1; } else if (k === '--set-tum') { a.setTum = v === '1'; i += 1; }
   }
   return a;
 }
@@ -617,7 +628,25 @@ async function e7Bekle(dinleyici, a, ekGoruldu = null) {
   await Promise.race([dinleyici.tamamla(), bekle(10000)]);
 }
 
-async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.write(`${s}\n`)) {
+/**
+ * --set-tum: oturum açıkken hedef sayfanın dizinindeki her alt kitap (fırlatmaz, kendi süre sınırı).
+ * @param {{getir?: Function}} secenek testte sahte İmpark
+ */
+async function setTumOlc(sonuc, a, secenek = {}) {
+  const kok = setTum.kokuUrldenBul(sonuc.hedef && sonuc.hedef.url);
+  const is = setTum.sayfadanOlc({ cdp: sonuc.cdp || null, kok, getir: secenek.getir });
+  let bekci;
+  const sure = new Promise((coz) => {
+    bekci = setTimeout(() => coz(null), a.setTumSn * 1000);
+  });
+  const r = await Promise.race([is, sure]);
+  clearTimeout(bekci);
+  if (r) return r;
+  const olcum = { set: false, satirlar: [], hata: `${a.setTumSn} sn içinde bitmedi` };
+  return { kok, adlar: [], olcum, karar: setTum.setTumKarari(olcum) };
+}
+
+async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.write(`${s}\n`), secenek = {}) {
   const a = argumanlar(argv);
   if (!a.port) {
     yaz('E6=OLCULEMEDI');
@@ -649,10 +678,13 @@ async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.wri
     cevaplar = kayitlariBirlestir(sonuc.dinleyici.hamlar(), kayit).map(guncellemeCevabiCoz);
   }
   const e7 = sonuc.dinleyici ? e7Ozetle(cevaplar) : { durum: 'OLCULEMEDI', ayrinti: 'CDP oturumu kurulamadı', oneri: '' };
+  let st = null;
+  if (a.setTum) st = await setTumOlc(sonuc, a, secenek);
   try { if (sonuc.cdp) sonuc.cdp.kapat(); } catch (_) { /* kapalı */ }
 
   const kayit = {
     ...sonuc, cdp: undefined, dinleyici: undefined, e7: { ...e7, cevaplar }, bitis: new Date().toISOString(),
+    ...(st ? { setTum: { kok: st.kok, adlar: st.adlar, karar: st.karar } } : {}),
   };
   if (a.kanit) {
     try { fs.writeFileSync(path.join(a.kanit, 'cdp-sonuc.json'), JSON.stringify(kayit, null, 2)); } catch (_) { /* kanıt eksik */ }
@@ -666,6 +698,7 @@ async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.wri
   yaz(`E7=${e7.durum}`);
   yaz(`E7_AYRINTI=${tekSatir(e7.ayrinti, 600)}`);
   yaz(`E7_ONERI=${tekSatir(e7.oneri, 600)}`);
+  if (st) setTum.satirlariYaz(st.karar, yaz);
   return CIKIS[sonuc.e6.durum] === undefined ? CIKIS.OLCULEMEDI : CIKIS[sonuc.e6.durum];
 }
 

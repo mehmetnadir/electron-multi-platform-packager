@@ -40,6 +40,11 @@
 #                 (work-liste.txt); geri kalan (K gunlugu, aktivasyon izi) KABUL_EV_GUN (1) gun tutulur.
 #   KABUL_AKTIVASYON_OLCULEMEDI=1  aktivasyon ekraninda "ICERIK dogrulanmadi" ile GECTI yerine
 #                 cikis 4 (OLCULEMEDI). Kapaliyken bugunku kural.
+#   KABUL_SET_TUM=1  (KABUL_CDP=1 ister) SET'in HER alt kitabi: motor yalniz ACILAN kitabi sorar
+#                 (SM2 Set 26.09: 58237 v7 hic sorulmadi, Impark v14). E7'den sonra ayni CDP oturumunda
+#                 sayfanin fs'iyle her bookN menusu okunur, surum Impark'a dogrudan sorulur
+#                 (cdp-kitap-ac --set-tum 1 → tools/kabul/set-guncellik.js). Geride alt kitap → cikis 3;
+#                 olculemeyen alt kitap karari degistirmez (kabul-karar.sh S kurali).
 #
 # Kurulum onbellegi tuzagi: AppRun `.empp-version` isaretine bakar; ayni surum zaten
 # kuruluysa paketi ACMAZ, ESKI kurulumu calistirir -> kapi bayat paketi onaylar.
@@ -91,6 +96,7 @@ olculemedi(){ say "OLCULEMEDI: $*"; temizle; exit 4; }
 
 DAMGA=$(date +%s)
 CDP="${KABUL_CDP:-0}"
+SET_TUM_ACIK="${KABUL_SET_TUM:-0}"
 # E7 YALNIZ AYRI EVDE GUVENILIR (Sef karari 26.09, canli olcum 45482): CDP acikken ayri ev varsayilan.
 if [ -n "${KABUL_AYRI_EV:-}" ]; then AYRI_EV="$KABUL_AYRI_EV"; else AYRI_EV="$CDP"; fi
 AKT_OLC="${KABUL_AKTIVASYON_OLCULEMEDI:-0}"
@@ -586,6 +592,7 @@ AKT_EKRAN=0
 if [ "$AKTIVASYON" = "1" ] && [ "${RENK:-0}" -lt 500 ] 2>/dev/null; then AKT_EKRAN=1; fi
 M_RENK="${RENK:-0}"
 E6=ATLANDI; E6_SEBEP=""; E6_URL=""; E7=ATLANDI; E7_AYRINTI=""; E7_ONERI=""
+SET_TUM=""; SET_TUM_AYRINTI=""; SET_TUM_ONERI=""; SET_TUM_NOT=""
 
 # Uzak kipte ProBook'taki CDP portuna ssh -L; yerel kipte dogrudan. Istemci BU makinede kosar
 # (Mac'te depo + node var; ProBook seridinde ~/empp-serit/repo + node 22).
@@ -618,13 +625,18 @@ cdp_olc(){
   fi
   say "E6/E7: CDP ProBook:$CDP_PORT (baglanti 127.0.0.1:$yp) — ilk kitaba giriliyor"
   "${KABUL_NODE:-node}" "$BETIK_DIZIN/cdp-kitap-ac.js" --port "$yp" --kanit "$KANIT" --kurulum-koku "$koku" \
-    --kitap-sn "${KABUL_KITAP_SN:-60}" --e7-sn "${KABUL_E7_SN:-20}" > "$KANIT/cdp.txt" 2>>"$KANIT/cdp.log"
+    --kitap-sn "${KABUL_KITAP_SN:-60}" --e7-sn "${KABUL_E7_SN:-20}" --set-tum "$SET_TUM_ACIK" \
+    > "$KANIT/cdp.txt" 2>>"$KANIT/cdp.log"
   E6=$(sed -n 's/^E6=//p' "$KANIT/cdp.txt" | tail -1)
   E6_SEBEP=$(sed -n 's/^E6_SEBEP=//p' "$KANIT/cdp.txt" | tail -1)
   E6_URL=$(sed -n 's/^E6_URL=//p' "$KANIT/cdp.txt" | tail -1)
   E7=$(sed -n 's/^E7=//p' "$KANIT/cdp.txt" | tail -1)
   E7_AYRINTI=$(sed -n 's/^E7_AYRINTI=//p' "$KANIT/cdp.txt" | tail -1)
   E7_ONERI=$(sed -n 's/^E7_ONERI=//p' "$KANIT/cdp.txt" | tail -1)
+  SET_TUM=$(sed -n 's/^SET_TUM=//p' "$KANIT/cdp.txt" | tail -1)
+  SET_TUM_AYRINTI=$(sed -n 's/^SET_TUM_AYRINTI=//p' "$KANIT/cdp.txt" | tail -1)
+  SET_TUM_ONERI=$(sed -n 's/^SET_TUM_ONERI=//p' "$KANIT/cdp.txt" | tail -1)
+  SET_TUM_NOT=$(sed -n 's/^SET_TUM_NOT=//p' "$KANIT/cdp.txt" | tail -1)
   if [ -z "$E6" ]; then
     E6=OLCULEMEDI; E6_SEBEP="CDP istemcisi sonuc vermedi ($(tail -1 "$KANIT/cdp.log" 2>/dev/null))"
   fi
@@ -658,6 +670,17 @@ if [ "$CDP" = "1" ] && [ "$AKT_EKRAN" = "0" ]; then
 elif [ "$CDP" = "1" ]; then
   say "E6/E7: aktivasyon ekrani (renk=$M_RENK) — kitap acilamaz, atlandi"
 fi
+# SET TUM ALT KITAPLAR (KABUL_SET_TUM=1): CDP kurulamadiysa / aktivasyon ekraniysa olculemedi
+# (karar degismez); sonuc kabul_karar'in S kuralina girer.
+if [ "$SET_TUM_ACIK" = "1" ]; then
+  if [ -z "$SET_TUM" ]; then
+    SET_TUM=OLCULEMEDI
+    if [ "$CDP" != "1" ]; then SET_TUM_AYRINTI="KABUL_SET_TUM=1 icin KABUL_CDP=1 gerekir (alt kitap menuleri CDP ile okunur)"
+    else SET_TUM_AYRINTI="CDP olcumu SET_TUM satiri vermedi (E6=$E6: ${E6_SEBEP:-})"; fi
+  fi
+  say "SET tum alt kitaplar: $SET_TUM — ${SET_TUM_AYRINTI:-}"
+  [ -n "$SET_TUM_NOT" ] && say "SET not: $SET_TUM_NOT"
+fi
 # K uzlasmasi kor mu (73581 dersi): paketin kendi guncelleme uzlasmasi calismiyor → UYARI, karar degil.
 if grep -q "menü çözülemedi" "$KANIT/calisma.log" 2>/dev/null; then
   say "UYARI: K bu pakette kor (empp-icerik: menu cozulemedi — kitap guncelleme uzlasmasi calismiyor)"
@@ -666,6 +689,7 @@ fi
 kabul_karar
 {
   echo "E6=$E6"; echo "E6_SEBEP=$E6_SEBEP"; echo "E7=$E7"; echo "E7_AYRINTI=$E7_AYRINTI"
+  [ -n "$SET_TUM" ] && { echo "SET_TUM=$SET_TUM"; echo "SET_TUM_AYRINTI=$SET_TUM_AYRINTI"; }
   echo "KARAR=$KARAR ($KARAR_KOD)"; echo "KARAR_SEBEP=$KARAR_SEBEP"
 } >> "$KANIT/ortam.txt"
 temizle
@@ -682,7 +706,7 @@ case "$KARAR_KOD" in
     exit 0 ;;
   3)
     say "GUNCEL-DEGIL: $KARAR_SEBEP"
-    say "yeniden kuyruk onerisi: ${E7_ONERI:-kaynak yenilenince yeniden kuyruga al}"
+    say "yeniden kuyruk onerisi: ${KARAR_ONERI:-${E7_ONERI:-kaynak yenilenince yeniden kuyruga al}}"
     exit 3 ;;
   4)
     say "OLCULEMEDI: $KARAR_SEBEP"
