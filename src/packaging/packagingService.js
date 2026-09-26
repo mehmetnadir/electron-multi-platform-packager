@@ -799,6 +799,7 @@ MimeType=application/x-electron;
       // electron-builder ÇAĞRILMADAN ÖNCE, tüm yamalardan sonra koşar ki envanter
       // ağacın son hâlini yansıtsın.
       let setGuncellemeKimligi = null;
+      let setHaritasi = null;
       if (setKimligi.acikMi(process.env, platforms)) {
         try {
           const setSonuc = await setKimligi.paketeYaz(workingPath, {
@@ -812,8 +813,11 @@ MimeType=application/x-electron;
             // çalışma anında KAPALI kalır (imzasız manifest kabul edilmez).
             imzaAcikAnahtari: jobInfo.guncellemeAcikAnahtari
               || (packageOptions && packageOptions.guncellemeAcikAnahtari) || null,
+            // Paketin G sürümü (claim `surum`, G3): istemcinin monoton tabanına girer.
+            surum: jobInfo.surum || (packageOptions && packageOptions.surum) || null,
           });
           const sh = setSonuc.harita;
+          setHaritasi = sh;
           setGuncellemeKimligi = sh.setKimligi || null;
           console.log(`🆔 SET kimliği: ${sh.setKimligi || 'YOK'} (${sh.setKimligiKaynagi}), `
             + `${sh.kabukDosyaSayisi} kabuk dosyası, ${sh.kitapSayisi} kitap üye`);
@@ -864,11 +868,15 @@ MimeType=application/x-electron;
       // prepareElectronFiles'tan ÖNCE (o adım electron.js'i main.js olarak
       // kopyalar; kopya da yamalı doğsun — güncelleme ötelemesiyle aynı gerekçe).
       // ATOMİK: `app.whenReady()` çapası olmayan dosyaya ne yama ne modül konur.
+      // KARAR (2026-09-26, e2e denetçi): kimlik/taban/imza anahtarı yoksa (taban yer tutucu
+      // `panel-yok.invalid` ise de) güncelleme ALAMAYACAK paket üretilmez — enjeksiyon atlanır,
+      // sebep görünür yazılır (`guncelleyiciEnjekte.enjeksiyonKarari`).
       if (guncelleyiciEnjekte.acikMi(process.env, platforms)) {
         try {
-          const enjekte = await guncelleyiciEnjekte.paketeUygula(workingPath, {
-            log: (satir) => console.log(satir),
-          });
+          const { sonuc: enjekte } = await guncelleyiciEnjekte.kararliUygula(
+            workingPath, setHaritasi,
+            { log: (satir) => console.log(satir), uyar: (satir) => console.warn(satir) },
+          );
           const yamali = enjekte.filter((x) => x.uygulandi);
           if (yamali.length) {
             console.log(`🔄 SET güncelleyici enjekte edildi: ${yamali.length} giriş dosyası`);

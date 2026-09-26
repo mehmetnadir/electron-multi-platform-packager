@@ -206,10 +206,10 @@ app.whenReady().then(async () => {
 test('SENTİNEL: canlı paketleme yolu enjeksiyonu ÇAĞIRIYOR ve sırası doğru', () => {
   const kaynak = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
   assert.match(kaynak, /require\('\.\/guncelleyici-enjekte'\)/, 'canlı yolda require yok');
-  const cagri = kaynak.indexOf('guncelleyiciEnjekte.paketeUygula');
+  const cagri = kaynak.indexOf('guncelleyiciEnjekte.kararliUygula');
   const setYaz = kaynak.indexOf('setKimligi.paketeYaz');
   const hazirla = kaynak.indexOf('this.prepareElectronFiles(');
-  assert.ok(cagri !== -1, 'paketeUygula çağrılmıyor');
+  assert.ok(cagri !== -1, 'kararliUygula çağrılmıyor');
   assert.ok(setYaz !== -1 && setYaz < cagri,
     'empp-set.json enjeksiyondan ÖNCE yazılmalı (envanter hazır olsun)');
   assert.ok(hazirla !== -1 && cagri < hazirla,

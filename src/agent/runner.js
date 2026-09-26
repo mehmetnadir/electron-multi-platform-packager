@@ -1406,11 +1406,18 @@ async function injectPardusIcon(zipPath, publisherName, work) {
  * yazıyor) satır satır ajan log'una yansıtır — mevcut ilerleme-log stiliyle tutarlı.
  * Süre `pardusTimeoutMs`'i aşarsa süreç SIGKILL edilir ve timeout olarak işaretlenir.
  */
-function runPardusScript(args) {
+function runPardusScript(args, job) {
   return new Promise((resolve) => {
-    // G açık anahtarı betiğe (oradan -e ile konteynere) doğrulanmış olarak geçer (2026-09-26).
-    const pe = pardusBetikEnv(process.env);
+    // G açık anahtarı + claim'in G kimliği (setKimligi, guncellemeTabani, surum) betiğe —
+    // oradan -e ile konteynerdeki paketleyiciye — doğrulanmış olarak geçer (2026-09-26).
+    const pe = pardusBetikEnv(process.env, job);
     if (pe.sebep) log(`pardus: G açık anahtarı ${pe.sebep} — pakette G kanalı kapalı kalır`);
+    if (pe.gSebepler.length) {
+      warn(`pardus: claim G kimliği eksik/geçersiz (${pe.gSebepler.join(', ')}) — `
+        + 'pakette G güncelleyici enjekte EDİLMEZ (sahte tabanlı paket üretilmez)');
+    } else {
+      log(`pardus: G kimliği set=${pe.gKimlik.setKimligi} surum=${pe.gKimlik.surum} taban=${pe.gKimlik.guncellemeTabani}`);
+    }
     const p = spawn('nice', ['-n', '10', CONFIG.pardusBuildScript, ...args], { env: pe.env });
     let stdout = '';
     let stderr = '';
@@ -1519,7 +1526,7 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
 
   await ensureDockerReady();
   log('pardus: build başlıyor —', CONFIG.pardusBuildScript);
-  const res = await runPardusScript([zipPath, appName, outDir, appVersion]);
+  const res = await runPardusScript([zipPath, appName, outDir, appVersion], kimlik);
   if (res.timedOut) {
     throw new Error(`pardus build ${Math.round(CONFIG.pardusTimeoutMs / 60000)} dk içinde bitmedi (timeout): ${CONFIG.pardusBuildScript}`);
   }
@@ -1873,7 +1880,11 @@ async function processJob(auth, job) {
       // Docker'da srv21 ile BİREBİR: HTTP paketleyici (3001) YOK, doğrudan script.
       // İkon: yayıncı zip'inde ico.png yok → kayıtlı logo zip köküne eklenir (aşağıda).
       if (!hazirDevir) await injectPardusIcon(zipPath, job.publisherName, work);
-      await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, { bookId: job.bookId, srcVersion });
+      await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, {
+        bookId: job.bookId, srcVersion,
+        // claim G kimliği (claim-surum): konteynerdeki paketleyiciye kadar taşınır
+        setKimligi: job.setKimligi, guncellemeTabani: job.guncellemeTabani, surum: job.surum,
+      });
     } else {
       log('uploading build to packager...');
       const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);

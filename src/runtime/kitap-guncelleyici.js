@@ -49,8 +49,9 @@
  * TÜM kiplerde: Windows yerinde + mac/Pardus örtü):
  *   • İmzası doğru manifest de ancak `kanal == "G"`, `setKimligi == paketin gömülü kimliği`
  *     ve `surum` G3 biçiminde (`2.<panel>.<sayaç>`) + KURULU sürümden KESİN BÜYÜKse uygulanır.
- *     Kurulu sürüm = max(paketin `package.json` sürümü, son uygulanan G sürümü). Aynı anahtarla
- *     imzalı ESKİ bir manifestin yeniden oynatılması (geri alma) ve başka setin manifesti reddedilir.
+ *     Kurulu sürüm = max(paketin `package.json` sürümü, `empp-set.json` `surum`u (claim), son
+ *     uygulanan G sürümü). Aynı anahtarla imzalı ESKİ bir manifestin yeniden oynatılması
+ *     (geri alma) ve başka setin manifesti reddedilir.
  *   • Windows'ta da her şey önce `.empp-gecici/` altında hazırlanır (indir + sha256/boyut doğrula
  *     + kitap arşivini aç); TEK bir dosya bile tutmazsa canlı ağaca HİÇ dokunulmaz. Uygulama
  *     kısa bir rename dizisidir (önce kitaplar, sonra kabuk, EN SON `index.html`); günce
@@ -370,6 +371,8 @@ function setiNormalize(veri) {
     imzaAnahtari: (imza.alg === IMZA_ALG && typeof imza.acikAnahtar === 'string') ? imza.acikAnahtar : '',
     taban: typeof n.taban === 'string' ? n.taban : '',
     damga: typeof n.damga === 'string' ? n.damga : '',
+    /** Paketin G sürümü (claim `surum`, G3); monoton tabana girer. Yoksa ''. */
+    surum: typeof n.surum === 'string' ? n.surum : '',
     sebep: typeof n.sebep === 'string' ? n.sebep : '',
     kabukDosyalari: dizi(n.kabukDosyalari),
     kitapDizinleri: dizi(n.kitapDizinleri),
@@ -1026,7 +1029,8 @@ async function guncellemeyiCalistir(p) {
       uygulanan = damga ? damga.surum : null;
     }
     const paketSurumu = await paketSurumuOku(fsm, kok);
-    const kurulu = enBuyukGSurum([uygulanan, paketSurumu]);
+    // Taban: paketin package.json sürümü, empp-set.json'daki paket G sürümü (claim), son uygulanan.
+    const kurulu = enBuyukGSurum([uygulanan, paketSurumu, set.surum || null]);
     rapor.kuruluSurum = kurulu;
     if (uygulanan && uygulanan === uzakSurum) {
       rapor.durum = 'guncel';

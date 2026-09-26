@@ -97,10 +97,16 @@ güncellenir. Ters sırada menü olmayan bir kitabı gösterir.
 ## Paket içine yazılanlar
 
 `empp-set.json` (şema **2**) — `{setKimligi, taban, damga, kabukTanimi, kabukDosyalari[],
-kapsamDisiDallar[], kitapDizinleri[]}`. `kabukTanimi` kabuk tanımının imzasıdır;
+kapsamDisiDallar[], kitapDizinleri[], imza, surum}`. `kabukTanimi` kabuk tanımının imzasıdır;
 kapı kendi imzasıyla karşılaştırır — üretici ile kapı ayrışmışsa GEÇTİ verilmez.
 Set kimliği yoksa dosya yine yazılır, `"setKimligi": null, "sebep": "..."` ile
 **görünür** kalır; sessizce düşürülmez.
+
+**Enjeksiyon kararı (2026-09-26):** set kimliği, gerçek taban (yer tutucu `panel-yok.invalid` /
+kaynak `varsayilan` DEĞİL) ya da imza anahtarı yoksa güncelleyici pakete ENJEKTE EDİLMEZ, sebep
+uyarı olarak yazılır (`guncelleyici-enjekte.js` `enjeksiyonKarari`) — güncelleme alamayan "G'li" paket
+üretilmez. Pardus Docker yolu claim'in `setKimligi`/`guncellemeTabani`/`surum`unu runner'da doğrulayıp
+`EMPP_G_*` ile konteynere, oradan jobInfo'ya taşır (`pardusGKimligi`, `packager-run-linux.js`).
 
 
 ---
@@ -220,8 +226,8 @@ G yayın ajanı kurulu Windows istemcisinde üç açık buldu; üçü de TÜM ki
 mac/Pardus örtü) kapandı — `src/runtime/kitap-guncelleyici.js`:
 
 1. **Monoton sürüm.** İmzası doğru manifest de ancak `surum` G3 biçiminde ve KURULU sürümden
-   KESİN büyükse uygulanır. Kurulu = max(`package.json` sürümü, son uygulanan G sürümü: Windows'ta
-   damga, örtüde `etkin.json`). Damga eski pakete aitse (taban = `empp-set.json` özeti değişti) yok
+   KESİN büyükse uygulanır. Kurulu = max(`package.json` sürümü, `empp-set.json` `surum`u (claim'in
+   `surum`u, G3), son uygulanan G sürümü: Windows'ta damga, örtüde `etkin.json`). Damga eski pakete aitse (taban = `empp-set.json` özeti değişti) yok
    sayılır. G3 olmayan paket sürümü (içerik-hash) kıyasa girmez — o paketin İLK G'si her G3'ü alır.
 2. **Kimlik.** `kanal == "G"` ve `setKimligi == paketin gömülü kimliği` değilse ret. İmzasız
    `surum.json` yalnız tetiktir; asıl karar imzalı manifestte (`-tetik` senaryoları).

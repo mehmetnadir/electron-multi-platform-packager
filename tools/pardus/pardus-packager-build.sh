@@ -118,6 +118,9 @@ set +e
 # G AÇIK ANAHTARI (2026-09-26): EMPP_GUNCELLEME_ACIK_ANAHTAR konteynere geçmiyordu → pakete imza anahtarı
 # gömülmüyor, Pardus'ta G kanalı sessizce kapalıydı. Açık anahtar (SPKI base64) SIR DEĞİL; runner onu
 # doğrulayıp (pardusBetikEnv) verir. Özel anahtar / .pem / anahtar dosyası bu komuta ASLA girmez.
+# CLAIM G KİMLİĞİ (2026-09-26): claim'in setKimligi / guncellemeTabani / surum alanları da konteynere
+# geçmiyordu → Pardus empp-set.json'unda setKimligi null, taban yer tutucu. Runner doğrular (pardusGKimligi),
+# geçersizi düşürür; packager-run-linux.js jobInfo'ya koyar. Boşsa paketleyici G'yi enjekte ETMEZ.
 nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -v "$REPO":/src:ro \
   -v packager-linux-nm:/app/node_modules -v packager-linux-cache:/cache \
@@ -129,6 +132,9 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
   -e EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-}" \
+  -e EMPP_G_SET_KIMLIGI="${EMPP_G_SET_KIMLIGI:-}" \
+  -e EMPP_G_GUNCELLEME_TABANI="${EMPP_G_GUNCELLEME_TABANI:-}" \
+  -e EMPP_G_SURUM="${EMPP_G_SURUM:-}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?

@@ -233,7 +233,7 @@ test('JSON şeması: beklenen alanlar ve tipleri', () => {
   assert.deepStrictEqual(Object.keys(h), [
     'sema', 'setKimligi', 'setKimligiKaynagi', 'sebep', 'taban', 'tabanKaynagi',
     'damga', 'kabukTanimi', 'kabukDosyaSayisi', 'kabukDosyalari', 'kapsamDisiDallar',
-    'kitapSayisi', 'kitapDizinleri', 'imza', 'imzaSebebi',
+    'kitapSayisi', 'kitapDizinleri', 'imza', 'imzaSebebi', 'surum',
   ]);
   assert.strictEqual(h.kabukTanimi, m.KABUK_IMZASI,
     'paket, hangi kabuk tanımıyla üretildiğini TAŞIMALI (kapı imzayı karşılaştırır)');

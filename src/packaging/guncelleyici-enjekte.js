@@ -57,6 +57,39 @@ function acikMi(env = process.env, platforms, secenek) {
 }
 
 /**
+ * ENJEKSİYON KARARI (SAF, 2026-09-26 — e2e denetçi bulgusu). `empp-set.json` haritası
+ * güncelleme ALAMAYACAK bir paket tarif ediyorsa istemci ENJEKTE EDİLMEZ; çağıran bunu
+ * görünür biçimde günlüğe yazar. Neden: taban verilmediğinde `set-kimligi.js` yer tutucu
+ * `https://panel-yok.invalid/…` yazar; istemci bu adrese istek atıp sessizce hiçbir şey
+ * almaz — "G'li" görünen ama güncelleme alamayan paket. Sebepler (ilk eksik döner):
+ *  - `set-haritasi-yok`     set adımı kapalı/yazılamadı (harita yok)
+ *  - `set-kimligi-yok`      claim/istek setKimligi taşımıyor
+ *  - `taban-yok`            taban boş, yer tutucu (kaynak `varsayilan` ya da `.invalid` alan adı)
+ *                           ya da istemcinin kabul etmeyeceği adres (https/yerel http değil)
+ *  - `imza-anahtari-yok`    pakete manifest doğrulama anahtarı gömülmedi (istemci kanalı kapatır)
+ * @param {object|null} harita `setKimligi.paketeYaz(...).harita`
+ * @returns {{enjekte: boolean, sebep: string}}
+ */
+function enjeksiyonKarari(harita) {
+  if (!harita || typeof harita !== 'object') return { enjekte: false, sebep: 'set-haritasi-yok' };
+  if (!harita.setKimligi) return { enjekte: false, sebep: 'set-kimligi-yok' };
+  if (!tabanGercekMi(harita.taban, harita.tabanKaynagi)) return { enjekte: false, sebep: 'taban-yok' };
+  if (!harita.imza || !harita.imza.acikAnahtar) return { enjekte: false, sebep: 'imza-anahtari-yok' };
+  return { enjekte: true, sebep: 'hazir' };
+}
+
+/** Taban, istemcinin gerçekten istek atacağı ve yer tutucu OLMAYAN bir adres mi? */
+function tabanGercekMi(taban, kaynak) {
+  if (kaynak === 'varsayilan') return false;
+  const t = typeof taban === 'string' ? taban.trim() : '';
+  if (!t) return false;
+  let u;
+  try { u = new URL(t); } catch (e) { return false; }
+  if (/\.invalid$/i.test(u.hostname)) return false;
+  return require(KAYNAK_MODUL).adresGuvenliMi(t);
+}
+
+/**
  * Enjekte edilecek blok. Saf fonksiyon.
  * Tamamı try/catch içinde: modül yoksa, electron yüklenmezse, güncelleyici
  * patlarsa bile uygulama normal açılır.
@@ -153,6 +186,23 @@ async function paketeUygula(paketKoku, { log = () => {}, gecikmeMs, kaynakModul 
   return sonuc;
 }
 
+/**
+ * Karara bağlı uygulama — canlı paketleme yolunun TEK girişi (packagingService). Karar
+ * olumsuzsa pakete HİÇBİR şey yazılmaz ve sebep `uyar` ile görünür yazılır.
+ * @returns {Promise<{karar: {enjekte:boolean, sebep:string}, sonuc: Array}>}
+ */
+async function kararliUygula(paketKoku, harita, {
+  log = () => {}, uyar = () => {}, gecikmeMs, kaynakModul,
+} = {}) {
+  const karar = enjeksiyonKarari(harita);
+  if (!karar.enjekte) {
+    uyar(`⚠️ SET güncelleyici ENJEKTE EDİLMEDİ (${karar.sebep}) — bu paket G güncellemesi `
+      + "alamazdı; eksik kimlik/taban/anahtarla G'li paket üretilmez");
+    return { karar, sonuc: [] };
+  }
+  return { karar, sonuc: await paketeUygula(paketKoku, { log, gecikmeMs, kaynakModul }) };
+}
+
 module.exports = {
   ISARET,
   MODUL_ADI,
@@ -161,8 +211,10 @@ module.exports = {
   VARSAYILAN_GECIKME_MS,
   CAPA_RE,
   acikMi,
+  enjeksiyonKarari,
   blokUret,
   icerigeEnjekteEt,
   girisAdaylari,
   paketeUygula,
+  kararliUygula,
 };

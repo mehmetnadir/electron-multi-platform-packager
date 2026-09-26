@@ -578,3 +578,41 @@ test('ortuGorunumu: etkin görünüm = paket + örtü, gizlenenler yok', async (
   assert.ok(!g.has('book2/index.html'));
   assert.strictEqual(icerik('book1/index.html'), '<html>kitap1</html>');
 });
+
+/* ============================================ (4) PAKETİN G SÜRÜMÜ (claim `surum`, 2026-09-26) */
+// package.json sürümü G3 değilken (Pardus/Windows paketleri '1.0.0' ile üretilir) taban yoktu:
+// paketin içerdiği sürümün imzalı manifesti ilk açılışta yeniden oynatılabiliyordu. Claim'in
+// `surum`u empp-set.json'a yazılır ve monoton tabana girer.
+function setSurumlu(kok, set, surum) {
+  const s = Object.assign({}, set, { surum });
+  fs.writeFileSync(path.join(kok, 'empp-set.json'), JSON.stringify(s));
+  return s;
+}
+
+test('WINDOWS set sürümü: package.json G3 değil, empp-set.json surum=2.5.3 → eşit/eski imzalı manifest RET', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '2.5.3');
+  const once = ozet(kok);
+  const a = await kos(kok, s, tam('2.5.3', { surumTetik: '2.5.8' }));
+  assert.strictEqual(a.r.sebep, 'manifest-reddedildi:surum-eski', JSON.stringify(a.r));
+  assert.strictEqual(a.r.kuruluSurum, '2.5.3');
+  assert.deepStrictEqual(ozet(kok), once, 'ağaç aynı kalmalı');
+  const b = await kos(kok, s, tam('2.5.4'));
+  assert.strictEqual(b.r.durum, 'guncellendi', JSON.stringify(b.r));
+});
+
+test('ÖRTÜ set sürümü: empp-set.json surum tabanı ilk kurulumda da geçerli — eski manifest örtü kurmaz', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '2.5.3');
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const { r } = await ortuKos(kok, s, ortuKoku, tam('2.5.2', { surumTetik: '2.5.8' }));
+  assert.strictEqual(r.sebep, 'manifest-reddedildi:surum-eski');
+  assert.ok(!fs.existsSync(ortuKoku), 'örtü dizini oluşmamalı');
+});
+
+test('set sürümü G3 değilse (bozuk/elle) yok sayılır — package.json/damga tabanı geçerli kalır', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '9.9.9.9');
+  const { r } = await kos(kok, s, tam('2.5.1'));
+  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
+});
