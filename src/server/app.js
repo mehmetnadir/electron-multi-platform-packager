@@ -904,34 +904,13 @@ app.get('/api/logos/:logoId/file', async (req, res) => {
   await logoService.serveLogoFile(logoId, res);
 });
 
-// SET GÜNCELLEME PAKETİ İNDİRME (sözleşme §Sunucu tarafı — TASARIM, 2026-09-23)
-// `src/agent/runner.js` (parça 3, BAŞKA AJANIN İŞİ) bu ucu indirip R2'ye yükler.
-// `/:jobId/:platform` rotasıyla ÇAKIŞMASIN diye ondan ÖNCE, literal `guncelleme`
-// segmentiyle tanımlanır — Express aynı şekilli yolları kayıt sırasına göre
-// eşler, `guncelleme` yalnız bu literal segmentle çakışır (platform adı olamaz).
-app.get('/api/download/:jobId/guncelleme', async (req, res) => {
-  try {
-    const { jobId } = req.params;
-    const job = packagingJobs.get(jobId);
-
-    if (!job || job.status !== 'completed') {
-      return res.status(404).json({ error: 'İş bulunamadı veya henüz tamamlanmadı' });
-    }
-
-    const gp = job.results && job.results.guncellemePaketi;
-    if (!gp || gp.atlandi || gp.hata || !gp.tarYolu || !fs.existsSync(gp.tarYolu)) {
-      return res.status(404).json({ error: 'guncelleme-paketi-yok' });
-    }
-
-    const fileName = `guncelleme-${jobId}.tar.gz`;
-    res.setHeader('Content-Disposition', buildContentDisposition(fileName));
-    res.setHeader('Content-Type', 'application/gzip');
-    res.download(gp.tarYolu, fileName);
-  } catch (error) {
-    console.error('Güncelleme paketi indirme hatası:', error);
-    res.status(500).json({ error: 'Güncelleme paketi indirilemedi: ' + error.message });
-  }
-});
+// ÖLÜ UÇ KALDIRILDI (2026-09-26, Librarian §8 karantina — kanıt:
+// _graveyard/2026-09-26-olu-guncelleme-ucu/OKU.md). Eski uç:
+// `GET /api/download/:jobId/guncelleme` — üreticisi (`guncelleme-paketi.js` /
+// `packagingService.paketeUret`) aynı gün kaldırıldığı için `job.results.guncellemePaketi`
+// hiç set edilmiyordu, uç her zaman 404 dönüyordu. Doğrudan çağıran, 7 günlük log'da istek
+// yoktu. Bir isteğin bu yola düşmesi artık aşağıdaki `:platform` joker rotasına eşlenir ve
+// `job.results['guncelleme']` hiç yazılmadığı için yine 404 döner (davranış korunur).
 
 // Paketlenmiş dosya indirme
 app.get('/api/download/:jobId/:platform', async (req, res) => {
