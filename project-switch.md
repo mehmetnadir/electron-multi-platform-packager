@@ -6,8 +6,8 @@
 - (lazy-grow: file fills as work happens)
 
 ## State
-[STATE: active]
-[TEMPORAL_STATE: assimilated 2026-05-22]
+[STATE: active — 2026-09-26 akşam canlıya alma: G kanalı+Windows şeridi+içerik kapısı+kabul E6/E7/E8 canlıda, Android G ekleme kapalı (karar bekliyor)]
+[TEMPORAL_STATE: canliya-alma 2026-09-26]
 [MAINTENANCE: librarian auto-scaffold — fill on first edit session]
 
 ## Index
@@ -17,4 +17,4 @@ See `.claude/docs/INDEX.md` (if exists)
 Electron
 
 ## Last Known Status
-unknown — needs first-session profiling
+agent-mode HEAD cdb5ed4 canlıda (3001); detay: .claude/docs/changelog.md (7)
