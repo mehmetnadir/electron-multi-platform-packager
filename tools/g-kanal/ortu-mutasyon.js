@@ -4,6 +4,8 @@
  * G örtüsü (mac + Pardus) + G GÜVENLİK (2026-09-26: monoton sürüm, set kimliği, ya hep ya hiç,
  * yeniden indirme yok — TÜM kipler) MUTASYON KANITI — her mutant tek bir kuralı bozar; ilgili
  * testler DÜŞMELİ ("öldü"). Hayatta kalan mutant = testin görmediği kural.
+ * M45–M67 (2026-09-26): Pardus Docker G anahtarı + claim kimliği, taban yoksa enjeksiyon yok,
+ * paketin G sürümü tabanı, renderer fs-shim örtü okuması, imzalı dosyalar[] (arşiv saklanmaz).
  * `UU` / `UUO` test adı = G uçtan uca 11 senaryo koşumu (`tools/g-uctan-uca/kos.js`, yerinde /
  * örtü kipi) — fikstür `--uu-dizin` (varsayılan ~/.empp-agent/g-uctan-uca/g-electron, hazirla ile).
  *
@@ -27,6 +29,17 @@ const T_ESKI = 'src/runtime/kitap-guncelleyici.test.js';
 const T_K = 'src/runtime/icerik-guncelleme.test.js';
 const T_EN = 'src/packaging/guncelleyici-enjekte.test.js';
 const T_GV = 'src/runtime/kitap-guncelleyici-guvenlik.test.js';
+// (a) Pardus G anahtarı + claim kimliği, (b) renderer fs-shim örtü okuması, taban kapısı (2026-09-26)
+const RH = 'src/agent/runner-helpers.js';
+const RN = 'src/agent/runner.js';
+const PB = 'tools/pardus/pardus-packager-build.sh';
+const PR = 'tools/pardus/packager-run-linux.js';
+const SK = 'src/packaging/set-kimligi.js';
+const PS = 'src/packaging/packagingService.js';
+const SH = 'src/platforms/common/fs-shim.js';
+const T_PG = 'tools/pardus/pardus-g-anahtar.test.js';
+const T_KR = 'src/packaging/guncelleyici-enjekte-karar.test.js';
+const T_SHIM = 'src/platforms/common/fs-shim-ortu.test.js';
 /** G uçtan uca koşumu (yerinde / örtü) — `testKos` bunları kos.js ile koşar. */
 const UU = 'UU';
 const UUO = 'UUO';
@@ -100,8 +113,8 @@ const MUTANTLAR = [
     eski: 'if (kurulu && gSurumCoz(uzakSurum) && gSurumKiyasla(uzakSurum, kurulu) <= 0) {',
     yeni: 'if (false) {', test: [T_GV] },
   { id: 'M27', ne: 'AÇIK-1: son uygulanan G sürümü taban sayılmaz (yalnız paket sürümü)', dosya: KG,
-    eski: 'const kurulu = enBuyukGSurum([uygulanan, paketSurumu]);',
-    yeni: 'const kurulu = enBuyukGSurum([paketSurumu]);', test: [T_GV] },
+    eski: 'const kurulu = enBuyukGSurum([uygulanan, paketSurumu, set.surum || null]);',
+    yeni: 'const kurulu = enBuyukGSurum([paketSurumu, set.surum || null]);', test: [T_GV] },
   { id: 'M28', ne: 'eski pakete ait damga (taban değişti) yine taban sayılır', dosya: KG,
     eski: 'if (damga && damga.taban && damga.taban !== tabanKimligi) {', yeni: 'if (false) {', test: [T_GV] },
   // ---- açık (2) set kimliği / kanal
@@ -146,6 +159,58 @@ const MUTANTLAR = [
   { id: 'M44', ne: 'örtü: türetilmiş kitap listesi arşivden yeniden doğrulanmaz', dosya: KG,
     eski: 'if (kitap.dogrulandi === null) kitap.dogrulandi = kitapTuretilmisDogrula(f, d, kitap);',
     yeni: 'if (kitap.dogrulandi === null) kitap.dogrulandi = true;', test: [T_GV] },
+  // ---- (a) Pardus Docker: G açık anahtarı
+  { id: 'M45', ne: 'pardus: açık anahtar konteynere -e ile geçmez', dosya: PB,
+    eski: '  -e EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-}" \\\n', yeni: '', test: [T_PG] },
+  { id: 'M46', ne: 'pardus: geçersiz/özel anahtar ortamdan düşürülmez', dosya: RH,
+    eski: '  if (sebep) delete cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR;\n', yeni: '  if (false) delete cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR;\n', test: [T_PG] },
+  { id: 'M47', ne: 'pardus: betik doğrulanmış ortam yerine ham ortamla koşar', dosya: RN,
+    eski: "CONFIG.pardusBuildScript, ...args], { env: pe.env });", yeni: "CONFIG.pardusBuildScript, ...args], { env: process.env });", test: [T_PG] },
+  // ---- (a-ext) claim G kimliği konteynere + taban yoksa enjeksiyon yok
+  { id: 'M48', ne: 'pardus: claim setKimligi konteynere -e ile geçmez', dosya: PB,
+    eski: '  -e EMPP_G_SET_KIMLIGI="${EMPP_G_SET_KIMLIGI:-}" \\\n', yeni: '', test: [T_PG] },
+  { id: 'M49', ne: 'konteyner jobInfo claim tabanını almaz', dosya: PR,
+    eski: "    guncellemeTabani: al('EMPP_G_GUNCELLEME_TABANI'),", yeni: '    guncellemeTabani: null,', test: [T_PG] },
+  { id: 'M50', ne: 'runner yer tutucu (.invalid) tabanı geçirir', dosya: RH,
+    eski: "    else if (/\\.invalid$/i.test(u.hostname)) sebepler.push('taban-yer-tutucu');\n", yeni: '', test: [T_PG] },
+  { id: 'M51', ne: 'ajan ortamındaki eski EMPP_G_* değerleri konteynere sızar', dosya: RH,
+    eski: '  for (const ad of Object.values(PARDUS_G_ENV)) delete cikti[ad];\n', yeni: '', test: [T_PG] },
+  { id: 'M52', ne: 'buildPardusArtifact claim kimliğini betiğe geçirmez', dosya: RN,
+    eski: 'runPardusScript([zipPath, appName, outDir, appVersion], kimlik);', yeni: 'runPardusScript([zipPath, appName, outDir, appVersion]);', test: [T_PG] },
+  { id: 'M53', ne: 'taban yokken (yer tutucu) de G enjekte edilir', dosya: EN,
+    eski: "  if (!tabanGercekMi(harita.taban, harita.tabanKaynagi)) return { enjekte: false, sebep: 'taban-yok' };\n",
+    yeni: '', test: [T_KR, T_PG] },
+  { id: 'M54', ne: 'istek/env ile gelen .invalid taban gerçek sayılır', dosya: EN,
+    eski: '  if (/\\.invalid$/i.test(u.hostname)) return false;\n', yeni: '', test: [T_KR] },
+  { id: 'M55', ne: 'imza anahtarı yokken de G enjekte edilir', dosya: EN,
+    eski: "  if (!harita.imza || !harita.imza.acikAnahtar) return { enjekte: false, sebep: 'imza-anahtari-yok' };\n",
+    yeni: '', test: [T_KR] },
+  { id: 'M56', ne: 'kararliUygula karar olumsuzken de yamalar', dosya: EN,
+    eski: '  if (!karar.enjekte) {\n', yeni: '  if (false) {\n', test: [T_KR] },
+  { id: 'M57', ne: 'packagingService set haritasını karara vermez', dosya: PS,
+    eski: '          setHaritasi = sh;\n', yeni: '', test: [T_KR] },
+  { id: 'M58', ne: 'claim surum empp-set.json\'a yazılmaz', dosya: SK,
+    eski: '    surum: surumCozum.surum,\n', yeni: '    surum: null,\n', test: [T_KR, T_PG] },
+  { id: 'M59', ne: 'istemci paketin G sürümünü (set.surum) monoton tabana katmaz', dosya: KG,
+    eski: 'enBuyukGSurum([uygulanan, paketSurumu, set.surum || null]);', yeni: 'enBuyukGSurum([uygulanan, paketSurumu]);', test: [T_GV] },
+  // ---- (b) renderer fs-shim: örtü OKUMASI
+  { id: 'M60', ne: 'fs-shim okuma yolu örtüyü atlar (pakete düşer)', dosya: SH,
+    eski: '      if (ORTU) { try { var o = ORTU.yol(b); if (o) return o; } catch (e) {} }\n', yeni: '', test: [T_SHIM] },
+  { id: 'M61', ne: 'fs-shim dizin listesi örtüde eklenen adları göstermez', dosya: SH,
+    eski: '        if (L) ekle(L.adlar.map(function (ad) { return sanal(ad, L, opts); }));\n', yeni: '', test: [T_SHIM] },
+  { id: 'M62', ne: 'fs-shim dizin listesi örtüde gizlenen kitabı gösterir', dosya: SH,
+    eski: '        if (L && L.cikar.length) {\n', yeni: '        if (false) {\n', test: [T_SHIM] },
+  { id: 'M63', ne: 'ana süreç renderer için örtü kökünü ortama yazmaz', dosya: KG,
+    eski: '          env[ORTU_ENV_ETKIN] = ortuKoku;\n', yeni: '', test: [T_SHIM] },
+  { id: 'M64', ne: 'renderer okuyucusu farklı sürümün örtüsünü de okur', dosya: KG,
+    eski: '  if (o.surum && d.surum !== o.surum) return null;\n', yeni: '', test: [T_SHIM] },
+  // ---- (d) imzalı dosyalar[] (yayın aracı 90d7a58 biçimi): arşiv saklanmaz
+  { id: 'M65', ne: 'imzalı dosyalar[] yok sayılır, arşiv türetilip saklanır', dosya: KG,
+    eski: 'const turetilecek = g.dosyalar === undefined;', yeni: 'const turetilecek = true;', test: [T_GV] },
+  { id: 'M66', ne: 'imzalı listede nesneler varken arşiv yeniden iner', dosya: KG,
+    eski: '        if (eksik) {\n', yeni: '        if (true) {\n', test: [T_GV] },
+  { id: 'M67', ne: 'imzalı listede arşivdeki listesiz dosya kabul edilir', dosya: KG,
+    eski: "            if (!d) throw new Error('arsivde-listesiz-dosya:' + y);", yeni: '            if (!d) continue;', test: [T_GV] },
 ];
 
 function arg(ad) { const i = process.argv.indexOf(ad); return i === -1 ? null : process.argv[i + 1]; }
@@ -195,7 +260,7 @@ function main() {
   const uuDizin = arg('--uu-dizin') || path.join(os.homedir(), '.empp-agent', 'g-uctan-uca', 'g-electron');
   fs.rmSync(anlik, { recursive: true, force: true });
   fs.cpSync(path.join(KOK, 'src'), path.join(anlik, 'src'), { recursive: true });
-  for (const t of ['g-uctan-uca', 'g-yayin']) {
+  for (const t of ['g-uctan-uca', 'g-yayin', 'pardus']) {
     fs.cpSync(path.join(KOK, 'tools', t), path.join(anlik, 'tools', t), { recursive: true });
   }
   const sonuc = [];
