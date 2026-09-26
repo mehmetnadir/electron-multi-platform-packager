@@ -259,3 +259,34 @@ mac/Pardus örtü) kapandı — `src/runtime/kitap-guncelleyici.js`:
 
 Kanıt: `tools/g-uctan-uca/kos.js` 11 senaryo (her ikisi de `--kip yerinde` ve `--kip ortu`),
 `src/runtime/kitap-guncelleyici-guvenlik.test.js`, mutasyon `tools/g-kanal/ortu-mutasyon.js` (M25–M44).
+
+## G istemcisi — Android (2026-09-26, dal `g-android` + `g-yayin-dosyalar`)
+
+> `platform-kanallari-sozlesmesi.md` "Android G katmanı" bölümünden taşındı (26.09, belge tavanı); açık maddeler orada.
+
+- **Yer:** politika JS'de (`src/platforms/android/empp-g-istemci.js`: iki kademe, imza, kapsam, plan), mekanizma Java'da
+  (`g-java/com/empp/g/`: `EmppGKatman` saf JDK, `EmppGRota` Capacitor RouteProcessor, `EmppGPlugin` köprü).
+  Kurulum `g-katmani.js` ← `packagingService.configureAndroidG`; YALNIZ `www/empp-set.json` varsa (kapı
+  `EMPP_SET_GUNCELLEME`; canlıda `windows` → Android'de bugün KAPALI).
+- **Katman:** `filesDir/empp-g` = `depo/<sha256>` (kabuk) · `kitap/<dizin>-<sha16>/` (eklenen kitap) · `hazirlik/` ·
+  `durum.txt`. WebView isteği önce katmandan, yoksa APK'dan; çıkarılan kitap 404. APK değişince katman atılır.
+- **Uç:** `<taban>/set/<kimlik>/android/{surum.json, manifest.json, manifest.json.sig, dosya/…}` — Android'e uyarlanmış
+  ağaçtan; Windows manifesti Android'e uygulanmaz. İmza: WebCrypto Ed25519, yoksa gömülü tweetnacl 1.0.3; ikisi de
+  yoksa KAPALI.
+- **Üç güvenlik kuralı (Electron `kitap-guncelleyici.js` e07bc37 ile aynı):**
+  1. *Monoton sürüm:* manifest `surum` G3 (`2.<panel>.<sayaç>`) ve KURULU sürümden KESİN büyük olmalı. Kurulu =
+     max(`empp-g-paket.json` [paketleme anındaki appVersion], son uygulanan G); G3 olmayan paket sürümü kıyasa
+     girmez. `surum.json` imzasız tetiktir. Java `uygula` da aynı kuralı uygular (savunma derinliği).
+  2. *Kimlik:* `kanal == "G"` ve `setKimligi == gömülü kimlik` değilse RET; `surum.json` başka seti söylüyorsa
+     manifest istenmez.
+  3. *Ya hep ya hiç:* kabuk (`yaz`) ve kitap (`kitapKur`) önce `hazirlik/`'e iner + boyut/sha256 doğrulanır; tek
+     hata → `uygula` hiç çağrılmaz. Kesinleşme tek `uygula` = tek `durum.txt` rename'i.
+- **Kanıt:** `node --test src/platforms/android/{empp-g-istemci,g-katmani,empp-android-shim-g,g-java}.test.js`;
+  mutasyon `node tools/g-android/g-mutasyon.js` (15 mutant: kural başına ≥3, JS + Java).
+- **Yayın aracı ekledi (26.09, dal `g-yayin-dosyalar`):** `tools/g-yayin/yayinla.js` artık android/ ucunu da
+  üretir — TEK imza paylaşılır (Windows/mac ile BİREBİR aynı `manifest.json`/`.sig` baytı, ayrı bir Android
+  imzalaması YOK), kitap arşivi de PAYLAŞILIR (`kitaplar[].kaynak` aynı `kitap/<ad>.zip` adresi — ayrı bir
+  Android zip'i üretilmez). `ciktiDogrula` android mirror'ın canonical'la bayt-bayt aynı olduğunu ve
+  `android/dosya/<yol>` sha256'larının manifestle tuttuğunu denetler. Uçtan uca kanıt:
+  `tools/g-yayin/android-uctan-uca.test.js` — GERÇEK `empp-g-istemci.js`'i gerçek g-yayin üretimiyle besler
+  (kabul + yabancı-set-RET + eski-sürüm-RET).
