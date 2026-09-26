@@ -85,6 +85,18 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
   Bloktest 2,2 GB: Mac Docker 1025 sn, ProBook yerli 367 sn, yerel kabul 51 sn (`pardus-seridi-probook-plani…:8-20`, `sozlesme.md:32`).
 - R2: 300 MB üstü çok parçalı, 64 MB parça (`runner.js:389-390`); ofiste 25 MB/s, dışarıda 4 MB/s (`run-agent.sh:94-97`).
 
+## Pakete girmeyecekler — Windows politikası dört platformda (KARARLANDI, Nadir 2026-09-26)
+> *"diğer os'ların paketlerini üretirken windows paketinde uyguladığımız gereksizleri atma politikasını onlarda da
+> uygulamalıyız."*
+- Liste TEK kaynaktan gelir (`src/packaging/paket-disi-liste.js`, yazılıyor); windows/macos/linux electron-builder
+  `files` dizileri ve Android `www` kopya filtresi aynı modülü çağırır; kopya liste yasak.
+- Kapsam (Windows'ta bugün): `node_modules`, kök `temp/`, `uploads/`, `build/`, `**/temp/data/storage.im`
+  (yayıncının kendi kullanıcı verisi, G2), `_` önekli kök dizinler. Bir madde bir platformda kırılma riski
+  taşıyorsa o platformda uygulanmaz ve gerekçesi burada yazılır (ölçüm sonrası).
+- 26.09 ölçümü: mac/linux'ta `build/` ve `storage.im` dışlanmıyor; Android yalnız `node_modules` + `.git`.
+- Ayrı karar (bu maddeye dahil DEĞİL): kayıpsız sayfa WebP bugün yalnız Windows'ta; diğer platformlar ProBook /
+  cihaz ölçümünden sonra.
+
 ## Kapılar (kod varsayılanı → canlı değer, `run-agent.sh`)
 | Bayrak | Kod varsayılanı | Canlı | Not |
 |---|---|---|---|
