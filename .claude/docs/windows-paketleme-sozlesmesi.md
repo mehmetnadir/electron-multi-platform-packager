@@ -81,15 +81,22 @@ Aktivasyon: çevrimdışı pakette `imKeys.dll` / İmpark DB anahtar kanalı old
 - Testler: 1.717 testin 1.709'u geçti; 2 FAIL eski (`_graveyard/` yokluğu), 6 atlandı.
 
 ## Üretimi etkilemeyen açık işler (onaydan sonra)
-1. Taslak kodu ana ağaca al + commit (kod şu an `~/01dev/_worktrees/win-sozlesme`, dal `taslak/win-sozlesme-20260926`).
-2. Sessiz arıza: makensis başarısız olup eski Setup.exe dururken paketleyici başarı diyor → sıfır-dışı çıkışta FAIL.
+1. ✅ Taslak kod ana ağaçta (`ded619e`, `c11aae0`, 2026-09-26).
+2. ✅ Sessiz arıza kapandı (`436daa0`): exit≠0'da yalnız bu derlemede üretilmiş Setup.exe kabul edilir
+   (updateInfoBuilder'ın zararsız hatası); teslimden önce taze mtime + birebir `<ad>-<sürüm>-Setup.exe` adı
+   aranır, eski exe'ler silinmeden kenara alınır.
 3. Üretim ed25519 anahtar çifti (test anahtarı `~/.empp-agent/test-guncelleme-ed25519.key` üretime çıkmaz).
-4. 3001 bayrakları: `EMPP_ICERIK_GUNCELLEME`, `EMPP_SET_GUNCELLEME`, `EMPP_SAYFA_WEBP` → `~/.empp-agent/run-agent.sh`
-   + `temiz-restart-bekle.sh` KANON tablosu; temiz restart kuyruk boşken.
-5. `_` önekli kök dizinleri (ör. SM2 `_eski/`) pakete alınmasın — tüm platformlar.
-6. Ölçülecek: aktivasyonlu kitapta aktivasyon akışı; G6 gerçek Windows'ta; İmpark `zkitap` localStorage göçü (yok);
-   B'nin A üstüne VM'de kurulumu (kapı madde 3); Defender/SmartScreen tarama süresi (bizim dışımızda).
-7. İmza: İmpark imza yuvası gerçek koşu (ofiste). Yayımcı adı / Certum başvurusu ertelendi.
+   Toplu Windows üretiminden ÖNCE şart; yedek yeri Nadir kararı.
+4. ✅ 3001 bayrakları platform kapsamlı: `EMPP_ICERIK_GUNCELLEME=windows`, `EMPP_SAYFA_WEBP=windows`,
+   `EMPP_SET_GUNCELLEME=0` (üretim anahtarına kadar) — `run-agent.sh` + KANON tablosu.
+5. ✅ `_` önekli kök dizinler hiçbir platform paketine girmez (`436daa0`, `kok-yedek-dizin-disla.js`).
+6. Ölçülecek: aktivasyonlu kitapta aktivasyon akışı (26.09 test sürüyor; imKeys.dll uygulama çalışınca
+   İmpark'tan iner); G6 gerçek Windows'ta; B'nin A üstüne VM'de kurulumu (kapı madde 3);
+   Defender/SmartScreen tarama süresi (bizim dışımızda).
+7. İmza: İmpark imza yuvası gerçek koşu (26.09 sürüyor, A paketi 715 MB, hazırlık 7 dk 42 sn).
+   Yayımcı adı / Certum başvurusu ertelendi.
+8. Başsız kabul kapısı (`tools/kabul`, `b12d2ff`): SM2 Windows A GEÇTİ; runner'da mac+android açık,
+   Windows paketleri srv21'de üretildiği için henüz runner kapısında değil.
 
 ## Yapılmayacaklar
 Aktivasyon akışına dokunmak · yayıncının özel menüsüne dokunmak (K17) · asar'ı SET dışında değiştirmek ·
