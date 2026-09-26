@@ -56,6 +56,22 @@ Paket **imzalanmadan dönmez**: 1. deneme 3 saate kadar bekler; imza gelmezse yu
 gider ("imza kuyruğunda sorun olabilir — İmpark'tan düzeltme talebi"). İmzasız paket hiçbir koşulda
 yayına/R2'ye çıkmaz; o sürede indirme İmpark exe'sidir.
 
+**Toplu üretim ve imza akışı — KARARLANDI (Nadir, 2026-09-26: "hepsini üretip, ürettiklerimizi yüklemeye
+geçelim; sonra sırayla imzalatırız ve indiririz"):** imza kuyruğu tek yuvalı ve sıralıdır; bekleme
+paralel işlerle doldurulur.
+1. **Üret (paralel):** kapsamdaki bütün Windows paketleri yerelde üretilir (kaynak: bugün İmpark exe'si,
+   sonra kitap id'den build klasörü). Her paket başsız kabul kapısından (`tools/kabul`) GEÇER; RED olan
+   imzaya gitmez.
+2. **Yükle (toplu):** GEÇEN paketlerin hepsi imza hazırlık dizinine (`KitapTekExe/_hazir/`) kopyalanıp
+   geri okunur (`imza-yuva-smb.sh toplu`, `SMB_SHA=0`). Kopya süresi İmpark hattına bağlıdır (25.09
+   0,2 MB/sn · 26.09 4,6 MB/sn); kopyalar imzadan önce biter, imza sırası kopya beklemez.
+3. **İmzala (sırayla):** paket başına tetik → takas → imza → hızlı kontrol → `_imzali/`; bekleme kuralı
+   (3 sa + 1 yeniden deneme 1 sa, sonra bildirim) paket başına uygulanır; biri düşerse sıra DURUR.
+4. **İndir ve doğrula:** imzalı dosya indirilir; `osslsigncode verify` (imzacı İm Park Bilişim, zincir +
+   CRL) ve başsız kabul yeniden koşar. İkisi de geçmeden paket yayına çıkmaz.
+5. **Yayınla:** R2'ye yüklenir, kayıtta `build_method=build`; önceki İmpark exe'si yedek olarak kalır.
+Bu koşuda ölçülen (26.09, 715 MB): hazırlık 7 dk 42 sn, tetikten imzaya ~6 dk — norm değil.
+
 ## Kimlik ve kitap türü — KARARLANDI (Nadir, 2026-09-25)
 Kimlik = setin/kitabın kendi `book_id`'si; elle girilen alan YOK. Tür **deterministik** türetilir:
 - kitap sayısı > 1 → `set`, değilse `tek`;
