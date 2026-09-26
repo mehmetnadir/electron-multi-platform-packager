@@ -151,8 +151,12 @@ function varsaOku(dosya) {
 }
 
 /**
- * SET DALI (2026-09-26, 73768 Pardus ProBook RED): kökte app.config.js YOK → güncelleme
- * yalnız app.config.js taşıyan alt klasörlere açılır, köke ASLA açılmaz.
+ * SET DALI (2026-09-26, 73768 Pardus ProBook RED; genişletildi 2026-09-26, 59834 index
+ * karışması): kökte app.config.js YOK → güncelleme yalnız app.config.js taşıyan alt
+ * klasörlere açılır, köke ASLA açılmaz. Kökte app.config.js VARSA bile en az bir alt
+ * kitap dizini (`setKitapDizinleri`) varsa yine bu dal çalışır — yayıncı bazı SET'lerin
+ * köküne de `app.config.js` koyabiliyor (59834 v47: `set_app.config` kökte duruyordu);
+ * "kökte app.config.js yok" TEK BAŞINA SET testi değildir, alt kitap varlığı esastır.
  *
  * NEDEN: kök index.html set menüsüdür (Web-Z kabuğu). Eski kod zip'i koşulsuz köke açıyor,
  * okuyucunun index.html'i (2.973 B, md5 9f8032915a19f3285dd2e3051ae5acc4) menünün üstüne
@@ -219,9 +223,12 @@ function setDaliUygula(buildDir, upd, { from, companyId, log }) {
 
 /**
  * Uygular; dönüş: { applied, from, to, companyId, reason, set, uygulanan, atlanan }.
- *   - Kökte app.config.js VAR (tek kitap): zip build köküne açılır — electron.js
- *     extractAllTo(dirname, true). Bugünkü davranış aynen.
- *   - YOK (SET): bkz. `setDaliUygula` — köke asla açılmaz.
+ *   - SET (alt kitap dizini VAR): bkz. `setDaliUygula` — köke asla açılmaz. Bu karar
+ *     kökte `app.config.js` olup olmamasından ÖNCE gelir (2026-09-26, 59834 dersi):
+ *     yayıncı bir SET'in köküne de `app.config.js` bırakabiliyor; tek başına o dosyanın
+ *     varlığı "tek kitap" anlamına gelmez.
+ *   - Tek kitap (alt kitap dizini YOK, kökte app.config.js VAR): zip build köküne
+ *     açılır — electron.js extractAllTo(dirname, true). Bugünkü davranış aynen.
  * `uygulanan`: [{kitap, once, kaynak}] ('.' = kök/tek kitap); `atlanan`: [{kitap, surum, kaynak, neden}].
  * opts: { updateDir?, log?(satır) } — log varsayılanı console.warn (atlama GÖRÜNÜR olmalı).
  */
@@ -232,7 +239,9 @@ function applyPublisherUpdate(buildDir, opts = {}) {
   const upd = latestLocalUpdate(companyId, opts.updateDir);
   if (!upd) return { applied: false, from, to: null, companyId, reason: companyId ? 'yerel güncelleme yok' : 'kurum.txt yok' };
   if (!isNewer(from, upd.version)) return { applied: false, from, to: upd.version, companyId, reason: 'zaten güncel' };
-  if (!fs.existsSync(path.join(buildDir, 'app.config.js'))) {
+  const kokAppConfigYok = !fs.existsSync(path.join(buildDir, 'app.config.js'));
+  const setKitaplari = setKitapDizinleri(buildDir);
+  if (kokAppConfigYok || setKitaplari.length) {
     return setDaliUygula(buildDir, upd, { from, companyId, log });
   }
   unzipla(upd.zipPath, buildDir);

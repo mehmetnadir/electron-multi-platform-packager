@@ -258,17 +258,54 @@ test('SET: ikinci koşu iş yapmaz (kök damgası ilerledi → önbellek STALE d
   assert.strictEqual(r.reason, 'zaten güncel');
 });
 
-test('Tek kitap: bugünkü davranış aynı — kökte app.config.js varsa zip köke açılır', () => {
+test('Tek kitap: bugünkü davranış aynı — kökte app.config.js var, alt kitap dizini YOK → zip köke açılır', () => {
   const { build, updRoot } = fixture();
   fs.writeFileSync(path.join(build, 'index.html'), '<html>eski okuyucu</html>');
-  // Tek kitapta alt klasörde app.config.js olsa bile SET dalı SEÇİLMEZ (yayıncı: kök önce).
-  fs.mkdirSync(path.join(build, 'alt'));
-  fs.writeFileSync(path.join(build, 'alt', 'app.config.js'), '// alt');
   const r = applyPublisherUpdate(build, { updateDir: updRoot, log: () => {} });
   assert.strictEqual(r.set, false);
   assert.strictEqual(r.applied, true);
   assert.strictEqual(fs.readFileSync(path.join(build, 'app.config.js'), 'utf8'), '// yeni');
   assert.ok(fs.existsSync(path.join(build, 'new.main.js')), 'zip köke açılmalı');
-  assert.ok(!fs.existsSync(path.join(build, 'alt', 'new.main.js')), 'tek kitapta alt klasöre açılmaz');
   assert.deepStrictEqual(r.uygulanan.map((u) => u.kitap), ['.']);
+});
+
+// --- GERİLEME: 2026-09-26 KÖKTE app.config.js OLSA BİLE SET (59834 v47 dersi) ---
+//
+// Eski karar TEK BAŞINA "kökte app.config.js var mı?" idi: varsa "tek kitap" sayılıp zip
+// köke açılıyordu. Ama yayıncı bazı SET paketlerinin köküne de kendi app.config.js'ini
+// bırakabiliyor (59834 v47 kaynağında kökte `set_app.config` birebir `app.config.js` olarak
+// duruyordu). Bu durumda eski kod güncellemeyi köke açar, SET menüsünün index.html'i
+// okuyucunun index.html'iyle ezilirdi (aynı 73768 semptomu, farklı tetik). Karar artık ÖNCE
+// "en az bir alt kitap dizini (bookN/app.config.js) var mı?" sorusuna bakıyor; varsa kökte
+// app.config.js olsa da SET dalı çalışır, kök ASLA açılmaz.
+test('GERİLEME: kökte app.config.js + alt kitap dizini birlikte varsa SET dalı öncelikli — köke açılmaz', () => {
+  const { build, updRoot } = fixture();
+  fs.writeFileSync(path.join(build, 'index.html'), '<html>set menüsü (kök)</html>');
+  fs.mkdirSync(path.join(build, 'alt'));
+  fs.writeFileSync(path.join(build, 'alt', 'app.config.js'), '// alt kitap');
+  const kokAppConfigOnce = fs.readFileSync(path.join(build, 'app.config.js'), 'utf8');
+  const kokIndexOnce = fs.readFileSync(path.join(build, 'index.html'), 'utf8');
+  const r = applyPublisherUpdate(build, { updateDir: updRoot, log: () => {} });
+  assert.strictEqual(r.set, true, 'alt kitap dizini varken (kökte app.config.js olsa bile) SET dalı seçilmeli');
+  assert.strictEqual(fs.readFileSync(path.join(build, 'app.config.js'), 'utf8'), kokAppConfigOnce, 'kök app.config.js EZİLMEMELİ');
+  assert.strictEqual(fs.readFileSync(path.join(build, 'index.html'), 'utf8'), kokIndexOnce, 'kök index.html (set menüsü) EZİLMEMELİ');
+  assert.ok(!fs.existsSync(path.join(build, 'new.main.js')), 'güncelleme köke açılmamalı');
+  assert.ok(!fs.existsSync(path.join(build, 'alt', 'new.main.js')), 'okuyucu rozeti bilinmeyen alt kitaba da açılmamalı (sürüm düşürme riski)');
+});
+
+test('GERİLEME (59834 v47 dersi): kök app.config.js + book1/book2 app.config.js taşıyan SET → köke açılmaz, kök index.html md5 korunur, kitaplara uygulanır', () => {
+  const { build, updRoot, updIndexMd5 } = setFixture();
+  // Yayıncının bazı SET kaynaklarında kökte de kendi app.config.js'i duruyor (59834 v47: set_app.config).
+  fs.writeFileSync(path.join(build, 'app.config.js'), '// yayincinin kok app.config.js’i (set_app.config)');
+  const kokAppConfigOnce = fs.readFileSync(path.join(build, 'app.config.js'), 'utf8');
+  const kokIndexOnce = md5(path.join(build, 'index.html'));
+  const { r } = kos(build, updRoot);
+  assert.strictEqual(r.set, true, 'kökte app.config.js olsa bile book1/book2 varken SET dalı seçilmeli');
+  assert.strictEqual(md5(path.join(build, 'index.html')), kokIndexOnce, 'kök index.html (set menüsü) EZİLMEMELİ');
+  assert.notStrictEqual(md5(path.join(build, 'index.html')), updIndexMd5);
+  assert.strictEqual(fs.readFileSync(path.join(build, 'app.config.js'), 'utf8'), kokAppConfigOnce, 'kök app.config.js EZİLMEMELİ');
+  assert.ok(!fs.existsSync(path.join(build, UPD_MAIN)), 'okuyucu main.js köke açılmamalı');
+  const b1 = path.join(build, 'book1');
+  assert.strictEqual(md5(path.join(b1, 'index.html')), updIndexMd5, 'book1 (eski okuyucu) güncellenmeli — kitaplara uygulanır');
+  assert.deepStrictEqual(r.uygulanan.map((u) => u.kitap), ['book1']);
 });
