@@ -133,6 +133,28 @@ function acikMi(wwwPath) {
   return fs.existsSync(path.join(wwwPath, 'empp-set.json'));
 }
 
+/**
+ * Monoton tabanın paket sürümü (2026-09-26, madde 3). Claim `surum`u (G3) paketleyicide
+ * `empp-set.json` `surum` alanına yazılır; Android'de taban da odur. `paketSurumu` (appVersion,
+ * Capacitor versionName) DEĞİŞMEZ — ayrı karar. İkisi de G3 ise büyüğü; set'te geçerli sürüm yoksa
+ * bugünkü davranış (appVersion; G3 değilse istemci kıyasa sokmaz). Saf okuma, yazmaz.
+ * @returns {{surum: string|null, kaynak: 'set'|'paket'|'yok'}}
+ */
+function paketSurumuSec(wwwPath, paketSurumu) {
+  const kg = require('../../runtime/kitap-guncelleyici');
+  let setSurumu = null;
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(wwwPath, 'empp-set.json'), 'utf8'));
+    if (s && kg.gSurumCoz(s.surum)) setSurumu = String(s.surum).trim();
+  } catch (e) { setSurumu = null; }
+  const p = (typeof paketSurumu === 'string' && paketSurumu.trim()) ? paketSurumu.trim() : null;
+  if (setSurumu) {
+    const en = kg.enBuyukGSurum([setSurumu, p]);
+    return { surum: en, kaynak: en === setSurumu ? 'set' : 'paket' };
+  }
+  return { surum: p, kaynak: p ? 'paket' : 'yok' };
+}
+
 async function mainActivityBul(dizin) {
   let girdiler = [];
   try { girdiler = await fs.promises.readdir(dizin, { withFileTypes: true }); } catch (e) { return null; }
@@ -158,7 +180,12 @@ async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kay
   const ma = await mainActivityBul(path.join(main, 'java'));
   if (!ma) return { kuruldu: false, sebep: 'MainActivity.java yok', test: false };
 
-  const www = { ...wwwDosyalari(kaynaklar), [WWW.paket]: paketDosyasi(paketSurumu) };
+  const ps = paketSurumuSec(wwwPath, paketSurumu);
+  if (ps.kaynak !== 'set') {
+    log(`⚠️ G: empp-set.json'da claim surum'u (G3) yok — Android monoton tabanı ${ps.surum || 'YOK'} `
+      + '(pakete gömülü içerikten eski bir G manifesti tabansız kalabilir)');
+  }
+  const www = { ...wwwDosyalari(kaynaklar), [WWW.paket]: paketDosyasi(ps.surum) };
   const java = javaDosyalari();
   const yeniMa = mainActivityYamasi(await fs.promises.readFile(ma, 'utf8'));
   let test = null;
@@ -193,5 +220,5 @@ async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kay
 module.exports = {
   WWW, JAVA_DOSYALARI, KAYIT, ROTA, TEST_AG, TEST_CA, NACL_SHA256, KAYNAK,
   kabukSarmali, wwwDosyalari, paketDosyasi, javaDosyalari, mainActivityYamasi, testAgYapilandirmasi,
-  manifestTestYamasi, acikMi, kur,
+  manifestTestYamasi, acikMi, paketSurumuSec, kur,
 };

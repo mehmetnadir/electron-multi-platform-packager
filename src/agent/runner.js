@@ -49,7 +49,7 @@ const {
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
-  pardusBetikEnv,
+  pardusBetikEnv, claimGSurumu,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
@@ -819,7 +819,7 @@ async function packagerLogoIdFor(publisherName) {
   } catch (e) { warn('logo listesi alinamadi:', agHatasiOzeti(e)); return null; }
 }
 
-async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, setKimligi, guncellemeTabani) {
+async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, setKimligi, guncellemeTabani, surum) {
   const res = await axios.post(
     joinUrl(CONFIG.packagerApi, 'api/package'),
     {
@@ -831,6 +831,9 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
       // bkz. kitap-guncelleme-sozlesmesi.md). İkisi de yoksa alan hiç gönderilmez.
       ...(setKimligi ? { setKimligi } : {}),
       ...(guncellemeTabani ? { guncellemeTabani } : {}),
+      // Paketin G sürümü (claim `surum`, G3; madde 3): empp-set.json → monoton taban.
+      // appVersion'dan AYRI alan — electron-builder/Capacitor sürümü DEĞİŞMEZ.
+      ...(surum ? { surum } : {}),
     },
     { timeout: 60000, validateStatus: () => true },
   );
@@ -1897,8 +1900,16 @@ async function processJob(auth, job) {
       const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
       log('packager session:', sessionId, '- starting package...');
       const logoId = await packagerLogoIdFor(job.publisherName);
+      // G tabanı (madde 3): mac/android appVersion '1.0.0' kalır; claim surum'u (G3) ayrı alanla
+      // empp-set.json'a iner. Yoksa bugünkü davranış + uyarı (pakette monoton alt sınır yok).
+      const gSurum = winPlan ? { surum: winPlan.surum, sebep: '' } : claimGSurumu(job);
+      if (!gSurum.surum) {
+        warn(`G tabanı: claim surum ${gSurum.sebep === 'yok' ? 'yok' : 'G3 değil (' + job.surum + ')'} — `
+          + `${packagerPlatform} paketinde monoton sürüm tabanı OLMAYACAK (eski G manifesti tabansız)`);
+      }
       jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId,
-        winPlan ? winPlan.setKimligi : job.setKimligi, winPlan ? winPlan.guncellemeTabani : job.guncellemeTabani);
+        winPlan ? winPlan.setKimligi : job.setKimligi, winPlan ? winPlan.guncellemeTabani : job.guncellemeTabani,
+        gSurum.surum);
       log('packager jobId:', jobId, '- polling...');
       const pollSonuclari = await packagerPoll(jobId, packagerPlatform);
       // Kök index denetimi görünürlük köprüsü (2026-09-26) — bkz. kok-index-log-koprusu.js.
