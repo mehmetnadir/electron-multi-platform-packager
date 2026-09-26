@@ -89,11 +89,24 @@ function yayinRotalari(o) {
     const adres = `/arsiv/${k.dizin}.zip`;
     r[adres] = zip;
     const giris = { dizin: k.dizin, durum: 'ekle', kaynak: `${o.tabanUrl}${adres}`, sha256: sha(zip), boyut: zip.length };
-    if (o.dosyalarSil !== k.dizin) giris.dosyalar = k.dosyaListesi || dosyalar;
+    // `listesiz`: G yayın aracının bugünkü biçimi — `ekle` girdisinde `dosyalar[]` YOK.
+    if (o.dosyalarSil !== k.dizin && !o.listesiz) giris.dosyalar = k.dosyaListesi || dosyalar;
     kitaplar.push(giris);
   }
-  const manifest = Buffer.from(JSON.stringify({ surum: o.surum, kabuk, kitaplar }));
-  r[`${kok}/surum.json`] = JSON.stringify({ surum: o.surum, uretim: '2026-09-26T00:00:00Z' });
+  // Kimlik alanları (2026-09-26): `kanal`/`manifestSet` ile bozulabilir (ret testleri).
+  const govde = {
+    sema: 1,
+    kanal: o.kanal === undefined ? 'G' : o.kanal,
+    setKimligi: o.manifestSet === undefined ? kimlik : o.manifestSet,
+    surum: o.surum,
+    kabuk,
+    kitaplar,
+  };
+  const manifest = Buffer.from(JSON.stringify(govde));
+  // surum.json imzasız TETİKTİR: `surumTetik` ile "yalan söyleyen" tetik sınanır.
+  r[`${kok}/surum.json`] = JSON.stringify({
+    surum: o.surumTetik || o.surum, uretim: '2026-09-26T00:00:00Z', setKimligi: kimlik,
+  });
   r[`${kok}/manifest.json`] = manifest;
   r[`${kok}/manifest.json.sig`] = o.imzala(o.imzaBoz ? Buffer.concat([manifest, Buffer.from(' ')]) : manifest);
   return r;

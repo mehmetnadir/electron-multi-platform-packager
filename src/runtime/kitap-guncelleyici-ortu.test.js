@@ -205,7 +205,7 @@ const KITAP3 = {
 
 function tamYayin(t, ek = {}) {
   return yayin(t, Object.assign({
-    surum: 's2',
+    surum: '2.1.2',
     kabuk: {
       'index.html': YENI_INDEX,
       'config/settings.json': '{"books":{"book1":{},"book3":{}}}',
@@ -223,17 +223,18 @@ test('ÖRTÜ: imzalı manifest → index + book1/43e23 + settings örtüye, book
   const { r, istekler } = await guncelle(kok, set, ortuKoku, (t) => tamYayin(t));
   assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
   assert.strictEqual(r.mod, 'ortu');
-  // index + settings iner. book1/43e23 İNMEZ: aynı içerik book3 arşivinden zaten nesne oldu
-  // (içerik-adresli tekilleştirme); book1/index.html paketteki ile aynı → inmez.
-  assert.strictEqual(r.kabukIndirilen, 2, JSON.stringify(r.sira));
+  // index + settings + book1/43e23 iner. book1/43e23'ün içeriği book3 arşivinde de var ama BU
+  // koşuda üretilen nesne o yolun kendi ucunu doğrulamaktan muaf tutmaz (ya hep ya hiç — bozuk
+  // uç her kipte aynı sonucu verir). book1/index.html paketteki ile aynı → inmez.
+  assert.strictEqual(r.kabukIndirilen, 3, JSON.stringify(r.sira));
   assert.ok(!istekler.includes('/set/7001/dosya/book1/index.html'));
-  assert.ok(!istekler.includes('/set/7001/dosya/book1/43e23fce2b7009474555a77.js'));
+  assert.ok(istekler.includes('/set/7001/dosya/book1/43e23fce2b7009474555a77.js'));
   assert.deepStrictEqual(r.eklenen, ['book3']);
   assert.deepStrictEqual(r.cikarilan, ['book2']);
   assert.deepStrictEqual(Y.agacOzeti(kok), once, 'paket gövdesine TEK BAYT yazılmamalı');
   const d = kg.ortuDurumuYukle({ kok, ortuKoku });
   assert.strictEqual(d.gecerli, true, d.sebep);
-  assert.strictEqual(d.surum, 's2');
+  assert.strictEqual(d.surum, '2.1.2');
   const oku = (rel) => {
     const c = kg.ortuCoz(d, rel);
     if (!c) return ['taban', fs.readFileSync(path.join(kok, rel), 'utf8')];
@@ -277,10 +278,24 @@ test('ÖRTÜ: imza bozuk → reddedilir, örtüye tek dosya yazılmaz', async ()
   assert.strictEqual(fs.existsSync(ortuKoku), false);
 });
 
-test('ÖRTÜ: eklenen kitapta imzalı dosya listesi yoksa → kısmi, örtü değişmez (imzasız dosya sunulmaz)', async () => {
+test('ÖRTÜ: eklenen kitapta dosyalar[] YOKSA liste imzalı arşivden türetilir (G yayın biçimi)', async () => {
   const { kok, set } = tabanKur();
   const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
   const { r } = await guncelle(kok, set, ortuKoku, (t) => tamYayin(t, { dosyalarSil: 'book3' }));
+  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
+  const d = kg.ortuDurumuYukle({ kok, ortuKoku });
+  assert.strictEqual(d.gecerli, true, d.sebep);
+  assert.strictEqual(fs.readFileSync(kg.ortuCoz(d, 'book3/index.html').yol, 'utf8'), '<html>kitap3</html>');
+  assert.deepStrictEqual(kg.ortuCoz(d, 'book3/listede-yok.js'), { tur: 'yok' });
+});
+
+test('ÖRTÜ: dosyalar[] VAR ama bozuksa → kısmi, örtü değişmez (imzasız dosya sunulmaz)', async () => {
+  const { kok, set } = tabanKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const bozuk = [{ yol: '../kacis.js', sha256: 'a'.repeat(64), boyut: 1 }];
+  const { r } = await guncelle(kok, set, ortuKoku, (t) => tamYayin(t, {
+    kitaplar: [{ dizin: 'book2', durum: 'cikar' }, { dizin: 'book3', durum: 'ekle', dosyalar: KITAP3, dosyaListesi: bozuk }],
+  }));
   assert.strictEqual(r.durum, 'kismi');
   assert.strictEqual(r.sebep, 'uyelik-eksik-kabuk-atlandi');
   assert.strictEqual(fs.existsSync(path.join(ortuKoku, kg.ORTU_ETKIN)), false);
@@ -301,12 +316,12 @@ test('ÖRTÜ: yarım güncelleme (bir kabuk dosyası 404) ESKİ örtüyü bozmaz
   const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
   await guncelle(kok, set, ortuKoku, (t) => tamYayin(t));
   const { r } = await guncelle(kok, set, ortuKoku, (t) => tamYayin(t, {
-    surum: 's3', kabuk: { 'index.html': '<html>v3</html>' }, dosyaSil: ['index.html'],
+    surum: '2.1.3', kabuk: { 'index.html': '<html>v3</html>' }, dosyaSil: ['index.html'],
   }));
   assert.strictEqual(r.durum, 'kismi');
   const d = kg.ortuDurumuYukle({ kok, ortuKoku });
   assert.strictEqual(d.gecerli, true, d.sebep);
-  assert.strictEqual(d.surum, 's2');
+  assert.strictEqual(d.surum, '2.1.2');
   assert.strictEqual(fs.readFileSync(kg.ortuCoz(d, 'index.html').yol, 'utf8'), YENI_INDEX);
 });
 
@@ -317,7 +332,7 @@ test('ÖRTÜ: index pakettekine geri dönerse örtü kopyası bırakılır ve BU
   const eskiNesne = path.join(ortuKoku, 'nesne', kg.nesneAdi(sha(YENI_INDEX), 'index.html'));
   assert.ok(fs.existsSync(eskiNesne));
   const { r } = await guncelle(kok, set, ortuKoku, (t) => yayin(t, {
-    surum: 's4', kabuk: { 'index.html': '<html>ESKI MENU</html>' }, kitaplar: [],
+    surum: '2.1.4', kabuk: { 'index.html': '<html>ESKI MENU</html>' }, kitaplar: [],
   }));
   assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
   assert.strictEqual(r.kabukIndirilen, 0);
@@ -331,7 +346,7 @@ test('ÖRTÜ: manifestteki etkisiz yollar (main.js, empp-set.json, node_modules)
   const { kok, set } = tabanKur();
   const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
   const { r } = await guncelle(kok, set, ortuKoku, (t) => yayin(t, {
-    surum: 's5',
+    surum: '2.1.5',
     kabuk: { 'index.html': YENI_INDEX, 'main.js': 'kötü()', 'empp-set.json': '{}', 'node_modules/a/i.js': 'x' },
     kitaplar: [],
   }));
@@ -509,7 +524,7 @@ test('BUDAMA: bu oturumda sunulan örtünün nesneleri, oturum ortasındaki gün
   s.electron.app.emit('ready');
   const eski = path.join(o.ortuKoku, 'nesne', kg.nesneAdi(sha(YENI_INDEX), 'index.html'));
   const { r } = await guncelle(o.kok, o.set, o.ortuKoku, (t) => yayin(t, {
-    surum: 's6', kabuk: { 'index.html': '<html>v6</html>' }, kitaplar: [],
+    surum: '2.1.6', kabuk: { 'index.html': '<html>v6</html>' }, kitaplar: [],
   }));
   assert.strictEqual(r.durum, 'guncellendi');
   assert.ok(fs.existsSync(eski), 'oturumdaki nesne korunmalı');

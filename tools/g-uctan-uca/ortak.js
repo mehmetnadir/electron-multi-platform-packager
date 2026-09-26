@@ -15,8 +15,9 @@ const SON_SURUM = '2.90.3';
 const DURUM_DOSYALARI = ['.empp-set-guncelleme.json', '.empp-gecici'];
 
 /**
- * `zorunlu`: true → her istemci (referans Windows dahil); 'yeni' → yeni G istemcileri
- * (mac/Pardus/Android) için zorunlu, referans Windows istemcisinde BİLİNEN AÇIK.
+ * `zorunlu`: true → her istemci (referans Windows dahil). 'yeni' (yalnız yeni G istemcileri
+ * için zorunlu) 2026-09-26'da kalktı: referans istemci geri-alma/başka-set/kısmi-bozuk
+ * açıklarını kapattı (g-electron dalı), artık HERKES için zorunlu.
  */
 const SENARYOLAR = [
   {
@@ -52,20 +53,32 @@ const SENARYOLAR = [
   {
     ad: 'kismi-bozuk',
     beklenen: 'degismez',
-    zorunlu: 'yeni',
+    zorunlu: true,
     not: 'gecerli manifest, book2 motoru bozuk servis ediliyor: ya hep ya hiç (örtü atomik açılır)',
   },
   {
     ad: 'geri-alma',
     beklenen: 'degismez',
-    zorunlu: 'yeni',
+    zorunlu: true,
     not: 'geçerli imzalı ama 2.90.0 < paket 2.90.1',
   },
   {
     ad: 'baska-set',
     beklenen: 'degismez',
-    zorunlu: 'yeni',
+    zorunlu: true,
     not: 'geçerli imzalı ama setKimligi 99902 manifesti 99901 yolunda',
+  },
+  {
+    ad: 'geri-alma-tetik',
+    beklenen: 'degismez',
+    zorunlu: true,
+    not: 'geri-alma, ama imzasız surum.json 2.90.9 diyor (yalan tetik): ret İMZALI manifestten',
+  },
+  {
+    ad: 'baska-set-tetik',
+    beklenen: 'degismez',
+    zorunlu: true,
+    not: 'baska-set, ama surum.json 99901/2.90.9 diyor (yalan tetik): ret İMZALI manifestten',
   },
 ];
 

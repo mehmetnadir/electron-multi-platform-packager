@@ -80,7 +80,8 @@ güncellenir. Ters sırada menü olmayan bir kitabı gösterir.
 2. **Panel yokken sessizce çalışmaya devam eder.** 404 / ağ hatası / bozuk JSON →
    güncelleme atlanır, uygulama normal açılır. Panel ucu henüz yazılmadığı için şart.
 3. **Atomik yazım.** Geçici ada indir → sha256 doğrula → yerine taşı.
-4. **Varsayılan RET.** Eksik alan, `..`/mutlak yol, boyut uyuşmazlığı → o öğe atlanır.
+4. **Varsayılan RET.** Eksik alan, `..`/mutlak yol, boyut uyuşmazlığı → güncellemenin TAMAMI
+   reddedilir (2026-09-26'dan beri ya hep ya hiç; bkz. "G istemcisi — kimlik, monoton sürüm").
 5. **Kabuk güncellemesi kitap verisinden sonra.** (yukarıdaki sıra kuralı)
 6. **Yayıncı kanalıyla çakışma:** yayıncının ~350 MB'lık zip'i kabuğu ezebilir.
    Bu sözleşme onu kapatmaz — ayrı karar (Nadir'e açık madde).
@@ -212,3 +213,31 @@ node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → can
 - **Şema:** `{sema:1, kanal:"G", setKimligi, surum, onceki, uretim, anahtar, kabuk[], kitaplar[]}`. Windows istemcisiyle uyumlu; eklenen alanlar yok sayılır.
 - **Anahtar:** `--anahtar-zinciri` üretim anahtarını Anahtar Zinciri borusundan okur ve `31b8663b…2cf6` ile eşleşmesini ister. `--anahtar-dosya` yalnız TEST içindir; dosyada üretim anahtarı bulunursa araç reddeder.
 - R2 düzeni, yükleme sırası ve açık kararlar `g-yayin-r2-yol-tasarimi.md`'de. İstemci kuralları ve yerel HTTPS koşumu `tools/g-uctan-uca/README.md`'de.
+
+## G istemcisi — kimlik, monoton sürüm, ya hep ya hiç (2026-09-26, dal `g-electron`)
+
+G yayın ajanı kurulu Windows istemcisinde üç açık buldu; üçü de TÜM kiplerde (Windows yerinde +
+mac/Pardus örtü) kapandı — `src/runtime/kitap-guncelleyici.js`:
+
+1. **Monoton sürüm.** İmzası doğru manifest de ancak `surum` G3 biçiminde ve KURULU sürümden
+   KESİN büyükse uygulanır. Kurulu = max(`package.json` sürümü, son uygulanan G sürümü: Windows'ta
+   damga, örtüde `etkin.json`). Damga eski pakete aitse (taban = `empp-set.json` özeti değişti) yok
+   sayılır. G3 olmayan paket sürümü (içerik-hash) kıyasa girmez — o paketin İLK G'si her G3'ü alır.
+2. **Kimlik.** `kanal == "G"` ve `setKimligi == paketin gömülü kimliği` değilse ret. İmzasız
+   `surum.json` yalnız tetiktir; asıl karar imzalı manifestte (`-tetik` senaryoları).
+3. **Ya hep ya hiç.** Windows: her şey önce `.empp-gecici/` altında hazırlanır (indir + sha256/boyut
+   + arşivi aç); tek hata → canlı ağaca hiç dokunulmaz. Uygulama rename dizisidir (kitaplar →
+   kabuk → EN SON `index.html`); düşen adımda geri alınır; `.empp-gecici/gunce.json` çöken süreci
+   sonraki açılışta geri sarar; kesinleşme = damganın atomik yazımı. Örtü: tek `rename` ile
+   kesinleşir; bu koşuda başka yoldan üretilen aynı içerik bir yolun bozuk ucunu ÖRTMEZ.
+4. **Birikimli manifest.** Aynı sha256'lı `ekle` arşivi yeniden indirilmez (Windows: damganın
+   `kitaplar` defteri; örtü: arşiv içerik-adresli nesne olarak saklanır).
+5. **Kural 8.** `bookN/…` kabuk girdisinin kitabı tabanda yoksa ve aynı manifestte eklenmiyorsa
+   atlanır — boş kitap dizini / hayalet kitap oluşmaz.
+6. **Örtüde `dosyalar[]` yoksa** (yayın aracının bugünkü biçimi) kitap listesi imzalı sha256'lı
+   arşivden türetilir; açılışta arşivden yeniden türetilip kıyaslanır (kurcalanmış liste → kitap
+   sunulmaz). `dosyalar[]` varsa ve bozuksa ret. ÖNERİ (yayın aracına): `ekle` girdisine imzalı
+   `dosyalar[{yol,sha256,boyut}]` eklenirse örtü arşivi saklamadan doğrular (disk ×2 biter).
+
+Kanıt: `tools/g-uctan-uca/kos.js` 11 senaryo (her ikisi de `--kip yerinde` ve `--kip ortu`),
+`src/runtime/kitap-guncelleyici-guvenlik.test.js`, mutasyon `tools/g-kanal/ortu-mutasyon.js` (M25–M44).

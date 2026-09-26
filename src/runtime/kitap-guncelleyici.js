@@ -45,6 +45,22 @@
  * için 127.0.0.1/localhost/::1 üzerinde `http:` — sahada loopback'te sunucu yoktur).
  * `surum.json` imzasızdır: yalnız TETİKTİR, hiçbir dosya ondan yazılmaz.
  *
+ * KİMLİK + MONOTON SÜRÜM + YA HEP YA HİÇ (2026-09-26, G yayın ajanının bulduğu üç açık —
+ * TÜM kiplerde: Windows yerinde + mac/Pardus örtü):
+ *   • İmzası doğru manifest de ancak `kanal == "G"`, `setKimligi == paketin gömülü kimliği`
+ *     ve `surum` G3 biçiminde (`2.<panel>.<sayaç>`) + KURULU sürümden KESİN BÜYÜKse uygulanır.
+ *     Kurulu sürüm = max(paketin `package.json` sürümü, son uygulanan G sürümü). Aynı anahtarla
+ *     imzalı ESKİ bir manifestin yeniden oynatılması (geri alma) ve başka setin manifesti reddedilir.
+ *   • Windows'ta da her şey önce `.empp-gecici/` altında hazırlanır (indir + sha256/boyut doğrula
+ *     + kitap arşivini aç); TEK bir dosya bile tutmazsa canlı ağaca HİÇ dokunulmaz. Uygulama
+ *     kısa bir rename dizisidir (önce kitaplar, sonra kabuk, EN SON `index.html`); günce
+ *     (`.empp-gecici/gunce.json`) çöken uygulamayı sonraki açılışta geri sarar. Kesinleşme
+ *     noktası damganın atomik yazımıdır.
+ *   • Birikimli manifest: aynı sha256 ile kurulmuş `ekle` arşivi yeniden İNDİRİLMEZ (defter:
+ *     damganın `kitaplar` alanı; örtüde içerik-adresli nesne).
+ *   • `bookN/…` kabuk girdisinin kitabı tabanda yoksa ve aynı manifestte eklenmiyorsa girdi
+ *     atlanır — boş kitap dizini oluşmaz.
+ *
  * AÇIK MADDE: kitap arşivi diske AKIŞLA iner (`arsiviIndir`), ama arşivi açarken
  * dosya bellekte tutulur (`arsivCoz`). Çok büyük arşivlerde akışlı açma gerekirse
  * `arsivCoz` enjekte edilebilir — çekirdek değişmeden.
@@ -61,6 +77,14 @@ const DAMGA_ADI = '.empp-set-guncelleme.json';
 const GECICI_UZANTI = '.indirme';
 const SILINECEK_UZANTI = '.empp-silinecek';
 const GECICI_DIZIN = '.empp-gecici';
+/** Yerinde uygulamanın güncesi (`.empp-gecici/` içinde) — çöken uygulamayı geri sarmak için. */
+const GUNCE_ADI = 'gunce.json';
+/** G kanalının adı — manifestte `kanal` alanı (sözleşme G3/G4). */
+const KANAL = 'G';
+/** G3 sürümü: `2.<panel>.<sayaç>`, sayısal kıyas (tools/g-yayin/g-surum.js ile AYNI desen). */
+const G_SURUM_RE = /^2\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
+/** `bookN` — kitap dalı adı (kural 8: tabanda olmayan kitaba kabuk dosyası yazılmaz). */
+const KITAP_DALI_RE = /^book\d+$/i;
 /** Kabuk dosyası üst sınırı — kabuk küçüktür, büyük gövde bozuk uç işaretidir. */
 const KABUK_TAVANI = 64 * 1024 * 1024;
 const SHA256_RE = /^[0-9a-f]{64}$/i;
@@ -278,7 +302,17 @@ function varsayilanFs() {
  * @returns {{yol:string, veri:Buffer}[]}
  */
 function arsivCozVarsayilan(veri) {
-  const b = Buffer.from(veri);
+  const cikti = [];
+  arsivGez(veri, (g) => { cikti.push(g); });
+  return cikti;
+}
+
+/**
+ * ZIP girdilerini TEK TEK gezer (`fn({yol, veri})`); bellekte aynı anda arşiv + tek girdi durur.
+ * Örtüde türetilmiş kitap listesinin doğrulaması büyük kitaplarda bunu kullanır.
+ */
+function arsivGez(veri, fn) {
+  const b = Buffer.isBuffer(veri) ? veri : Buffer.from(veri);
   // Merkezî dizin sonu (EOCD) imzasını sondan tara.
   let eocd = -1;
   const alt = Math.max(0, b.length - 66560);
@@ -290,7 +324,6 @@ function arsivCozVarsayilan(veri) {
   const merkez = b.readUInt32LE(eocd + 16);
   if (merkez === 0xffffffff) throw new Error('zip64-desteklenmiyor');
 
-  const cikti = [];
   let p = merkez;
   for (let i = 0; i < adet; i++) {
     if (p + 46 > b.length || b.readUInt32LE(p) !== 0x02014b50) throw new Error('zip-merkez-bozuk');
@@ -316,9 +349,8 @@ function arsivCozVarsayilan(veri) {
     if (yontem === 0) govde = Buffer.from(ham);
     else if (yontem === 8) govde = zlib.inflateRawSync(ham);
     else throw new Error('zip-yontem-' + yontem);
-    cikti.push({ yol: ad, veri: govde });
+    fn({ yol: ad, veri: govde });
   }
-  return cikti;
 }
 
 /* --------------------------------------------------------------- yardımcılar */
@@ -350,7 +382,73 @@ function manifestiDogrula(nesne) {
   if (typeof nesne.surum !== 'string' || !nesne.surum.trim()) return null;
   if (!Array.isArray(nesne.kabuk)) return null;
   const kitaplar = Array.isArray(nesne.kitaplar) ? nesne.kitaplar : [];
-  return { surum: nesne.surum.trim(), kabuk: nesne.kabuk, kitaplar };
+  return {
+    surum: nesne.surum.trim(),
+    kabuk: nesne.kabuk,
+    kitaplar,
+    kanal: typeof nesne.kanal === 'string' ? nesne.kanal : null,
+    setKimligi: (nesne.setKimligi == null || nesne.setKimligi === '') ? null : String(nesne.setKimligi),
+  };
+}
+
+/** `"2.51.4"` → `{panel:51, sayac:4}`; G3 biçimi dışındaysa `null`. */
+function gSurumCoz(s) {
+  if (typeof s !== 'string') return null;
+  const m = G_SURUM_RE.exec(s.trim());
+  return m ? { panel: Number(m[1]), sayac: Number(m[2]) } : null;
+}
+
+/** a<b → -1, a=b → 0, a>b → 1; biri G3 değilse `null` (kıyaslanamaz). */
+function gSurumKiyasla(a, b) {
+  const x = gSurumCoz(a);
+  const y = gSurumCoz(b);
+  if (!x || !y) return null;
+  if (x.panel !== y.panel) return x.panel < y.panel ? -1 : 1;
+  if (x.sayac !== y.sayac) return x.sayac < y.sayac ? -1 : 1;
+  return 0;
+}
+
+/** Listedeki en büyük G3 sürümü; hiç yoksa `null`. Biçim dışılar (içerik-hash vb.) yok sayılır. */
+function enBuyukGSurum(liste) {
+  let en = null;
+  for (const s of Array.isArray(liste) ? liste : []) {
+    if (!gSurumCoz(s)) continue;
+    if (en === null || gSurumKiyasla(s, en) > 0) en = s.trim();
+  }
+  return en;
+}
+
+/** Paketin kendi sürümü (`package.json` → `version`); okunamazsa `null`. */
+async function paketSurumuOku(fsm, kok) {
+  try {
+    const n = JSON.parse(Buffer.from(await fsm.readFile(nodePath.join(kok, 'package.json'))).toString('utf8'));
+    return (n && typeof n.version === 'string' && n.version.trim()) ? n.version.trim() : null;
+  } catch (e) { return null; }
+}
+
+/**
+ * İmzası doğrulanmış manifestin KİMLİK denetimi (üç açığın ikisi + biçim). '' → kabul.
+ * @param {object} m            `manifestiDogrula` çıktısı
+ * @param {string} setKimligi   paketin gömülü kimliği
+ * @param {string|null} kurulu  kurulu sürüm (paket ya da son uygulanan G); `null` → ilk G
+ */
+function manifestKimligiDenetle(m, setKimligi, kurulu) {
+  if (!m) return 'manifest-gecersiz';
+  if (m.kanal !== KANAL) return 'kanal-g-degil';
+  if (m.setKimligi == null || setKimligi == null || m.setKimligi !== String(setKimligi)) return 'baska-set';
+  if (!gSurumCoz(m.surum)) return 'surum-bicimi';
+  if (kurulu && gSurumCoz(kurulu) && gSurumKiyasla(m.surum, kurulu) <= 0) return 'surum-eski';
+  return '';
+}
+
+/** `bookN/…` kabuk girdisinin kitap dalı (yoksa `null`). */
+function kitapDaliAl(yol, set) {
+  const parca = String(yol).split('/');
+  if (parca.length < 2) return null;
+  const dal = parca[0];
+  if (KITAP_DALI_RE.test(dal)) return dal;
+  const dizinler = set && Array.isArray(set.kitapDizinleri) ? set.kitapDizinleri : [];
+  return dizinler.some((d) => String(d).toLowerCase() === dal.toLowerCase()) ? dal : null;
 }
 
 /** Kabuk girdisi: `yol` + `sha256` + `boyut` tam ve biçimsel olarak geçerli mi? */
@@ -388,20 +486,47 @@ async function varMi(fsm, yol) {
   try { await fsm.stat(yol); return true; } catch (e) { return false; }
 }
 
-async function damgayiOku(fsm, kok) {
+/**
+ * Damga (yerinde kipin durumu): `{surum, taban, kitaplar:{dizin: arşivSha256}}`.
+ * `taban` = paketteki `empp-set.json`'un özeti — yeni paket kurulunca eski damga GEÇERSİZ sayılır.
+ * `kitaplar` = G ile kurulmuş `ekle` arşivlerinin defteri (aynı sha256 yeniden indirilmez).
+ */
+async function damgaDurumuOku(fsm, kok) {
   try {
     const ham = await fsm.readFile(nodePath.join(kok, DAMGA_ADI));
     const n = JSON.parse(Buffer.from(ham).toString('utf8'));
-    return (n && typeof n.surum === 'string') ? n.surum : null;
+    if (!n || typeof n.surum !== 'string') return null;
+    const kitaplar = {};
+    if (n.kitaplar && typeof n.kitaplar === 'object' && !Array.isArray(n.kitaplar)) {
+      for (const [d, s] of Object.entries(n.kitaplar)) {
+        if (typeof s === 'string' && SHA256_RE.test(s)) kitaplar[d] = s.toLowerCase();
+      }
+    }
+    return { surum: n.surum, taban: typeof n.taban === 'string' ? n.taban : '', kitaplar };
   } catch (e) { return null; }
 }
 
-async function damgayiYaz(fsm, kok, surum) {
+async function damgayiOku(fsm, kok) {
+  const d = await damgaDurumuOku(fsm, kok);
+  return d ? d.surum : null;
+}
+
+/** Atomik: geçici ada yaz → `rename`. Yerinde kipin KESİNLEŞME noktasıdır. */
+async function damgayiYaz(fsm, kok, surum, ek) {
+  const hedef = nodePath.join(kok, DAMGA_ADI);
+  const gec = hedef + GECICI_UZANTI;
+  const e = ek || {};
   try {
-    await fsm.writeFile(nodePath.join(kok, DAMGA_ADI),
-      Buffer.from(JSON.stringify({ surum, zaman: new Date().toISOString() }), 'utf8'));
+    const govde = { surum, zaman: new Date().toISOString() };
+    if (typeof e.taban === 'string' && e.taban) govde.taban = e.taban;
+    if (e.kitaplar && typeof e.kitaplar === 'object') govde.kitaplar = e.kitaplar;
+    await fsm.writeFile(gec, Buffer.from(JSON.stringify(govde), 'utf8'));
+    await fsm.rename(gec, hedef);
     return true;
-  } catch (e) { return false; }
+  } catch (x) {
+    try { await fsm.unlink(gec); } catch (x2) {}
+    return false;
+  }
 }
 
 /** Yereldeki dosyanın sha256'sı; okunamıyorsa `null`. */
@@ -453,6 +578,304 @@ async function artiklariTopla(fsm, kok, gunluk) {
   return sayi;
 }
 
+/* ------------------------------------ yerinde uygulama (Windows) — ya hep ya hiç */
+
+async function dizinMi(fsm, yol) {
+  try {
+    const d = await fsm.stat(yol);
+    return !!(d && typeof d.isDirectory === 'function' && d.isDirectory());
+  } catch (e) { return false; }
+}
+
+/**
+ * Tek uygulama adımını geri alır: yerine konan yeni içerik hazırlık alanına döner, yedekteki
+ * eski içerik yerine konur. Yarım kalmış adımda da güvenlidir (var/yok denetimli).
+ */
+async function adimGeriAl(fsm, a) {
+  try {
+    if (a.yeni && !(await varMi(fsm, a.yeni)) && (await varMi(fsm, a.hedef))) {
+      await fsm.mkdir(nodePath.dirname(a.yeni), { recursive: true });
+      await fsm.rename(a.hedef, a.yeni);
+    }
+  } catch (e) {}
+  try {
+    if ((await varMi(fsm, a.yedek)) && !(await varMi(fsm, a.hedef))) await fsm.rename(a.yedek, a.hedef);
+  } catch (e) {}
+}
+
+async function gunceyiYaz(fsm, geciciKok, gunce) {
+  const y = nodePath.join(geciciKok, GUNCE_ADI);
+  await fsm.writeFile(y + GECICI_UZANTI, Buffer.from(JSON.stringify(gunce), 'utf8'));
+  await fsm.rename(y + GECICI_UZANTI, y);
+}
+
+/**
+ * Önceki koşu uygulamanın ORTASINDA çöktüyse: damga günceyle aynı sürümdeyse kesinleşmiştir
+ * (yalnız artık temizlenir); değilse `ilerleme`ye kadarki adımlar TERS sırada geri alınır.
+ * @returns {Promise<number>} toparlanan günce sayısı (0/1)
+ */
+async function yarimUygulamayiToparla(fsm, kok, gunluk) {
+  const geciciKok = nodePath.join(kok, GECICI_DIZIN);
+  let gunce;
+  try {
+    gunce = JSON.parse(Buffer.from(await fsm.readFile(nodePath.join(geciciKok, GUNCE_ADI))).toString('utf8'));
+  } catch (e) { return 0; }
+  const damga = await damgaDurumuOku(fsm, kok);
+  const kesin = !!(damga && gunce && typeof gunce.surum === 'string' && damga.surum === gunce.surum);
+  if (!kesin && gunce && Array.isArray(gunce.adimlar)) {
+    const son = Number.isInteger(gunce.ilerleme)
+      ? Math.min(gunce.ilerleme, gunce.adimlar.length - 1) : gunce.adimlar.length - 1;
+    for (let i = son; i >= 0; i--) {
+      const a = gunce.adimlar[i] || {};
+      const hedef = hedefYoluCoz(kok, a.hedef);
+      const yedek = hedefYoluCoz(geciciKok, a.yedek);
+      const yeni = a.yeni ? hedefYoluCoz(geciciKok, a.yeni) : null;
+      if (!hedef || !yedek || (a.yeni && !yeni)) continue; // kurcalanmış günce: dokunma
+      await adimGeriAl(fsm, { hedef, yedek, yeni });
+    }
+    gunluk(`[${ISARET}] yarım kalan uygulama geri sarıldı (${gunce.surum})`);
+  } else {
+    gunluk(`[${ISARET}] kesinleşmiş uygulamanın artıkları temizlendi`);
+  }
+  try { await fsm.rm(geciciKok, { recursive: true, force: true }); } catch (e) {}
+  return 1;
+}
+
+/**
+ * YERİNDE (Windows) uygulama — YA HEP YA HİÇ. İstisna fırlatmaz; sonucu `rapor`a yazar.
+ *  A) HAZIRLIK: her girdi doğrulanır; kitap arşivleri ve değişen kabuk dosyaları `.empp-gecici/`
+ *     altına iner, sha256 + boyutla doğrulanır. TEK hata → canlı ağaca HİÇ dokunulmadan ret.
+ *  B) UYGULAMA: günce yazılır → rename dizisi (kitaplar → kabuk → EN SON `index.html`) →
+ *     damga (atomik) = kesinleşme. Bir adım düşerse yapılanlar ters sırada geri alınır.
+ */
+async function yerindeUygula(c) {
+  const {
+    manifest, kok, fsm, getir, arsiviIndir, arsivCoz, zamanAsimi, kimlikKoku, gunluk, rapor,
+  } = c;
+  const set = setiNormalize(c.set);
+  const geciciKok = nodePath.join(kok, GECICI_DIZIN);
+  const hazirKok = nodePath.join(geciciKok, 'hazir');
+  const yedekKok = nodePath.join(geciciKok, 'yedek');
+  const temizle = async () => {
+    try { await fsm.rm(geciciKok, { recursive: true, force: true }); } catch (e) {}
+  };
+  const reddet = async (sebep, mesaj) => {
+    await temizle();
+    rapor.durum = 'kismi';
+    rapor.sebep = sebep;
+    rapor.eklenen = [];
+    rapor.cikarilan = [];
+    rapor.kabukIndirilen = 0;
+    rapor.sira = [];
+    gunluk(`[${ISARET}] ${mesaj} — güncelleme UYGULANMADI, canlı ağaca dokunulmadı`);
+    return rapor;
+  };
+
+  // A0) Girdi doğrulaması (istek yok). Bozuk tek girdi bütün güncellemeyi reddeder.
+  const eklenecek = new Map();
+  const cikarilacak = new Map();
+  for (const g of manifest.kitaplar) {
+    if (!uyelikGirdisiGecerliMi(g) || !ortuDiziniGecerliMi(g.dizin) || !hedefYoluCoz(kok, g.dizin)) {
+      rapor.uyelikBasarisiz += 1;
+      return reddet('uyelik-girdisi-bozuk', `üyelik girdisi eksik/bozuk/kök dışı (${g && g.dizin})`);
+    }
+    const dl = g.dizin.toLowerCase();
+    if (eklenecek.has(dl) || cikarilacak.has(dl)) {
+      rapor.uyelikBasarisiz += 1;
+      return reddet('uyelik-tekrar', `üyelik dizini tekrarlanıyor (${g.dizin})`);
+    }
+    if (g.durum === 'cikar') cikarilacak.set(dl, g.dizin);
+    else eklenecek.set(dl, g);
+  }
+  const kabuklar = [];
+  const kabukYollari = new Set();
+  for (const g of manifest.kabuk) {
+    if (!kabukGirdisiGecerliMi(g)) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-girdisi-bozuk', 'kabuk girdisi eksik/bozuk');
+    }
+    const yol = goreliNormalle(g.yol);
+    const hedef = yolGuvenliMi(yol) ? hedefYoluCoz(kok, yol) : null;
+    if (!hedef) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-yol-kacisi', `kabuk yolu kök dışına çıkıyor (${g.yol})`);
+    }
+    if (yol.split('/').some((s) => s.toLowerCase().startsWith('.empp'))) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-durum-yolu', `kabuk yolu kanalın kendi durumunu hedefliyor (${yol})`);
+    }
+    if (kabukYollari.has(yol.toLowerCase())) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-tekrar', `kabuk yolu tekrarlanıyor (${yol})`);
+    }
+    kabukYollari.add(yol.toLowerCase());
+    // Kural 8: kitabı tabanda olmayan (ve bu manifestte eklenmeyen) `bookN/…` girdisi atlanır.
+    const dal0 = kitapDaliAl(yol, set)
+      || ((yol.includes('/') && eklenecek.has(yol.split('/')[0].toLowerCase())) ? yol.split('/')[0] : null);
+    const dal = dal0 ? dal0.toLowerCase() : null;
+    if (dal && cikarilacak.has(dal)) {
+      rapor.kabukKitapsiz += 1;
+      gunluk(`[${ISARET}] çıkarılan kitabın kabuk dosyası atlandı: ${yol}`);
+      continue;
+    }
+    if (dal && !eklenecek.has(dal) && !(await dizinMi(fsm, nodePath.join(kok, dal0)))) {
+      rapor.kabukKitapsiz += 1;
+      gunluk(`[${ISARET}] kitabı tabanda yok, eklenmiyor — atlandı (boş dizin açılmaz): ${yol}`);
+      continue;
+    }
+    kabuklar.push({ g, yol, hedef, dal, sha: g.sha256.toLowerCase() });
+  }
+
+  // A1) Kitap arşivleri — hazırlık alanına iner, doğrulanır, açılır.
+  try {
+    await temizle();
+    await fsm.mkdir(hazirKok, { recursive: true });
+  } catch (e) {
+    return reddet('gecici-yazilamadi', 'geçici dizin yazılamadı');
+  }
+  const onceki = c.damga ? c.damga.kitaplar : {};
+  const defter = Object.assign({}, onceki);
+  const kitapAdimlari = [];
+  let sira = 0;
+  for (const g of eklenecek.values()) {
+    const hedefDizin = nodePath.join(kok, g.dizin);
+    const sha = g.sha256.toLowerCase();
+    if (onceki[g.dizin] === sha && (await dizinMi(fsm, hedefDizin))) {
+      rapor.kitapZatenKurulu += 1;
+      gunluk(`[${ISARET}] kitap zaten kurulu (aynı arşiv) — yeniden indirilmedi: ${g.dizin}`);
+      continue;
+    }
+    sira += 1;
+    const arsiv = nodePath.join(geciciKok, 'k' + sira + '.arsiv' + GECICI_UZANTI);
+    const acilan = nodePath.join(hazirKok, 'k' + sira);
+    try {
+      rapor.istek += 1;
+      const ind = await arsiviIndir(g.kaynak, arsiv, { zamanAsimi });
+      if (!ind || ind.durum !== 200) throw new Error('durum-' + (ind ? ind.durum : 'yok'));
+      if (ind.boyut !== g.boyut) throw new Error('boyut-uyusmaz');
+      if (String(ind.ozet).toLowerCase() !== sha) throw new Error('sha256-uyusmaz');
+      await fsm.mkdir(acilan, { recursive: true });
+      for (const ge of arsivCoz(await fsm.readFile(arsiv))) {
+        const ic = hedefYoluCoz(acilan, ge && ge.yol);
+        if (!ic) throw new Error('arsiv-yol-kacisi:' + (ge && ge.yol));
+        await fsm.mkdir(nodePath.dirname(ic), { recursive: true });
+        await fsm.writeFile(ic, Buffer.from(ge.veri));
+      }
+      try { await fsm.unlink(arsiv); rapor.geciciAtilan += 1; } catch (e) {}
+    } catch (e) {
+      rapor.uyelikBasarisiz += 1;
+      return reddet('kitap-hazirlanamadi', `kitap hazırlanamadı (${e && e.message}): ${g.dizin}`);
+    }
+    kitapAdimlari.push({ tur: 'kitap-ekle', ad: g.dizin, yeni: acilan, hedef: hedefDizin });
+    defter[g.dizin] = sha;
+  }
+  for (const dizin of cikarilacak.values()) {
+    delete defter[dizin];
+    const hedefDizin = nodePath.join(kok, dizin);
+    if (!(await varMi(fsm, hedefDizin))) continue; // birikimli manifest: zaten çıkmış
+    kitapAdimlari.push({ tur: 'kitap-cikar', ad: dizin, yeni: null, hedef: hedefDizin });
+  }
+
+  // A2) Kabuk — yalnız yereldekinden farklı olanlar iner; eklenen kitabın içindeki girdi
+  //     hazırlanan kitap dizinine karşı kıyaslanır ve oraya yazılır.
+  const kabukAdimlari = [];
+  let n = 0;
+  for (const k of kabuklar) {
+    const ek = k.dal
+      ? kitapAdimlari.find((a) => a.tur === 'kitap-ekle' && a.ad.toLowerCase() === k.dal) : null;
+    const yerelYol = ek ? nodePath.join(ek.yeni, k.yol.slice(k.yol.indexOf('/') + 1)) : k.hedef;
+    const yerel = await yerelOzet(fsm, yerelYol);
+    if (yerel && yerel.toLowerCase() === k.sha) continue;
+    let yanit;
+    try {
+      rapor.istek += 1;
+      yanit = await getir(
+        kimlikKoku + '/dosya/' + k.yol.split('/').map(encodeURIComponent).join('/'), { zamanAsimi });
+    } catch (e) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-indirilemedi', `kabuk indirilemedi (${e && e.message}): ${k.yol}`);
+    }
+    if (!yanit || yanit.durum !== 200) {
+      rapor.kabukAtlanan += 1;
+      return reddet('kabuk-durum-' + (yanit ? yanit.durum : 'yok'),
+        `kabuk durum ${yanit ? yanit.durum : 'yok'}: ${k.yol}`);
+    }
+    const govde = Buffer.from(yanit.govde || Buffer.alloc(0));
+    if (govde.length !== k.g.boyut || sha256(govde) !== k.sha) {
+      rapor.kabukAtlanan += 1;
+      const ne = govde.length !== k.g.boyut ? 'boyut' : 'sha256';
+      return reddet('kabuk-' + ne + '-uyusmaz', `${ne} uyuşmadı: ${k.yol}`);
+    }
+    n += 1;
+    const hazir = ek ? yerelYol : nodePath.join(hazirKok, 'd' + n);
+    try {
+      await fsm.mkdir(nodePath.dirname(hazir), { recursive: true });
+      await fsm.writeFile(hazir, govde);
+    } catch (e) {
+      return reddet('gecici-yazilamadi', `hazırlık dosyası yazılamadı: ${k.yol}`);
+    }
+    if (!ek) kabukAdimlari.push({ tur: 'kabuk', ad: k.yol, yeni: hazir, hedef: k.hedef });
+    rapor.kabukIndirilen += 1;
+  }
+
+  // B) UYGULAMA — önce kitaplar, sonra kabuk, EN SON index.html (sözleşme §5 / kural 7).
+  const indexMi = (a) => a.ad.toLowerCase() === 'index.html';
+  const adimlar = kitapAdimlari.concat(
+    kabukAdimlari.filter((a) => !indexMi(a)), kabukAdimlari.filter(indexMi));
+  adimlar.forEach((a, i) => { a.yedek = nodePath.join(yedekKok, 'y' + i); });
+  const gRel = (p) => nodePath.relative(geciciKok, p).split(nodePath.sep).join('/');
+  const kRel = (p) => nodePath.relative(kok, p).split(nodePath.sep).join('/');
+  const gunce = {
+    sema: 1,
+    surum: manifest.surum,
+    ilerleme: -1,
+    adimlar: adimlar.map((a) => ({
+      tur: a.tur, ad: a.ad, yeni: a.yeni ? gRel(a.yeni) : null, hedef: kRel(a.hedef), yedek: gRel(a.yedek),
+    })),
+  };
+  try {
+    await fsm.mkdir(yedekKok, { recursive: true });
+    await gunceyiYaz(fsm, geciciKok, gunce);
+  } catch (e) {
+    return reddet('gunce-yazilamadi', 'uygulama güncesi yazılamadı');
+  }
+  const yapilan = [];
+  let hata = null;
+  for (let i = 0; i < adimlar.length; i++) {
+    const a = adimlar[i];
+    try {
+      gunce.ilerleme = i;
+      await gunceyiYaz(fsm, geciciKok, gunce);
+      yapilan.push(a);
+      if (await varMi(fsm, a.hedef)) await fsm.rename(a.hedef, a.yedek);
+      if (a.yeni) {
+        await fsm.mkdir(nodePath.dirname(a.hedef), { recursive: true });
+        await fsm.rename(a.yeni, a.hedef);
+      }
+    } catch (e) {
+      hata = e;
+      break;
+    }
+  }
+  if (!hata && !(await damgayiYaz(fsm, kok, manifest.surum, { taban: c.tabanKimligi, kitaplar: defter }))) {
+    hata = new Error('damga-yazilamadi');
+  }
+  if (hata) {
+    for (let i = yapilan.length - 1; i >= 0; i--) await adimGeriAl(fsm, yapilan[i]);
+    return reddet('uygulama-geri-alindi',
+      `uygulama düştü (${hata && hata.message}) — yapılan ${yapilan.length} adım geri alındı`);
+  }
+
+  // Kesinleşti: rapor + yedek/günce temizliği.
+  for (const a of adimlar) {
+    rapor.sira.push({ tur: a.tur, ad: a.ad });
+    if (a.tur === 'kitap-ekle') rapor.eklenen.push(a.ad);
+    if (a.tur === 'kitap-cikar') rapor.cikarilan.push(a.ad);
+  }
+  await temizle();
+  return null;
+}
+
 /* ------------------------------------------------------------- ana akış */
 
 /**
@@ -487,6 +910,12 @@ async function guncellemeyiCalistir(p) {
     uyelikBasarisiz: 0,
     geciciAtilan: 0,
     artik: 0,
+    /** Kural 8: kitabı tabanda olmayan / çıkarılan `bookN/…` kabuk girdisi (atlandı). */
+    kabukKitapsiz: 0,
+    /** Birikimli manifest: aynı arşivle zaten kurulu olduğu için indirilmeyen `ekle` sayısı. */
+    kitapZatenKurulu: 0,
+    /** Monoton kıyasın tabanı: max(paket sürümü, son uygulanan G sürümü). */
+    kuruluSurum: null,
     /** Uygulanan hamlelerin SIRASI — `kitap-*` maddeleri `kabuk` maddelerinden ÖNCE gelir. */
     sira: [],
     hata: '',
@@ -547,42 +976,69 @@ async function guncellemeyiCalistir(p) {
     const silmeAcik = secenek.silmeAcik === true;
     const kimlikKoku = taban + '/set/' + encodeURIComponent(set.setKimligi);
 
-    // 0) Önceki çöken koşunun artıkları. (Örtü kipinde gövde salt-okunur; örtünün kendi
-    //    geçici dizini `ortuyaUygula` başında toparlanır.)
-    if (!ortuKoku) rapor.artik = await artiklariTopla(fsm, kok, gunluk);
+    // 0) Önceki çöken koşunun artıkları: önce yarım kalan uygulamanın güncesi (geri sar ya da
+    //    temizle), sonra eski biçim `.empp-silinecek` artıkları. (Örtü kipinde gövde salt-okunur;
+    //    örtünün kendi geçici dizini `ortuyaUygula` başında toparlanır.)
+    if (!ortuKoku) {
+      rapor.artik = (await yarimUygulamayiToparla(fsm, kok, gunluk))
+        + (await artiklariTopla(fsm, kok, gunluk));
+    }
 
-    // 1) Kademe — surum.json
+    // 1) Kademe — surum.json (imzasız TETİK: yalnız "manifeste bakmaya değer mi" kararı)
     let uzakSurum;
+    let uzakSet = null;
     try {
       rapor.istek += 1;
       const s = await jsonGetir(getir, kimlikKoku + '/surum.json', zamanAsimi);
       if (!s || typeof s.surum !== 'string' || !s.surum.trim()) throw new Error('surum-alani-yok');
       uzakSurum = s.surum.trim();
+      if (s.setKimligi != null && s.setKimligi !== '') uzakSet = String(s.setKimligi);
     } catch (e) {
       rapor.sebep = 'surum-alinamadi:' + (e && e.message ? e.message : 'bilinmeyen');
       gunluk(`[${ISARET}] sürüm alınamadı — ${rapor.sebep} (uygulama normal devam ediyor)`);
       return rapor;
     }
+    if (uzakSet != null && uzakSet !== set.setKimligi) {
+      rapor.sebep = 'uzak-baska-set';
+      gunluk(`[${ISARET}] surum.json başka sete ait (${uzakSet} ≠ ${set.setKimligi}) — manifest indirilmedi`);
+      return rapor;
+    }
 
-    let tabanKimligi = '';
-    let yerelSurum;
+    // Yerel durum: son uygulanan G sürümü + paketin kendi sürümü → KURULU sürüm (monoton taban).
+    const tabanKimligi = typeof secenek.tabanKimligi === 'string' && secenek.tabanKimligi
+      ? secenek.tabanKimligi : await tabanKimligiOku(fsm, kok);
+    let uygulanan = null;
+    let damga = null;
     if (ortuKoku) {
       // Örtüde yerel sürüm DAMGADAN değil, doğrulanabilen etkin durumdan okunur: imzası,
       // taban kimliği ya da nesneleri tutmayan örtü "yok" sayılır (yeniden kurulur).
-      tabanKimligi = typeof secenek.tabanKimligi === 'string' && secenek.tabanKimligi
-        ? secenek.tabanKimligi : await tabanKimligiOku(fsm, kok);
       const d = ortuDurumuYukle({ kok, ortuKoku, set: secenek.set, tabanKimligi });
-      yerelSurum = d.gecerli ? d.surum : null;
+      uygulanan = d.gecerli ? d.surum : null;
       if (!d.gecerli && d.sebep !== 'etkin-yok') {
         gunluk(`[${ISARET}] mevcut örtü geçersiz (${d.sebep}) — yeniden kurulacak`);
       }
     } else {
-      yerelSurum = await damgayiOku(fsm, kok);
+      damga = await damgaDurumuOku(fsm, kok);
+      if (damga && damga.taban && damga.taban !== tabanKimligi) {
+        gunluk(`[${ISARET}] damga eski pakete ait (taban değişti) — yok sayıldı`);
+        damga = null;
+      }
+      uygulanan = damga ? damga.surum : null;
     }
-    if (yerelSurum && yerelSurum === uzakSurum) {
+    const paketSurumu = await paketSurumuOku(fsm, kok);
+    const kurulu = enBuyukGSurum([uygulanan, paketSurumu]);
+    rapor.kuruluSurum = kurulu;
+    if (uygulanan && uygulanan === uzakSurum) {
       rapor.durum = 'guncel';
       rapor.sebep = 'surum-ayni';
       gunluk(`[${ISARET}] sürüm aynı (${uzakSurum.slice(0, 12)}…) — manifest indirilmedi`);
+      return rapor;
+    }
+    if (kurulu && gSurumCoz(uzakSurum) && gSurumKiyasla(uzakSurum, kurulu) <= 0) {
+      rapor.durum = 'guncel';
+      rapor.sebep = 'uzak-surum-buyuk-degil';
+      gunluk(`[${ISARET}] uzak sürüm (${uzakSurum}) kurulu sürümden (${kurulu}) büyük değil — `
+        + 'manifest indirilmedi');
       return rapor;
     }
 
@@ -613,216 +1069,35 @@ async function guncellemeyiCalistir(p) {
       return rapor;
     }
 
+    // 2b) KİMLİK — imza doğru olsa da: kanal G, bu setin kimliği, kurulu sürümden KESİN büyük.
+    const kimlikRed = manifestKimligiDenetle(manifest, set.setKimligi, kurulu);
+    if (kimlikRed) {
+      rapor.sebep = 'manifest-reddedildi:' + kimlikRed;
+      gunluk(`[${ISARET}] imzalı manifest reddedildi (${kimlikRed}: kanal=${manifest.kanal}, `
+        + `set=${manifest.setKimligi}, sürüm=${manifest.surum}, kurulu=${kurulu || 'yok'}) — `
+        + 'hiçbir dosyaya dokunulmadı');
+      return rapor;
+    }
+
     // ÖRTÜ KİPİ: imzası doğrulanmış manifest örtüye uygulanır; paket gövdesine dokunulmaz.
     if (ortuKoku) {
       await ortuyaUygula({
-        manifest, manifestHam, imzaMetni, set, kok, ortuKoku, tabanKimligi, fsm, getir,
+        manifest, manifestHam, imzaMetni, set: secenek.set, kok, ortuKoku, tabanKimligi, fsm, getir,
         arsiviIndir, arsivCoz, zamanAsimi, kimlikKoku, gunluk, rapor,
       });
       return rapor;
     }
 
-    /** Geri alma yığını — ters sırada koşar. */
-    const geriAl = [];
-    /** Kabuk temiz biterse kaldırılacak `.empp-silinecek` dizinleri. */
-    const bekleyenSilme = [];
-    const geciciKok = nodePath.join(kok, GECICI_DIZIN);
+    // 3) YERİNDE (Windows) — ya hep ya hiç: hazırla + doğrula, sonra tek dizide uygula.
+    const kabukKumesi = manifest.kabuk.filter(kabukGirdisiGecerliMi)
+      .map((g) => goreliNormalle(g.yol));
+    const red = await yerindeUygula({
+      manifest, set: secenek.set, kok, fsm, getir, arsiviIndir, arsivCoz, zamanAsimi, kimlikKoku,
+      gunluk, rapor, damga, tabanKimligi,
+    });
+    if (red) return rapor;
 
-    const geriSar = async () => {
-      for (let i = geriAl.length - 1; i >= 0; i--) {
-        try { await geriAl[i](); } catch (e) {}
-      }
-    };
-    const gecicileriTemizle = async () => {
-      try { await fsm.rm(geciciKok, { recursive: true, force: true }); } catch (e) {}
-    };
-
-    // 3) ÜYELİK — kabuktan ÖNCE (sözleşme §5).
-    for (const g of manifest.kitaplar) {
-      if (!uyelikGirdisiGecerliMi(g)) {
-        rapor.uyelikBasarisiz += 1;
-        gunluk(`[${ISARET}] üyelik girdisi eksik/bozuk — reddedildi`);
-        continue;
-      }
-      const hedefDizin = hedefYoluCoz(kok, g.dizin);
-      if (!hedefDizin) {
-        rapor.uyelikBasarisiz += 1;
-        gunluk(`[${ISARET}] üyelik dizini kök dışına çıkıyor — reddedildi: ${g.dizin}`);
-        continue;
-      }
-
-      if (g.durum === 'cikar') {
-        // ATOMİK ÇIKARMA: önce `.empp-silinecek`e taşı; kaldırma kabuktan SONRA.
-        if (!(await varMi(fsm, hedefDizin))) {
-          rapor.cikarilan.push(g.dizin);
-          rapor.sira.push({ tur: 'kitap-cikar', ad: g.dizin });
-          continue;
-        }
-        const kenar = hedefDizin + SILINECEK_UZANTI;
-        try {
-          await fsm.rm(kenar, { recursive: true, force: true });
-          await fsm.rename(hedefDizin, kenar);
-          geriAl.push(() => fsm.rename(kenar, hedefDizin));
-          bekleyenSilme.push(kenar);
-          rapor.cikarilan.push(g.dizin);
-          rapor.sira.push({ tur: 'kitap-cikar', ad: g.dizin });
-          gunluk(`[${ISARET}] kitap çıkarılıyor: ${g.dizin}`);
-        } catch (e) {
-          rapor.uyelikBasarisiz += 1;
-          gunluk(`[${ISARET}] kitap çıkarılamadı: ${g.dizin}`);
-        }
-        continue;
-      }
-
-      // EKLEME: indir → doğrula → geçici dizine aç → SONRA yerine taşı.
-      const etiket = adiSadelestir(g.dizin);
-      const arsiv = nodePath.join(geciciKok, etiket + '.arsiv' + GECICI_UZANTI);
-      const acilan = nodePath.join(geciciKok, etiket + '.acilan');
-      try {
-        await fsm.mkdir(geciciKok, { recursive: true });
-        await fsm.rm(acilan, { recursive: true, force: true });
-
-        rapor.istek += 1;
-        const ind = await arsiviIndir(g.kaynak, arsiv, { zamanAsimi });
-        if (!ind || ind.durum !== 200) throw new Error('durum-' + (ind ? ind.durum : 'yok'));
-        if (ind.boyut !== g.boyut) throw new Error('boyut-uyusmaz');
-        if (String(ind.ozet).toLowerCase() !== g.sha256.toLowerCase()) throw new Error('sha256-uyusmaz');
-
-        const girdiler = arsivCoz(await fsm.readFile(arsiv));
-        for (const ge of girdiler) {
-          const ic = hedefYoluCoz(acilan, ge && ge.yol);
-          if (!ic) throw new Error('arsiv-yol-kacisi:' + (ge && ge.yol));
-          await fsm.mkdir(nodePath.dirname(ic), { recursive: true });
-          await fsm.writeFile(ic, Buffer.from(ge.veri));
-        }
-        try { await fsm.unlink(arsiv); rapor.geciciAtilan += 1; } catch (e) {}
-
-        // Yerine koyma — eski sürüm varsa kenara alınır (kabuktan sonra kaldırılır).
-        if (await varMi(fsm, hedefDizin)) {
-          const kenar = hedefDizin + SILINECEK_UZANTI;
-          await fsm.rm(kenar, { recursive: true, force: true });
-          await fsm.rename(hedefDizin, kenar);
-          geriAl.push(() => fsm.rename(kenar, hedefDizin));
-          bekleyenSilme.push(kenar);
-        }
-        await fsm.rename(acilan, hedefDizin);
-        geriAl.push(() => fsm.rename(hedefDizin, acilan));
-        rapor.eklenen.push(g.dizin);
-        rapor.sira.push({ tur: 'kitap-ekle', ad: g.dizin });
-        gunluk(`[${ISARET}] kitap eklendi: ${g.dizin} (${ind.boyut} bayt)`);
-      } catch (e) {
-        // YARIM İNEN KİTAP MENÜYE GİRMEZ: çöp temizlenir, hedefe dokunulmaz.
-        try { await fsm.unlink(arsiv); rapor.geciciAtilan += 1; } catch (e2) {}
-        try { await fsm.rm(acilan, { recursive: true, force: true }); } catch (e2) {}
-        rapor.uyelikBasarisiz += 1;
-        gunluk(`[${ISARET}] kitap eklenemedi (${e && e.message}) — hedef korundu: ${g.dizin}`);
-      }
-    }
-
-    // 4) Üyelikte tek bir arıza bile varsa KABUĞA DOKUNULMAZ ve hamleler geri alınır.
-    if (rapor.uyelikBasarisiz > 0) {
-      await geriSar();
-      await gecicileriTemizle();
-      rapor.durum = 'kismi';
-      rapor.sebep = 'uyelik-eksik-kabuk-atlandi';
-      rapor.eklenen = [];
-      rapor.cikarilan = [];
-      gunluk(`[${ISARET}] ${rapor.uyelikBasarisiz} üyelik hamlesi başarısız — `
-        + 'kabuk güncellenmedi, hamleler geri alındı (menü bozulmadı)');
-      return rapor;
-    }
-
-    // 5) KABUK — kitap verisi yerine konduktan SONRA.
-    let kabukBasarisiz = 0;
-    const kabukKumesi = [];
-    for (const g of manifest.kabuk) {
-      if (!kabukGirdisiGecerliMi(g)) {
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] kabuk girdisi eksik/bozuk — atlandı`);
-        continue;
-      }
-      const hedef = hedefYoluCoz(kok, g.yol);
-      if (!hedef) {
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] kabuk yolu kök dışına çıkıyor — atlandı: ${g.yol}`);
-        continue;
-      }
-      kabukKumesi.push(g.yol.replace(/\\/g, '/'));
-
-      const yerel = await yerelOzet(fsm, hedef);
-      if (yerel && yerel.toLowerCase() === g.sha256.toLowerCase()) continue;
-
-      const gecici = hedef + GECICI_UZANTI;
-      let yanit;
-      try {
-        rapor.istek += 1;
-        yanit = await getir(
-          kimlikKoku + '/dosya/' + g.yol.split('/').map(encodeURIComponent).join('/'),
-          { zamanAsimi });
-      } catch (e) {
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] kabuk indirilemedi (${e && e.message}) — atlandı: ${g.yol}`);
-        continue;
-      }
-      if (!yanit || yanit.durum !== 200) {
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] kabuk durum ${yanit ? yanit.durum : 'yok'} — atlandı: ${g.yol}`);
-        continue;
-      }
-
-      const govde = Buffer.from(yanit.govde || Buffer.alloc(0));
-      try {
-        await fsm.mkdir(nodePath.dirname(hedef), { recursive: true });
-        await fsm.writeFile(gecici, govde);
-      } catch (e) {
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] geçici dosya yazılamadı — atlandı: ${g.yol}`);
-        continue;
-      }
-
-      const boyutTutar = govde.length === g.boyut;
-      const ozetTutar = sha256(govde).toLowerCase() === g.sha256.toLowerCase();
-      if (!boyutTutar || !ozetTutar) {
-        // KENDİ çöpümüz atılır; HEDEF DOSYAYA DOKUNULMAZ.
-        try { await fsm.unlink(gecici); rapor.geciciAtilan += 1; } catch (e) {}
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] ${!boyutTutar ? 'boyut' : 'sha256'} uyuşmadı — `
-          + `hedef korundu, atlandı: ${g.yol}`);
-        continue;
-      }
-
-      try {
-        await fsm.rename(gecici, hedef);
-        rapor.kabukIndirilen += 1;
-        rapor.sira.push({ tur: 'kabuk', ad: g.yol });
-      } catch (e) {
-        try { await fsm.unlink(gecici); rapor.geciciAtilan += 1; } catch (e2) {}
-        rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-        gunluk(`[${ISARET}] yerine taşınamadı — atlandı: ${g.yol}`);
-      }
-    }
-
-    // 6) Kabukta arıza varsa üyelik hamleleri GERİ ALINIR (hayalet menü olmasın).
-    if (kabukBasarisiz > 0) {
-      await geriSar();
-      await gecicileriTemizle();
-      rapor.durum = 'kismi';
-      rapor.sebep = kabukBasarisiz + '-kabuk-dosyasi-atlandi';
-      rapor.eklenen = [];
-      rapor.cikarilan = [];
-      gunluk(`[${ISARET}] kabuk eksik (${kabukBasarisiz}) — üyelik hamleleri geri alındı, damga yazılmadı`);
-      return rapor;
-    }
-
-    // 7) Kesinleştirme: kenara alınanlar artık kaldırılabilir.
-    for (const kenar of bekleyenSilme) {
-      try { await fsm.rm(kenar, { recursive: true, force: true }); } catch (e) {
-        gunluk(`[${ISARET}] kenara alınan kaldırılamadı: ${kenar}`);
-      }
-    }
-    await gecicileriTemizle();
-
-    // 8) Kabuk artıkları — YALNIZ `EMPP_GUNCELLEME_SILME=1` ile.
+    // 4) Kabuk artıkları — YALNIZ `EMPP_GUNCELLEME_SILME=1` ile (kesinleşmeden SONRA).
     if (silmeAcik && kabukKumesi.length) {
       const dallar = new Set(kabukKumesi.map((y) => y.split('/')[0]));
       const kume = new Set(kabukKumesi);
@@ -831,6 +1106,7 @@ async function guncellemeyiCalistir(p) {
         if (gor === DAMGA_ADI) continue;
         if (gor.endsWith(GECICI_UZANTI)) continue;
         const dal = gor.split('/')[0];
+        if (dal === GECICI_DIZIN) continue;
         if (korunan.has(dal)) continue;        // kitap dizinleri bu kapıya TABİ DEĞİL
         if (!dallar.has(dal)) continue;
         if (kume.has(gor)) continue;
@@ -844,10 +1120,9 @@ async function guncellemeyiCalistir(p) {
       }
     }
 
-    await damgayiYaz(fsm, kok, manifest.surum);
     rapor.durum = 'guncellendi';
     rapor.sebep = 'tamam';
-    gunluk(`[${ISARET}] güncellendi — kabuk ${rapor.kabukIndirilen}, `
+    gunluk(`[${ISARET}] güncellendi (${manifest.surum}) — kabuk ${rapor.kabukIndirilen}, `
       + `eklenen ${rapor.eklenen.length}, çıkarılan ${rapor.cikarilan.length}`);
   } catch (e) {
     rapor.hata = 'beklenmeyen:' + (e && e.message ? e.message : 'bilinmeyen');
@@ -871,6 +1146,7 @@ async function guncellemeyiBaslat(p) {
     setKimligi: null, taban: '', durum: 'atlandi', sebep, istek: 0,
     kabukIndirilen: 0, kabukAtlanan: 0, kabukSilinen: 0,
     eklenen: [], cikarilan: [], uyelikBasarisiz: 0, geciciAtilan: 0, artik: 0,
+    kabukKitapsiz: 0, kitapZatenKurulu: 0, kuruluSurum: null,
     sira: [], hata: '',
   });
   try {
@@ -1165,6 +1441,7 @@ async function ortuyaUygula(c) {
   let sayac = 0;
 
   const nesneVar = async (ad, sha, boyut) => {
+    if (!onceden.has(ad)) return false;
     const y = nodePath.join(nesneKoku, ad);
     try {
       const st = await fsm.stat(y);
@@ -1182,10 +1459,15 @@ async function ortuyaUygula(c) {
     try { await fsm.rm(geciciKok, { recursive: true, force: true }); } catch (e) {}
   };
 
+  // Bu koşudan ÖNCE var olan nesneler. Yeniden kullanım YALNIZ bunlarla: bu koşuda başka bir
+  // yoldan üretilen aynı içerik, o yolun kendi ucunu doğrulamaktan muaf tutmaz (ya hep ya hiç —
+  // bozuk uç her kipte aynı sonucu verir; G uçtan uca 'kismi-bozuk').
+  let onceden = new Set();
   try {
     await fsm.mkdir(nesneKoku, { recursive: true });
     await temizle();
     await fsm.mkdir(geciciKok, { recursive: true });
+    onceden = new Set(await fsm.readdir(nesneKoku));
   } catch (e) {
     rapor.durum = 'atlandi';
     rapor.sebep = 'ortu-yazilamadi';
@@ -1193,10 +1475,16 @@ async function ortuyaUygula(c) {
     return;
   }
 
-  // 1) ÜYELİK — ekle: arşiv (imzalı sha256) + her dosya imzalı `dosyalar[]` ile doğrulanır.
+  // 1) ÜYELİK — ekle: arşiv imzalı sha256 ile doğrulanır. Dosya listesi iki yoldan gelir:
+  //    (a) manifestte imzalı `dosyalar[]` varsa o (arşiv yalnız nesne eksikse iner);
+  //    (b) yoksa (G yayın aracının bugünkü biçimi) liste ARŞİVDEN türetilir ve arşiv içerik-adresli
+  //        nesne olarak SAKLANIR — açılışta liste o arşivden yeniden türetilerek doğrulanır; aynı
+  //        sha256'lı arşiv (birikimli manifest) yeniden İNDİRİLMEZ.
   const eklenen = [];
   const cikarilan = [];
   const dallar = new Set();
+  const eklenenDal = new Map(); // lower → {dizin, dosyalar Map(yol → {sha256, boyut})}
+  const kitapListeleri = {};
   for (const g of manifest.kitaplar) {
     if (!uyelikGirdisiGecerliMi(g) || !ortuDiziniGecerliMi(g.dizin)) {
       rapor.uyelikBasarisiz += 1;
@@ -1216,44 +1504,91 @@ async function ortuyaUygula(c) {
       gunluk(`[${ISARET}] kitap örtüde gizlenecek: ${dal}`);
       continue;
     }
-    const dosyalar = kitapDosyalariDogrula(g.dosyalar);
-    if (!dosyalar) {
+    const turetilecek = g.dosyalar === undefined;
+    const imzaliListe = turetilecek ? null : kitapDosyalariDogrula(g.dosyalar);
+    if (!turetilecek && !imzaliListe) {
       rapor.uyelikBasarisiz += 1;
-      gunluk(`[${ISARET}] kitap eklenemedi: ${dal} — imzalı dosya listesi (dosyalar[]) yok/bozuk; `
+      gunluk(`[${ISARET}] kitap eklenemedi: ${dal} — imzalı dosya listesi (dosyalar[]) bozuk; `
         + 'örtüde imzasız dosya sunulmaz');
       continue;
     }
+    const arsivSha = g.sha256.toLowerCase();
+    const arsivAdi = arsivSha + '.zip';
     try {
-      let eksik = false;
-      for (const d of dosyalar) {
-        if (!(await nesneVar(nesneAdi(d.sha256, d.yol), d.sha256, d.boyut))) { eksik = true; break; }
-      }
-      if (eksik) {
-        const arsiv = nodePath.join(geciciKok, adiSadelestir(dal) + '.arsiv' + GECICI_UZANTI);
-        rapor.istek += 1;
-        const ind = await arsiviIndir(g.kaynak, arsiv, { zamanAsimi });
-        if (!ind || ind.durum !== 200) throw new Error('durum-' + (ind ? ind.durum : 'yok'));
-        if (ind.boyut !== g.boyut) throw new Error('boyut-uyusmaz');
-        if (String(ind.ozet).toLowerCase() !== g.sha256.toLowerCase()) throw new Error('sha256-uyusmaz');
-        const bekl = new Map(dosyalar.map((d) => [d.yol, d]));
-        const uretilen = new Set();
-        for (const ge of arsivCoz(await fsm.readFile(arsiv))) {
+      let dosyalar = imzaliListe;
+      let indi = false;
+      if (turetilecek) {
+        // (b) Arşiv nesnesi zaten varsa (aynı sha256) indirme yok.
+        if (!(await nesneVar(arsivAdi, arsivSha, g.boyut))) {
+          const arsiv = nodePath.join(geciciKok, adiSadelestir(dal) + '.arsiv' + GECICI_UZANTI);
+          rapor.istek += 1;
+          const ind = await arsiviIndir(g.kaynak, arsiv, { zamanAsimi });
+          if (!ind || ind.durum !== 200) throw new Error('durum-' + (ind ? ind.durum : 'yok'));
+          if (ind.boyut !== g.boyut) throw new Error('boyut-uyusmaz');
+          if (String(ind.ozet).toLowerCase() !== arsivSha) throw new Error('sha256-uyusmaz');
+          await fsm.rename(arsiv, nodePath.join(nesneKoku, arsivAdi));
+          indi = true;
+        } else {
+          rapor.kitapZatenKurulu += 1;
+        }
+        const liste = [];
+        const gorulen = new Set();
+        const yazilacak = [];
+        arsivGez(await fsm.readFile(nodePath.join(nesneKoku, arsivAdi)), (ge) => {
           const y = goreliNormalle(ge && ge.yol);
           if (!yolGuvenliMi(y)) throw new Error('arsiv-yol-kacisi:' + y);
-          const d = bekl.get(y);
-          if (!d) throw new Error('arsivde-listesiz-dosya:' + y);
+          if (gorulen.has(y.toLowerCase())) throw new Error('arsivde-cift-girdi:' + y);
+          gorulen.add(y.toLowerCase());
           const veri = Buffer.from(ge.veri);
-          if (veri.length !== d.boyut || sha256(veri) !== d.sha256) throw new Error('dosya-ozeti-uyusmaz:' + y);
-          if (!uretilen.has(y)) { await nesneYaz(nesneAdi(d.sha256, y), veri); uretilen.add(y); }
+          const d = { yol: y, sha256: sha256(veri), boyut: veri.length };
+          liste.push(d);
+          yazilacak.push({ d, veri });
+        });
+        for (const { d, veri } of yazilacak) {
+          if (!(await nesneVar(nesneAdi(d.sha256, d.yol), d.sha256, d.boyut))) {
+            await nesneYaz(nesneAdi(d.sha256, d.yol), veri);
+          }
         }
-        for (const d of dosyalar) if (!uretilen.has(d.yol)) throw new Error('arsivde-eksik:' + d.yol);
-        try { await fsm.unlink(arsiv); rapor.geciciAtilan += 1; } catch (e) {}
+        dosyalar = liste;
+        kitapListeleri[dal] = { arsiv: arsivAdi, dosyalar: liste.map((d) => ({ ...d })) };
+        gereken.add(arsivAdi);
+      } else {
+        // (a) İmzalı liste: nesneler eksikse arşiv iner, her dosya listeyle kıyaslanır.
+        let eksik = false;
+        for (const d of dosyalar) {
+          if (!(await nesneVar(nesneAdi(d.sha256, d.yol), d.sha256, d.boyut))) { eksik = true; break; }
+        }
+        if (eksik) {
+          const arsiv = nodePath.join(geciciKok, adiSadelestir(dal) + '.arsiv' + GECICI_UZANTI);
+          rapor.istek += 1;
+          const ind = await arsiviIndir(g.kaynak, arsiv, { zamanAsimi });
+          if (!ind || ind.durum !== 200) throw new Error('durum-' + (ind ? ind.durum : 'yok'));
+          if (ind.boyut !== g.boyut) throw new Error('boyut-uyusmaz');
+          if (String(ind.ozet).toLowerCase() !== arsivSha) throw new Error('sha256-uyusmaz');
+          const bekl = new Map(dosyalar.map((d) => [d.yol, d]));
+          const uretilen = new Set();
+          for (const ge of arsivCoz(await fsm.readFile(arsiv))) {
+            const y = goreliNormalle(ge && ge.yol);
+            if (!yolGuvenliMi(y)) throw new Error('arsiv-yol-kacisi:' + y);
+            const d = bekl.get(y);
+            if (!d) throw new Error('arsivde-listesiz-dosya:' + y);
+            const veri = Buffer.from(ge.veri);
+            if (veri.length !== d.boyut || sha256(veri) !== d.sha256) throw new Error('dosya-ozeti-uyusmaz:' + y);
+            if (!uretilen.has(y)) { await nesneYaz(nesneAdi(d.sha256, y), veri); uretilen.add(y); }
+          }
+          for (const d of dosyalar) if (!uretilen.has(d.yol)) throw new Error('arsivde-eksik:' + d.yol);
+          try { await fsm.unlink(arsiv); rapor.geciciAtilan += 1; } catch (e) {}
+          indi = true;
+        } else {
+          rapor.kitapZatenKurulu += 1;
+        }
       }
       for (const d of dosyalar) gereken.add(nesneAdi(d.sha256, d.yol));
+      eklenenDal.set(dal.toLowerCase(), { dizin: dal, dosyalar: new Map(dosyalar.map((d) => [d.yol, d])) });
       eklenen.push(dal);
       rapor.sira.push({ tur: 'kitap-ekle', ad: dal });
       gunluk(`[${ISARET}] kitap örtüye eklendi: ${dal} (${dosyalar.length} dosya`
-        + `${eksik ? '' : ', nesneler zaten vardı'})`);
+        + `${turetilecek ? ', liste arşivden' : ''}${indi ? '' : ', arşiv/nesneler zaten vardı'})`);
     } catch (e) {
       rapor.uyelikBasarisiz += 1;
       gunluk(`[${ISARET}] kitap eklenemedi (${e && e.message}) — örtü değişmedi: ${dal}`);
@@ -1267,7 +1602,7 @@ async function ortuyaUygula(c) {
     return;
   }
 
-  // 2) KABUK — yalnız paketteki kopyası tutmayan dosyalar iner (index.html, bookN/43e23…).
+  // 2) KABUK — yalnız paketteki (ya da eklenen kitaptaki) kopyası tutmayan dosyalar iner.
   let kabukBasarisiz = 0;
   const ortuYollari = [];
   for (const g of manifest.kabuk) {
@@ -1279,19 +1614,34 @@ async function ortuyaUygula(c) {
     const yol = goreliNormalle(g.yol);
     if (!yolGuvenliMi(yol)) {
       rapor.kabukAtlanan += 1; kabukBasarisiz += 1;
-      gunluk(`[${ISARET}] kabuk yolu kök dışına çıkıyor — atlandı: ${g.yol}`);
+      gunluk(`[${ISARET}] kabuk yolu kök dışına çıkıyor — atlandı: ${yol}`);
       continue;
     }
-    if (ortudeEtkisizMi(yol) || dallar.has(yol.split('/')[0].toLowerCase())) {
+    const ilk = yol.split('/')[0];
+    const ekDal = yol.includes('/') ? eklenenDal.get(ilk.toLowerCase()) : null;
+    if (ortudeEtkisizMi(yol) || (yol.includes('/') && cikarilan.some((x) => x.toLowerCase() === ilk.toLowerCase()))) {
       rapor.ortuEtkisiz += 1;
-      gunluk(`[${ISARET}] örtüde etkisiz (Node require / kanal durumu / üyelikte) — atlandı: ${yol}`);
+      gunluk(`[${ISARET}] örtüde etkisiz (Node require / kanal durumu / çıkarılan kitap) — atlandı: ${yol}`);
+      continue;
+    }
+    // Kural 8: kitabı tabanda olmayan ve eklenmeyen `bookN/…` girdisi atlanır (boş kitap yok).
+    const kd = kitapDaliAl(yol, set);
+    if (kd && !ekDal && !(await dizinMi(fsm, nodePath.join(kok, kd)))) {
+      rapor.kabukKitapsiz += 1;
+      gunluk(`[${ISARET}] kitabı tabanda yok, eklenmiyor — atlandı: ${yol}`);
       continue;
     }
     const sha = g.sha256.toLowerCase();
     const ad = nesneAdi(sha, yol);
+    if (ekDal) {
+      const ic = ekDal.dosyalar.get(yol.slice(ilk.length + 1));
+      if (ic && ic.sha256 === sha && ic.boyut === g.boyut) continue; // arşivdeki güncel
+    }
     if (await nesneVar(ad, sha, g.boyut)) { ortuYollari.push(yol); gereken.add(ad); continue; }
     let taban = null;
-    try { taban = Buffer.from(await fsm.readFile(nodePath.join(kok, yol))); } catch (e) { taban = null; }
+    if (!ekDal) {
+      try { taban = Buffer.from(await fsm.readFile(nodePath.join(kok, yol))); } catch (e) { taban = null; }
+    }
     if (taban && taban.length === g.boyut && sha256(taban) === sha) continue; // paketteki güncel
     let yanit;
     try {
@@ -1349,6 +1699,9 @@ async function ortuyaUygula(c) {
       ortuYollari: ortuYollari.slice().sort(),
       eklenen,
       cikarilan,
+      // Arşivden türetilmiş kitap listeleri (imzalı `dosyalar[]` yoksa). YETKİ DEĞİL, İPUCU:
+      // açılışta liste imzalı sha256'lı arşiv nesnesinden yeniden türetilip kıyaslanır.
+      kitapListeleri,
       zaman: new Date().toISOString(),
     };
     const gec = nodePath.join(geciciKok, ORTU_ETKIN + GECICI_UZANTI);
@@ -1420,6 +1773,9 @@ function ortuDurumuYukle(o) {
     cikarilan: new Set(),
     nesneler: new Set(),
     dogrulanan: new Map(),
+    /** lower dal → {dizin, dosyalar: Map(yol → {sha256, boyut}), turetilmis, arsivAdi, arsivSha,
+     *  arsivBoyut, dogrulandi: null|true|false} — eklenen kitapların dosya haritası. */
+    kitaplar: new Map(),
   };
   const red = (s) => { d.sebep = s; d.gecerli = false; return d; };
   try {
@@ -1450,8 +1806,12 @@ function ortuDurumuYukle(o) {
     try { m = manifestiDogrula(JSON.parse(Buffer.from(mHam).toString('utf8'))); } catch (e) { m = null; }
     if (!m) return red('manifest-gecersiz');
     if (m.surum !== etkin.surum) return red('surum-uyusmaz');
+    // Kimlik: kesinleşmiş durum da yalnız bu setin G kanalına ait olabilir.
+    if (m.kanal !== KANAL || m.setKimligi !== set.setKimligi) return red('manifest-kimligi');
 
     const dallar = new Set();
+    const listeler = (etkin.kitapListeleri && typeof etkin.kitapListeleri === 'object')
+      ? etkin.kitapListeleri : {};
     for (const g of m.kitaplar) {
       // Kesinleşmiş durumda bozuk girdi olamaz (güncelleyici reddeder) — varsa elle oynanmıştır.
       if (!uyelikGirdisiGecerliMi(g) || !ortuDiziniGecerliMi(g.dizin)) return red('manifest-uyelik-bozuk');
@@ -1459,27 +1819,46 @@ function ortuDurumuYukle(o) {
       if (dallar.has(dl)) return red('manifest-uyelik-bozuk');
       dallar.add(dl);
       if (g.durum === 'cikar') { d.cikarilan.add(dl); continue; }
-      const dosyalar = kitapDosyalariDogrula(g.dosyalar);
-      if (!dosyalar) return red('kitap-listesi-yok');
+      const kitap = {
+        dizin: g.dizin, dosyalar: new Map(), turetilmis: false,
+        arsivAdi: '', arsivSha: g.sha256.toLowerCase(), arsivBoyut: g.boyut, dogrulandi: true,
+      };
+      let dosyalar;
+      if (g.dosyalar === undefined) {
+        // Arşivden türetilmiş liste: etkin.json'daki liste İPUCUDUR; ilk istekte imzalı sha256'lı
+        // arşiv nesnesinden yeniden türetilip kıyaslanır (kitapTuretilmisDogrula).
+        const kl = listeler[g.dizin];
+        if (!kl || kl.arsiv !== kitap.arsivSha + '.zip') return red('kitap-listesi-yok');
+        dosyalar = kitapDosyalariDogrula(kl.dosyalar);
+        if (!dosyalar) return red('kitap-listesi-yok');
+        kitap.turetilmis = true;
+        kitap.arsivAdi = kl.arsiv;
+        kitap.dogrulandi = null;
+        d.nesneler.add(kl.arsiv);
+      } else {
+        dosyalar = kitapDosyalariDogrula(g.dosyalar);
+        if (!dosyalar) return red('kitap-listesi-yok');
+      }
       d.eklenen.add(dl);
       for (const x of dosyalar) {
-        const y = g.dizin + '/' + x.yol;
-        d.harita.set(y, { sha256: x.sha256, boyut: x.boyut, kitap: true });
-        d.nesneler.add(nesneAdi(x.sha256, y));
+        kitap.dosyalar.set(x.yol, { sha256: x.sha256, boyut: x.boyut });
+        d.nesneler.add(nesneAdi(x.sha256, g.dizin + '/' + x.yol));
       }
+      d.kitaplar.set(dl, kitap);
     }
     for (const g of m.kabuk) {
       if (!kabukGirdisiGecerliMi(g)) return red('manifest-kabuk-bozuk');
       const y = goreliNormalle(g.yol);
       if (!yolGuvenliMi(y)) return red('manifest-kabuk-bozuk');
-      if (ortudeEtkisizMi(y) || dallar.has(y.split('/')[0].toLowerCase())) continue;
+      if (ortudeEtkisizMi(y)) continue;
+      if (y.includes('/') && d.cikarilan.has(y.split('/')[0].toLowerCase())) continue;
       d.harita.set(y, { sha256: g.sha256.toLowerCase(), boyut: g.boyut, kitap: false });
     }
     if (!Array.isArray(etkin.ortuYollari)) return red('etkin-bozuk');
     for (const y0 of etkin.ortuYollari) {
       const y = goreliNormalle(y0);
       const e = d.harita.get(y);
-      if (!e || e.kitap) return red('etkin-uyusmaz');
+      if (!e) return red('etkin-uyusmaz');
       const ad = nesneAdi(e.sha256, y);
       // Kabuk nesnesi açılışta doğrulanır: biri bile bozuksa örtünün TAMAMI yüklenmez.
       if (!nesneDogrulaSenkron(fsS, d, ad, e)) return red('nesne-bozuk:' + y);
@@ -1508,22 +1887,89 @@ function ortuCoz(d, rel, fsS) {
   const y = goreliNormalle(rel);
   if (!yolGuvenliMi(y)) return null;
   const f = fsS || require('fs');
-  const dal = y.split('/')[0].toLowerCase();
+  const parca = y.split('/');
+  const dal = parca[0].toLowerCase();
+  // Kabuk örtüsü ÖNCE — eklenen kitabın içindeki imzalı kabuk girdisi (ör. motor) dahil.
+  if (d.ortuYollari.has(y)) {
+    const e = d.harita.get(y);
+    const ad = nesneAdi(e.sha256, y);
+    if (nesneDogrulaSenkron(f, d, ad, e)) return { tur: 'ortu', yol: nodePath.join(d.nesneKoku, ad) };
+    // Oturum ortasında bozulan kabuk nesnesi yerine paketin (imzalı) kopyası sunulur; eklenen
+    // kitapta ise kitabın kendi (arşivdeki) kopyasına düşülür.
+    if (!d.eklenen.has(dal)) return null;
+  }
   if (d.eklenen.has(dal)) {
     // Eklenen kitabın dizini TAMAMEN örtünündür: listede olmayan / bozuk dosya sunulmaz.
-    const e = d.harita.get(y);
+    const kitap = d.kitaplar.get(dal);
+    if (!kitap || parca.length < 2) return { tur: 'yok' };
+    if (kitap.dogrulandi === null) kitap.dogrulandi = kitapTuretilmisDogrula(f, d, kitap);
+    if (!kitap.dogrulandi) return { tur: 'yok' };
+    const e = kitap.dosyalar.get(parca.slice(1).join('/'));
     if (!e) return { tur: 'yok' };
     const ad = nesneAdi(e.sha256, y);
     return nesneDogrulaSenkron(f, d, ad, e) ? { tur: 'ortu', yol: nodePath.join(d.nesneKoku, ad) } : { tur: 'yok' };
   }
   if (d.cikarilan.has(dal)) return { tur: 'yok' };
-  if (d.ortuYollari.has(y)) {
-    const e = d.harita.get(y);
-    const ad = nesneAdi(e.sha256, y);
-    // Oturum ortasında bozulan kabuk nesnesi yerine paketin (imzalı) kopyası sunulur.
-    return nesneDogrulaSenkron(f, d, ad, e) ? { tur: 'ortu', yol: nodePath.join(d.nesneKoku, ad) } : null;
-  }
   return null;
+}
+
+/**
+ * Arşivden türetilmiş kitap listesini DOĞRULAR (süreç başına bir kez, ilk istekte): arşiv
+ * nesnesinin boyutu + sha256'sı imzalı manifesttekiyle aynı mı, ve arşivden yeniden türetilen
+ * liste `etkin.json`'daki listeyle birebir mi? Değilse kitabın hiçbir dosyası sunulmaz.
+ */
+function kitapTuretilmisDogrula(fsS, d, kitap) {
+  try {
+    const b = fsS.readFileSync(nodePath.join(d.nesneKoku, kitap.arsivAdi));
+    if (b.length !== kitap.arsivBoyut || sha256(b) !== kitap.arsivSha) return false;
+    const gorulen = new Map();
+    arsivGez(b, (ge) => {
+      const yol = goreliNormalle(ge && ge.yol);
+      if (!yolGuvenliMi(yol) || gorulen.has(yol)) throw new Error('arsiv-bozuk');
+      gorulen.set(yol, { sha256: sha256(ge.veri), boyut: ge.veri.length });
+    });
+    if (gorulen.size !== kitap.dosyalar.size) return false;
+    for (const [yol, e] of kitap.dosyalar) {
+      const g = gorulen.get(yol);
+      if (!g || g.sha256 !== e.sha256 || g.boyut !== e.boyut) return false;
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
+/**
+ * Örtünün ETKİN görünümü: paket-göreli yol → sunulacak mutlak dosya (paketten ya da örtüden).
+ * Gizlenen yollar listede yoktur. Kabul/uçtan uca koşum ve tanı için (Electron gerektirmez).
+ * @returns {Map<string,string>}
+ */
+function ortuGorunumu(d, kok, fsS) {
+  const f = fsS || require('fs');
+  const k = nodePath.resolve(String(kok || ''));
+  const cikti = new Map();
+  const koy = (y) => {
+    if (cikti.has(y)) return;
+    const r = ortuCoz(d, y, f);
+    if (r === null) {
+      const t = nodePath.join(k, y);
+      try { if (f.statSync(t).isFile()) cikti.set(y, t); } catch (e) {}
+    } else if (r.tur === 'ortu') cikti.set(y, r.yol);
+  };
+  const yigin = [''];
+  while (yigin.length) {
+    const on = yigin.pop();
+    let girdiler = [];
+    try { girdiler = f.readdirSync(on ? nodePath.join(k, on) : k, { withFileTypes: true }); } catch (e) { girdiler = []; }
+    for (const g of girdiler) {
+      const y = on ? on + '/' + g.name : g.name;
+      if (g.isDirectory()) yigin.push(y);
+      else if (g.isFile()) koy(y);
+    }
+  }
+  if (d && d.gecerli) {
+    for (const y of d.ortuYollari) koy(y);
+    for (const kitap of d.kitaplar.values()) for (const ic of kitap.dosyalar.keys()) koy(kitap.dizin + '/' + ic);
+  }
+  return cikti;
 }
 
 /** Mutlak dosya yolu (file: isteği) → örtü kararı; paket kökü dışındaysa `null`. */
@@ -1720,6 +2166,21 @@ module.exports = {
   artiklariTopla,
   guncellemeyiCalistir,
   guncellemeyiBaslat,
+  // Kimlik + monoton sürüm + ya hep ya hiç (2026-09-26)
+  KANAL,
+  GUNCE_ADI,
+  gSurumCoz,
+  gSurumKiyasla,
+  enBuyukGSurum,
+  manifestKimligiDenetle,
+  kitapDaliAl,
+  damgaDurumuOku,
+  damgayiYaz,
+  yarimUygulamayiToparla,
+  yerindeUygula,
+  arsivGez,
+  kitapTuretilmisDogrula,
+  ortuGorunumu,
   // Örtü (mac + Pardus, 2026-09-26)
   ORTU_DIZIN_ADI,
   ORTU_ETKIN,

@@ -110,16 +110,18 @@ test(
       await s.kapat();
     }
 
-    const k = await kos({ dizin: h.dizin });
-    const bul = (ad) => k.sonuclar.find((x) => x.senaryo === ad);
-    assert.equal(k.gecti, true, JSON.stringify(k.sonuclar, null, 1));
-    for (const x of k.sonuclar.filter((y) => y.zorunlu === true))
-      assert.equal(x.sonuc, 'GEÇTİ', x.senaryo);
-    assert.equal(bul('gecerli').ikinci, 'guncel (1 istek)');
-    // Referans (Windows) istemcinin bilinen açıkları — kapanırsa bu test haber verir.
-    assert.equal(bul('geri-alma').sonuc, 'AÇIK');
-    assert.equal(bul('baska-set').sonuc, 'AÇIK');
-    assert.equal(bul('kismi-bozuk').sonuc, 'AÇIK');
+    // İki kip: Windows (yerinde) ve mac/Pardus (örtü, EMPP_G_ORTU_KOKU). Açıklar 26.09'da kapandı:
+    // her senaryo her kipte zorunlu ve GEÇMELİ.
+    for (const kip of ['yerinde', 'ortu']) {
+      const k = await kos({ dizin: h.dizin, kip });
+      const bul = (ad) => k.sonuclar.find((x) => x.senaryo === ad);
+      assert.equal(k.gecti, true, kip + ': ' + JSON.stringify(k.sonuclar, null, 1));
+      assert.equal(k.sonuclar.length, o.SENARYOLAR.length);
+      for (const x of k.sonuclar) assert.equal(x.sonuc, 'GEÇTİ', kip + ':' + x.senaryo);
+      assert.equal(bul('gecerli').ikinci, 'guncel (1 istek)');
+      assert.match(bul('geri-alma-tetik').sebep, /^manifest-reddedildi:surum-eski$/);
+      assert.match(bul('baska-set-tetik').sebep, /^manifest-reddedildi:baska-set$/);
+    }
 
     // dogrula.js: kurulu ağaç 'degismez' kipinde geçer, 'tam' kipinde kalır.
     const b = beklenenOku(h.dizin);

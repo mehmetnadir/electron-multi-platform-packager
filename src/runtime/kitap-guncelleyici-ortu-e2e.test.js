@@ -118,7 +118,7 @@ const YENI_INDEX = '<html>YENI MENU v2 — G</html>';
 const YENI_MOTOR = '/* 43e23 motor v2 (kanonik) */';
 function yayin(taban, ek = {}) {
   return Y.yayinRotalari(Object.assign({
-    tabanUrl: taban, imzala: H.imzala, setKimligi: '74390', surum: 'e2e-v2',
+    tabanUrl: taban, imzala: H.imzala, setKimligi: '74390', surum: '2.90.2',
     kabuk: {
       'index.html': YENI_INDEX,
       'config/settings.json': '{"books":{"book1":{},"book3":{}}}',
