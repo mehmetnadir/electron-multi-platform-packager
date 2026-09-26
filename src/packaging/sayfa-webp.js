@@ -43,6 +43,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const { uyariMetni } = require('./webp-kapi-uyarisi');
 const { kapiAcikMi } = require('./platform-kapisi');
+const onbellek = require('./webp-onbellek');
 
 const MOD1_N = 100;
 const PNG_IMZA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
@@ -103,11 +104,16 @@ function sayfaGorseliMi(goreliYol) {
 /**
  * Tek dosyayı dönüştür. Küçülmüyorsa ÖZGÜNÜ döndürür (paketi büyütmek yasak).
  * @param {Buffer} buf
- * @param {{kip?: string, kalite?: number, sharpFn?: Function, log?: Function}} [opts]
+ * @param {{kip?: string, kalite?: number, sharpFn?: Function, log?: Function,
+ *   onbellek?: {acik: boolean, dizin?: string|null, tavanGb?: number},
+ *   onbellekSayac?: {isabet: number, iska: number, yazilan: number}}} [opts]
  *   `kip` verilmezse `EMPP_SAYFA_WEBP_KIP` env'inden çözülür (varsayılan `kayipsiz`).
  *   `kalite` yalnız `yakin`/`kayipli` kiplerinde etkilidir (yakin varsayılanı
  *   `EMPP_SAYFA_WEBP_KALITE` env'inden, yoksa 60; kayipli varsayılanı 82).
- * @returns {Promise<{cikti: Buffer, donusturuldu: boolean, sebep: string, kip: string}>}
+ *   `onbellek` verilmezse KAPALI sayılır — çevreden otomatik açılmaz, açan tek
+ *   yer `klasoruDonustur` (bkz. `webp-onbellek.js`); böylece bu fonksiyonu tek
+ *   başına çağıran testler/kod yanlışlıkla gerçek önbellek dizinine dokunmaz.
+ * @returns {Promise<{cikti: Buffer, donusturuldu: boolean, sebep: string, kip: string, onbellek?: string}>}
  */
 async function bufferiDonustur(buf, opts = {}) {
   const { sharpFn, log = () => {} } = opts;
@@ -115,6 +121,25 @@ async function bufferiDonustur(buf, opts = {}) {
   const { kip, uyari } = opts.kip ? { kip: opts.kip, uyari: null } : kipCoz(process.env);
   if (uyari) log(uyari);
   if (durum === 'bilinmiyor') return { cikti: buf, donusturuldu: false, sebep: 'png-degil', kip };
+
+  const onbellekAyar = opts.onbellek || { acik: false };
+  const onbellekSayac = opts.onbellekSayac;
+  let onbellekAnahtar = null;
+  if (onbellekAyar.acik) {
+    onbellekAnahtar = onbellek.anahtarHesapla(buf, kip);
+    const bulunan = await onbellek.oku(onbellekAyar.dizin, onbellekAnahtar, {
+      sifreliMi: durum === 'sifreli',
+      mod1Fn: mod1,
+    });
+    if (bulunan) {
+      if (onbellekSayac) onbellekSayac.isabet++;
+      if (bulunan.tur === 'ozgun') {
+        return { cikti: buf, donusturuldu: false, sebep: 'kucultmedi', kip, onbellek: 'isabet' };
+      }
+      return { cikti: bulunan.cikti, donusturuldu: true, sebep: 'tamam', kip, onbellek: 'isabet' };
+    }
+    if (onbellekSayac) onbellekSayac.iska++;
+  }
 
   const duz = durum === 'sifreli' ? mod1(buf) : buf;
 
@@ -130,11 +155,18 @@ async function bufferiDonustur(buf, opts = {}) {
     const sharp = sharpFn || require('sharp');
     webp = await sharp(duz).webp(secenek).toBuffer();
   } catch (e) {
+    // Kodlama hatası ÖNBELLEĞE YAZILMAZ — geçici/ortamsal olabilir, her seferinde tekrar denenmeli.
     return { cikti: buf, donusturuldu: false, sebep: 'kodlama-hatasi:' + e.message, kip };
   }
 
   if (!webp || webp.length >= duz.length) {
-    return { cikti: buf, donusturuldu: false, sebep: 'kucultmedi', kip };
+    if (onbellekAyar.acik) {
+      try {
+        await onbellek.yaz(onbellekAyar.dizin, onbellekAnahtar, { tur: 'ozgun' });
+        if (onbellekSayac) onbellekSayac.yazilan++;
+      } catch (_) { /* önbellek yazma hatası üretim akışını durdurmamalı */ }
+    }
+    return { cikti: buf, donusturuldu: false, sebep: 'kucultmedi', kip, onbellek: onbellekAyar.acik ? 'iska' : undefined };
   }
 
   // Geri okuma: çıktının gerçekten çözülebildiğini doğrula (sessiz bozuk dosya yasak).
@@ -145,19 +177,32 @@ async function bufferiDonustur(buf, opts = {}) {
       return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-basarisiz', kip };
     }
   } catch (e) {
+    // Doğrulama hatası da ÖNBELLEĞE YAZILMAZ — aynı sebepten.
     return { cikti: buf, donusturuldu: false, sebep: 'dogrulama-hatasi:' + e.message, kip };
   }
 
   const cikti = durum === 'sifreli' ? mod1(webp) : webp;
-  return { cikti, donusturuldu: true, sebep: 'tamam', kip };
+
+  if (onbellekAyar.acik) {
+    try {
+      await onbellek.yaz(onbellekAyar.dizin, onbellekAnahtar, { tur: 'webp', cikti });
+      if (onbellekSayac) onbellekSayac.yazilan++;
+    } catch (_) { /* önbellek yazma hatası üretim akışını durdurmamalı */ }
+  }
+
+  return { cikti, donusturuldu: true, sebep: 'tamam', kip, onbellek: onbellekAyar.acik ? 'iska' : undefined };
 }
 
 /**
  * Bir uygulama dizinindeki TÜM sayfa görsellerini dönüştürür.
  * Dosya adları DEĞİŞMEZ. Yazma atomiktir (geçici dosya + rename).
  * @param {string} kokDizin
- * @param {{kip?: string, kalite?: number, kuru?: boolean, log?: Function, sharpFn?: Function}} [opts]
+ * @param {{kip?: string, kalite?: number, kuru?: boolean, log?: Function, sharpFn?: Function,
+ *   onbellek?: {acik: boolean, dizin?: string|null, tavanGb?: number}}} [opts]
  *   `kip` verilmezse `EMPP_SAYFA_WEBP_KIP` env'inden çözülür (varsayılan `kayipsiz`).
+ *   `onbellek` verilmezse `EMPP_WEBP_ONBELLEK`/`EMPP_WEBP_ONBELLEK_GB` env'inden
+ *   çözülür (varsayılan açık, `~/.empp-agent/webp-onbellek`, tavan 30 GB —
+ *   bkz. `webp-onbellek.js`).
  */
 async function klasoruDonustur(kokDizin, opts = {}) {
   const { kalite, kuru = false, log = () => {}, sharpFn } = opts;
@@ -169,6 +214,9 @@ async function klasoruDonustur(kokDizin, opts = {}) {
   // paketleme başında, HER ZAMAN görünür bir uyarı basar.
   const uyari = uyariMetni(process.env);
   if (uyari) log(uyari);
+
+  const onbellekAyar = opts.onbellek || onbellek.ayarlariCoz(process.env);
+  const onbellekSayac = { isabet: 0, iska: 0, yazilan: 0 };
 
   const ist = { bakilan: 0, donusturulen: 0, atlanan: 0, hata: 0, oncekiBayt: 0, sonrakiBayt: 0, sebepler: {} };
 
@@ -190,7 +238,7 @@ async function klasoruDonustur(kokDizin, opts = {}) {
     try { buf = await fs.readFile(tam); } catch (e) { ist.hata++; return; }
     ist.oncekiBayt += buf.length;
 
-    const r = await bufferiDonustur(buf, { kip, kalite, sharpFn });
+    const r = await bufferiDonustur(buf, { kip, kalite, sharpFn, onbellek: onbellekAyar, onbellekSayac });
     if (!r.donusturuldu) {
       ist.atlanan++;
       ist.sebepler[r.sebep] = (ist.sebepler[r.sebep] || 0) + 1;
@@ -219,6 +267,21 @@ async function klasoruDonustur(kokDizin, opts = {}) {
   log(`[sayfa-webp] kip=${kip} 🖼️  Sayfa WebP: ${ist.donusturulen}/${ist.bakilan} dönüştürüldü, ` +
       `${(ist.oncekiBayt / 1048576).toFixed(0)} MB → ${(ist.sonrakiBayt / 1048576).toFixed(0)} MB ` +
       `(kazanç ${(kazanc / 1048576).toFixed(0)} MB)`);
+
+  log(`webp-onbellek isabet=${onbellekSayac.isabet} ıska=${onbellekSayac.iska} yazılan=${onbellekSayac.yazilan}`);
+
+  if (onbellekAyar.acik && onbellekSayac.yazilan > 0) {
+    try {
+      const budama = await onbellek.budaGerekirse(onbellekAyar.dizin, onbellekAyar.tavanGb);
+      if (budama.silinen > 0) {
+        log(`[webp-onbellek] tavan aşıldı: ${budama.silinen} eski girdi silindi ` +
+            `(${(budama.oncekiToplamBayt / 1073741824).toFixed(2)} GB → ` +
+            `${(budama.sonrakiToplamBayt / 1073741824).toFixed(2)} GB)`);
+      }
+    } catch (_) { /* budama başarısız olsa da paketleme durmaz */ }
+  }
+
+  ist.onbellek = onbellekSayac;
   return ist;
 }
 
