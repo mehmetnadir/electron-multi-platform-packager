@@ -37,6 +37,7 @@ const windowsMimari = require('./windows-mimari');
 const windowsAsarsiz = require('./windows-asarsiz');
 const ikonSaydamlik = require('./ikon-saydamlik');
 const harfKapisi = require('./harf-kapisi');
+const kokIndexDenetimi = require('./kok-index-denetimi');
 const nsisKurulum = require('./nsis-kurulum');
 const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
@@ -435,6 +436,11 @@ MimeType=application/x-electron;
       } catch (copyError) {
         throw new Error(`Build dosyaları kopyalanamadı: ${copyError.message}. Session: ${sessionId}`);
       }
+
+      // KÖK INDEX DENETİMİ — kaynak anlık görüntüsü (2026-09-26, bkz. kok-index-denetimi.js
+      // dosya başlığı). workingPath İLK DOLDURULDUĞUNDA, HİÇBİR yamadan (set-menu dahil)
+      // önce alınır; set-menu adımından SONRA bu anlık görüntüyle karşılaştırılacak.
+      const kaynakKokIndexHtml = await kokIndexDenetimi.kokIndexOku(workingPath);
 
       // SÜRÜM TÜRETME (2026-09-22, Nadir onayı) — bkz. src/packaging/surum-turet.js.
       // Ölçülen arıza: üretim tetikleyicileri (.sm4-k*-uret.js) appVersion'ı hep
@@ -988,6 +994,27 @@ MimeType=application/x-electron;
           // mod=dusur ise bilinçli düşüştür — yut­ma, yukarı taşı.
           if (harfErr && harfErr.harfSonucu) throw harfErr;
           console.warn('⚠️ harf-kapisi başarısız (paketleme devam ediyor):', harfErr.message);
+        }
+      }
+
+      // KÖK INDEX DENETİMİ (2026-09-26, ölçüm: shallwe-pardus-index-20260926.md) — ProBook
+      // kabul kapısı (K18) yalnız "bir menü açıldı mı" ölçüyordu, "DOĞRU menü mü" değil;
+      // 45482/45551 pardus paketleri yayıncının kendi menüsü yerine bizim `empp-set-menu`
+      // menümüzle GEÇTİ. Bu kapı, set-menu (K17) adımından SONRA ve platform fan-out'undan
+      // (`switch(platform)`) ÖNCE — harf kapısı ile TAM AYNI konum — paketin güncel kök
+      // index.html'ini yukarıda alınan kaynak anlık görüntüsüyle karşılaştırır. Yalnız
+      // bilerek enjekte edilen `<script>` satırları (empp-fs-shim.js, empp-ag-politikasi.js)
+      // normalize edilip çıkarılır; kaynak yoksa/motor kopyasıysa K17'nin ürettiği menü
+      // BEKLENEN sayılır. Aksi fark (yayıncının özel kök menüsü sessizce değişmiş/kaybolmuş)
+      // KÖK EZİLMİŞ demektir — harf kapısıyla AYNI ilke: yutma, yukarı taşı, iş düşsün.
+      if (kokIndexDenetimi.acikMi()) {
+        try {
+          await kokIndexDenetimi.paketeUygula(workingPath, kaynakKokIndexHtml, {
+            log: (s) => console.log(s),
+          });
+        } catch (kokIndexErr) {
+          if (kokIndexErr && kokIndexErr.kokIndexSonucu) throw kokIndexErr;
+          console.warn('⚠️ kök index denetimi başarısız (paketleme devam ediyor):', kokIndexErr.message);
         }
       }
 
