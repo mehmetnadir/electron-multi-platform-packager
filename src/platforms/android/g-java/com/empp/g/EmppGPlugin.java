@@ -41,25 +41,39 @@ public class EmppGPlugin extends Plugin {
         };
     }
 
-    /** Pakete gömülü `empp-set.json` (ham metin — ayrıştırma ve doğrulama JS'de). */
+    /** APK varlığı → UTF-8 metin (örtüden DEĞİL — G bunları asla değiştiremez). */
+    private String varlikMetni(String yol) throws IOException {
+        InputStream in = getContext().getAssets().open(yol);
+        try {
+            ByteArrayOutputStream o = new ByteArrayOutputStream();
+            byte[] t = new byte[8192];
+            int n;
+            while ((n = in.read(t)) > 0) o.write(t, 0, n);
+            return new String(o.toByteArray(), StandardCharsets.UTF_8);
+        } finally {
+            in.close();
+        }
+    }
+
+    /**
+     * Pakete gömülü `empp-set.json` (ham metin — ayrıştırma ve doğrulama JS'de) + varsa
+     * `empp-g-paket.json` (paketin kendi sürümü → monoton sürüm tabanı).
+     */
     @PluginMethod
     public void yapilandirma(PluginCall call) {
+        JSObject r = new JSObject();
         try {
-            InputStream in = getContext().getAssets().open("public/empp-set.json");
-            try {
-                ByteArrayOutputStream o = new ByteArrayOutputStream();
-                byte[] t = new byte[8192];
-                int n;
-                while ((n = in.read(t)) > 0) o.write(t, 0, n);
-                JSObject r = new JSObject();
-                r.put("metin", new String(o.toByteArray(), StandardCharsets.UTF_8));
-                call.resolve(r);
-            } finally {
-                in.close();
-            }
+            r.put("metin", varlikMetni("public/empp-set.json"));
         } catch (Throwable e) {
             call.reject("yapilandirma-yok");
+            return;
         }
+        try {
+            r.put("paket", varlikMetni("public/empp-g-paket.json"));
+        } catch (Throwable e) {
+            // Paket sürümü yok → kurulu sürüm yalnız son uygulanan G'dir (JS kararı).
+        }
+        call.resolve(r);
     }
 
     @PluginMethod

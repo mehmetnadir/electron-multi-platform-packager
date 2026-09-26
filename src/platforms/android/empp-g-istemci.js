@@ -26,6 +26,18 @@
  *     — Android içeriği platforma uyarlanmış ağaçtan (www) üretilir; Windows manifesti Android'e
  *     uygulanmaz.
  *   • Hiçbir istisna dışarı sızmaz.
+ *
+ * ÜÇ GÜVENLİK KURALI (2026-09-26 — Electron istemcisi `kitap-guncelleyici.js` e07bc37 ile AYNI):
+ *   1. MONOTON SÜRÜM. İmzası doğru manifest de ancak `surum` G3 biçiminde (`2.<panel>.<sayaç>`)
+ *      ve KURULU sürümden KESİN BÜYÜKse uygulanır. Kurulu = max(paketin sürümü
+ *      [`empp-g-paket.json`], son uygulanan G [katman durumu]); G3 olmayan paket sürümü
+ *      (içerik-hash) kıyasa girmez. APK değişince eski katman zaten atılır (ikili kimliği).
+ *      `surum.json` imzasız TETİKTİR: kurulu sürümden büyük değilse manifest hiç istenmez.
+ *   2. KİMLİK. `kanal == "G"` ve `setKimligi == gömülü kimlik` değilse RET (başka setin
+ *      imzalı manifesti bu pakete uygulanmaz). `surum.json` başka seti söylüyorsa manifest istenmez.
+ *   3. YA HEP YA HİÇ. Her şey önce yerel hazırlık alanına iner ve doğrulanır (boyut burada,
+ *      sha256 + arşiv açma yerel tarafta); TEK hata → `uygula` HİÇ çağrılmaz, canlı katmana
+ *      dokunulmaz. Kesinleşme tek `uygula` çağrısı = yerelde tek `durum.txt` rename'i.
  */
 (function (kok, fabrika) {
   var m = fabrika();
@@ -50,6 +62,10 @@
   var IMZA_UZANTI = '.sig';
   /** Ed25519 SPKI DER öneki (RFC 8410): 12 bayt + 32 bayt ham anahtar. */
   var SPKI_ONEK = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+  /** G kanalının adı — manifestte `kanal` alanı (sözleşme G3/G4). */
+  var KANAL = 'G';
+  /** G3 sürümü `2.<panel>.<sayaç>` — tools/g-yayin/g-surum.js ve Electron istemcisiyle AYNI desen. */
+  var G_SURUM_RE = /^2\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
 
   /* ------------------------------------------------------------- yardımcılar */
 
@@ -86,6 +102,61 @@
       imzaAnahtari: (imza.alg === 'ed25519' && typeof imza.acikAnahtar === 'string') ? imza.acikAnahtar.trim() : '',
       sebep: typeof n.sebep === 'string' ? n.sebep : ''
     };
+  }
+
+  /** Pakete gömülü `empp-g-paket.json` metni → paketin sürümü (yoksa/bozuksa `null`). */
+  function paketSurumuCoz(metin) {
+    if (typeof metin !== 'string' || !metin) return null;
+    try {
+      var n = JSON.parse(metin);
+      return (n && typeof n.surum === 'string' && n.surum.trim()) ? n.surum.trim() : null;
+    } catch (e) { return null; }
+  }
+
+  /* ------------------------------------------------ sürüm + kimlik (kural 1-2) */
+
+  /** `"2.51.4"` → `{panel:51, sayac:4}`; G3 biçimi dışındaysa `null`. */
+  function gSurumCoz(s) {
+    if (typeof s !== 'string') return null;
+    var m = G_SURUM_RE.exec(s.trim());
+    return m ? { panel: Number(m[1]), sayac: Number(m[2]) } : null;
+  }
+
+  /** a<b → -1, a=b → 0, a>b → 1; biri G3 değilse `null` (kıyaslanamaz). */
+  function gSurumKiyasla(a, b) {
+    var x = gSurumCoz(a);
+    var y = gSurumCoz(b);
+    if (!x || !y) return null;
+    if (x.panel !== y.panel) return x.panel < y.panel ? -1 : 1;
+    if (x.sayac !== y.sayac) return x.sayac < y.sayac ? -1 : 1;
+    return 0;
+  }
+
+  /** Listedeki en büyük G3 sürümü; hiç yoksa `null`. Biçim dışılar (içerik-hash vb.) yok sayılır. */
+  function enBuyukGSurum(liste) {
+    var en = null;
+    for (var i = 0; i < (liste || []).length; i++) {
+      var s = liste[i];
+      if (!gSurumCoz(s)) continue;
+      if (en === null || gSurumKiyasla(s, en) > 0) en = s.trim();
+    }
+    return en;
+  }
+
+  /**
+   * İmzası doğrulanmış manifestin KİMLİK denetimi. '' → kabul, aksi → red kodu.
+   * @param {object} n            ayrıştırılmış manifest
+   * @param {string} setKimligi   paketin gömülü kimliği
+   * @param {string|null} kurulu  kurulu sürüm (paket ya da son uygulanan G); `null` → ilk G
+   */
+  function manifestKimligiDenetle(n, setKimligi, kurulu) {
+    if (!n || typeof n !== 'object' || Array.isArray(n)) return 'manifest-gecersiz';
+    if (n.kanal !== KANAL) return 'kanal-g-degil';
+    var mk = (n.setKimligi == null || n.setKimligi === '') ? null : String(n.setKimligi);
+    if (mk === null || setKimligi == null || mk !== String(setKimligi)) return 'baska-set';
+    if (!gSurumCoz(n.surum)) return 'surum-bicimi';
+    if (kurulu && gSurumCoz(kurulu) && gSurumKiyasla(n.surum, kurulu) <= 0) return 'surum-eski';
+    return '';
   }
 
   /* -------------------------------------------------------------------- imza */
@@ -217,7 +288,7 @@
 
   function bosRapor() {
     return {
-      platform: PLATFORM, setKimligi: null, durum: 'atlandi', sebep: '', istek: 0, imzaYolu: null,
+      platform: PLATFORM, setKimligi: null, durum: 'atlandi', sebep: '', istek: 0, imzaYolu: null, kuruluSurum: null,
       kabukIndirilen: 0, kabukAyni: 0, platformAtlanan: 0, eklenen: [], cikarilan: [], surum: null, hata: ''
     };
   }
@@ -231,7 +302,7 @@
     var yerel = o && o.yerel;
     var kabuk = o && o.kabuk;
     var gunluk = (o && typeof o.gunluk === 'function') ? o.gunluk : function () {};
-    var set, kokAdres, uzakSurum, manifestHam, plan;
+    var set, kokAdres, uzakSurum, manifestHam, plan, paketSurumu, kurulu;
 
     function getir(adres, tavan) {
       rapor.istek += 1;
@@ -245,6 +316,7 @@
       var ham;
       try { ham = JSON.parse(y && y.metin); } catch (e) { throw new Bitis('kapali', 'empp-set-json-okunamadi'); }
       set = setiNormalize(ham);
+      paketSurumu = paketSurumuCoz(y && y.paket);
       rapor.setKimligi = set.setKimligi;
       if (set.setKimligi == null) throw new Bitis('kapali', 'set-kimligi-yok' + (set.sebep ? ' (' + set.sebep + ')' : ''));
       if (!/^[A-Za-z0-9._:-]{1,64}$/.test(set.setKimligi)) throw new Bitis('kapali', 'set-kimligi-gecersiz');
@@ -256,6 +328,10 @@
       return yerel.durum();
     }).then(function (d) {
       var yerelSurum = d && typeof d.surum === 'string' ? d.surum : null;
+      // Kural 1: KURULU = max(paket sürümü, son uygulanan G). Katman eski APK'ya aitse yerel
+      // taraf onu zaten atmıştır (ikili kimliği) — burada görülen sürüm bu APK'nındır.
+      kurulu = enBuyukGSurum([yerelSurum, paketSurumu]);
+      rapor.kuruluSurum = kurulu;
       return getir(kokAdres + '/surum.json', 64 * 1024).then(function (s) {
         if (!s || s.durum !== 200 || typeof s.b64 !== 'string') throw new Bitis('atlandi', 'surum-alinamadi:durum-' + (s ? s.durum : 'yok'));
         var j;
@@ -263,7 +339,15 @@
         if (!j || typeof j.surum !== 'string' || !j.surum.trim()) throw new Bitis('atlandi', 'surum-alani-yok');
         uzakSurum = j.surum.trim();
         rapor.surum = uzakSurum;
+        // Kural 2 (tetik): surum.json başka seti söylüyorsa manifest hiç istenmez.
+        if (j.setKimligi != null && j.setKimligi !== '' && String(j.setKimligi) !== set.setKimligi) {
+          throw new Bitis('atlandi', 'uzak-baska-set');
+        }
         if (yerelSurum && yerelSurum === uzakSurum) throw new Bitis('guncel', 'surum-ayni');
+        // Kural 1 (tetik): kurulu sürümden KESİN büyük olmayan uç için manifest hiç istenmez.
+        if (kurulu && gSurumCoz(uzakSurum) && gSurumKiyasla(uzakSurum, kurulu) <= 0) {
+          throw new Bitis('guncel', 'uzak-surum-buyuk-degil');
+        }
       }, function (e) {
         if (e instanceof Bitis) throw e;
         throw new Bitis('atlandi', 'surum-alinamadi:' + ((e && e.message) || 'ag'));
@@ -285,6 +369,9 @@
       if (!karar.gecerli) throw new Bitis('red', 'manifest-imzasi-gecersiz:' + karar.sebep);
       var n;
       try { n = JSON.parse(utf8(manifestHam)); } catch (e) { throw new Bitis('red', 'manifest-json-bozuk'); }
+      // Kural 1-2 — imza doğru olsa da: kanal G, BU setin kimliği, kurulu sürümden KESİN büyük.
+      var kimlikRed = manifestKimligiDenetle(n, set.setKimligi, kurulu);
+      if (kimlikRed) throw new Bitis('red', 'manifest-reddedildi:' + kimlikRed);
       plan = planKur(n, kabuk);
       if (plan.red) throw new Bitis('red', plan.red);
       rapor.platformAtlanan = plan.platform.length;
@@ -294,6 +381,8 @@
       var mevcut = (oz && oz.ozetler) || {};
       var degisen = plan.kabuk.filter(function (g) { return mevcut[g.yol] !== g.sha256; });
       rapor.kabukAyni = plan.kabuk.length - degisen.length;
+      // Kural 3 — YA HEP YA HİÇ: 1) ve 2) yalnız HAZIRLIĞA yazar (canlı katman görmez); herhangi
+      // bir hata zinciri keser ve 3) `uygula` HİÇ çağrılmaz. Hata yutulup "kalanıyla devam" YOK.
       // 1) Kabuk dosyaları → hazırlık (yerel taraf sha256'yı yeniden doğrular).
       return degisen.reduce(function (pr, g) {
         return pr.then(function () {
@@ -435,7 +524,9 @@
 
   return {
     ISARET: ISARET, PLATFORM: PLATFORM, MOTOR_ADI: MOTOR_ADI, SHIM_ADI: SHIM_ADI, SON_ANAHTARI: SON_ANAHTARI,
-    ARALIK: ARALIK, KABUK_TAVANI: KABUK_TAVANI,
+    ARALIK: ARALIK, KABUK_TAVANI: KABUK_TAVANI, KANAL: KANAL,
+    gSurumCoz: gSurumCoz, gSurumKiyasla: gSurumKiyasla, enBuyukGSurum: enBuyukGSurum,
+    manifestKimligiDenetle: manifestKimligiDenetle, paketSurumuCoz: paketSurumuCoz,
     adresGuvenliMi: adresGuvenliMi, kimlikKoku: kimlikKoku, dosyaAdresi: dosyaAdresi, setiNormalize: setiNormalize,
     hamAcikAnahtar: hamAcikAnahtar, webcryptoDogrula: webcryptoDogrula, webcryptoOlc: webcryptoOlc,
     imzaDogrula: imzaDogrula, kapsamSinifi: kapsamSinifi, planKur: planKur, androidSayfasiMi: androidSayfasiMi,

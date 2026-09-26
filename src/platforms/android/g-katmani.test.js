@@ -88,6 +88,7 @@ test('kur: empp-set.json varsa her şey yazılır; test CA verilmediyse ağ yap�
   const r = await g.kur(p.kok, p.www);
   assert.deepStrictEqual(r, { kuruldu: true, sebep: 'kuruldu', test: false });
   for (const ad of Object.values(g.WWW)) assert.ok(fs.existsSync(path.join(p.www, ad)), ad);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(p.www, g.WWW.paket), 'utf8')), { surum: null });
   for (const ad of g.JAVA_DOSYALARI) assert.ok(fs.existsSync(path.join(p.main, 'java', 'com', 'empp', 'g', ad)), ad);
   assert.ok(fs.readFileSync(path.join(p.main, 'java', 'com', 'dijitap', 'x', 'MainActivity.java'), 'utf8').includes(g.ROTA));
   assert.strictEqual(fs.readFileSync(path.join(p.main, 'AndroidManifest.xml'), 'utf8'), MANIFEST, 'üretimde manifest değişmez');
@@ -124,10 +125,26 @@ test('kur: test CA yolu verilirse NSC + raw sertifika + manifest; PEM değilse h
 
 test('packagingService: G adımı K9\'dan SONRA, tek yerden; test CA yalnız EMPP_G_TEST_GUVEN_CA\'dan', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', 'packaging', 'packagingService.js'), 'utf8');
-  const cagri = src.match(/await this\.configureAndroidG\(webAppPath, wwwPath\);/g) || [];
-  assert.strictEqual(cagri.length, 1);
-  assert.ok(src.indexOf('await this.configureAndroidAgBilgisi(webAppPath);') < src.indexOf('await this.configureAndroidG(webAppPath, wwwPath);'));
-  assert.ok(src.indexOf('await this.configureAndroidFullscreen(webAppPath);') < src.indexOf('await this.configureAndroidG(webAppPath, wwwPath);'));
+  const CAGRI = 'await this.configureAndroidG(webAppPath, wwwPath, appVersion);';
+  assert.strictEqual(src.split(CAGRI).length - 1, 1);
+  assert.ok(src.indexOf('await this.configureAndroidAgBilgisi(webAppPath);') < src.indexOf(CAGRI));
+  assert.ok(src.indexOf('await this.configureAndroidFullscreen(webAppPath);') < src.indexOf(CAGRI));
+  assert.match(src, /async initializeCapacitorProject\(webAppPath, appName, appVersion,/, 'appVersion kapsamda');
+  assert.match(src, /\n {8}paketSurumu,\n/, 'paket sürümü G adımına geçer');
   assert.match(src, /testCaYolu: process\.env\.EMPP_G_TEST_GUVEN_CA \|\| null/);
   assert.strictEqual((src.match(/EMPP_G_TEST_GUVEN_CA/g) || []).length, 2, 'test CA başka yoldan girmemeli');
+});
+
+test('paket sürümü (monoton taban): kur yazar, eklenti AYNI adı APK varlığından okur, G değiştiremez', async () => {
+  const p = sahteProje();
+  await g.kur(p.kok, p.www, { paketSurumu: ' 2.51.3 ' });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(p.www, g.WWW.paket), 'utf8')), { surum: '2.51.3' });
+  assert.strictEqual(g.paketDosyasi(''), '{"surum":null}\n');
+  assert.strictEqual(g.paketDosyasi(42), '{"surum":null}\n');
+  const eklenti = fs.readFileSync(path.join(__dirname, 'g-java', 'com', 'empp', 'g', 'EmppGPlugin.java'), 'utf8');
+  assert.ok(eklenti.includes(`varlikMetni("public/${g.WWW.paket}")`), 'eklenti paket dosyasını APK varlığından okur');
+  const G = require('./empp-g-istemci.js');
+  assert.strictEqual(G.kapsamSinifi(g.WWW.paket, require('../../packaging/set-kabuk')), 'platform',
+    'kök empp-* → G manifesti onu asla değiştiremez');
+  assert.strictEqual(G.paketSurumuCoz(g.paketDosyasi('2.51.3')), '2.51.3', 'yazan ve okuyan aynı biçimde');
 });

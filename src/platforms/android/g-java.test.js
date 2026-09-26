@@ -39,7 +39,7 @@ function javaDosyalari(kok) {
   return out;
 }
 
-test('G Java: EmppGKatman + EmppGRota JVM birim testleri (60+ madde) geçer', (t) => {
+test('G Java: EmppGKatman + EmppGRota JVM birim testleri (70+ madde) geçer', (t) => {
   const jdk = jdkBul();
   if (!jdk) { t.skip('JDK yok — Java birim testleri KOŞMADI'); return; }
   const cikti = fs.mkdtempSync(path.join(os.tmpdir(), 'emppg-jv-'));
@@ -55,8 +55,9 @@ test('G Java: EmppGKatman + EmppGRota JVM birim testleri (60+ madde) geçer', (t
   const k = spawnSync(path.join(jdk, 'java'), ['-cp', cikti, 'com.empp.g.EmppGTest'], { encoding: 'utf8', timeout: 120000 });
   const son = /SONUC gecti=(\d+) kaldi=(\d+)/.exec(k.stdout || '');
   assert.ok(son, `sonuç satırı yok:\n${k.stdout}\n${k.stderr}`);
+  t.diagnostic(`Java: ${son[0]}`);
   assert.strictEqual(Number(son[2]), 0, `kalan Java testi var:\n${(k.stdout || '').split('\n').filter((l) => l.startsWith('KALDI')).join('\n')}`);
-  assert.ok(Number(son[1]) >= 60, `beklenenden az Java testi koştu (${son[1]})`);
+  assert.ok(Number(son[1]) >= 70, `beklenenden az Java testi koştu (${son[1]})`);
   assert.strictEqual(k.status, 0);
 });
 

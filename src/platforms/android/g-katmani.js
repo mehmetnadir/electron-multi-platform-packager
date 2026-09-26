@@ -32,6 +32,8 @@ const WWW = Object.freeze({
   istemci: 'empp-g-istemci.js',
   kabuk: 'empp-g-kabuk.js',
   nacl: 'empp-g-nacl.js',
+  /** Paketin kendi sürümü → istemcinin MONOTON sürüm tabanı (EmppGPlugin.yapilandirma APK'dan okur). */
+  paket: 'empp-g-paket.json',
 });
 const JAVA_DIZINI = ['com', 'empp', 'g'];
 const JAVA_DOSYALARI = Object.freeze(['EmppGKatman.java', 'EmppGRota.java', 'EmppGPlugin.java']);
@@ -75,6 +77,16 @@ function wwwDosyalari(kaynaklar = {}) {
     [WWW.kabuk]: kabukSarmali(fs.readFileSync(KAYNAK.setKabuk, 'utf8')),
     [WWW.nacl]: nacl,
   };
+}
+
+/**
+ * `empp-g-paket.json` gövdesi. Kök `empp-*` olduğu için G onu ASLA değiştiremez (platform
+ * dosyası) ve eklenti onu örtüden değil APK varlığından okur. Sürüm yoksa `null` yazılır:
+ * istemci o zaman yalnız son uygulanan G'ye kıyaslar (Electron'da `package.json` sürümünün eşi).
+ */
+function paketDosyasi(paketSurumu) {
+  const s = (typeof paketSurumu === 'string' && paketSurumu.trim()) ? paketSurumu.trim() : null;
+  return JSON.stringify({ surum: s }) + '\n';
 }
 
 function javaDosyalari() {
@@ -138,7 +150,7 @@ async function mainActivityBul(dizin) {
  * Kurulum. Önce HER ŞEY bellekte hazırlanır; biri tutmazsa HİÇBİRİ yazılmaz.
  * @returns {Promise<{kuruldu:boolean, sebep:string, test:boolean}>}
  */
-async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kaynaklar = {} } = {}) {
+async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kaynaklar = {}, paketSurumu = null } = {}) {
   if (!acikMi(wwwPath)) {
     return { kuruldu: false, sebep: 'empp-set.json yok (EMPP_SET_GUNCELLEME bu iş için kapalı)', test: false };
   }
@@ -146,7 +158,7 @@ async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kay
   const ma = await mainActivityBul(path.join(main, 'java'));
   if (!ma) return { kuruldu: false, sebep: 'MainActivity.java yok', test: false };
 
-  const www = wwwDosyalari(kaynaklar);
+  const www = { ...wwwDosyalari(kaynaklar), [WWW.paket]: paketDosyasi(paketSurumu) };
   const java = javaDosyalari();
   const yeniMa = mainActivityYamasi(await fs.promises.readFile(ma, 'utf8'));
   let test = null;
@@ -180,6 +192,6 @@ async function kur(webAppPath, wwwPath, { log = () => {}, testCaYolu = null, kay
 
 module.exports = {
   WWW, JAVA_DOSYALARI, KAYIT, ROTA, TEST_AG, TEST_CA, NACL_SHA256, KAYNAK,
-  kabukSarmali, wwwDosyalari, javaDosyalari, mainActivityYamasi, testAgYapilandirmasi,
+  kabukSarmali, wwwDosyalari, paketDosyasi, javaDosyalari, mainActivityYamasi, testAgYapilandirmasi,
   manifestTestYamasi, acikMi, kur,
 };

@@ -23,7 +23,9 @@ const MOTOR_YENI = Buffer.from('/*motor 2026.9.12*/');
 
 function manifest(ek = {}) {
   return {
-    surum: 's2',
+    kanal: 'G',
+    setKimligi: '73768',
+    surum: '2.51.2',
     kabuk: [
       { yol: 'index.html', sha256: sha(INDEX), boyut: INDEX.length },
       { yol: 'config/settings.json', sha256: sha(AYAR), boyut: AYAR.length },
@@ -38,20 +40,23 @@ function manifest(ek = {}) {
 }
 
 /** Sahte EmppG köprüsü + uç. Her çağrıyı kaydeder. */
-function kur({ man = manifest(), sig, surum = 's2', yerelSurum = null, ozet = {}, set, kitap, dosyalar } = {}) {
+function kur({ man = manifest(), sig, surum = '2.51.2', surumSet, yerelSurum = null, paket, ozet = {}, set, kitap,
+  kitapHata, dosyalar } = {}) {
   const govde = Buffer.from(JSON.stringify(man));
   const uc = new Map();
   const koy = (a, b, d = 200) => uc.set(a, { d, b: b == null ? null : Buffer.from(b) });
-  if (surum !== null) koy(`${KOK}/surum.json`, JSON.stringify({ surum, uretim: '2026-09-26T00:00:00Z' }));
+  if (surum !== null) {
+    koy(`${KOK}/surum.json`, JSON.stringify({ surum, uretim: '2026-09-26T00:00:00Z', setKimligi: surumSet }));
+  }
   koy(`${KOK}/manifest.json`, govde);
   if (sig !== null) koy(`${KOK}/manifest.json.sig`, sig === undefined ? imzala(govde) : sig);
   const icerik = dosyalar || { 'index.html': INDEX, 'config/settings.json': AYAR, [`book1/${MOTOR}`]: MOTOR_YENI };
   for (const [y, b] of Object.entries(icerik)) koy(G.dosyaAdresi(KOK, y), b);
-  const kayit = { getir: [], yaz: [], kitapKur: [], uygula: [], ozetler: [] };
+  const kayit = { getir: [], yaz: [], kitapKur: [], uygula: [], ozetler: [], sira: [] };
   const yerel = {
     yapilandirma: async () => ({ metin: JSON.stringify(set || {
       setKimligi: '73768', taban: TABAN, imza: { alg: 'ed25519', acikAnahtar: ACIK },
-    }) }),
+    }), paket: paket === undefined ? undefined : JSON.stringify({ surum: paket }) }),
     durum: async () => ({ surum: yerelSurum }),
     getir: async ({ adres, tavan }) => {
       kayit.getir.push(adres);
@@ -64,13 +69,16 @@ function kur({ man = manifest(), sig, surum = 's2', yerelSurum = null, ozet = {}
     yaz: async (a) => {
       if (sha(Buffer.from(a.b64, 'base64')) !== a.sha256) throw new Error('sha256-uyusmaz');
       kayit.yaz.push(a.sha256);
+      kayit.sira.push('yaz');
       return { tamam: true };
     },
     kitapKur: async (a) => {
       kayit.kitapKur.push(a);
+      kayit.sira.push('kitapKur');
+      if (kitapHata === a.dizin) throw new Error('baglanti-koptu');
       return kitap || { klasor: `${a.dizin}-${a.sha256.slice(0, 16)}`, dosyaSayisi: 4, indexShimli: true, shimVar: true, manifestVar: true };
     },
-    uygula: async (p) => { kayit.uygula.push(p); return { surum: p.surum }; },
+    uygula: async (p) => { kayit.uygula.push(p); kayit.sira.push('uygula'); return { surum: p.surum }; },
   };
   return { yerel, kayit, govde };
 }
@@ -93,7 +101,7 @@ test('manifest YOK (404): hiçbir şey olmaz — manifest istenmez, yazılmaz, u
 });
 
 test('sürüm aynı: manifest indirilmez', async () => {
-  const { yerel, kayit } = kur({ yerelSurum: 's2' });
+  const { yerel, kayit } = kur({ yerelSurum: '2.51.2' });
   const r = await G.guncellemeyiCalistir(ortam(yerel));
   assert.strictEqual(r.durum, 'guncel');
   assert.strictEqual(kayit.getir.length, 1);
@@ -109,7 +117,7 @@ test('İMZALI güncelleme uygulanır: index + ayar + book1 motoru + book7 ekleni
   assert.deepStrictEqual(r.cikarilan, ['book3']);
   assert.strictEqual(kayit.uygula.length, 1);
   const p = kayit.uygula[0];
-  assert.strictEqual(p.surum, 's2');
+  assert.strictEqual(p.surum, '2.51.2');
   assert.deepStrictEqual(p.dosyalar.map((d) => d.yol).sort(), ['book1/' + MOTOR, 'config/settings.json', 'index.html']);
   assert.deepStrictEqual(p.kitaplar, [{ dizin: 'book7', klasor: 'book7-aaaaaaaaaaaaaaaa', sha256: 'a'.repeat(64) }]);
   assert.deepStrictEqual(p.cikarilan, ['book3']);
@@ -240,7 +248,7 @@ test('değişmeyen kabuk indirilmez; hiçbir şey değişmediyse yalnız sürüm
   assert.strictEqual(r.kabukAyni, 3);
   assert.strictEqual(kayit.yaz.length, 0);
   assert.ok(!kayit.getir.some((a) => a.includes('/dosya/')));
-  assert.deepStrictEqual(kayit.uygula[0], { surum: 's2', dosyalar: [], kitaplar: [], cikarilan: [] });
+  assert.deepStrictEqual(kayit.uygula[0], { surum: '2.51.2', dosyalar: [], kitaplar: [], cikarilan: [] });
 });
 
 test('boyut uyuşmazlığı / sha uyuşmazlığı (yerel taraf) → RET, uygulanmaz', async () => {
@@ -307,4 +315,139 @@ test('androidSayfasiMi: yalnız gerçek script etiketi sayılır', () => {
   assert.ok(G.androidSayfasiMi("<head><script defer src='./empp-android-shim.js'></script>"));
   assert.ok(!G.androidSayfasiMi('<!-- empp-android-shim.js --><head></head>'));
   assert.ok(!G.androidSayfasiMi('<head></head>'));
+});
+
+/* ------------------------------------------------------------------------------------------------
+ * ÜÇ GÜVENLİK KURALI (Electron e07bc37 ile aynı): monoton sürüm · set kimliği · ya hep ya hiç.
+ * ---------------------------------------------------------------------------------------------- */
+
+const imzali = (m) => ({ man: m, sig: imzala(Buffer.from(JSON.stringify(m))) });
+const dokunulmadi = (kayit) => kayit.yaz.length + kayit.kitapKur.length + kayit.uygula.length + kayit.ozetler.length;
+
+test('G3 sürüm yardımcıları: sayısal kıyas, biçim dışı kıyaslanmaz, en büyük, paket dosyası', () => {
+  assert.strictEqual(G.gSurumKiyasla('2.51.10', '2.51.9'), 1, 'sözlük sırası değil sayısal');
+  assert.strictEqual(G.gSurumKiyasla('2.51.4', '2.52.0'), -1);
+  assert.strictEqual(G.gSurumKiyasla('2.51.4', '2.51.4'), 0);
+  assert.strictEqual(G.gSurumKiyasla('2.51.4', 'a1b2c3'), null);
+  for (const kotu of ['1.51.4', '2.051.4', '2.51', '2.51.4.1', ' ', 'v2.51.4', '2.1234567890.1']) {
+    assert.strictEqual(G.gSurumCoz(kotu), null, kotu);
+  }
+  assert.strictEqual(G.enBuyukGSurum([null, 'e3b0c442', '2.51.9', '2.51.10', '2.50.99']), '2.51.10');
+  assert.strictEqual(G.enBuyukGSurum([null, 'e3b0c442']), null);
+  assert.strictEqual(G.paketSurumuCoz('{"surum":" 2.51.3 "}'), '2.51.3');
+  assert.strictEqual(G.paketSurumuCoz('bozuk'), null);
+  assert.strictEqual(G.paketSurumuCoz(undefined), null);
+});
+
+test('KURAL 1 monoton: surum.json kurulu sürümden büyük değil → manifest HİÇ istenmez', async () => {
+  for (const [ad, secenek] of [
+    ['uygulanan G daha yeni', { yerelSurum: '2.51.5', surum: '2.51.4' }],
+    ['paket sürümüne eşit', { paket: '2.51.2', surum: '2.51.2' }],
+    ['paket sürümünden eski', { paket: '2.52.0', surum: '2.51.9' }],
+  ]) {
+    const { yerel, kayit } = kur(secenek);
+    const r = await G.guncellemeyiCalistir(ortam(yerel));
+    assert.strictEqual(r.durum, 'guncel', ad);
+    assert.strictEqual(r.sebep, 'uzak-surum-buyuk-degil', ad);
+    assert.deepStrictEqual(kayit.getir, [`${KOK}/surum.json`], ad);
+    assert.strictEqual(dokunulmadi(kayit), 0, ad);
+  }
+});
+
+test('KURAL 1 monoton: surum.json yalan söylese de İMZALI manifest eski/eşitse RET (geri alma yok)', async () => {
+  for (const [ad, manSurum, secenek] of [
+    ['uygulanan G\'ye eşit', '2.51.3', { yerelSurum: '2.51.3' }],
+    ['uygulanan G\'den eski (eski imzalı manifestin yeniden oynatılması)', '2.51.1', { yerelSurum: '2.51.3' }],
+    ['paket sürümünden eski', '2.51.4', { paket: '2.51.5' }],
+  ]) {
+    const { yerel, kayit } = kur({ ...imzali(manifest({ surum: manSurum })), surum: '2.51.9', ...secenek });
+    const r = await G.guncellemeyiCalistir(ortam(yerel));
+    assert.strictEqual(r.durum, 'red', ad);
+    assert.strictEqual(r.sebep, 'manifest-reddedildi:surum-eski', ad);
+    assert.strictEqual(dokunulmadi(kayit), 0, ad);
+  }
+});
+
+test('KURAL 1 monoton: G3 biçimi dışı manifest sürümü (içerik-hash) → RET', async () => {
+  const { yerel, kayit } = kur({ ...imzali(manifest({ surum: 'e3b0c44298fc1c14' })), surum: 'e3b0c44298fc1c14' });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.sebep, 'manifest-reddedildi:surum-bicimi');
+  assert.strictEqual(dokunulmadi(kayit), 0);
+});
+
+test('KURAL 1 monoton: KESİN büyük kabul (2.51.10 > 2.51.9); içerik-hash paket sürümü kıyasa girmez', async () => {
+  const a = kur({ ...imzali(manifest({ surum: '2.51.10' })), surum: '2.51.10', yerelSurum: '2.51.9', paket: '2.51.2' });
+  const r1 = await G.guncellemeyiCalistir(ortam(a.yerel));
+  assert.strictEqual(r1.durum, 'guncellendi', JSON.stringify(r1));
+  assert.strictEqual(r1.kuruluSurum, '2.51.9');
+  assert.strictEqual(a.kayit.uygula[0].surum, '2.51.10');
+  const b = kur({ ...imzali(manifest({ surum: '2.0.1' })), surum: '2.0.1', paket: 'a1b2c3d4e5f6' });
+  const r2 = await G.guncellemeyiCalistir(ortam(b.yerel));
+  assert.strictEqual(r2.durum, 'guncellendi', 'paketin İLK G\'si her G3\'ü alır');
+  assert.strictEqual(r2.kuruluSurum, null);
+});
+
+test('KURAL 2 kimlik: başka setin / kimliksiz İMZALI manifesti → RET, hiçbir şeye dokunulmaz', async () => {
+  for (const [ad, ek] of [['başka set', { setKimligi: '99999' }], ['kimlik yok', { setKimligi: undefined }],
+    ['boş kimlik', { setKimligi: '' }], ['sayı ama farklı', { setKimligi: 73769 }]]) {
+    const { yerel, kayit } = kur(imzali(manifest(ek)));
+    const r = await G.guncellemeyiCalistir(ortam(yerel));
+    assert.strictEqual(r.durum, 'red', ad);
+    assert.strictEqual(r.sebep, 'manifest-reddedildi:baska-set', ad);
+    assert.strictEqual(dokunulmadi(kayit), 0, ad);
+  }
+  const s = kur(imzali(manifest({ setKimligi: 73768 })));
+  assert.strictEqual((await G.guncellemeyiCalistir(ortam(s.yerel))).durum, 'guncellendi', 'sayı biçimli aynı kimlik kabul');
+});
+
+test('KURAL 2 kimlik: kanal G değilse (K/Windows manifesti vb.) → RET', async () => {
+  for (const kanal of ['K', 'g', undefined, null]) {
+    const { yerel, kayit } = kur(imzali(manifest({ kanal })));
+    const r = await G.guncellemeyiCalistir(ortam(yerel));
+    assert.strictEqual(r.sebep, 'manifest-reddedildi:kanal-g-degil', String(kanal));
+    assert.strictEqual(dokunulmadi(kayit), 0, String(kanal));
+  }
+});
+
+test('KURAL 2 kimlik (tetik): surum.json başka seti söylüyorsa manifest HİÇ istenmez', async () => {
+  const { yerel, kayit } = kur({ surumSet: '11811' });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'atlandi');
+  assert.strictEqual(r.sebep, 'uzak-baska-set');
+  assert.deepStrictEqual(kayit.getir, [`${KOK}/surum.json`]);
+  const ayni = kur({ surumSet: '73768' });
+  assert.strictEqual((await G.guncellemeyiCalistir(ortam(ayni.yerel))).durum, 'guncellendi');
+});
+
+test('KURAL 3 ya hep ya hiç: SON kitap düşerse uygula HİÇ çağrılmaz (kabuk + ilk kitap yalnız hazırlıkta)', async () => {
+  const m = manifest();
+  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99 });
+  const { yerel, kayit } = kur({ ...imzali(m), kitapHata: 'book8' });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'atlandi');
+  assert.match(r.sebep, /^kitap-alinamadi:book8:baglanti-koptu/);
+  assert.strictEqual(kayit.yaz.length, 3, 'kabuk hazırlığa indi');
+  assert.deepStrictEqual(kayit.kitapKur.map((k) => k.dizin), ['book7', 'book8']);
+  assert.strictEqual(kayit.uygula.length, 0, 'yarım güncelleme KESİNLEŞMEZ');
+  assert.deepStrictEqual(r.eklenen, []);
+});
+
+test('KURAL 3 ya hep ya hiç: kabuk dosyası inmezse kitap kurulmaz, uygula yok', async () => {
+  const { yerel, kayit } = kur({ dosyalar: { 'index.html': INDEX, [`book1/${MOTOR}`]: MOTOR_YENI } });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.sebep, 'kabuk-indirilemedi:config/settings.json');
+  assert.strictEqual(kayit.kitapKur.length + kayit.uygula.length, 0);
+});
+
+test('KURAL 3 ya hep ya hiç: bütün hazırlık (yaz, kitapKur) TEK uygula\'dan ÖNCE; uygula tam bir kez', async () => {
+  const m = manifest();
+  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99 });
+  const { yerel, kayit } = kur(imzali(m));
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'guncellendi');
+  assert.deepStrictEqual(kayit.sira, ['yaz', 'yaz', 'yaz', 'kitapKur', 'kitapKur', 'uygula']);
+  const p = kayit.uygula[0];
+  assert.strictEqual(p.dosyalar.length, 3);
+  assert.deepStrictEqual(p.kitaplar.map((k) => k.dizin), ['book7', 'book8']);
+  assert.deepStrictEqual(p.cikarilan, ['book3']);
 });

@@ -4574,7 +4574,7 @@ if (!window.cordova) {
     // Tam ekran (immersive) — status + navigation bar'ı native gizle
     await this.configureAndroidFullscreen(webAppPath);
     await this.configureAndroidAgBilgisi(webAppPath);
-    await this.configureAndroidG(webAppPath, wwwPath);
+    await this.configureAndroidG(webAppPath, wwwPath, appVersion);
 
     // www/index.html'e viewport + fullscreen enjekte et (cap sync bunu kopyalar)
     await this.enableAndroidFullscreen(wwwPath);
@@ -4693,12 +4693,14 @@ if (!window.cordova) {
   // Fullscreen MainActivity'yi baştan yazdığı ve K9 kaydını eklediği için ONLARDAN SONRA çağrılır.
   // Build düşürülmez: kurulamazsa APK G'siz çıkar (shim eklentiyi görmez, istek atmaz) ve günlüğe
   // yazılır. `EMPP_G_TEST_GUVEN_CA` YALNIZ yerel uçtan uca sınama derlemesinde verilir.
-  async configureAndroidG(webAppPath, wwwPath) {
+  // `paketSurumu` (appVersion) → www/empp-g-paket.json: istemcinin monoton sürüm tabanı.
+  async configureAndroidG(webAppPath, wwwPath, paketSurumu = null) {
     const g = require('../platforms/android/g-katmani');
     try {
       const sonuc = await g.kur(webAppPath, wwwPath, {
         log: (s) => console.log(s),
         testCaYolu: process.env.EMPP_G_TEST_GUVEN_CA || null,
+        paketSurumu,
         kaynaklar: {
           istemci: path.join(__dirname, '../platforms/android/empp-g-istemci.js'),
           nacl: path.join(__dirname, '../platforms/android/vendor/tweetnacl-1.0.3/nacl.min.js'),

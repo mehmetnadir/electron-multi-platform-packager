@@ -116,7 +116,7 @@ public final class EmppGTest {
 
         // --- uygula: eksik hazırlık → atomik RET, tablo ve durum değişmez ---
         EmppGKatman.Plan kotuPlan = new EmppGKatman.Plan();
-        kotuPlan.surum = "s0";
+        kotuPlan.surum = "2.51.0";
         kotuPlan.dosyalar.add(new String[] {"index.html", indexSha});
         kotuPlan.dosyalar.add(new String[] {"config/settings.json", sha("olmayan".getBytes(StandardCharsets.UTF_8))});
         atar(() -> k.uygula(kotuPlan), "dosya-hazir-degil", "uygula: hazır olmayan dosya → RET");
@@ -124,13 +124,13 @@ public final class EmppGTest {
 
         // --- uygula: index ---
         EmppGKatman.Plan p1 = new EmppGKatman.Plan();
-        p1.surum = "surum-1";
+        p1.surum = "2.51.1";
         p1.dosyalar.add(new String[] {"index.html", indexSha});
         k.uygula(p1);
         File f = k.bul("/index.html");
         dogru(f != null && f.isFile() && oku(f).contains("YENI"), "uygula: /index.html örtüden");
         dogru(k.bul("/book1/x.png") == null, "uygula: örtüsüz yol APK'ya");
-        dogru(oku(new File(kok, "durum.txt")).startsWith("EMPP-G 1\nikili\tikili-1\nsurum\tsurum-1\n"), "uygula: durum.txt biçimi");
+        dogru(oku(new File(kok, "durum.txt")).startsWith("EMPP-G 1\nikili\tikili-1\nsurum\t2.51.1\n"), "uygula: durum.txt biçimi");
 
         // --- rota (Capacitor RouteProcessor) ---
         EmppGRota rota = new EmppGRota(k);
@@ -146,7 +146,7 @@ public final class EmppGTest {
 
         // --- yeniden başlatma: aynı APK → örtü korunur; APK değişti → atılır ---
         EmppGKatman k2 = new EmppGKatman(kok, "ikili-1", ag, null);
-        dogru(k2.bul("/index.html") != null && "surum-1".equals(k2.tablo().surum()), "yeniden başlatma: aynı APK → örtü korunur");
+        dogru(k2.bul("/index.html") != null && "2.51.1".equals(k2.tablo().surum()), "yeniden başlatma: aynı APK → örtü korunur");
         new File(kok, "hazirlik/depo").mkdirs();
         new FileOutputStream(new File(kok, "hazirlik/depo/yarim")).close();
         EmppGKatman k3 = new EmppGKatman(kok, "ikili-2", ag, null);
@@ -159,7 +159,7 @@ public final class EmppGTest {
         EmppGKatman b1 = new EmppGKatman(kok2, "i", ag, null);
         b1.yaz(indexSha, index);
         EmppGKatman.Plan pb = new EmppGKatman.Plan();
-        pb.surum = "s";
+        pb.surum = "2.51.1";
         pb.dosyalar.add(new String[] {"index.html", indexSha});
         b1.uygula(pb);
         Files.write(new File(kok2, "durum.txt").toPath(),
@@ -196,6 +196,8 @@ public final class EmppGTest {
         EmppGKatman.KitapSonucu ks = kk.kitapKur("book7", url, zsha, z.length, 1000);
         dogru(ks.klasor.equals("book7-" + zsha.substring(0, 16)) && ks.dosyaSayisi == 4 && ks.indexShimli && ks.shimVar && ks.manifestVar,
             "kitap: hazırlandı + Android işaretleri");
+        dogru(new File(kok3, "hazirlik/kitap/" + ks.klasor).isDirectory() && !new File(kok3, "kitap/" + ks.klasor).exists()
+            && kk.bul("/book7/index.html") == null, "kitap: kesinleşmeden YALNIZ hazırlıkta; rota görmez (ya hep ya hiç)");
         int onceki = ag3.istek;
         EmppGKatman.KitapSonucu ks2 = kk.kitapKur("book7", url, zsha, z.length, 1000);
         dogru(ks2.onbellekten && ag3.istek == onceki, "kitap: aynı arşiv ikinci kez indirilmez (önbellek)");
@@ -211,7 +213,7 @@ public final class EmppGTest {
         String msha = sha(motor);
         kk.yaz(msha, motor);
         EmppGKatman.Plan p2 = new EmppGKatman.Plan();
-        p2.surum = "surum-2";
+        p2.surum = "2.51.2";
         p2.dosyalar.add(new String[] {"book1/43e23fce2b7009474555a77.js", msha});
         p2.kitaplar.add(new String[] {"book7", ks.klasor, zsha});
         p2.cikarilan.add("book3");
@@ -234,18 +236,18 @@ public final class EmppGTest {
         byte[] motor2 = "/*motor-book7*/".getBytes(StandardCharsets.UTF_8);
         kk.yaz(sha(motor2), motor2);
         EmppGKatman.Plan p3 = new EmppGKatman.Plan();
-        p3.surum = "surum-3";
+        p3.surum = "2.51.3";
         p3.dosyalar.add(new String[] {"book7/43e23fce2b7009474555a77.js", sha(motor2)});
         kk.uygula(p3);
         dogru(oku(kk.bul("/book7/43e23fce2b7009474555a77.js")).contains("motor-book7"), "tekil motor örtüsü eklenen kitabın üstünde");
         EmppGKatman.Plan p4 = new EmppGKatman.Plan();
-        p4.surum = "surum-4";
+        p4.surum = "2.51.4";
         p4.kitaplar.add(new String[] {"book7", ks.klasor, zsha});
         p4.kitaplar.add(new String[] {"book3", ks.klasor.replace("book7", "book3"), zsha});
         atar(() -> kk.uygula(p4), "kitap-hazir-degil", "uygula: hazırlanmamış book3 → RET (atomik)");
-        dogru("surum-3".equals(kk.tablo().surum()) && kk.bul("/book3/x") == EmppGKatman.YOK, "RET sonrası önceki tablo aynen");
+        dogru("2.51.3".equals(kk.tablo().surum()) && kk.bul("/book3/x") == EmppGKatman.YOK, "RET sonrası önceki tablo aynen");
         EmppGKatman.Plan p5 = new EmppGKatman.Plan();
-        p5.surum = "surum-5";
+        p5.surum = "2.51.5";
         p5.kitaplar.add(new String[] {"book7", ks.klasor, zsha});
         kk.uygula(p5);
         File yeniden = kk.bul("/book7/43e23fce2b7009474555a77.js");
@@ -253,11 +255,32 @@ public final class EmppGTest {
             "yeniden eklenen kitabın altındaki eski tekil örtü düştü (artık arşivin kendi dosyası sorulur)");
         dogru(!new File(kok3, "depo/" + sha(motor2)).exists(), "gc: başvurulmayan depo dosyası silindi");
         EmppGKatman.Plan p6 = new EmppGKatman.Plan();
-        p6.surum = "surum-6";
+        p6.surum = "2.51.6";
         p6.cikarilan.add("book7");
         kk.uygula(p6);
         dogru(kk.bul("/book7/index.html") == EmppGKatman.YOK && !new File(kok3, "kitap/" + ks.klasor).exists(),
             "çıkarılan G kitabı: 404 + klasörü silindi");
+
+        // --- MONOTON SÜRÜM (savunma derinliği; JS atlansa da eski örtü geri gelmez) ---
+        dogru(EmppGKatman.gSurumKiyasla("2.51.10", "2.51.9") == 1 && EmppGKatman.gSurumKiyasla("2.51.4", "2.52.0") == -1
+            && EmppGKatman.gSurumKiyasla("2.51.4", "2.51.4") == 0 && EmppGKatman.gSurumKiyasla("2.51.4", "e3b0c442") == null
+            && EmppGKatman.gSurumKiyasla("2.051.4", "2.51.4") == null, "G3 kıyası sayısal; biçim dışı kıyaslanmaz");
+        EmppGKatman.Plan esit = new EmppGKatman.Plan();
+        esit.surum = "2.51.6";
+        atar(() -> kk.uygula(esit), "surum-eski", "uygula: EŞİT sürüm → RET");
+        EmppGKatman.Plan geri = new EmppGKatman.Plan();
+        geri.surum = "2.51.5";
+        geri.cikarilan.add("book1");
+        atar(() -> kk.uygula(geri), "surum-eski", "uygula: ESKİ sürüm (yeniden oynatma) → RET");
+        EmppGKatman.Plan hashSurum = new EmppGKatman.Plan();
+        hashSurum.surum = "e3b0c44298fc1c14";
+        atar(() -> kk.uygula(hashSurum), "surum-bicimi", "uygula: G3 dışı sürüm → RET");
+        dogru("2.51.6".equals(kk.tablo().surum()) && kk.bul("/book1/index.html") == null
+            && oku(new File(kok3, "durum.txt")).contains("surum\t2.51.6\n"), "sürüm RET'lerinden sonra tablo + durum.txt aynen");
+        EmppGKatman.Plan ileri = new EmppGKatman.Plan();
+        ileri.surum = "2.51.10";
+        kk.uygula(ileri);
+        dogru("2.51.10".equals(kk.tablo().surum()), "uygula: KESİN büyük (2.51.10 > 2.51.6, sayısal) kabul");
 
         // ozet: örtü tablodan, APK varlıktan, YOK → null
         EmppGKatman.Varliklar apk = new EmppGKatman.Varliklar() {

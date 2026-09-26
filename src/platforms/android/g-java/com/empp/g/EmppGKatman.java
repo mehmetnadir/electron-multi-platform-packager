@@ -45,6 +45,9 @@ import java.util.zip.ZipFile;
  *   • APK değişince (yeni kurulum/güncelleme) eski örtü ATILIR: yeni APK'nın içeriğini eski
  *     örtü gölgelemesin (`ikili` = paket güncelleme zamanı + sürüm).
  *   • Okunamayan/bozuk `durum.txt` → örtü YOK sayılır (APK içeriği); uygulama açılmaya devam eder.
+ *   • MONOTON SÜRÜM (savunma derinliği; asıl karar JS'de, Electron e07bc37 ile aynı kural):
+ *     kesinleşen sürüm G3 (`2.<panel>.<sayaç>`) olmalı ve mevcut örtünün sürümünden KESİN
+ *     büyük olmalı — köprüyü doğrudan çağıran biri de eski örtüyü geri getiremez.
  */
 public final class EmppGKatman {
 
@@ -56,6 +59,8 @@ public final class EmppGKatman {
 
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
     private static final Pattern DIZIN = Pattern.compile("^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$");
+    /** G3 sürümü — tools/g-yayin/g-surum.js ve `empp-g-istemci.js` ile AYNI desen. */
+    private static final Pattern G_SURUM = Pattern.compile("^2\\.(0|[1-9]\\d{0,8})\\.(0|[1-9]\\d{0,8})$");
     private static final int ARABELLEK = 64 * 1024;
     private static final long VARSAYILAN_TAVAN = 64L * 1024 * 1024;
 
@@ -487,6 +492,24 @@ public final class EmppGKatman {
 
     /* ---------------------------------------------------------- kesinleştirme */
 
+    /** `"2.51.4"` → {51, 4}; G3 biçimi dışındaysa `null`. */
+    static long[] gSurumCoz(String s) {
+        if (s == null) return null;
+        java.util.regex.Matcher m = G_SURUM.matcher(s.trim());
+        if (!m.matches()) return null;
+        return new long[] {Long.parseLong(m.group(1)), Long.parseLong(m.group(2))};
+    }
+
+    /** a<b → -1, a=b → 0, a>b → 1; biri G3 değilse `null` (kıyaslanamaz). JS ile aynı. */
+    public static Integer gSurumKiyasla(String a, String b) {
+        long[] x = gSurumCoz(a);
+        long[] y = gSurumCoz(b);
+        if (x == null || y == null) return null;
+        if (x[0] != y[0]) return x[0] < y[0] ? -1 : 1;
+        if (x[1] != y[1]) return x[1] < y[1] ? -1 : 1;
+        return 0;
+    }
+
     /**
      * Planı ATOMİK uygular: taşı → `durum.txt` (geçici + rename) → bellek tablosu → artık temizliği.
      * Çıkarılan dizin → rota 404 (APK'daki kopya da gizlenir); eklenen/değişen dizinin altındaki
@@ -496,7 +519,10 @@ public final class EmppGKatman {
         if (p == null || p.surum == null || p.surum.trim().isEmpty() || !alanGuvenliMi(p.surum)) {
             throw new IOException("surum-gecersiz");
         }
+        if (gSurumCoz(p.surum) == null) throw new IOException("surum-bicimi");
         Tablo eski = tablo;
+        Integer kiyas = gSurumKiyasla(p.surum, eski.surum);
+        if (kiyas != null && kiyas <= 0) throw new IOException("surum-eski:" + kisalt(eski.surum));
         Map<String, String> dosyalar = new TreeMap<>(eski.dosyalar);
         Map<String, String[]> kitaplar = new TreeMap<>(eski.kitaplar);
         Set<String> cikar = new TreeSet<>(eski.cikarilan);
