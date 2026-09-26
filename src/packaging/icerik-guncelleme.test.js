@@ -184,7 +184,8 @@ function sentinelDenetle(src) {
   const { kod, windows, macos, linux } = filesDizileri(src);
   const cagriI = kod.indexOf('icerikGuncelleme.paketeUygula(');
   const cagri = cagriI !== -1;
-  assert.ok(!windows.includes(m.ADM_ZIP_FILES_ISTISNASI), 'Windows files listesine adm-zip sızmış (kapsam dışı)');
+  // Windows'ta adm-zip node_modules istisnasıyla DEĞİL empp-vendor/ ile girer (sözleşme G1, 2026-09-26).
+  assert.ok(!windows.includes(m.ADM_ZIP_FILES_ISTISNASI), 'Windows files listesine node_modules/adm-zip istisnası sızmış');
   for (const [ad, liste] of [['macos', macos], ['linux', linux]]) {
     const var_ = liste.includes(m.ADM_ZIP_FILES_ISTISNASI);
     assert.strictEqual(var_, cagri, cagri ? `${ad}: çağrı var ama files istisnası yok` : `${ad}: istisna var ama çağrı yok`);
@@ -291,15 +292,64 @@ test('R3 — admZipKaynagi() FIRLATIRSA da (require.resolve) paketeUygula sonucu
   } finally { Module._resolveFilename = asilResolve; }
 });
 
-test('Y-C durum dosyası: başarılı pakette mac/linux etkin, Windows/Android etkin:false', async () => {
+test('Y-C durum dosyası: başarılı pakette mac/linux/WINDOWS etkin (sözleşme G1), Android etkin:false', async () => {
   const kok = paketKur();
   await m.paketeUygula(kok);
   const durum = JSON.parse(fs.readFileSync(path.join(kok, m.DURUM_ADI), 'utf8'));
-  assert.deepStrictEqual(durum.etkin, { macos: true, linux: true, windows: false, android: false });
+  assert.deepStrictEqual(durum.etkin, { macos: true, linux: true, windows: true, android: false });
   assert.strictEqual(durum.hata, null);
 });
 
 test('kapı: EMPP_ICERIK_GUNCELLEME=0 kapatır, varsayılan açık', () => {
   assert.strictEqual(m.acikMi({}), true);
   assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: '0' }), false);
+});
+
+test('G5 (2026-09-26): kanalSPaketeUygula içerik kapısından BAĞIMSIZ kanal Ş\'yi kapatır, adm-zip KOYMAZ', async () => {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'kanal-s-'));
+  const giris = 'const { app } = require("electron");\nconst checkForUpdates = async () => {\n  const AdmZip = require("adm-zip")\n}\napp.whenReady().then(() => {})\n';
+  fs.writeFileSync(path.join(kok, 'main.js'), giris);
+  fs.mkdirSync(path.join(kok, 'book1'));
+  fs.writeFileSync(path.join(kok, 'book1', 'electron.js'), giris);
+  const r = await m.kanalSPaketeUygula(kok);
+  assert.deepStrictEqual(r.kanalSAcik, []);
+  assert.deepStrictEqual(r.kanalS.map((x) => x.dosya).sort(), ['book1/electron.js', 'main.js'].map((y) => y.split('/').join(path.sep)).sort());
+  for (const d of ['main.js', path.join('book1', 'electron.js')]) {
+    assert.ok(fs.readFileSync(path.join(kok, d), 'utf8').includes(m.KANAL_S_ISARET), `${d} kapanmadı`);
+  }
+  assert.ok(!fs.existsSync(path.join(kok, m.VENDOR_DIZIN)), 'yalnız Ş kapatma adm-zip koymamalı');
+  const ikinci = await m.kanalSPaketeUygula(kok);
+  assert.ok(ikinci.kanalS.every((x) => x.sebep === 'zaten-kapali'), 'idempotent değil');
+});
+
+// ─── PLATFORM KAPSAMI (2026-09-26, Windows sözleşmesi ONAYLI — yalnız Windows) ───
+// Bayrak virgüllü platform listesi alabilir; kapı yalnız işin platformlarının HEPSİ
+// listedeyse açıktır (ortak workingPath: karışık işte mac çıktısına sızmasın).
+// Kural kaynağı: platform-kapisi.js — burada bu modülün acikMi'si uçtan uca sınanır.
+test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME=windows — windows açık, macos kapalı, karışık kapalı', () => {
+  const uyarilar = [];
+  const s = { uyar: (x) => uyarilar.push(x) };
+  const env = { EMPP_ICERIK_GUNCELLEME: 'windows' };
+  assert.strictEqual(m.acikMi(env, ['windows'], s), true, 'yalnız windows işi açık olmalı');
+  assert.strictEqual(m.acikMi(env, ['macos'], s), false, 'yalnız macos işi kapalı olmalı');
+  assert.strictEqual(m.acikMi(env, ['windows', 'macos'], s), false, 'karışık iş kapalı olmalı');
+  assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: 'windows,macos' }, ['windows', 'macos'], s), true);
+  assert.deepStrictEqual(uyarilar, []);
+});
+
+test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME eski değerler — 0 kapalı, 1 açık, tanımsız → varsayılan AÇIK', () => {
+  for (const is of [['windows'], ['macos'], ['windows', 'macos'], undefined]) {
+    assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: '0' }, is), false);
+    assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: '1' }, is), true);
+    assert.strictEqual(m.acikMi({}, is), true);
+  }
+});
+
+test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME bilinmeyen platform adı → görünür UYARI, eşleşme yok', () => {
+  const uyarilar = [];
+  const s = { uyar: (x) => uyarilar.push(x) };
+  assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: 'windows,mac' }, ['macos'], s), false);
+  assert.strictEqual(uyarilar.length, 1);
+  assert.match(uyarilar[0], /^UYARI: EMPP_ICERIK_GUNCELLEME tanınmayan platform adı: mac /);
+  assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: 'windows,mac' }, ['windows'], s), true, 'tanınan ad çalışmaya devam eder');
 });

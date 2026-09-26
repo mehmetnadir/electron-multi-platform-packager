@@ -102,6 +102,10 @@ export ELECTRON_BUILDER_CACHE="${ELECTRON_BUILDER_CACHE:-$SERIT/cache/electron-b
 export NODE_PATH="$REPO/node_modules"
 export EMPP_SET_MENU="${EMPP_SET_MENU:-1}" EMPP_SAYFA_WEBP="${EMPP_SAYFA_WEBP:-0}"
 export EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}"
+# Kapı sızıntısı (26.09): bu iki bayrak geçirilmezse paketleyici varsayılanı AÇIK okur ve Pardus
+# paketine taslak içerik/SET güncelleme modülleri girer. Varsayılan KAPALI; kapsam `windows` gibi
+# platform listesiyse linux işinde zaten kapalı kalır (src/packaging/platform-kapisi.js).
+export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" EMPP_ICERIK_GUNCELLEME="${EMPP_ICERIK_GUNCELLEME:-0}"
 log "paketleyici basliyor (job $JOB, DEB=$EMPP_LINUX_DEB) — log: $OUT/raw/packager.log"
 set +e
 ( cd "$WORKAPP" && node "$TOOLS/packager-run-yerel.js" "$REPO" "$SID" "$APP_NAME" "$VER" "$JOB" ) \

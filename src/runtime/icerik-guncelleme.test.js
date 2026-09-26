@@ -290,10 +290,26 @@ test('rendererKur idempotent; diğer modüller aynen geçer', () => {
   assert.strictEqual(o.win.require('adm-zip'), o.win.require('adm-zip'), 'sarılı sınıf önbellekli');
 });
 
-test('anaSurecKur: Windows\'ta ve kapıda (EMPP_ICERIK_GUNCELLEME=0) hiçbir şey kurulmaz', () => {
+test('anaSurecKur: kapıda (EMPP_ICERIK_GUNCELLEME=0) hiçbir şey kurulmaz', () => {
   const app = { getPath: () => '/yok', isReady: () => true, once() {} };
-  assert.strictEqual(m.anaSurecKur({ electron: { app }, kok: '/x', platform: 'win32' }).durum, 'windows-kapsam-disi');
   assert.strictEqual(m.anaSurecKur({ electron: { app }, kok: '/x', platform: 'linux', env: { EMPP_ICERIK_GUNCELLEME: '0' } }).durum, 'kapali');
+  assert.strictEqual(m.anaSurecKur({ electron: { app }, kok: '/x', platform: 'win32', env: { EMPP_ICERIK_GUNCELLEME: '0' } }).durum, 'kapali');
+});
+
+test('anaSurecKur: WINDOWS kapsamda (sözleşme G1) — WORK userData altında, örtü kurulur', () => {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-win-kok-'));
+  const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-win-ud-'));
+  let kayit = null;
+  const protocol = { interceptFileProtocol: (ad, fn) => { kayit = ad; } };
+  const app = { getPath: (k) => (k === 'userData' ? ud : '/yok'), isReady: () => true, once() {} };
+  const env = {};
+  const r = m.anaSurecKur({ electron: { app, protocol }, kok, platform: 'win32', env });
+  assert.strictEqual(r.durum, 'kuruldu');
+  assert.strictEqual(r.workKok, path.join(ud, 'work'));
+  assert.strictEqual(env.EMPP_WORK_DIR, path.join(ud, 'work'), 'renderer aynı WORK\'ü görmeli');
+  assert.strictEqual(kayit, 'file', 'file: örtüsü kurulmadı');
+  const kaynak = fs.readFileSync(require.resolve('./icerik-guncelleme.js'), 'utf8');
+  assert.ok(!kaynak.includes('windows-kapsam-disi'), 'Windows kapsam dışı dönüşü geri gelmiş');
 });
 
 test('anaSurecKur: uzlaşma pencereden ÖNCE; örtü yayıncının ÖNCEDEN kaydettiği ready dinleyicisinden de önce kurulur', () => {

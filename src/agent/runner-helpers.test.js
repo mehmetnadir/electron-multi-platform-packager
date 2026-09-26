@@ -17,6 +17,9 @@ const {
   isTransientNetworkError,
   srcVersionTuret,
   agHatasiOzeti,
+  guncellemeDosyalariniSirala,
+  guncellemeIcerikTipi,
+  tarListesiniAyristir,
 } = require('./runner-helpers');
 
 test('mapPlatform: android -> android', () => {
@@ -37,8 +40,45 @@ test('mapPlatform: pardus -> pardus (Docker + pardus-packager-build.sh dalı, 20
   assert.equal(mapPlatform(' pardus '), 'pardus');
 });
 
+// KAPI (2026-09-23, Şef/Nadir yetkisiyle): tetikleyici kararı (windows-set ayrı
+// platform mı, yoksa 'windows' teslimini mi değiştirir — windows-paketleme-sozlesmesi.md
+// "Tetikleyici — KARAR BEKLİYOR") verilmeden varsayılan AÇIK olamaz; yoksa runner'ı
+// yeniden başlatan herkes boru hattındaki windows işlerini claim edip NSIS üretir.
+test("mapPlatform: windows -> null (KAPI KAPALI, varsayılan — karar bekliyor)", () => {
+  const onceki = process.env.EMPP_RUNNER_WINDOWS;
+  delete process.env.EMPP_RUNNER_WINDOWS;
+  try {
+    assert.equal(mapPlatform('windows'), null);
+    assert.equal(mapPlatform('WINDOWS'), null);
+    assert.equal(mapPlatform(' windows '), null);
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_RUNNER_WINDOWS; else process.env.EMPP_RUNNER_WINDOWS = onceki;
+  }
+});
+
+test('mapPlatform: windows -> windows YALNIZ EMPP_RUNNER_WINDOWS=1 iken (SET güncelleme kanalının kaynağı)', () => {
+  const onceki = process.env.EMPP_RUNNER_WINDOWS;
+  process.env.EMPP_RUNNER_WINDOWS = '1';
+  try {
+    assert.equal(mapPlatform('windows'), 'windows');
+    assert.equal(mapPlatform('WINDOWS'), 'windows');
+    assert.equal(mapPlatform(' windows '), 'windows');
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_RUNNER_WINDOWS; else process.env.EMPP_RUNNER_WINDOWS = onceki;
+  }
+});
+
+test("mapPlatform: windows -> null EMPP_RUNNER_WINDOWS başka bir değerdeyken (yalnız '1' açar)", () => {
+  const onceki = process.env.EMPP_RUNNER_WINDOWS;
+  process.env.EMPP_RUNNER_WINDOWS = 'true';
+  try {
+    assert.equal(mapPlatform('windows'), null);
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_RUNNER_WINDOWS; else process.env.EMPP_RUNNER_WINDOWS = onceki;
+  }
+});
+
 test('mapPlatform: unsupported -> null', () => {
-  assert.equal(mapPlatform('windows'), null);
   assert.equal(mapPlatform('linux'), null);
   assert.equal(mapPlatform(''), null);
   assert.equal(mapPlatform(undefined), null);
@@ -119,14 +159,16 @@ test('artifactExtension', () => {
   assert.equal(artifactExtension('android'), '.apk');
   assert.equal(artifactExtension('macos'), '.dmg');
   assert.equal(artifactExtension('pardus'), '.impark');
-  assert.equal(artifactExtension('windows'), '');
+  assert.equal(artifactExtension('windows'), '.exe');
+  assert.equal(artifactExtension('linux'), ''); // gerçekten desteklenmeyen -> boş
 });
 
 test('artifactContentType', () => {
   assert.equal(artifactContentType('android'), 'application/vnd.android.package-archive');
   assert.equal(artifactContentType('macos'), 'application/x-apple-diskimage');
   assert.equal(artifactContentType('pardus'), 'application/octet-stream');
-  assert.equal(artifactContentType('windows'), 'application/octet-stream'); // bilinmeyen -> güvenli genel tip
+  assert.equal(artifactContentType('windows'), 'application/x-msdownload');
+  assert.equal(artifactContentType('linux'), 'application/octet-stream'); // bilinmeyen -> güvenli genel tip
 });
 
 test('joinUrl: single slash', () => {
@@ -151,6 +193,123 @@ test('parseNextJob publisherName tasir', () => {
   const { parseNextJob } = require('./runner-helpers');
   const j = parseNextJob(200, { bookId: '1', platform: 'mac', downloadUrl: 'https://x/a.exe', publisherName: 'YDS Publishing' });
   assert.strictEqual(j.publisherName, 'YDS Publishing');
+});
+
+// SET güncelleme kanalı (2026-09-23): claim setKimligi + guncellemeTabani tasir.
+test('parseNextJob: setKimligi + guncellemeTabani claim den gelirse tasinir', () => {
+  const { parseNextJob } = require('./runner-helpers');
+  const j = parseNextJob(200, {
+    bookId: '11811', platform: 'windows', downloadUrl: 'https://x/a.exe',
+    setKimligi: 11811, guncellemeTabani: 'https://cdn.ydspublishing.com/guncelleme',
+  });
+  assert.strictEqual(j.setKimligi, '11811'); // sayı bile gelse string e sabitlenir (kimlik, aritmetik degil)
+  assert.strictEqual(j.guncellemeTabani, 'https://cdn.ydspublishing.com/guncelleme');
+});
+
+test('parseNextJob: setKimligi/guncellemeTabani yoksa alanlar hic tanimsiz kalir (tahmin uretilmez)', () => {
+  const { parseNextJob } = require('./runner-helpers');
+  const j = parseNextJob(200, { bookId: '2', platform: 'android', downloadUrl: 'https://x/b.exe' });
+  assert.strictEqual('setKimligi' in j, false);
+  assert.strictEqual('guncellemeTabani' in j, false);
+});
+
+// ---------------------------------------------------------------------------
+// SET güncelleme kanalı — Runner parçası (3/3, 2026-09-23) saf yardımcılar.
+// ---------------------------------------------------------------------------
+
+test('guncellemeDosyalariniSirala: dosya/* -> manifest.json -> surum.json (sözleşme sırası)', () => {
+  const girdi = ['surum.json', 'dosya/assets2/logo.png', 'manifest.json', 'dosya/index.html'];
+  const sirali = guncellemeDosyalariniSirala(girdi);
+  assert.deepEqual(sirali, ['dosya/assets2/logo.png', 'dosya/index.html', 'manifest.json', 'surum.json']);
+});
+
+test('guncellemeDosyalariniSirala: surum.json HER ZAMAN son indekste durur (rastgele sıralarda)', () => {
+  // "Sıralamada surum.json'u öne alınca düşsün" mutasyon kontrolü: girdi kaç farklı
+  // sırada verilirse verilsin, sonuçta surum.json her zaman en sonda olmalı.
+  const kombinasyonlar = [
+    ['surum.json', 'manifest.json', 'dosya/a.js'],
+    ['dosya/a.js', 'surum.json', 'manifest.json'],
+    ['manifest.json', 'surum.json', 'dosya/a.js'],
+    ['dosya/b.css', 'dosya/a.js', 'manifest.json', 'surum.json'],
+  ];
+  for (const girdi of kombinasyonlar) {
+    const sirali = guncellemeDosyalariniSirala(girdi);
+    assert.strictEqual(sirali[sirali.length - 1], 'surum.json', `girdi=${JSON.stringify(girdi)}`);
+    assert.strictEqual(sirali[sirali.length - 2], 'manifest.json', `girdi=${JSON.stringify(girdi)}`);
+  }
+});
+
+test('guncellemeDosyalariniSirala: aynı kategori içinde girdi sırası korunur (kararlı sıralama)', () => {
+  const girdi = ['dosya/c.js', 'dosya/a.js', 'dosya/b.js'];
+  assert.deepEqual(guncellemeDosyalariniSirala(girdi), ['dosya/c.js', 'dosya/a.js', 'dosya/b.js']);
+});
+
+test('guncellemeDosyalariniSirala: {yol} nesneleriyle de çalışır, kimliği bozmaz', () => {
+  const girdi = [{ yol: 'surum.json', boyut: 40 }, { yol: 'dosya/a.js', boyut: 10 }];
+  const sirali = guncellemeDosyalariniSirala(girdi);
+  assert.deepEqual(sirali.map((x) => x.yol), ['dosya/a.js', 'surum.json']);
+  assert.strictEqual(sirali[0].boyut, 10);
+});
+
+test('guncellemeDosyalariniSirala: geçersiz girdi -> boş dizi (fırlamaz)', () => {
+  assert.deepEqual(guncellemeDosyalariniSirala(null), []);
+  assert.deepEqual(guncellemeDosyalariniSirala(undefined), []);
+});
+
+test('guncellemeIcerikTipi: bilinen uzantılar dogru MIME döner', () => {
+  assert.equal(guncellemeIcerikTipi('index.html'), 'text/html');
+  assert.equal(guncellemeIcerikTipi('manifest.json'), 'application/json');
+  assert.equal(guncellemeIcerikTipi('dosya/assets2/app.JS'), 'application/javascript'); // büyük/küçük harf duyarsız
+  assert.equal(guncellemeIcerikTipi('dosya/assets2/logo.png'), 'image/png');
+  assert.equal(guncellemeIcerikTipi('dosya/favicon.ico'), 'image/x-icon');
+  assert.equal(guncellemeIcerikTipi('dosya/font.woff2'), 'font/woff2');
+});
+
+test('guncellemeIcerikTipi: bilinmeyen/uzantısız -> application/octet-stream', () => {
+  assert.equal(guncellemeIcerikTipi('dosya/gizli-dosya'), 'application/octet-stream');
+  assert.equal(guncellemeIcerikTipi(''), 'application/octet-stream');
+  assert.equal(guncellemeIcerikTipi(undefined), 'application/octet-stream');
+});
+
+test('tarListesiniAyristir: set/<id>/ kökünü göreli yola indirger, dizinleri eler', () => {
+  const cikti = [
+    'set/11811/',
+    'set/11811/surum.json',
+    'set/11811/manifest.json',
+    'set/11811/dosya/',
+    'set/11811/dosya/assets2/',
+    'set/11811/dosya/assets2/logo.png',
+    'set/11811/dosya/index.html',
+  ].join('\n');
+  const sonuc = tarListesiniAyristir(cikti, '11811');
+  assert.deepEqual(sonuc, ['surum.json', 'manifest.json', 'dosya/assets2/logo.png', 'dosya/index.html']);
+});
+
+test('tarListesiniAyristir: farklı bir set kimliğinin dosyaları SESSİZCE elenir (kapsam dışı)', () => {
+  const cikti = ['set/11811/surum.json', 'set/99999/surum.json'].join('\n');
+  assert.deepEqual(tarListesiniAyristir(cikti, '11811'), ['surum.json']);
+});
+
+test('tarListesiniAyristir: yol güvenliği — .. ve mutlak yol RET edilir (varsayılan RET)', () => {
+  const cikti = [
+    'set/11811/surum.json',
+    'set/11811/dosya/../../etc/passwd',
+    'set/11811//etc/passwd',
+    '../../etc/passwd',
+  ].join('\n');
+  const sonuc = tarListesiniAyristir(cikti, '11811');
+  assert.deepEqual(sonuc, ['surum.json']);
+});
+
+test('tarListesiniAyristir: ./ öneki temizlenir, boş satırlar elenir', () => {
+  const cikti = ['./set/11811/surum.json', '', '   ', 'set/11811/manifest.json'].join('\n');
+  assert.deepEqual(tarListesiniAyristir(cikti, '11811'), ['surum.json', 'manifest.json']);
+});
+
+test('tarListesiniAyristir: setKimligi veya çıktı boşsa -> boş dizi', () => {
+  assert.deepEqual(tarListesiniAyristir('set/1/surum.json', ''), []);
+  assert.deepEqual(tarListesiniAyristir('', '11811'), []);
+  assert.deepEqual(tarListesiniAyristir(null, '11811'), []);
 });
 
 test('runner: complete-multipart 5xx için yeniden deneme var (sentinel, 2026-08-27)', () => {

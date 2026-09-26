@@ -8,8 +8,12 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
+// Yorum soyma YALNIZ satır başında başlayan blok yorumlara uygulanır (2026-09-26):
+// genel `/\*[\s\S]*?\*\//` deseni dize içindeki glob'ları (`"**/*"`, `"!**/temp/…"`)
+// yorum sanıyor, Windows files dizisinden Linux hedefine kadar KODU yutuyordu —
+// Windows listesine glob eklemek bu testi ilgisiz yere düşürdü (ölçüldü).
 const SRC = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8')
-  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\*[\s\S]*?\*\//gm, '')
   .replace(/^\s*\/\/.*$/gm, '');
 
 test('deb hedefi EMPP_LINUX_DEB=0 ile kapatılabilir (kod, yorum değil)', () => {

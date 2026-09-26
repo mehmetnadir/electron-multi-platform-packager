@@ -36,6 +36,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 
+const crypto = require('crypto');
 const kabuk = require('../src/packaging/set-kabuk');
 const kg = require('../src/runtime/kitap-guncelleyici');
 
@@ -46,7 +47,7 @@ const kg = require('../src/runtime/kitap-guncelleyici');
  * Zorunlu: `--set-koku`, `--set-kimligi`, `--cikti`. İsteğe bağlı: `--kitaplar`.
  */
 function argsAyristir(argv) {
-  const a = { setKoku: null, setKimligi: null, cikti: null, kitaplarJson: null };
+  const a = { setKoku: null, setKimligi: null, cikti: null, kitaplarJson: null, imzaAnahtari: null };
   const liste = Array.isArray(argv) ? argv : [];
   for (let i = 0; i < liste.length; i++) {
     const bayrak = liste[i];
@@ -60,6 +61,7 @@ function argsAyristir(argv) {
     else if (bayrak === '--set-kimligi') a.setKimligi = degerAl();
     else if (bayrak === '--cikti') a.cikti = degerAl();
     else if (bayrak === '--kitaplar') a.kitaplarJson = degerAl();
+    else if (bayrak === '--imza-anahtari') a.imzaAnahtari = degerAl();
     else throw new Error(`bilinmeyen argüman: ${bayrak}`);
   }
   if (!a.setKoku) throw new Error('--set-koku zorunlu');
@@ -199,13 +201,38 @@ function surumHesapla(kabukGirdileri) {
   return kg.sha256(siraliMetin);
 }
 
+/* ------------------------------------------------------ imza (sözleşme G4) */
+
+/**
+ * ed25519 ÖZEL anahtarını PEM (PKCS#8) dosyasından okur. Anahtarın içeriği hiçbir
+ * günlüğe/çıktıya yazılmaz; yalnız türü doğrulanır.
+ * @returns {import('crypto').KeyObject}
+ */
+function imzaAnahtariOku(yol) {
+  const k = crypto.createPrivateKey(require('fs').readFileSync(String(yol)));
+  if (k.asymmetricKeyType !== kg.IMZA_ALG) {
+    throw new Error(`imza anahtarı ${kg.IMZA_ALG} değil (${k.asymmetricKeyType})`);
+  }
+  return k;
+}
+
+/** Manifest baytlarını imzalar; base64 imza döner. Kendi açık anahtarıyla hemen doğrular. */
+function manifestImzala(govde, ozelAnahtar) {
+  const imza = crypto.sign(null, Buffer.from(govde), ozelAnahtar).toString('base64');
+  const acik = crypto.createPublicKey(ozelAnahtar).export({ type: 'spki', format: 'der' }).toString('base64');
+  if (!kg.manifestImzasiGecerliMi(govde, imza, acik)) throw new Error('imza öz-doğrulaması tutmadı');
+  return imza;
+}
+
 /* --------------------------------------------------------------------- çıktı */
 
 /**
  * `<cikti>/set/<setKimligi>/{surum.json,manifest.json,dosya/<yol>...}` yazar.
  * `simdiIso` test edilebilirlik için enjekte edilir (varsayılan gerçek saat).
  */
-async function ciktiyaYaz({ cikti, setKimligi, setKoku, kabukGirdileri, kitaplar, surum, simdiIso }) {
+async function ciktiyaYaz({
+  cikti, setKimligi, setKoku, kabukGirdileri, kitaplar, surum, simdiIso, imzaAnahtari,
+}) {
   const kimlikMetni = String(setKimligi);
   const setDizini = path.join(path.resolve(String(cikti)), 'set', kimlikMetni);
   await fs.mkdir(setDizini, { recursive: true });
@@ -215,7 +242,15 @@ async function ciktiyaYaz({ cikti, setKimligi, setKoku, kabukGirdileri, kitaplar
   await fs.writeFile(path.join(setDizini, 'surum.json'), JSON.stringify(surumJson));
 
   const manifest = { surum, kabuk: kabukGirdileri, kitaplar };
-  await fs.writeFile(path.join(setDizini, 'manifest.json'), JSON.stringify(manifest));
+  const manifestGovde = Buffer.from(JSON.stringify(manifest), 'utf8');
+  await fs.writeFile(path.join(setDizini, 'manifest.json'), manifestGovde);
+  // G4: imza manifestin YAZILAN baytları üzerinde; tüketici imzasız manifesti reddeder.
+  let imzali = false;
+  if (imzaAnahtari) {
+    await fs.writeFile(path.join(setDizini, 'manifest.json' + kg.IMZA_UZANTI),
+      manifestImzala(manifestGovde, imzaAnahtari));
+    imzali = true;
+  }
 
   const kokMutlak = path.resolve(String(setKoku));
   const dosyaKoku = path.join(setDizini, 'dosya');
@@ -226,7 +261,7 @@ async function ciktiyaYaz({ cikti, setKimligi, setKoku, kabukGirdileri, kitaplar
     await fs.copyFile(kaynak, hedef);
   }
 
-  return { setDizini, surumJson, manifest };
+  return { setDizini, surumJson, manifest, imzali };
 }
 
 /* ----------------------------------------------------------------------- ana */
@@ -240,15 +275,21 @@ async function main(argv, { gunluk } = {}) {
   const kabukGirdileri = await kabukGirdileriHesapla(a.setKoku, kabukYollari);
   const { kitaplar, reddedilen } = kitaplariAyristir(a.kitaplarJson, yaz);
   const surum = surumHesapla(kabukGirdileri);
+  const imzaAnahtari = a.imzaAnahtari ? imzaAnahtariOku(a.imzaAnahtari) : null;
 
-  const { setDizini } = await ciktiyaYaz({
+  const { setDizini, imzali } = await ciktiyaYaz({
     cikti: a.cikti,
     setKimligi: a.setKimligi,
     setKoku: a.setKoku,
     kabukGirdileri,
     kitaplar,
     surum,
+    imzaAnahtari,
   });
+  if (!imzali) {
+    yaz('[uyari] manifest İMZASIZ üretildi (--imza-anahtari yok) — sözleşme G4 gereği paketler '
+      + 'bu manifesti REDDEDER');
+  }
 
   if (kapsamDisi.length) {
     yaz(`[uyari] kapsam dışı kök dizin (kabuk/kitap/artefakt değil, hiç kopyalanmadı): `
@@ -265,6 +306,7 @@ async function main(argv, { gunluk } = {}) {
     kitapSayisi: kitaplar.length,
     kitapReddedilen: reddedilen,
     kapsamDisiDallar: kapsamDisi,
+    imzali,
   };
 }
 
@@ -285,5 +327,7 @@ module.exports = {
   kitaplariAyristir,
   surumHesapla,
   ciktiyaYaz,
+  imzaAnahtariOku,
+  manifestImzala,
   main,
 };

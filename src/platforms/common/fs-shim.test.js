@@ -49,7 +49,7 @@ test('install: window.require yoksa (web/Capacitor) null; varsa fs sarılır, di
   const prevEnv = process.env.EMPP_WORK_DIR; process.env.EMPP_WORK_DIR = path.join(os.tmpdir(), 'empp-w');
   const shim = install(win);
   process.env.EMPP_WORK_DIR = prevEnv;
-  if (process.platform === 'win32') { assert.strictEqual(shim, null); return; }
+  // 2026-09-26 (sözleşme G1/G2): shim Windows'ta da kurulur — win32 istisnası kalktı.
   assert.ok(shim && shim.__empp.WORK.endsWith('empp-w'));
   assert.strictEqual(win.require('fs'), shim);
   assert.strictEqual(win.require('path'), path);
@@ -195,4 +195,76 @@ test('fetch: work\'te varsa oradan servis, yoksa gerçek fetch (anahtar deposu I
   const r3 = await win.fetch('https://sorucoz.tv/x'); assert.strictEqual(r3.real, true);
   assert.deepStrictEqual(calls, ['assets/book1/data/BookContent.xml', 'https://sorucoz.tv/x']);
   assert.strictEqual(workPathForUrl('file://' + base + '/classlibraries/ImWin32.dll', path, fs, work, base), path.join(work, 'classlibraries/ImWin32.dll'));
+});
+
+// ---------------------------------------------------------------------------
+// WINDOWS (2026-09-26, Windows paketleme sözleşmesi G1/G2) — shim Windows'ta ETKİN.
+// Windows yolları `path.win32` + sahte fs ile ölçülür (Mac'te gerçek C:\ yok).
+// ---------------------------------------------------------------------------
+function winFs(varOlan = []) {
+  const kume = new Set(varOlan.map((y) => y.toLowerCase()));
+  return {
+    existsSync: (y) => kume.has(String(y).toLowerCase()),
+    statSync: () => ({ isFile: () => true }),
+    mkdirSync: () => {},
+  };
+}
+
+test('WINDOWS rel: BASE içi sürücü harfli yol göreli olur, WORK\'e yönlenir', () => {
+  const BASE = 'C:\\Users\\ogr\\AppData\\Local\\Programs\\kitap\\resources\\app\\book1';
+  const WORK = 'C:\\Users\\ogr\\AppData\\Roaming\\kitap\\work\\book1';
+  const R = makeResolver(path.win32, winFs(), WORK, BASE);
+  assert.strictEqual(R.rel(BASE + '\\classlibraries\\ImWin32.dll'), 'classlibraries\\ImWin32.dll');
+  assert.strictEqual(R.toWork(BASE + '\\temp\\data\\storage.im'),
+    WORK + '\\temp\\data\\storage.im');
+  // Harf büyüklüğü farkı Windows'ta aynı yoldur.
+  assert.strictEqual(R.rel(BASE.toUpperCase() + '\\imKeys.dll'), 'imKeys.dll');
+});
+
+test('WINDOWS rel: BASE/WORK dışı sürücü harfli ve UNC yol GERÇEK sistem yoludur — dokunulmaz', () => {
+  const BASE = 'C:\\P\\app\\book1';
+  const WORK = 'C:\\U\\work\\book1';
+  const R = makeResolver(path.win32, winFs(), WORK, BASE);
+  assert.strictEqual(R.rel('C:\\Users\\ogr\\Desktop\\a.pdf'), null, 'masaüstü dosyası WORK\'e kaçmamalı');
+  assert.strictEqual(R.rel('D:\\yedek\\x.txt'), null, 'başka sürücü');
+  assert.strictEqual(R.rel('\\\\sunucu\\paylasim\\x.txt'), null, 'UNC');
+  assert.strictEqual(R.toWork('C:\\Users\\ogr\\Desktop\\a.pdf'), 'C:\\Users\\ogr\\Desktop\\a.pdf');
+});
+
+test('WINDOWS rel: sürücüsüz kök-mutlak sahte yol (\\classlibraries\\x) paket-göreli sayılır', () => {
+  const R = makeResolver(path.win32, winFs(), 'C:\\U\\work', 'C:\\P\\app');
+  assert.strictEqual(R.rel('/classlibraries/ImWin32.dll'), 'classlibraries/ImWin32.dll');
+  assert.strictEqual(R.rel('\\temp\\data\\storage.im'), 'temp\\data\\storage.im');
+  assert.strictEqual(R.rel('.\\temp\\a.txt'), 'temp\\a.txt');
+});
+
+test('WINDOWS workPathForUrl: file:///C:/… adresi BASE\'e göre çözülür, WORK kopyası servis edilir', () => {
+  const BASE = 'C:\\P\\app\\book1';
+  const WORK = 'C:\\U\\work\\book1';
+  const hedef = WORK + '\\classlibraries\\ImWin32.dll';
+  const f = winFs([hedef]);
+  assert.strictEqual(
+    workPathForUrl('file:///C:/P/app/book1/classlibraries/ImWin32.dll', path.win32, f, WORK, BASE), hedef);
+  assert.strictEqual(
+    workPathForUrl('file:///C:/P/app/book1/yok.txt', path.win32, f, WORK, BASE), null);
+  assert.strictEqual(
+    workPathForUrl('file:///D:/baska/classlibraries/ImWin32.dll', path.win32, f, WORK, BASE), null);
+});
+
+test('WINDOWS install: win32 sürecinde shim KURULUR, WORK = EMPP_WORK_DIR/<alt-kitap> (G1/G2)', () => {
+  const kaynak = fs.readFileSync(require.resolve('./fs-shim.js'), 'utf8');
+  assert.ok(!/platform\s*===\s*'win32'\)\s*return null/.test(kaynak), 'win32 erken dönüşü geri gelmiş');
+  assert.ok(kaynak.includes('EMPP_FS_SHIM_WINDOWS_ETKIN'), 'kapının aradığı işaret yok');
+  const BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-win-base-'));
+  const workKok = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-win-work-'));
+  const mod = { exports: {} };
+  const proc = { platform: 'win32', env: { EMPP_WORK_DIR: workKok } };
+  new Function('module', 'exports', 'require', '__dirname', 'process', kaynak)(mod, mod.exports, require, BASE, proc);
+  const win = { require: (n) => require(n), __emppSubBook: 'book2' };
+  const shim = mod.exports.install(win);
+  assert.ok(shim, 'win32\'de shim null döndü');
+  assert.strictEqual(shim.__empp.WORK, path.join(workKok, 'book2'));
+  win.require('fs').writeFileSync(path.join(BASE, 'temp', 'data', 'storage.im'), 'veri');
+  assert.ok(fs.existsSync(path.join(workKok, 'book2', 'temp', 'data', 'storage.im')), 'yazma WORK\'e gitmedi');
+  assert.ok(!fs.existsSync(path.join(BASE, 'temp', 'data', 'storage.im')), 'kurulum dizinine yazıldı');
 });

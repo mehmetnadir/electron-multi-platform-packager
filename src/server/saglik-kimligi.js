@@ -16,8 +16,9 @@
  * yanlış yeşil, bu arızanın ta kendisiydi.
  *
  * BİREBİR KAYNAK (drift'i önlemek için kopya mantık değil, doğrudan çağrı):
- *   - sayfaWebp  → src/packaging/sayfa-webp.js       `acikMi()`
- *   - setGuncelleme → src/packaging/guncelleyici-enjekte.js `acikMi()`
+ *   - sayfaWebp, setGuncelleme, icerikGuncelleme → src/packaging/platform-kapisi.js
+ *                   `kapiDurumu()` (sayfa-webp / guncelleyici-enjekte / icerik-guncelleme
+ *                   `acikMi()`'lerinin kullandığı AYNI çözücü)
  *   - surumNormallestir → src/agent/surum-normallestir.js `acikMi()`
  *   - yama       → src/packaging/yama-katmani.js      `acikMi()`
  *   - windowsAsarsiz → src/packaging/windows-asarsiz.js `acikMi()`
@@ -36,36 +37,47 @@
  * modülün var olma sebebi olan arızanın (2026-09-20 kaçak paketleyici) tıpatıp
  * aynısı. Kapı listesi, üretim davranışını değiştiren HER bayrağı taşımalıdır.
  *
+ * PLATFORM KAPSAMI (2026-09-26, Windows sözleşmesi ONAYLI): `sayfaWebp`, `setGuncelleme` ve
+ * `icerikGuncelleme` bayrakları virgüllü platform listesi alabilir (`EMPP_SET_GUNCELLEME=windows`).
+ * Bu üçünün gösterimi `src/packaging/platform-kapisi.js` `kapiDurumu()` üzerinden — kararı
+ * veren `kapiAcikMi()` ile AYNI çözücü: `0`/`1`/tanımsız → boolean (eski gösterim aynen),
+ * kapsamlı değer → kanonik sıralı platform dizgesi (`"windows"`, `"windows,macos"`), tanınan
+ * ad yoksa `false`. Dizgede yalnız sabit platform adları bulunur — ham değer taşınmaz.
+ * `icerikGuncelleme` bu listede YOKTU (üretim davranışını değiştiren kapı — kör nokta).
+ *
  * BOZARSAN: `saglik-kimligi.test.js` kırılır. O dosyalardaki koşul DEĞİŞİRSE burası da
  * (setMenu/pardusKabul için) elle güncellenmeli — aksi halde sağlık ucu YALAN söyler.
  */
 
-const { acikMi: sayfaWebpAcikMi } = require('../packaging/sayfa-webp');
-const { acikMi: setGuncellemeAcikMi } = require('../packaging/guncelleyici-enjekte');
+const { kapiDurumu } = require('../packaging/platform-kapisi');
 const { acikMi: surumNormallestirAcikMi } = require('../agent/surum-normallestir');
 const { acikMi: yamaAcikMi } = require('../packaging/yama-katmani');
 const { acikMi: windowsAsarsizAcikMi } = require('../packaging/windows-asarsiz');
 
 /**
  * Bir sürecin ortam değişkenlerinden üretim-davranışı kapılarının açık/kapalı
- * durumunu okur. Dönen nesne YALNIZ boolean taşır — ham env değeri (örn. hangi
- * kalite/dizin/anahtar) asla dışarı taşınmaz.
+ * durumunu okur. Dönen nesne boolean taşır; yalnız platform kapsamlı üç kapı
+ * (sayfaWebp, setGuncelleme, icerikGuncelleme) kapsamlı değerde kanonik platform dizgesi
+ * (`"windows"`) taşır. Ham env değeri (örn. hangi kalite/dizin/anahtar) asla dışarı taşınmaz.
  *
  * @param {NodeJS.ProcessEnv|Object} env
- * @returns {{sayfaWebp: boolean, setMenu: boolean, pardusKabul: boolean,
- *            surumNormallestir: boolean, yama: boolean, setGuncelleme: boolean,
- *            windowsAsarsiz: boolean}}
+ * @returns {{sayfaWebp: boolean|string, setMenu: boolean, pardusKabul: boolean,
+ *            surumNormallestir: boolean, yama: boolean, setGuncelleme: boolean|string,
+ *            icerikGuncelleme: boolean|string, windowsAsarsiz: boolean}}
  */
 function kapilariOku(env) {
   const e = (env && typeof env === 'object') ? env : {};
   return {
-    sayfaWebp: sayfaWebpAcikMi(e) === true,
+    // Varsayılan KAPALI — `sayfa-webp.js` acikMi ile AYNI çözücü (platform-kapisi).
+    sayfaWebp: kapiDurumu('EMPP_SAYFA_WEBP', e, false),
     setMenu: e.EMPP_SET_MENU === '1',
     pardusKabul: e.EMPP_PARDUS_KABUL === '1',
     surumNormallestir: surumNormallestirAcikMi(e) === true,
     yama: yamaAcikMi(e) === true,
-    // Varsayılan AÇIK ('0' kapatır) — `guncelleyici-enjekte.js` ile BİREBİR.
-    setGuncelleme: setGuncellemeAcikMi(e) === true,
+    // Varsayılan AÇIK ('0' kapatır) — `guncelleyici-enjekte.js` ile AYNI çözücü.
+    setGuncelleme: kapiDurumu('EMPP_SET_GUNCELLEME', e, true),
+    // Varsayılan AÇIK ('0' kapatır) — `icerik-guncelleme.js` ile AYNI çözücü.
+    icerikGuncelleme: kapiDurumu('EMPP_ICERIK_GUNCELLEME', e, true),
     // Varsayılan AÇIK ('0' kapatır) — Windows NSIS paketinde `asar` kapalı mı?
     // PAKET DÜZENİNİ değiştirir (içerik `resources/app.asar` yerine `resources/app/`
     // altında düz dosya olarak durur), yani üretim davranışı kapısıdır: bu bayrağı

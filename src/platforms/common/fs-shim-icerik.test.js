@@ -62,11 +62,12 @@ test('modül pakette VARSA: adm-zip sarılır, fs korumalı; WORK alt-kitap öne
   assert.ok(fs.existsSync(path.join(o.workKok, 'book2', 'temp', 'a.txt')));
 });
 
-test('Windows: ne fs-shim ne içerik kancası kurulur (kapsam dışı — review #4)', () => {
+test('Windows (sözleşme G1, 2026-09-26): fs-shim VE içerik kancası kurulur — K userData WORK\'e açılır', () => {
   const o = ortam({ modulVar: true, platform: 'win32' });
-  assert.strictEqual(o.win.__emppFsShim, undefined);
-  assert.strictEqual(o.win.__emppIcerik, undefined);
-  assert.strictEqual(o.win.require('adm-zip'), require('adm-zip'), 'adm-zip sarılmadı');
+  assert.ok(o.win.__emppFsShim, 'win32\'de fs-shim kurulmadı');
+  assert.ok(o.win.__emppIcerik, 'win32\'de içerik kancası kurulmadı');
+  assert.strictEqual(o.win.__emppIcerik.WORK, path.join(o.workKok, 'book2'));
+  assert.strictEqual(o.win.require('adm-zip').__empp, true, 'adm-zip sarılmadı');
 });
 
 test('REGRESYON 73768: adm-zip paketin empp-vendor dizininden çözülür (node_modules yokken bile)', () => {

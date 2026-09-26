@@ -28,12 +28,15 @@ const paketManifesti = require('./paket-manifesti');
 const motorSurumu = require('./motor-surumu');
 const okuyucuKabugu = require('./okuyucu-kabugu');
 const setKimligi = require('./set-kimligi');
+const guncellemePaketi = require('./guncelleme-paketi');
 const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
 const icerikGuncelleme = require('./icerik-guncelleme');
 const windowsMimari = require('./windows-mimari');
 const windowsAsarsiz = require('./windows-asarsiz');
 const ikonSaydamlik = require('./ikon-saydamlik');
 const harfKapisi = require('./harf-kapisi');
+const nsisKurulum = require('./nsis-kurulum');
+const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
 
 class PackagingService {
@@ -565,7 +568,11 @@ MimeType=application/x-electron;
       // Motor uzantıyı sabitliyor ama Chromium <img> için İÇERİĞE bakar (ölçüldü).
       // KAPI VARSAYILAN KAPALI (`EMPP_SAYFA_WEBP=1`) — ProBook kabul kapısından
       // (sayfa + büyüteç + canvas yolu) geçmeden üretimde açılmaz.
-      if (sayfaWebp.acikMi()) {
+      // PLATFORM KAPSAMI (2026-09-26): bu kapı ve aşağıdaki SET/içerik kapıları işin
+      // `platforms` dizisini alır — `EMPP_SAYFA_WEBP=windows` yalnız TÜM platformları
+      // listede olan işte açar (ortak workingPath; karışık işte mac'e sızmasın).
+      // Kural: src/packaging/platform-kapisi.js.
+      if (sayfaWebp.acikMi(process.env, platforms)) {
         try {
           await sayfaWebp.klasoruDonustur(workingPath, { log: (s) => console.log(s) });
         } catch (webpError) {
@@ -777,7 +784,8 @@ MimeType=application/x-electron;
       // "sebep" ile YİNE yazılır (sessizce düşmesi ölçümü imkânsız kılardı).
       // electron-builder ÇAĞRILMADAN ÖNCE, tüm yamalardan sonra koşar ki envanter
       // ağacın son hâlini yansıtsın.
-      if (setKimligi.acikMi()) {
+      let setGuncellemeKimligi = null;
+      if (setKimligi.acikMi(process.env, platforms)) {
         try {
           const setSonuc = await setKimligi.paketeYaz(workingPath, {
             log: (satir) => console.log(satir),
@@ -785,13 +793,50 @@ MimeType=application/x-electron;
             guncellemeTabani: jobInfo.guncellemeTabani
               || (packageOptions && packageOptions.guncellemeTabani) || null,
             sebep: jobInfo.setKimligiSebebi || null,
+            // G4 (2026-09-26): manifest imzasını doğrulayacak ed25519 AÇIK anahtar
+            // (SPKI DER base64). Yoksa EMPP_GUNCELLEME_ACIK_ANAHTAR; o da yoksa kanal
+            // çalışma anında KAPALI kalır (imzasız manifest kabul edilmez).
+            imzaAcikAnahtari: jobInfo.guncellemeAcikAnahtari
+              || (packageOptions && packageOptions.guncellemeAcikAnahtari) || null,
           });
           const sh = setSonuc.harita;
+          setGuncellemeKimligi = sh.setKimligi || null;
           console.log(`🆔 SET kimliği: ${sh.setKimligi || 'YOK'} (${sh.setKimligiKaynagi}), `
             + `${sh.kabukDosyaSayisi} kabuk dosyası, ${sh.kitapSayisi} kitap üye`);
         } catch (setKimlikError) {
           console.warn('⚠️ SET kimliği yazılamadı (paketleme devam ediyor):',
             setKimlikError.message);
+        }
+      }
+
+      // SET GÜNCELLEME PAKETİ (2026-09-23, sözleşme §Sunucu tarafı — TASARIM) —
+      // KAPI VARSAYILAN AÇIK (`EMPP_SET_GUNCELLEME=0` kapatır, setKimligi.paketeYaz
+      // ile AYNI kapı). `empp-set.json`'la AYNI ANDA koşar (envanterin gördüğü ağaç
+      // ile manifestin gördüğü ağaç birebir aynı olsun) — yani TAM BURADA,
+      // setKimligi.paketeYaz'ın hemen ardından. Hata build'i DÜŞÜRMEZ; sonuca
+      // `guncellemePaketi: {hata}` yazılır (sessiz yutma yok, görünür).
+      // `src/agent/runner.js` (parça 3) bu çıktıyı indirip R2'ye yükler — o dosya
+      // BAŞKA AJANIN İŞİDİR, burada değiştirilmez.
+      let guncellemePaketiSonucu = null;
+      if (guncellemePaketi.acikMi(process.env, platforms) && setGuncellemeKimligi) {
+        try {
+          const gp = await guncellemePaketi.paketeUret(workingPath, {
+            log: (satir) => console.log(satir),
+            setKimligi: setGuncellemeKimligi,
+            jobId,
+            // G4: ÖZEL anahtar dosyasının YOLU (içerik asla istekte taşınmaz);
+            // verilmezse EMPP_GUNCELLEME_IMZA_ANAHTARI.
+            imzaAnahtari: jobInfo.guncellemeImzaAnahtariYolu || null,
+          });
+          guncellemePaketiSonucu = gp;
+          if (!gp.atlandi) {
+            console.log(`📦 Güncelleme paketi: ${gp.kabukDosyaSayisi} kabuk dosyası, `
+              + `${gp.boyut} bayt (${gp.tarYolu})`);
+          }
+        } catch (guncellemePaketiError) {
+          console.warn('⚠️ Güncelleme paketi üretilemedi (paketleme devam ediyor):',
+            guncellemePaketiError.message);
+          guncellemePaketiSonucu = { hata: guncellemePaketiError.message };
         }
       }
 
@@ -805,7 +850,7 @@ MimeType=application/x-electron;
       // prepareElectronFiles'tan ÖNCE (o adım electron.js'i main.js olarak
       // kopyalar; kopya da yamalı doğsun — güncelleme ötelemesiyle aynı gerekçe).
       // ATOMİK: `app.whenReady()` çapası olmayan dosyaya ne yama ne modül konur.
-      if (guncelleyiciEnjekte.acikMi()) {
+      if (guncelleyiciEnjekte.acikMi(process.env, platforms)) {
         try {
           const enjekte = await guncelleyiciEnjekte.paketeUygula(workingPath, {
             log: (satir) => console.log(satir),
@@ -835,9 +880,11 @@ MimeType=application/x-electron;
       // kanalını (Ş) kapatır — kapatamazsa adm-zip KOYMAZ —, adm-zip'i node_modules +
       // dependencies'e, çalışma anı modülünü (WORK'e geçici açma/doğrulama, file: örtüsü,
       // menü uzlaşması) pakete ekler. prepareElectronFiles'tan SONRA: package.json/main.js hazır.
-      // mac/linux `files`'taki "node_modules/adm-zip" istisnası bununla eştir; Windows KAPSAM
-      // DIŞI (istisna yok → adm-zip Windows paketine girmez). Sentinel: icerik-guncelleme.test.js.
-      if (icerikGuncelleme.acikMi()) {
+      // mac/linux `files`'taki "node_modules/adm-zip" istisnası bununla eştir. WINDOWS KAPSAMDA
+      // (2026-09-26, sözleşme G1): adm-zip Windows'ta `node_modules` dışlamasına takılmayan
+      // `empp-vendor/` yolundan gelir, fs-shim Windows'ta da kurulur. Sentinel:
+      // icerik-guncelleme.test.js.
+      if (icerikGuncelleme.acikMi(process.env, platforms)) {
         try {
           const icerik = await icerikGuncelleme.paketeUygula(workingPath, {
             log: (satir) => console.log(satir),
@@ -848,6 +895,32 @@ MimeType=application/x-electron;
         } catch (icerikHatasi) {
           console.warn('⚠️ İçerik güncelleme enjekte edilemedi (paketleme devam ediyor):',
             icerikHatasi.message);
+        }
+      } else if (platforms.includes('windows')) {
+        // KANAL Ş WINDOWS'TA DAİMA KAPALI (2026-09-26, sözleşme G5): K kapısı kapatılsa
+        // bile yayıncının kabuk kanalı açık kalmasın — açık Ş, kurulum dizinindeki
+        // main.js'i require patlamasıyla bozuyor ve setAppVersion version.txt'yi
+        // değiştirip sürüm bilgisini yalanlıyordu.
+        try {
+          const ks = await icerikGuncelleme.kanalSPaketeUygula(workingPath, {
+            log: (satir) => console.log(satir),
+          });
+          if (ks.kanalSAcik.length) console.warn(`⚠️ Kanal Ş kapatılamadı: ${ks.kanalSAcik.join(', ')}`);
+        } catch (ksHatasi) {
+          console.warn('⚠️ Kanal Ş kapatılamadı (paketleme devam ediyor):', ksHatasi.message);
+        }
+      }
+
+      // AÇILIŞ ZAMANLAMA + İMPARK DEVRALMA (2026-09-26, Windows sözleşmesi madde 6 + G6).
+      // Ana süreç dosyasının EN BAŞINA ölçüm kancası; aynı kitabın İmpark kurulumunu
+      // (C:\DijiTap\<vhost>\<ad>) kimlik birebir eşleşirse devralıp kaldıran modül.
+      // Yalnız Windows hedefinde; kapılar EMPP_ACILIS_ZAMANLAMA=0 / EMPP_IMPARK_KALDIR=0.
+      if (platforms.includes('windows') && acilisZamanlama.acikMi()) {
+        try {
+          await acilisZamanlama.paketeUygula(workingPath, { log: (satir) => console.log(satir) });
+        } catch (zamanlamaHatasi) {
+          console.warn('⚠️ Açılış zamanlama eklenemedi (paketleme devam ediyor):',
+            zamanlamaHatasi.message);
         }
       }
 
@@ -981,6 +1054,10 @@ MimeType=application/x-electron;
             progress: Math.round(((i + 1) / totalPlatforms) * 100)
           });
         }
+      }
+
+      if (guncellemePaketiSonucu) {
+        results.guncellemePaketi = guncellemePaketiSonucu;
       }
 
       return results;
@@ -2111,6 +2188,10 @@ function closeSplashScreen() {
       // paketin İÇİNDEN değil; `build/` dışlanmış halde gerçek bir NSIS Setup.exe
       // üretildi ve `resources/app/build` oluşmadı.
       //
+      // `**/temp/data/storage.im` DIŞLAMASI (2026-09-26, Windows sözleşmesi G2): yayıncının
+      // KENDİ makinesindeki kullanıcı verisi (bookN/temp/data/storage.im) kaynak build'de
+      // duruyordu ve her kuruluma taşınıyordu. Motor dosya yoksa `saveStorage({})` ile
+      // kendisi oluşturuyor (kaynakta okundu) — fs-shim bunu userData/work'e yazar.
       // BU DİZİ MAKİNE-OKUNUR KALMALI: `windows-asarsiz.test.js` B3d desenleri buradan
       // okuyup electron-builder'ın KENDİ eleyicisine veriyor. Araya yorum satırı koyma.
       files: [
@@ -2118,7 +2199,8 @@ function closeSplashScreen() {
         "!node_modules",
         "!temp",
         "!uploads",
-        "!build"
+        "!build",
+        "!**/temp/data/storage.im"
       ],
       // asar KAPALI — YALNIZ WINDOWS (2026-09-21, ölçümle). Gerekçe + geri dönüş
       // kapısı (EMPP_WINDOWS_ASARSIZ=0) tek yerde: src/packaging/windows-asarsiz.js.
@@ -2229,8 +2311,13 @@ function closeSplashScreen() {
       files = await fs.readdir(outputPath);
     }
     
-    // Eğer output path'te yoksa, temp dizinine bak
-    if (files.length === 0) {
+    // Eğer output path'te yoksa, temp dizinine bak.
+    // .exe'YE BAKILIR, "dizin boş mu"ya DEĞİL (2026-09-26, ölçüldü): SET güncelleme paketi
+    // (guncelleme-paketi.js) varsayılan olarak `temp/<job>/windows/guncelleme/` yazar; göreli
+    // tempPath'te electron-builder exe'yi `app/temp/<job>/windows/`e koyar. Eski koşul
+    // `files.length === 0` 'guncelleme' dizinini görüp yedek aramayı atlıyor, exe üretildiği
+    // hâlde "Windows installer oluşturulamadı" veriyordu.
+    if (!files.some((f) => f.endsWith('.exe'))) {
       const tempOutputPath = path.join(workingPath, 'temp', path.basename(tempPath), 'windows');
       if (await fs.pathExists(tempOutputPath)) {
         files = await fs.readdir(tempOutputPath);
@@ -5279,8 +5366,29 @@ public class MainActivity extends BridgeActivity {
     //    kurulum insansız koşar, MessageBox orada süreci sonsuza kadar bekletirdi.
     //  - Yalnız sürüm AYNI ise sorulur. Kurulu sürüm eskiyse soru yok, doğrudan
     //    güncellenir — "bayat kurulum" kendiliğinden tazelenir.
+    // KURULUM GÖRÜNÜRLÜĞÜ + ZAMANLAMA (2026-09-26, Windows sözleşmesi madde 6 "boş ekran"):
+    // `src/packaging/nsis-kurulum.js`. Kapı `EMPP_NSIS_KURULUM=0` (varsayılan AÇIK) eski
+    // davranışa döner. userData adı günlük yolu içindir: Electron app.getName() =
+    // productName || name — kurulum ve uygulama AYNI dosyaya yazsın.
+    const kurulumGorunur = String(process.env.EMPP_NSIS_KURULUM == null ? '' : process.env.EMPP_NSIS_KURULUM) !== '0';
+    let kurulumUserData = null;
+    try {
+      kurulumUserData = nsisKurulum.userDataAdi(await fs.readJson(path.join(workingPath, 'package.json')));
+    } catch (e) { kurulumUserData = null; }
+    if (!kurulumUserData) {
+      kurulumUserData = String(appName || 'uygulama').toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+      console.warn(`⚠️ Kurulum günlüğü: package.json adı okunamadı, "${kurulumUserData}" kullanılacak`);
+    }
+    // MUTLAK yol ŞART: startPackaging workingPath'i GÖRELİ verir ('temp/<job>/app'),
+    // makensis ise şablon dizininde koşar — göreli !include bulunamaz (2026-09-26, ölçüldü).
+    const ovrYolu = path.resolve(buildDir, nsisKurulum.OVR_ADI);
+    const initBasi = kurulumGorunur ? `\n${nsisKurulum.customInitBasi()}` : '';
+    const ayniSurumKapat = kurulumGorunur
+      ? `\n  IfSilent +2\n  Banner::destroy\n  !insertmacro emppGunluk "aynı sürüm zaten kurulu — kurulum yapılmadı, kitap açıldı"`
+      : '';
+
     const zatenKuruluMakro = `
-!macro customInit
+!macro customInit${initBasi}
   IfSilent empp_kurulum_devam
   Push $R7
   Push $R8
@@ -5296,7 +5404,7 @@ public class MainActivity extends BridgeActivity {
   ; calisma dizini olarak OUTDIR'i verir; .onInit icinde OUTDIR BOSTUR, bu
   ; yuzden CreateProcess sessizce dusuyordu: yukleyici cikiyor, kitap acilmiyordu
   ; (iz dosyasi testi: kurulum dali kosmadi ama uygulama sureci de 0'di).
-  SetOutPath "$R7"
+  SetOutPath "$R7"${ayniSurumKapat}
   Exec '"$R7\\\${APP_EXECUTABLE_FILENAME}"'
   Pop $R8
   Pop $R7
@@ -5327,6 +5435,7 @@ public class MainActivity extends BridgeActivity {
 # electron-multi-platform-packager tarafından üretildi
 
 ${onTaramaKapali}
+${kurulumGorunur ? nsisKurulum.ortakBaslik({ userData: kurulumUserData }) : ''}
 ${zatenKuruluMakro}
 !macro customInstall
   SetDetailsPrint both
@@ -5334,11 +5443,18 @@ ${zatenKuruluMakro}
   DetailPrint "Yayınevi: ${companyText}"
   ${installationMessages}
   DetailPrint "Kurulum dizini: $INSTDIR"
+${kurulumGorunur ? nsisKurulum.customInstallSonu() : ''}
 !macroend
+${kurulumGorunur ? nsisKurulum.customCheckAppRunningMakro(ovrYolu) : ''}
 `;
     
     const nsisPath = path.join(buildDir, 'installer.nsh');
     await fs.writeFile(nsisPath, nsisScript.trim());
+    if (kurulumGorunur) {
+      await fs.writeFile(ovrYolu, nsisKurulum.ovrIcerigi());
+      console.log(`✅ Kurulum görünürlüğü: evre metinleri + gerçek MB sayacı + doğrudan açma, `
+        + `günlük %APPDATA%\\${kurulumUserData}\\${nsisKurulum.GUNLUK_ADI}`);
+    }
     
     console.log('✅ Gelismis NSIS kurulum animasyonu olusturuldu');
     console.log(`  - Build dir: ${buildDir}`);

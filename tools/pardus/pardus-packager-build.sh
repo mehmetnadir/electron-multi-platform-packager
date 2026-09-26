@@ -116,6 +116,8 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_SET_MENU="${EMPP_SET_MENU:-1}" \
   -e EMPP_SAYFA_WEBP="${EMPP_SAYFA_WEBP:-0}" \
   -e EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" \
+  -e EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" \
+  -e EMPP_ICERIK_GUNCELLEME="${EMPP_ICERIK_GUNCELLEME:-0}" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1

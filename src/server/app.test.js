@@ -39,3 +39,31 @@ test('sweepStaleOutputs: yaş-tabanlı (mtime) backstop, TTL env ile ayarlı', (
 test('OUTPUT_TTL_HOURS varsayılan 72s (R2 yüklemesi dakikalar — geniş güven payı)', () => {
   assert.match(SRC, /OUTPUT_TTL_HOURS\s*=\s*Number\(process\.env\.OUTPUT_TTL_HOURS\s*\|\|\s*72\)/);
 });
+
+/**
+ * SET GÜNCELLEME PAKETİ indirme ucu (sözleşme §Sunucu tarafı — TASARIM, 2026-09-23).
+ * `app.js` modül yüklenirken `server.listen(PORT, ...)` koşulsuz çalışıyor (bu
+ * dosyanın başındaki not: server'ı ayağa kaldırmadan sözleşmeyi kilitleriz) —
+ * bu yüzden gerçek HTTP round-trip DEĞİL, dosyadaki sentinel disiplini: kayıt
+ * SIRASI ve gating mantığı kaynaktan kilitlenir.
+ */
+test("/api/download/:jobId/guncelleme literal rota, :platform joker rotasından ÖNCE tanımlı (çakışma yok)", () => {
+  const guncellemeIdx = SRC.indexOf("app.get('/api/download/:jobId/guncelleme'");
+  const platformIdx = SRC.indexOf("app.get('/api/download/:jobId/:platform'");
+  assert.ok(guncellemeIdx > -1, 'guncelleme rotası bulunamadı');
+  assert.ok(platformIdx > -1, ':platform rotası bulunamadı');
+  assert.ok(guncellemeIdx < platformIdx,
+    'guncelleme rotası :platform rotasından SONRA tanımlanmış — Express eşleşmesi çakışır');
+});
+
+test('/api/download/:jobId/guncelleme: job tamamlanmamışsa veya paket yoksa 404 {error}', () => {
+  const route = SRC.slice(SRC.indexOf("app.get('/api/download/:jobId/guncelleme'"),
+    SRC.indexOf("app.get('/api/download/:jobId/:platform'"));
+  assert.match(route, /job\.status !== 'completed'/);
+  assert.match(route, /job\.results && job\.results\.guncellemePaketi/);
+  // atlandı / hata / dosya yok — üçü de 404 sayılır, sessizce 200 dönmez.
+  assert.match(route, /gp\.atlandi \|\| gp\.hata \|\| !gp\.tarYolu \|\| !fs\.existsSync\(gp\.tarYolu\)/);
+  assert.match(route, /guncelleme-paketi-yok/);
+  assert.match(route, /buildContentDisposition/);
+  assert.match(route, /res\.download\(gp\.tarYolu/);
+});

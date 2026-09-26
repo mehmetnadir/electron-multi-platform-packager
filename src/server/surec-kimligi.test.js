@@ -327,6 +327,10 @@ test('/api/health gövdesi: kapılar yalnız boolean, ham env değeri yok [GERİ
 });
 
 test('/api/health şeması: zorunlu kimlik alanlarının tamamı gövdede bulunur [GERİLEME]', () => {
+  // 2026-09-26: saglik-kimligi artık sayfa-webp'yi DOLAYLI yüklemiyor (üç kapsamlı kapı
+  // ortak çözücüden okunur: packaging/platform-kapisi.js). Canlı sunucuda modülü
+  // packagingService yükler; burada aynı durumu açıkça kuruyoruz.
+  require('../packaging/sayfa-webp');
   const k = surecKimligi(); // gerçek süreç + gerçek require.cache
   for (const alan of ['pid', 'ppid', 'yetimMi', 'moduller', 'diskHash', 'bayatMi']) {
     assert.ok(Object.prototype.hasOwnProperty.call(k, alan), `${alan} eksik`);
@@ -340,7 +344,7 @@ test('/api/health şeması: zorunlu kimlik alanlarının tamamı gövdede bulunu
     const m = k.moduller[rel];
     assert.ok(m === null || /^[0-9a-f]{12}$/.test(m), 'moduller değeri null ya da kısa hash olmalı');
   }
-  // Bu test sürecinde saglik-kimligi zinciri sayfa-webp'yi yükler → null OLMAMALI.
+  // sayfa-webp yukarıda yüklendi → null OLMAMALI.
   assert.match(k.moduller['src/packaging/sayfa-webp.js'], /^[0-9a-f]{12}$/);
   assert.strictEqual(k.bayatMi, false, 'çalışma ağacı temizken health bayat dememeli');
 });

@@ -414,7 +414,8 @@ function anaSurecKur(o) {
   var electron = o.electron, app = electron && electron.app;
   var env = o.env || process.env;
   if (!app) return { durum: 'app-yok' };
-  if ((o.platform || process.platform) === 'win32') return { durum: 'windows-kapsam-disi' };
+  // Windows KAPSAMDA (2026-09-26, Windows paketleme sözleşmesi G1): K içeriği userData/work'e
+  // açılır, kurulum dizinine yazılmaz; eskiden burada win32 için erken "kapsam dışı" dönüşü vardı.
   if (env.EMPP_ICERIK_GUNCELLEME === '0') return { durum: 'kapali' };
   var fsMod = require('fs'), pathMod = require('path');
   var workKok = env.EMPP_WORK_DIR || pathMod.join(app.getPath('userData'), 'work');
@@ -742,7 +743,7 @@ function korumaliFs(fsNesnesi, ctx) {
 }
 
 /**
- * Renderer giriş noktası (fs-shim `install()` sonunda çağırır; Windows'ta çağrılmaz).
+ * Renderer giriş noktası (fs-shim `install()` sonunda çağırır; 2026-09-26'dan beri Windows dahil).
  * @param win window
  * @param o {{ R, realFs, pathMod, WORK, realRequire?, fsNesnesi?, tavanMb? }}
  */

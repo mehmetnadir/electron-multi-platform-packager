@@ -45,6 +45,7 @@ const {
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
+  guncellemeDosyalariniSirala, guncellemeIcerikTipi, tarListesiniAyristir,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 
@@ -350,10 +351,20 @@ async function presignUpload(auth, job) {
  * bağlantılar: reset olursa yalnız o parça yeniden gider.
  * Sunucu eski sürümdeyse (uç 404) çağıran taraf tek-parça yola düşer.
  */
-const { applyPublisherUpdate, latestLocalUpdate, isNewer } = require('./publisher-update');
+const { applyPublisherUpdate, latestLocalUpdate } = require('./publisher-update');
+const { dahaYeniMi } = require('./surum-kiyas');
 /**
  * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
  * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
+ *
+ * 2026-09-21 — REGRESYON ÖNLEME: burada eskiden `publisher-update.isNewer`
+ * kullanılıyordu. O fonksiyon yayıncının electron.js checkVersion davranışını
+ * birebir taklit eder ("3 parça değilse string farkı = yeni") ve YAYINCI
+ * TARAFINDA doğrudur. Ama `surum-normallestir` düzeltmesi etkinleşince
+ * önbellekteki version.txt 3 parçaya iner ("1.13.1") ve zip adı 4 parçalı
+ * kalır ("1.13.1.3") → `isNewer('1.13.1','1.13.1.3') === true` → HER İŞTE
+ * cache STALE → her işte ~1 GB yeniden indirme/çıkarma. `surum-kiyas.dahaYeniMi`
+ * normalleştirilmiş hâli aynı sürüm sayar ve belirsiz girdide "yeni" demez.
  */
 function cachedZipIsStale(zipPath) {
   try {
@@ -362,7 +373,7 @@ function cachedZipIsStale(zipPath) {
     const kurum = read('kurum.txt').replace(/\r|\n/g, '');
     const version = read('version.txt') || '1';
     const upd = latestLocalUpdate(kurum ? kurum.padStart(3, '0') : null);
-    const stale = !!upd && isNewer(version, upd.version);
+    const stale = !!upd && dahaYeniMi(version, upd.version);
     if (stale) log(`source cache STALE — yayıncı güncellemesi ${version} → ${upd.version}`);
     return stale;
   } catch (e) { return false; }
@@ -737,10 +748,19 @@ async function packagerLogoIdFor(publisherName) {
   } catch (e) { warn('logo listesi alinamadi:', agHatasiOzeti(e)); return null; }
 }
 
-async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId) {
+async function packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, setKimligi, guncellemeTabani) {
   const res = await axios.post(
     joinUrl(CONFIG.packagerApi, 'api/package'),
-    { sessionId, platforms: [packagerPlatform], appName, appVersion, ...(logoId ? { logoId } : {}) },
+    {
+      sessionId, platforms: [packagerPlatform], appName, appVersion,
+      ...(logoId ? { logoId } : {}),
+      // SET güncelleme kanalı (2026-09-23): claim'den geldiyse packagingService'e
+      // AYNI istekte iletilir — packager TÜM yamalardan sonra guncelleme paketini
+      // (surum.json/manifest.json/dosya/…) bu jobId altında üretir (parça 1/3,
+      // bkz. kitap-guncelleme-sozlesmesi.md). İkisi de yoksa alan hiç gönderilmez.
+      ...(setKimligi ? { setKimligi } : {}),
+      ...(guncellemeTabani ? { guncellemeTabani } : {}),
+    },
     { timeout: 60000, validateStatus: () => true },
   );
   if (res.status !== 200 || !res.data || !res.data.jobId) {
@@ -894,6 +914,165 @@ async function packagerReleaseJob(jobId) {
   } catch (e) {
     warn('packager delete-job hatası (iş yine de başarılı):', agHatasiOzeti(e));
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SET güncelleme kanalı — Runner parçası (3/3, 2026-09-23).
+// bkz. .claude/docs/kitap-guncelleme-sozlesmesi.md "Sunucu tarafı — TASARIM".
+// Windows SET işi artefaktı R2'ye yüklendikten SONRA (packagerReleaseJob'dan ÖNCE —
+// o çağrı packager'daki jobId'yi siler, guncelleme ucu da onunla gider) çalışır.
+// ---------------------------------------------------------------------------
+
+/**
+ * SET güncelleme paketini (`surum.json`/`manifest.json`/`dosya/**`, tek `.tar.gz`)
+ * AYNI packager jobId'sinden indirir. Eski packager sürümünde uç yoksa (HTTP 404,
+ * `guncelleme-paketi-yok`) `false` döner — çağıran bunu "adım atlandı, iş yine de
+ * başarılı" sayar (eski packager uyumu). Başka her HTTP/ağ hatası FIRLATILIR —
+ * sessiz yutma YOK.
+ *
+ * `--retry-all-errors` KASITLI OLARAK verilmiyor: 404'ü boşuna 3 kez denemek yerine
+ * doğrudan "atlandı" yoluna düşülsün; gerçek ağ/5xx hataları curl'ün varsayılan
+ * retry davranışıyla (bağlantı/5xx) zaten yeniden denenir.
+ *
+ * @returns {Promise<boolean>} true = indirildi, false = 404 (adım atlanacak)
+ */
+async function guncellemeTarIndir(jobId, destPath) {
+  await fsp.rm(destPath, { force: true }).catch(() => {});
+  const res = await run('curl', [
+    '-sS', '-4', '-L',
+    '--retry', '3', '--retry-delay', '2',
+    '-w', '%{http_code}',
+    '-o', destPath,
+    joinUrl(CONFIG.packagerApi, `api/download/${jobId}/guncelleme`),
+  ]);
+  const httpCode = Number(String(res.stdout || '').trim()) || 0;
+  if (httpCode === 404) return false; // guncelleme-paketi-yok — eski packager, adım atlanır
+  if (res.code !== 0 || httpCode < 200 || httpCode >= 300) {
+    throw new Error(`guncelleme paketi indirilemedi: curl exit ${res.code}, HTTP ${httpCode} ${res.stderr.slice(-200)}`);
+  }
+  const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
+  if (size === 0) throw new Error('guncelleme paketi boş indi (HTTP 200 ama 0 bayt)');
+  return true;
+}
+
+/** API'den SET güncelleme dosyaları için presigned PUT URL'leri ister. */
+async function presignGuncelleme(auth, { bookId, platform, setKimligi, dosyalar }) {
+  const res = await axios.post(
+    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-guncelleme`),
+    { bookId, platform, setKimligi, dosyalar },
+    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
+  );
+  if (res.status !== 200 || !res.data || !Array.isArray(res.data.dosyalar)) {
+    throw new Error(`presign-guncelleme failed: HTTP ${res.status} ${JSON.stringify(res.data)}`);
+  }
+  return res.data; // { taban, dosyalar: [{yol, uploadUrl, r2ObjectKey}] }
+}
+
+/** Tek bir güncelleme dosyasını presigned URL'e PUT eder. Ağ hatasında yeniden dener. */
+async function guncellemeDosyaYukle(localYol, uploadUrl, contentType) {
+  const res = await run('curl', [
+    '-sS', '-4', '--fail', '-X', 'PUT',
+    '-H', `Content-Type: ${contentType || 'application/octet-stream'}`,
+    '--upload-file', localYol,
+    '--retry', '5', '--retry-delay', '3', '--retry-all-errors',
+    uploadUrl,
+  ]);
+  if (res.code !== 0) {
+    throw new Error(`guncelleme dosyası yüklenemedi (${path.basename(localYol)}): curl exit ${res.code} ${res.stderr.slice(-160)}`);
+  }
+}
+
+/**
+ * Yayınlanan `surum.json`'u okuyup üretilen sürümle karşılaştırır — tüketici
+ * tutarlı durum görsün diye eklenen son adım. EŞLEŞMEZSE FIRLATIR: sözleşme
+ * "eşleşmezse iş 'yüklendi' sayılmaz, hata metni görünür — sessiz yutma YOK" der.
+ */
+async function guncellemeSurumDogrula(taban, setKimligi, beklenenSurum) {
+  const res = await axios.get(joinUrl(taban, `set/${setKimligi}/surum.json`), {
+    timeout: 30000, validateStatus: () => true,
+  });
+  if (res.status !== 200 || !res.data || typeof res.data.surum !== 'string') {
+    throw new Error(`guncelleme doğrulama: surum.json okunamadı (HTTP ${res.status})`);
+  }
+  if (res.data.surum !== beklenenSurum) {
+    throw new Error(`guncelleme doğrulama: sürüm eşleşmedi (üretilen ${beklenenSurum}, yayınlanan ${res.data.surum})`);
+  }
+}
+
+/**
+ * SET güncelleme paketini indirir, sıraya göre (`dosya/*` → `manifest.json` →
+ * EN SON `surum.json`) R2'ye yükler, ardından yayınlanan `surum.json`'u karşılaştırarak
+ * DOĞRULAR. `job.setKimligi` çağıran tarafından zaten kontrol edilmiş kabul edilir.
+ * `job.guncellemeTabani` yoksa adım (tahmin ÜRETİLMEDEN) atlanır.
+ *
+ * @param {{agentId:string, token:string}} auth
+ * @param {{bookId:string, platform:string, setKimligi:string, guncellemeTabani?:string}} job
+ * @param {string|null} jobId  packager jobId (guncelleme tar'ı AYNI job'tan iner)
+ */
+async function guncellemeSetiYukleVeDogrula(auth, job, jobId) {
+  const setKimligi = job.setKimligi;
+  const taban = job.guncellemeTabani;
+  if (!taban) {
+    warn(`guncelleme: claim guncellemeTabani taşımıyor — adım ATLANDI (set ${setKimligi})`);
+    return;
+  }
+  if (!jobId) {
+    warn(`guncelleme: packager jobId yok — adım ATLANDI (set ${setKimligi})`);
+    return;
+  }
+
+  const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-guncelleme-'));
+  try {
+    const tarPath = path.join(work, 'guncelleme.tar.gz');
+    const indi = await guncellemeTarIndir(jobId, tarPath);
+    if (!indi) {
+      log(`guncelleme: packager 'guncelleme-paketi-yok' (404) — adım ATLANDI (set ${setKimligi}), iş başarılı kalıyor (eski packager uyumu)`);
+      return;
+    }
+
+    const listRes = await run('tar', ['-tzf', tarPath]);
+    if (listRes.code !== 0) throw new Error(`guncelleme paketi listelenemedi: tar exit ${listRes.code} ${listRes.stderr.slice(-200)}`);
+    const goreliYollar = tarListesiniAyristir(listRes.stdout, setKimligi);
+    if (goreliYollar.length === 0) {
+      throw new Error(`guncelleme paketi 'set/${setKimligi}/' altında dosya içermiyor`);
+    }
+
+    const extractDir = path.join(work, 'acik');
+    await fsp.mkdir(extractDir, { recursive: true });
+    const x = await run('tar', ['-xzf', tarPath, '-C', extractDir]);
+    if (x.code !== 0) throw new Error(`guncelleme paketi açılamadı: tar exit ${x.code} ${x.stderr.slice(-200)}`);
+
+    const siraliYollar = guncellemeDosyalariniSirala(goreliYollar);
+    const kok = path.join(extractDir, 'set', setKimligi);
+
+    if (!siraliYollar.includes('surum.json')) throw new Error("guncelleme paketinde 'surum.json' yok");
+    const surumBeklenen = JSON.parse(await fsp.readFile(path.join(kok, 'surum.json'), 'utf8')).surum;
+    if (!surumBeklenen) throw new Error("guncelleme paketindeki surum.json'da 'surum' alanı yok");
+
+    const dosyalar = [];
+    for (const yol of siraliYollar) {
+      const boyut = (await fsp.stat(path.join(kok, yol))).size;
+      dosyalar.push({ yol, boyut, contentType: guncellemeIcerikTipi(yol) });
+    }
+
+    log(`guncelleme: ${dosyalar.length} dosya (set ${setKimligi}) presign isteniyor...`);
+    const presigned = await presignGuncelleme(auth, { bookId: job.bookId, platform: job.platform, setKimligi, dosyalar });
+    const uploadByYol = new Map((presigned.dosyalar || []).map((d) => [d.yol, d]));
+
+    // SIRALI yükleme — dosya/* → manifest.json → EN SON surum.json (tüketici tutarlı
+    // durum görsün). Paralel/toplu yükleme bu garantiyi bozar, KULLANILMAZ.
+    for (const yol of siraliYollar) {
+      const hedef = uploadByYol.get(yol);
+      if (!hedef || !hedef.uploadUrl) throw new Error(`guncelleme: '${yol}' için presigned URL yok`);
+      await guncellemeDosyaYukle(path.join(kok, yol), hedef.uploadUrl, guncellemeIcerikTipi(yol));
+      log(`  guncelleme yüklendi: ${yol}`);
+    }
+
+    await guncellemeSurumDogrula(presigned.taban || taban, setKimligi, surumBeklenen);
+    log(`guncelleme: set ${setKimligi} doğrulandı — surum ${surumBeklenen}`);
+  } finally {
+    await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -1629,7 +1808,7 @@ async function processJob(auth, job) {
       const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
       log('packager session:', sessionId, '- starting package...');
       const logoId = await packagerLogoIdFor(job.publisherName);
-      jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId);
+      jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, job.setKimligi, job.guncellemeTabani);
       log('packager jobId:', jobId, '- polling...');
       await packagerPoll(jobId, packagerPlatform);
 
@@ -1645,6 +1824,16 @@ async function processJob(auth, job) {
     // 5. POST artifact FILE back (server uploads to R2).
     log('posting result (completed) with artifact file...');
     await postResultSuccess(auth, job, artifactPath);
+
+    // SET güncelleme kanalı (2026-09-23, parça 3/3): Windows SET işi başarıyla
+    // yüklendiyse VE claim setKimligi taşıyorsa, packager'ın AYNI jobId'de ürettiği
+    // guncelleme paketini indir/sıraya göre yükle/doğrula — packagerReleaseJob'dan
+    // ÖNCE (o çağrı packager'daki jobId'yi siler, guncelleme ucu da onunla gider).
+    // Eşleşme doğrulaması düşerse iş BAŞARISIZ sayılır (aşağıdaki catch'e düşer) —
+    // ana artifact zaten R2'de olsa da sessiz yutma YOK.
+    if (packagerPlatform === 'windows' && job.setKimligi) {
+      await guncellemeSetiYukleVeDogrula(auth, job, jobId);
+    }
 
     // Artifact R2'ye gitti — packager'ın yerel kopyasını tutmanın anlamı yok.
     // Bu adım eksikti: her üretim packager'ın output/ dizininde 1-3 GB bırakıyor,
@@ -1796,4 +1985,7 @@ module.exports = {
   packagerReleaseJob,
   touchCacheEntry,
   ensureDockerReady, runPardusScript, runKabulBetigi, buildPardusArtifact, hazirPardusPaketi, pardusKabulKapisi, heartbeat, injectPardusIcon,
+  // SET güncelleme kanalı (2026-09-23) — testler için dışa açık.
+  guncellemeSetiYukleVeDogrula, guncellemeTarIndir, presignGuncelleme, guncellemeDosyaYukle, guncellemeSurumDogrula,
+  packagerStartPackage,
 };

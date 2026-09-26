@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs-extra');
 const { v4: uuidv4 } = require('uuid');
+const setKimlikleri = require('../packaging/set-kimligi');
 const http = require('http');
 const socketIo = require('socket.io');
 const AdmZip = require('adm-zip');
@@ -22,6 +23,9 @@ const { getGitCommit } = require('./git-commit');
 // açık/kapalı durumunu (yalnız boolean, ham env basılmaz) taşır. Karar mantığı
 // `./saglik-kimligi.js`'te (saf, I/O yok) — burada yalnız çağrılır.
 const { kapilariOku } = require('./saglik-kimligi');
+// K-surec-kimligi (2026-09-21) — port açık ≠ doğru kod yüklü: pid/ppid/yetimMi +
+// bellek↔disk parmak izi (`moduller`/`diskHash`/`bayatMi`). Ölçüm `./surec-kimligi.js`'te.
+const { surecKimligi } = require('./surec-kimligi');
 const STARTED_AT = new Date().toISOString();
 const GIT_COMMIT = getGitCommit(path.join(__dirname, '..', '..'));
 
@@ -113,8 +117,9 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     commit: GIT_COMMIT,
     startedAt: STARTED_AT,
-    pid: process.pid,
     kapilar: kapilariOku(process.env),
+    // pid/ppid/yetimMi + moduller/diskHash/bayatMi — ham env DEĞERİ burada ASLA basılmaz.
+    ...surecKimligi(),
   });
 });
 
@@ -491,7 +496,12 @@ app.post('/api/package', async (req, res) => {
       description,
       packageOptions = {},
       priority = 5,
-      pwaConfig
+      pwaConfig,
+      // SET güncelleme kanalı (sözleşme: .claude/docs/kitap-guncelleme-sozlesmesi.md).
+      // İkisi de İSTEĞE BAĞLI; geçersizse istek DÜŞÜRÜLMEZ, alan yok sayılır ve
+      // sebebi empp-set.json'a yazılır (sessiz yutma yok).
+      setKimligi,
+      guncellemeTabani
     } = req.body;
     
     // Debug: PWA config kontrolü
@@ -505,6 +515,22 @@ app.post('/api/package', async (req, res) => {
 
     if (!platforms || platforms.length === 0) {
       return res.status(400).json({ error: 'En az bir platform seçilmeli' });
+    }
+
+    // SET kimliği doğrulaması: boş olmayan, yol-güvenli tek parça (URL yoluna giriyor).
+    // Geçersiz değer isteği DÜŞÜRMEZ — yok sayılır ve sebebi pakete yazılır, çünkü
+    // paketleme kimliğe bağımlı değildir; kimlik yoksa yalnız güncelleme kanalı kapalıdır.
+    const setKimligiGecerli = setKimlikleri.kimlikGecerliMi(setKimligi);
+    const guncellemeTabaniGecerli = typeof guncellemeTabani === 'string'
+      && /^https?:\/\/[^\s]+$/.test(guncellemeTabani.trim());
+    const setKimligiSebepleri = [];
+    if (setKimligi !== undefined && setKimligi !== null && !setKimligiGecerli) {
+      setKimligiSebepleri.push(`istekteki setKimligi geçersiz (${JSON.stringify(setKimligi)}) — yok sayıldı`);
+      console.warn('⚠️ /api/package: geçersiz setKimligi yok sayıldı:', JSON.stringify(setKimligi));
+    }
+    if (guncellemeTabani !== undefined && guncellemeTabani !== null && !guncellemeTabaniGecerli) {
+      setKimligiSebepleri.push(`istekteki guncellemeTabani geçersiz (${JSON.stringify(guncellemeTabani)}) — yok sayıldı`);
+      console.warn('⚠️ /api/package: geçersiz guncellemeTabani yok sayıldı:', JSON.stringify(guncellemeTabani));
     }
 
     const jobId = uuidv4();
@@ -535,6 +561,10 @@ app.post('/api/package', async (req, res) => {
       description,
       packageOptions,
       pwaConfig, // PWA config ekle
+      // SET güncelleme kanalı alanları — paketleme anında empp-set.json'a yazılır.
+      setKimligi: setKimligiGecerli ? String(setKimligi).trim() : null,
+      guncellemeTabani: guncellemeTabaniGecerli ? guncellemeTabani.trim() : null,
+      setKimligiSebebi: setKimligiSebepleri.length ? setKimligiSebepleri.join('; ') : null,
       priority,
       status: 'queued',
       createdAt: new Date().toISOString(),
@@ -862,6 +892,35 @@ app.get('/api/queue-statistics', (req, res) => {
 app.get('/api/logos/:logoId/file', async (req, res) => {
   const { logoId } = req.params;
   await logoService.serveLogoFile(logoId, res);
+});
+
+// SET GÜNCELLEME PAKETİ İNDİRME (sözleşme §Sunucu tarafı — TASARIM, 2026-09-23)
+// `src/agent/runner.js` (parça 3, BAŞKA AJANIN İŞİ) bu ucu indirip R2'ye yükler.
+// `/:jobId/:platform` rotasıyla ÇAKIŞMASIN diye ondan ÖNCE, literal `guncelleme`
+// segmentiyle tanımlanır — Express aynı şekilli yolları kayıt sırasına göre
+// eşler, `guncelleme` yalnız bu literal segmentle çakışır (platform adı olamaz).
+app.get('/api/download/:jobId/guncelleme', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const job = packagingJobs.get(jobId);
+
+    if (!job || job.status !== 'completed') {
+      return res.status(404).json({ error: 'İş bulunamadı veya henüz tamamlanmadı' });
+    }
+
+    const gp = job.results && job.results.guncellemePaketi;
+    if (!gp || gp.atlandi || gp.hata || !gp.tarYolu || !fs.existsSync(gp.tarYolu)) {
+      return res.status(404).json({ error: 'guncelleme-paketi-yok' });
+    }
+
+    const fileName = `guncelleme-${jobId}.tar.gz`;
+    res.setHeader('Content-Disposition', buildContentDisposition(fileName));
+    res.setHeader('Content-Type', 'application/gzip');
+    res.download(gp.tarYolu, fileName);
+  } catch (error) {
+    console.error('Güncelleme paketi indirme hatası:', error);
+    res.status(500).json({ error: 'Güncelleme paketi indirilemedi: ' + error.message });
+  }
 });
 
 // Paketlenmiş dosya indirme

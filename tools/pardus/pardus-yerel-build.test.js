@@ -122,3 +122,14 @@ test('electron-builder yoksa (npm ci yapilmamis) net hata', () => {
   assert.notEqual(r.status, 0);
   assert.match(log(o), /electron-builder yok/);
 });
+
+// Kapı sızıntısı (2026-09-26): iki Pardus şeridi de içerik ve SET güncelleme bayraklarını
+// paketleyiciye KAPALI varsayılanla geçirmeli; geçirmezse paketleyici varsayılanı AÇIK okur.
+test('pardus seritleri icerik+SET guncelleme bayraklarini varsayilan KAPALI gecirir', () => {
+  const docker = fs.readFileSync(path.join(__dirname, 'pardus-packager-build.sh'), 'utf8');
+  const yerel = fs.readFileSync(BETIK, 'utf8');
+  for (const ad of ['EMPP_SET_GUNCELLEME', 'EMPP_ICERIK_GUNCELLEME']) {
+    assert.match(docker, new RegExp(`-e ${ad}="\\$\\{${ad}:-0\\}"`), `docker: ${ad}`);
+    assert.match(yerel, new RegExp(`${ad}="\\$\\{${ad}:-0\\}"`), `yerel: ${ad}`);
+  }
+});

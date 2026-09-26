@@ -66,10 +66,21 @@ test('kapilariOku: setGuncelleme EMPP_SET_GUNCELLEME=0 ile kapalı', () => {
   assert.strictEqual(kapilariOku({ EMPP_SET_GUNCELLEME: '0' }).setGuncelleme, false);
 });
 
-test('kapilariOku: setGuncelleme "1"/""/"false" ile AÇIK kalır (yalnız "0" kapatır)', () => {
-  for (const v of ['1', '', 'false', 'kapali']) {
+test('kapilariOku: setGuncelleme "1"/"" ile AÇIK kalır', () => {
+  for (const v of ['1', '']) {
     assert.strictEqual(kapilariOku({ EMPP_SET_GUNCELLEME: v }).setGuncelleme, true,
       `EMPP_SET_GUNCELLEME=${JSON.stringify(v)} kapıyı kapatmamalı`);
+  }
+});
+
+// DEĞİŞTİ (2026-09-26, platform kapsamı): 0/1/boş dışındaki değer artık platform listesidir.
+// "false"/"kapali" eskiden AÇIK sayılıyordu (yalnız "0" kapatıyordu); şimdi tanınmayan platform
+// adıdır → hiçbir işi eşlemez → KAPALI (+ iş anında UYARI). Şüphede kapalı: `win`/`mac` gibi
+// bir yazım hatası kapıyı TÜM platformlarda açmasın (25.09 mac DMG sızıntısının sınıfı).
+test('kapilariOku: setGuncelleme tanınmayan değer ("false"/"kapali"/"win") → KAPALI', () => {
+  for (const v of ['false', 'kapali', 'win']) {
+    assert.strictEqual(kapilariOku({ EMPP_SET_GUNCELLEME: v }).setGuncelleme, false,
+      `EMPP_SET_GUNCELLEME=${JSON.stringify(v)} hiçbir platformu eşlememeli`);
   }
 });
 
@@ -119,9 +130,75 @@ test('kapilariOku: env undefined verilse çökmez, tüm kapılar varsayılana d�
   const k = kapilariOku(undefined);
   assert.deepStrictEqual(k, {
     sayfaWebp: false, setMenu: false, pardusKabul: false,
-    surumNormallestir: true, yama: false, setGuncelleme: true,
+    surumNormallestir: true, yama: false, setGuncelleme: true, icerikGuncelleme: true,
     windowsAsarsiz: true,
   });
+});
+
+// ---------------------------------------------------------------------------
+// PLATFORM KAPSAMI (2026-09-26, Windows sözleşmesi ONAYLI — onay yalnız Windows).
+// sayfaWebp / setGuncelleme / icerikGuncelleme virgüllü platform listesi alır. Sağlık ucu
+// kapsamlı değerde kanonik platform dizgesi gösterir ("windows"); 0/1/tanımsız eski boolean.
+// ---------------------------------------------------------------------------
+
+test('PLATFORM KAPSAMI: kapsamlı değer sağlık ucunda kanonik dizge ("windows")', () => {
+  const k = kapilariOku({
+    EMPP_SAYFA_WEBP: 'windows',
+    EMPP_SET_GUNCELLEME: ' Windows ',
+    EMPP_ICERIK_GUNCELLEME: 'macos,windows',
+  });
+  assert.strictEqual(k.sayfaWebp, 'windows');
+  assert.strictEqual(k.setGuncelleme, 'windows');
+  assert.strictEqual(k.icerikGuncelleme, 'windows,macos', 'kanonik sıra: supportedPlatforms sırası');
+});
+
+test('PLATFORM KAPSAMI: 0 → false, 1 → true, tanımsız → eski varsayılan (üç kapı)', () => {
+  const k0 = kapilariOku({ EMPP_SAYFA_WEBP: '0', EMPP_SET_GUNCELLEME: '0', EMPP_ICERIK_GUNCELLEME: '0' });
+  assert.deepStrictEqual([k0.sayfaWebp, k0.setGuncelleme, k0.icerikGuncelleme], [false, false, false]);
+  const k1 = kapilariOku({ EMPP_SAYFA_WEBP: '1', EMPP_SET_GUNCELLEME: '1', EMPP_ICERIK_GUNCELLEME: '1' });
+  assert.deepStrictEqual([k1.sayfaWebp, k1.setGuncelleme, k1.icerikGuncelleme], [true, true, true]);
+  const kv = kapilariOku({});
+  assert.deepStrictEqual([kv.sayfaWebp, kv.setGuncelleme, kv.icerikGuncelleme], [false, true, true]);
+});
+
+test('PLATFORM KAPSAMI: bilinmeyen ad dizgeye GİRMEZ (ham değer sızmaz)', () => {
+  const k = kapilariOku({ EMPP_SET_GUNCELLEME: 'windows,gizli-9f3a', EMPP_ICERIK_GUNCELLEME: 'gizli-9f3a' });
+  assert.strictEqual(k.setGuncelleme, 'windows');
+  assert.strictEqual(k.icerikGuncelleme, false);
+  assert.ok(!JSON.stringify(k).includes('gizli'), 'ham değer sağlık ucuna sızmış');
+});
+
+test('SÖZLEŞME: sağlık gösterimi kapı kararıyla AYNI (üç modülün acikMi\'si)', () => {
+  const kaynaklar = {
+    sayfaWebp: require('../packaging/sayfa-webp').acikMi,
+    setGuncelleme: require('../packaging/guncelleyici-enjekte').acikMi,
+    icerikGuncelleme: require('../packaging/icerik-guncelleme').acikMi,
+  };
+  const adlar = {
+    sayfaWebp: 'EMPP_SAYFA_WEBP', setGuncelleme: 'EMPP_SET_GUNCELLEME',
+    icerikGuncelleme: 'EMPP_ICERIK_GUNCELLEME',
+  };
+  const sessiz = { uyar: () => {} };
+  for (const [alan, acikMi] of Object.entries(kaynaklar)) {
+    for (const v of [undefined, '0', '1', '', 'windows', 'windows,macos', 'win']) {
+      const env = v === undefined ? {} : { [adlar[alan]]: v };
+      const gosterim = kapilariOku(env)[alan];
+      for (const is of [['windows'], ['macos'], ['windows', 'macos']]) {
+        const beklenen = typeof gosterim === 'string'
+          ? is.every((p) => gosterim.split(',').includes(p))
+          : gosterim;
+        assert.strictEqual(acikMi(env, is, sessiz), beklenen,
+          `${alan} ${JSON.stringify(v)} ${is.join('+')}: sağlık ucu kapı kararından SAPTI`);
+      }
+    }
+  }
+});
+
+test('GERİLEME: kaçak süreç ayırt edilebilir — kapı listesi icerikGuncelleme TAŞIR', () => {
+  const alanlar = Object.keys(kapilariOku({}));
+  assert.ok(alanlar.includes('icerikGuncelleme'), `içerik kapısı listede yok: ${alanlar.join(', ')}`);
+  assert.notDeepStrictEqual(kapilariOku({ EMPP_ICERIK_GUNCELLEME: 'windows' }),
+    kapilariOku({}), 'windows kapsamlı süreç varsayılan (her platformda açık) süreçten ayırt edilemiyor');
 });
 
 // ---------------------------------------------------------------------------

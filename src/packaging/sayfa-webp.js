@@ -42,6 +42,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { uyariMetni } = require('./webp-kapi-uyarisi');
+const { kapiAcikMi } = require('./platform-kapisi');
 
 const MOD1_N = 100;
 const PNG_IMZA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
@@ -221,9 +222,16 @@ async function klasoruDonustur(kokDizin, opts = {}) {
   return ist;
 }
 
-/** Kapı: üretimde yalnız EMPP_SAYFA_WEBP=1 ile açılır. */
-function acikMi(env = process.env) {
-  return env.EMPP_SAYFA_WEBP === '1';
+/**
+ * Kapı: varsayılan KAPALI; `1` her platformda açar. Platform listesi (`windows`,
+ * `windows,macos`) yalnız işin platformlarının HEPSİ listedeyse açar —
+ * `./platform-kapisi.js` (2026-09-26, Windows sözleşmesi madde 5: kayıpsız WebP).
+ * @param {Object} [env]
+ * @param {string[]} [platforms] işin platformları (`jobInfo.platforms`)
+ * @param {{uyar?: function(string): void}} [secenek]
+ */
+function acikMi(env = process.env, platforms, secenek) {
+  return kapiAcikMi('EMPP_SAYFA_WEBP', env, platforms, false, secenek);
 }
 
 module.exports = {

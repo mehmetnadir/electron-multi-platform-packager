@@ -32,16 +32,20 @@
         if (r && !r.startsWith('..') && !pathMod.isAbsolute(r)) return r;
         var w = pathMod.relative(WORK, p);
         if (w && !w.startsWith('..') && !pathMod.isAbsolute(w)) return w;
+        // WINDOWS (2026-09-26, sözleşme G1/G2): sürücü harfli (C:\…) ya da UNC (\\sunucu\…) yol
+        // BASE/WORK dışındaysa GERÇEK sistem yoludur — dokunulmaz. Eski kod bunu "/" ile bölüp
+        // "kök-mutlak sahte yol" sanıyordu → WORK\C:\Users\… gibi bozuk hedef üretirdi.
+        if (/^[a-zA-Z]:/.test(p) || /^[\\/]{2}/.test(p)) return null;
         // Uygulama getFilePath("/classlibraries/ImWin32.dll") gibi KÖK-mutlak yollar üretir
         // (exe yolu boş → join("", "/x") = "/x"). Gerçek kök dizini değilse (/Users, /Applications,
         // /private...) paket-göreli say. Gerçek sistem yolu ise dokunma.
-        var first = p.split('/').filter(Boolean)[0];
+        var first = p.split(/[\\/]/).filter(Boolean)[0];
         var rootExists = false;
         try { rootExists = !!first && realFs.existsSync('/' + first); } catch (e) {}
-        if (first && !rootExists) return p.replace(/^\/+/, '');
+        if (first && !rootExists) return p.replace(/^[\\/]+/, '');
         return null;
       }
-      return p.replace(/^\.\//, '');
+      return p.replace(/^\.[\\/]/, '');
     }
     function ensureDir(p) { try { realFs.mkdirSync(pathMod.dirname(p), { recursive: true }); } catch (e) {} }
     function toWork(p) { var r = rel(p); if (r == null) return p; var w = pathMod.join(WORK, r); ensureDir(w); return w; }
@@ -109,6 +113,8 @@
       var rel = null;
       if (/^file:/i.test(u)) {
         var fsPath = decodeURIComponent(u.replace(/^file:\/\//i, ''));
+        // Windows file URL'si: file:///C:/… → "/C:/…" — baştaki "/" sürücü harfinden önce atılır.
+        if (/^\/[a-zA-Z]:[\\/]/.test(fsPath)) fsPath = fsPath.slice(1);
         var r = pathMod.relative(BASE, fsPath);
         if (r && !r.startsWith('..') && !pathMod.isAbsolute(r)) rel = r;
       } else {
@@ -144,7 +150,7 @@
    * VARSA (paketleyici `src/packaging/icerik-guncelleme.js` koyar) renderer parçasını kurar:
    * `window.require('adm-zip')` açma hedefi WORK'e, açma doğrulaması, sahte sürüm ilerletme
    * süzgeci. Dosya YOKSA hiçbir şey değişmez (eski paketler birebir aynı davranır).
-   * Windows'ta çağrılmaz (kapsam dışı).
+   * Windows'ta da çağrılır (2026-09-26, sözleşme G1).
    * `kok` = uygulama kökü (alt-kitap sayfasında BASE'in `__emppSubBook` kadar yukarısı).
    */
   function icerikKancasi(win, realRequire, realFs, pathMod, R, WORK, kok) {
@@ -171,9 +177,12 @@
       var realFs = realRequire('fs');
       var proc = (typeof process !== 'undefined') ? process : null;
       var BASE = (typeof __dirname === 'string' && __dirname) ? __dirname : pathMod.dirname((win.location && win.location.pathname) || '/');
-      // Windows'ta CWD kurulum dizini — dokunma. İçerik güncellemesi de Windows'ta KAPSAM DIŞI
-      // (Faz 2 review #4: ölçülmedi; adm-zip Windows paketine konmaz).
-      if (proc && proc.platform === 'win32') return null;
+      // EMPP_FS_SHIM_WINDOWS_ETKIN (2026-09-26, Windows paketleme sözleşmesi G1/G2): shim Windows'ta
+      // da kurulur. Eskiden burada `win32 → return null` vardı: yayıncı motoru aktivasyonu
+      // (classlibraries/ImWin32.dll, imKeys.dll), kullanıcı verisini (temp/data/storage.im) ve
+      // İmpark içerik güncellemesini (assets/<id>) KURULUM DİZİNİNE yazıyordu; tam sürüm kurulumu
+      // (`RMDir /r $INSTDIR`) hepsini siliyor, K kanalı da adm-zip olmadığı için açılamıyordu.
+      // Artık yazmalar userData/work'e, okumalar önce WORK sonra paket — mac/Pardus ile aynı model.
       var WORK_ROOT = (proc && proc.env && proc.env.EMPP_WORK_DIR) || null;
       if (!WORK_ROOT) {
         var home = (proc && proc.env && (proc.env.HOME || proc.env.USERPROFILE)) || '';

@@ -17,7 +17,7 @@
  *      derlemesi düşer (UUID'siz yolda ölçümde geçiyordu, o yüzden görülmedi). Bağımlılıksız
  *      `node_modules/adm-zip` ise electron-builder tarafından hiç kopyalanmaz (ölçüldü: asar'da 0 girdi). Satıcı dizini
  *      `files`'taki tümünü-al deseniyle her platformda asar'a girer; renderer parçası
- *      `window.require('adm-zip')`'i buradan çözer (Windows'ta fs-shim kurulmaz → atıl bayt).
+ *      `window.require('adm-zip')`'i buradan çözer (Windows dahil — sözleşme G1, 2026-09-26).
  *      packagingService'teki "node_modules/adm-zip" `files` istisnası artık ETKİSİZ (zararsız).
  *   2) `empp-icerik-guncelleme.js` — çalışma anı modülü (`src/runtime/icerik-guncelleme.js`):
  *      renderer parçasını fs-shim kurar, ana süreç parçasını (3) çağırır.
@@ -38,6 +38,7 @@
 
 const path = require('path');
 const fs = require('fs-extra');
+const { kapiAcikMi } = require('./platform-kapisi');
 
 const ISARET = 'EMPP_ICERIK_GUNCELLEME';
 const KANAL_S_ISARET = 'EMPP_KANAL_S_KAPALI';
@@ -65,9 +66,16 @@ const KANAL_S_RE = /(\bcheckForUpdates\s*=\s*(?:async\s*)?(?:function\s*\w*\s*)?
 const KANAL_S_IZ_RE = /adm-zip|\bcheckForUpdates\b/;
 const DURUM_ADI = 'empp-icerik-durum.json';
 
-/** Kapı: varsayılan AÇIK. Kapatmak için EMPP_ICERIK_GUNCELLEME=0. */
-function acikMi(env = process.env) {
-  return String(env[ISARET] == null ? '' : env[ISARET]) !== '0';
+/**
+ * Kapı: varsayılan AÇIK; `0` kapatır, `1` her platformda açar. Platform listesi
+ * (`windows`, `windows,macos`) yalnız işin platformlarının HEPSİ listedeyse açar —
+ * `./platform-kapisi.js` (2026-09-26, Windows sözleşmesi yalnız Windows'u onayladı).
+ * @param {Object} [env]
+ * @param {string[]} [platforms] işin platformları (`jobInfo.platforms`)
+ * @param {{uyar?: function(string): void}} [secenek]
+ */
+function acikMi(env = process.env, platforms, secenek) {
+  return kapiAcikMi(ISARET, env, platforms, true, secenek);
 }
 
 /** Kapatma sonrası hâlâ kanal Ş izi taşıyor mu (adm-zip konursa kanal canlanır)? */
@@ -148,16 +156,15 @@ async function bagimlilikGeriAl(paketKoku, log = () => {}) {
 }
 
 /**
- * Pakete uygular. prepareElectronFiles'tan SONRA çağrılmalı (package.json + main.js hazır;
- * o adımın `npm install`'ı node_modules'ümüze dokunmasın).
- * @returns {Promise<{kanalS:Array, admZip:boolean, modul:boolean, anaSurec:Array}>}
+ * KANAL Ş'Yİ PAKETTE KAPATIR — kök + birinci düzey alt dizinlerdeki electron.js/main.js/
+ * electronUpdate.js. `paketeUygula`nın ilk adımıdır; ayrıca Windows paketinde içerik kapısı
+ * (EMPP_ICERIK_GUNCELLEME) KAPALI olsa bile tek başına çağrılır (sözleşme G5, 2026-09-26:
+ * "Ş pakette KAPALI" — `main.js` adm-zip require patlaması ve `setAppVersion`'ın version.txt'yi
+ * sunucu değerine çekmesi durur).
+ * @returns {Promise<{kanalS:Array, kanalSAcik:string[]}>}
  */
-async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakModul } = {}) {
-  const sonuc = {
-    kanalS: [], kanalSAcik: [], admZip: false, modul: false, anaSurec: [], hata: null,
-  };
-
-  // 4) Kanal Ş — kök + birinci düzey alt dizinler (bookN/electron.js kopyaları).
+async function kanalSPaketeUygula(paketKoku, { log = () => {} } = {}) {
+  const sonuc = { kanalS: [], kanalSAcik: [] };
   const adaylar = KANAL_S_ADLARI.map((ad) => path.join(paketKoku, ad));
   for (const ad of await fs.readdir(paketKoku)) {
     const tam = path.join(paketKoku, ad);
@@ -174,6 +181,23 @@ async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakMod
     if (kanalSTehlikeli(r.icerik)) sonuc.kanalSAcik.push(rel);
   }
   log(`   kanal Ş: ${sonuc.kanalS.filter((x) => x.uygulandi).length} dosyada kapatıldı`);
+  return sonuc;
+}
+
+/**
+ * Pakete uygular. prepareElectronFiles'tan SONRA çağrılmalı (package.json + main.js hazır;
+ * o adımın `npm install`'ı node_modules'ümüze dokunmasın).
+ * @returns {Promise<{kanalS:Array, admZip:boolean, modul:boolean, anaSurec:Array}>}
+ */
+async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakModul } = {}) {
+  const sonuc = {
+    kanalS: [], kanalSAcik: [], admZip: false, modul: false, anaSurec: [], hata: null,
+  };
+
+  // 4) Kanal Ş — kök + birinci düzey alt dizinler (bookN/electron.js kopyaları).
+  const s = await kanalSPaketeUygula(paketKoku, { log });
+  sonuc.kanalS = s.kanalS;
+  sonuc.kanalSAcik = s.kanalSAcik;
 
   // ATOMİK KAPI (kanal Ş dahil): kanal kapatılamadıysa adm-zip KONMAZ — yoksa yayıncının kabuk
   // zip'i bizim index.html'lerimizi ezer. Kitap içerik güncellemesi bu pakette çalışmaz; bu
@@ -230,13 +254,14 @@ async function paketeUygula(paketKoku, { log = () => {}, admZipKaynak, kaynakMod
 async function durumYaz(paketKoku, sonuc, log) {
   const masaustu = !!(sonuc.admZip && sonuc.modul && sonuc.anaSurec.some((x) => x.uygulandi || x.sebep === 'zaten-yamali'));
   // Tek dosya tüm platform çıktılarına ortak workingPath'ten girer (paketeUygula platform
-  // ayrımından önce koşar) → etkinlik PLATFORM BAŞINA yazılır (review2 Y-C): Windows'ta adm-zip
-  // `files` istisnası yok ve fs-shim/ana süreç parçası win32'de dönüyor; Android kendi K8 yolunu
-  // kullanıyor (bu modül değil).
-  const etkin = { macos: masaustu, linux: masaustu, windows: false, android: false };
+  // ayrımından önce koşar) → etkinlik PLATFORM BAŞINA yazılır (review2 Y-C). WINDOWS 2026-09-26'dan
+  // beri KAPSAMDA (sözleşme G1): adm-zip `empp-vendor/`de, `files`'taki "**/*" deseniyle Windows
+  // paketine de girer; fs-shim ve ana süreç parçası win32'de artık dönmüyor, K userData/work'e açılır.
+  // Android kendi K8 yolunu kullanıyor (bu modül değil).
+  const etkin = { macos: masaustu, linux: masaustu, windows: masaustu, android: false };
   try {
     await fs.writeJson(path.join(paketKoku, DURUM_ADI), {
-      etkin, not: 'windows: kapsam dışı (ölçülmedi); android: kendi K8 açıcısı, bu modül değil',
+      etkin, not: 'windows: userData/work (sözleşme G1, VM\'de ölçülecek); android: kendi K8 açıcısı, bu modül değil',
       hata: sonuc.hata, admZip: sonuc.admZip, modul: sonuc.modul,
       kanalSKapali: sonuc.kanalS.filter((x) => x.uygulandi || x.sebep === 'zaten-kapali').map((x) => x.dosya),
       kanalSAcik: sonuc.kanalSAcik, zaman: new Date().toISOString(),
@@ -247,5 +272,5 @@ async function durumYaz(paketKoku, sonuc, log) {
 module.exports = {
   ISARET, KANAL_S_ISARET, MODUL_ADI, KAYNAK_MODUL, ADM_ZIP_FILES_ISTISNASI, DURUM_ADI, VENDOR_DIZIN, ADM_ZIP_GORELI, bagimlilikGeriAl,
   acikMi, admZipKaynagi, kanalSTehlikeli, paketBagimliliklari, kanalSKapat, blokUret, anaSurecEnjekteEt,
-  paketeUygula,
+  kanalSPaketeUygula, paketeUygula,
 };

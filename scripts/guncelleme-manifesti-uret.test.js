@@ -24,6 +24,17 @@ const path = require('node:path');
 const uretici = require('./guncelleme-manifesti-uret');
 const kabuk = require('../src/packaging/set-kabuk');
 const kg = require('../src/runtime/kitap-guncelleyici');
+const crypto = require('node:crypto');
+
+/* TEST imza anahtarı (sözleşme G4) — PEM dosyası üreticinin CLI yolundan okunur. */
+const { publicKey: TEST_ACIK_K, privateKey: TEST_OZEL } = crypto.generateKeyPairSync('ed25519');
+const TEST_ACIK = TEST_ACIK_K.export({ type: 'spki', format: 'der' }).toString('base64');
+function testAnahtarDosyasi() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'uretici-anahtar-'));
+  const y = path.join(d, 'test.key');
+  fs.writeFileSync(y, TEST_OZEL.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  return y;
+}
 
 function gecici(ad) {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'empp-uretici-' + ad + '-'));
@@ -76,9 +87,11 @@ test('argsAyristir: tüm bayrakları doğru okur', () => {
     '--set-kimligi', '11811',
     '--cikti', '/b/cikti',
     '--kitaplar', '[]',
+    '--imza-anahtari', '/c/test.key',
   ]);
   assert.deepStrictEqual(a, {
     setKoku: '/a/koku', setKimligi: '11811', cikti: '/b/cikti', kitaplarJson: '[]',
+    imzaAnahtari: '/c/test.key',
   });
 });
 
@@ -254,7 +267,9 @@ test('UÇTAN UCA: üretici → dosya-sistemi tabanlı getir → kg.guncellemeyiC
   const setKoku = ornekSetKoku();
   const cikti = gecici('cikti-e2e');
 
-  const rapor = await uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811', '--cikti', cikti]);
+  const rapor = await uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811', '--cikti', cikti,
+    '--imza-anahtari', testAnahtarDosyasi()]);
+  assert.strictEqual(rapor.imzali, true, 'manifest imzalanmalı (G4)');
 
   // Hedef: eski bir kurulum kopyası (index.html eski, kalanı aynı, kitap kendi verisiyle).
   const hedefKok = agacKur(gecici('hedef-paket'), {
@@ -270,8 +285,8 @@ test('UÇTAN UCA: üretici → dosya-sistemi tabanlı getir → kg.guncellemeyiC
 
   const { getir, sayac } = fsGetirKur(cikti);
   const r = await kg.guncellemeyiCalistir({
-    taban: 'http://sahte-panel.invalid',
-    set: { setKimligi: '11811' },
+    taban: 'https://sahte-panel.invalid',
+    set: { setKimligi: '11811', imza: { alg: 'ed25519', acikAnahtar: TEST_ACIK } },
     kok: hedefKok,
     getir,
     zamanAsimi: 4000,
@@ -302,12 +317,42 @@ test('UÇTAN UCA: üretici → dosya-sistemi tabanlı getir → kg.guncellemeyiC
   // İkinci koşu: hedef artık güncel → manifest hiç indirilmemeli (iki kademe çalışıyor).
   const { getir: getir2, sayac: sayac2 } = fsGetirKur(cikti);
   const r2 = await kg.guncellemeyiCalistir({
-    taban: 'http://sahte-panel.invalid',
-    set: { setKimligi: '11811' },
+    taban: 'https://sahte-panel.invalid',
+    set: { setKimligi: '11811', imza: { alg: 'ed25519', acikAnahtar: TEST_ACIK } },
     kok: hedefKok,
     getir: getir2,
     zamanAsimi: 4000,
   });
   assert.strictEqual(r2.durum, 'guncel');
   assert.ok(!sayac2.yollar.some((y) => y.endsWith('manifest.json')), 'sürüm aynıysa manifest hiç indirilmemeli');
+});
+
+test('G4: --imza-anahtari ile manifest.json.sig yazılır, tüketicinin doğrulayıcısı kabul eder', async () => {
+  const setKoku = ornekSetKoku();
+  const cikti = gecici('cikti-imza');
+  const r = await uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811', '--cikti', cikti,
+    '--imza-anahtari', testAnahtarDosyasi()]);
+  const dizin = path.join(cikti, 'set', '11811');
+  const govde = fs.readFileSync(path.join(dizin, 'manifest.json'));
+  const imza = fs.readFileSync(path.join(dizin, 'manifest.json' + kg.IMZA_UZANTI), 'utf8');
+  assert.strictEqual(r.imzali, true);
+  assert.strictEqual(kg.manifestImzasiGecerliMi(govde, imza, TEST_ACIK), true);
+  const bozuk = Buffer.from(govde); bozuk[5] ^= 1;
+  assert.strictEqual(kg.manifestImzasiGecerliMi(bozuk, imza, TEST_ACIK), false);
+});
+
+test('G4: anahtarsız üretim imzasız manifest yazar ve UYARIR; RSA anahtarı reddedilir', async () => {
+  const setKoku = ornekSetKoku();
+  const cikti = gecici('cikti-imzasiz');
+  const satirlar = [];
+  const r = await uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811', '--cikti', cikti],
+    { gunluk: (m) => satirlar.push(m) });
+  assert.strictEqual(r.imzali, false);
+  assert.ok(!fs.existsSync(path.join(cikti, 'set', '11811', 'manifest.json' + kg.IMZA_UZANTI)));
+  assert.ok(satirlar.some((m) => /İMZASIZ/.test(m)));
+  const { privateKey: rsa } = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });
+  const y = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'uretici-rsa-')), 'rsa.key');
+  fs.writeFileSync(y, rsa.export({ type: 'pkcs8', format: 'pem' }));
+  await assert.rejects(uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811',
+    '--cikti', gecici('cikti-rsa'), '--imza-anahtari', y]), /ed25519 değil/);
 });

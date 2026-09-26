@@ -359,3 +359,35 @@ test('klasoruDonustur: opts.kip=kayipli verilirse eski davranışla dönüştür
     assert.ok(gunlukler.some((s) => s.includes('[sayfa-webp] kip=kayipli')));
   } finally { await fs.remove(kok); }
 });
+
+// ─── PLATFORM KAPSAMI (2026-09-26, Windows sözleşmesi ONAYLI — yalnız Windows) ───
+// Bayrak virgüllü platform listesi alabilir; kapı yalnız işin platformlarının HEPSİ
+// listedeyse açıktır (ortak workingPath: karışık işte mac çıktısına sızmasın).
+// Kural kaynağı: platform-kapisi.js — burada bu modülün acikMi'si uçtan uca sınanır.
+test('PLATFORM KAPSAMI: EMPP_SAYFA_WEBP=windows — windows açık, macos kapalı, karışık kapalı', () => {
+  const uyarilar = [];
+  const s = { uyar: (x) => uyarilar.push(x) };
+  const env = { EMPP_SAYFA_WEBP: 'windows' };
+  assert.strictEqual(acikMi(env, ['windows'], s), true, 'yalnız windows işi açık olmalı');
+  assert.strictEqual(acikMi(env, ['macos'], s), false, 'yalnız macos işi kapalı olmalı');
+  assert.strictEqual(acikMi(env, ['windows', 'macos'], s), false, 'karışık iş kapalı olmalı');
+  assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: 'windows,macos' }, ['windows', 'macos'], s), true);
+  assert.deepStrictEqual(uyarilar, []);
+});
+
+test('PLATFORM KAPSAMI: EMPP_SAYFA_WEBP eski değerler — 0 kapalı, 1 açık, tanımsız → varsayılan KAPALI', () => {
+  for (const is of [['windows'], ['macos'], ['windows', 'macos'], undefined]) {
+    assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: '0' }, is), false);
+    assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: '1' }, is), true);
+    assert.strictEqual(acikMi({}, is), false);
+  }
+});
+
+test('PLATFORM KAPSAMI: EMPP_SAYFA_WEBP bilinmeyen platform adı → görünür UYARI, eşleşme yok', () => {
+  const uyarilar = [];
+  const s = { uyar: (x) => uyarilar.push(x) };
+  assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: 'windows,mac' }, ['macos'], s), false);
+  assert.strictEqual(uyarilar.length, 1);
+  assert.match(uyarilar[0], /^UYARI: EMPP_SAYFA_WEBP tanınmayan platform adı: mac /);
+  assert.strictEqual(acikMi({ EMPP_SAYFA_WEBP: 'windows,mac' }, ['windows'], s), true, 'tanınan ad çalışmaya devam eder');
+});

@@ -19,13 +19,24 @@
  *   mac     -> 'macos'    (book-update's platform ENUM uses 'mac'; accept both)
  *   pardus  -> 'pardus'   (.impark, via pardus-packager-build.sh + Docker — NOT the
  *                          local HTTP packager; runner.js branches on this value)
+ *   windows -> 'windows'  (NSIS .exe, via LOCAL packager HTTP API — SET güncelleme
+ *                          kanalının kaynağı) — YALNIZ `EMPP_RUNNER_WINDOWS=1` ise;
+ *                          aksi hâlde `null` (desteklenmiyor gibi davranır).
  *
- * Returns null for anything this Mac agent does not build (windows/web…) so the
- * caller can fail the job cleanly instead of asking the packager to do something
- * it was not dispatched for.
+ * KAPI (2026-09-23, Şef/Nadir yetkisiyle): sözleşmedeki tetikleyici kararı
+ * ("windows-set ayrı bir platform mı, yoksa 'windows' teslimini mi değiştirir?" —
+ * bkz. `windows-paketleme-sozlesmesi.md` "Tetikleyici — KARAR BEKLİYOR") henüz
+ * VERİLMEDİ. `mapPlatform('windows')` varsayılan olarak `null` dönmezse, runner'ı
+ * yeniden başlatan HERHANGİ bir agent boru hattındaki `windows` işlerini claim
+ * edip NSIS paketi üretmeye başlar — bu, Nadir'in henüz vermediği kararı fiilen
+ * uygulamış olur. `EMPP_RUNNER_WINDOWS=1` açıkça verilmeden bu dal KAPALI kalır.
+ *
+ * Returns null for anything this Mac agent does not build (kapı kapalıyken windows
+ * dahil) so the caller can fail the job cleanly instead of asking the packager to
+ * do something it was not dispatched for.
  *
  * @param {string} platform
- * @returns {('android'|'macos'|'pardus'|null)}
+ * @returns {('android'|'macos'|'pardus'|'windows'|null)}
  */
 function mapPlatform(platform) {
   switch (String(platform || '').trim().toLowerCase()) {
@@ -36,6 +47,8 @@ function mapPlatform(platform) {
       return 'macos';
     case 'pardus':
       return 'pardus';
+    case 'windows':
+      return process.env.EMPP_RUNNER_WINDOWS === '1' ? 'windows' : null;
     default:
       return null;
   }
@@ -90,6 +103,11 @@ function parseNextJob(status, body) {
     buildMethod: job.buildMethod != null ? String(job.buildMethod) : undefined,
     bookTitle: job.bookTitle != null ? String(job.bookTitle) : undefined,
     ...(job.publisherName != null ? { publisherName: String(job.publisherName) } : {}),
+    // SET güncelleme kanalı (2026-09-23): windows SET işlerinde claim bu ikisini taşır —
+    // yoksa (android/macos/pardus, ya da eski API) alanlar tanımsız kalır, güncelleme
+    // adımı runner.js'te sessizce atlanır (varsayılan RET, tahmin ÜRETİLMEZ).
+    ...(job.setKimligi != null ? { setKimligi: String(job.setKimligi) } : {}),
+    ...(job.guncellemeTabani != null ? { guncellemeTabani: String(job.guncellemeTabani) } : {}),
   };
 }
 
@@ -241,6 +259,8 @@ function artifactExtension(packagerPlatform) {
       return '.dmg';
     case 'pardus':
       return '.impark';
+    case 'windows':
+      return '.exe';
     default:
       return '';
   }
@@ -261,6 +281,8 @@ function artifactContentType(packagerPlatform) {
       return 'application/vnd.android.package-archive';
     case 'macos':
       return 'application/x-apple-diskimage';
+    case 'windows':
+      return 'application/x-msdownload';
     case 'pardus':
     default:
       return 'application/octet-stream';
@@ -715,6 +737,118 @@ function srcVersionTuret(downloadUrl, maxLen = 80) {
   return `src-${hash}`;
 }
 
+// ---------------------------------------------------------------------------
+// SET güncelleme kanalı — Runner parçası (3/3, 2026-09-23, bkz.
+// .claude/docs/kitap-guncelleme-sozlesmesi.md "Sunucu tarafı — TASARIM").
+// Bu bölümdeki fonksiyonlar SAFTIR (I/O yok) — tar/curl/fs çağrıları runner.js'te.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bir SET güncelleme paketindeki dosyaları YÜKLEME SIRASINA göre sıralar:
+ * önce `dosya/*` (kabuk içerik), sonra `manifest.json`, EN SON `surum.json`.
+ *
+ * Neden bu sıra (sözleşme, "Üyelik kuralları" + "Çalışma anı kuralları"): bir
+ * tüketici (çalışan exe) `surum.json`'u okuyup "yeni sürüm var" kararını verir —
+ * içerik ve manifest R2'de ondan ÖNCE durmalı, yoksa bir istemci surum.json'u
+ * görüp manifest/dosya henüz orada değilken güncellemeye kalkar (yarım görünüm).
+ * BAŞKA BİR SIRA KABUL EDİLMEZ.
+ *
+ * Girdi öğeleri düz string (yol) ya da `{yol, ...}` nesnesi olabilir; nesneler
+ * kendi kimliğiyle (yalnız yeniden sıralanmış olarak) döner. Orijinal liste
+ * DEĞİŞTİRİLMEZ (kopya üzerinde çalışılır); aynı kategori içindeki öğeler girdi
+ * sırasını korur (kararlı sıralama).
+ *
+ * @param {Array<string|{yol:string}>} liste
+ * @returns {Array<string|{yol:string}>}
+ */
+function guncellemeDosyalariniSirala(liste) {
+  if (!Array.isArray(liste)) return [];
+  const yolOf = (item) => (typeof item === 'string'
+    ? item
+    : (item && typeof item === 'object' && item.yol != null ? String(item.yol) : ''));
+  const kategori = (yol) => {
+    if (yol === 'surum.json') return 2;
+    if (yol === 'manifest.json') return 1;
+    return 0; // 'dosya/*' ve tanınmayan her şey — en güvenli varsayılan EN ÖNCE gider
+  };
+  return liste
+    .map((item, index) => ({ item, index, sira: kategori(yolOf(item)) }))
+    .sort((a, b) => (a.sira - b.sira) || (a.index - b.index))
+    .map((x) => x.item);
+}
+
+/**
+ * Bir SET kabuk/güncelleme dosyasının Content-Type'ını uzantısından türetir.
+ * SAF fonksiyon — `presign-guncelleme` isteğine giden `dosyalar[].contentType`
+ * alanını doldurmak için kullanılır. R2'ye giden GERÇEK PUT header'ı her zaman
+ * ayrıca verilir (bu yalnız istek gövdesini/yerel curl header'ını besler, sunucu
+ * imzasının yerine geçmez).
+ *
+ * @param {string} yol
+ * @returns {string}
+ */
+function guncellemeIcerikTipi(yol) {
+  const m = String(yol || '').toLowerCase().match(/\.[a-z0-9]+$/);
+  const ext = m ? m[0] : '';
+  const TIPLER = {
+    '.html': 'text/html', '.htm': 'text/html',
+    '.json': 'application/json',
+    '.js': 'application/javascript', '.mjs': 'application/javascript',
+    '.css': 'text/css',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+    '.woff': 'font/woff', '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf', '.otf': 'font/otf',
+    '.mp4': 'video/mp4', '.mp3': 'audio/mpeg',
+    '.pdf': 'application/pdf',
+    '.wasm': 'application/wasm',
+    '.txt': 'text/plain',
+    '.xml': 'application/xml',
+  };
+  return TIPLER[ext] || 'application/octet-stream';
+}
+
+/**
+ * `tar -tzf <arşiv>` çıktısını (satır başına bir yol) SET güncelleme paketinin
+ * beklenen köküne (`set/<setKimligi>/`) göre ayrıştırır: dizin girdilerini ve
+ * beklenen kökün DIŞINDA kalan/güvensiz girdileri ELER, kalanları köke göre
+ * GÖRELİ yola indirger.
+ *
+ * Güvenlik (sözleşme "Varsayılan RET" — eksik alan/`..`/mutlak yol → o öğe
+ * atlanır): `..` segmenti içeren, `/` ile başlayan (mutlak) ya da beklenen
+ * `setKimligi` kökünün dışında kalan girdiler SESSİZCE elenir — fırlatmaz,
+ * dönen listede yer almaz. Boş satırlar ve `/` ile biten dizin girdileri de
+ * elenir.
+ *
+ * SAF fonksiyon — tar'ı ÇALIŞTIRMAZ, yalnız onun metin çıktısını ayrıştırır.
+ *
+ * @param {string} cikisMetni  `tar -tzf` stdout
+ * @param {string} setKimligi  beklenen set kimliği (örn. '11811')
+ * @returns {string[]} köke göre göreli yol listesi (örn. ['manifest.json', 'dosya/assets2/x.png'])
+ */
+function tarListesiniAyristir(cikisMetni, setKimligi) {
+  const setId = String(setKimligi || '').trim();
+  if (!setId || !String(cikisMetni || '').trim()) return [];
+  const kok = `set/${setId}/`;
+  const sonuc = [];
+  for (const ham of String(cikisMetni).split(/\r?\n/)) {
+    const satir = ham.trim();
+    if (!satir) continue;
+    if (satir.endsWith('/')) continue; // dizin girdisi
+    const yol = satir.replace(/^\.\//, ''); // bazı tar sürümleri './' öneki koyar
+    if (!yol.startsWith(kok)) continue; // beklenen setin dışında — atla
+    const goreli = yol.slice(kok.length);
+    if (!goreli) continue;
+    if (goreli.startsWith('/') || goreli.split('/').includes('..')) continue; // mutlak/`..` — RET
+    sonuc.push(goreli);
+  }
+  return sonuc;
+}
+
 module.exports = {
   pauseRequested,
   etkinYetenekler,
@@ -744,4 +878,7 @@ module.exports = {
   DISK_KAPISI_ISARETI,
   probookErisilemezHatasi,
   PROBOOK_KAPISI_ISARETI,
+  guncellemeDosyalariniSirala,
+  guncellemeIcerikTipi,
+  tarListesiniAyristir,
 };
