@@ -311,6 +311,38 @@ async function ensureSetMenu(rootPath, opts = {}) {
   return { action: mevcut == null ? 'no-root-index' : 'generated', books: bookDirs, mode };
 }
 
+/** `setMenuKapisi`'nin fırlattığı hatanın kodu (çağıran/test ayırt etsin). */
+const SET_KOK_EZILMIS = 'SET_KOK_EZILMIS';
+
+/**
+ * KAPI (2026-09-26, 73768): `ensureSetMenu` sonucu `webz-shell-index-missing` ise
+ * paketleme HATA ile biter — uyarı değil.
+ *
+ * NEDEN: bu sonuç "kökte Web-Z kabuk dosyaları var ama kök index.html kabuk değil / yok"
+ * demektir — yani set menüsü ezilmiş (yayıncı okuyucusunun index.html'i menünün üstüne
+ * açılmış) ya da hiç yok. Böyle paket hiçbir platformda açılmaz (sonsuz "yükleniyor").
+ * Eskiden yalnız uyarı basılıyordu; kabul kapısı olmayan mac ve android paketleri
+ * 26.09'da bu yüzden R2'ye bozuk yüklendi.
+ *
+ * Yayıncının KENDİ özel menüsü (Flashy 59480, K17) ya da masaüstünün Web-Z kabuğu
+ * `custom-menu-kept` döner — bu kapı onlara dokunmaz. `null` (kontrol kendisi patladı ya
+ * da hiç koşmadı) bilgi yoktur, iş düşürülmez.
+ * @param {{action:string, books?:string[]}|null} menuResult
+ * @returns {object|null} menuResult (değişmeden)
+ */
+function setMenuKapisi(menuResult) {
+  if (menuResult && menuResult.action === 'webz-shell-index-missing') {
+    const kitaplar = (menuResult.books || []).join(', ') || '-';
+    const e = new Error("SET kök index'i ezilmiş/eksik — paket yüklenmedi (kökte Web-Z kabuk "
+      + `dosyaları var ama index.html kabuk değil; kitaplar: ${kitaplar}). Kök menüyü Üretim `
+      + 'Masası üretmeli; kaynak önbellekte zehirli kök olabilir.');
+    e.code = SET_KOK_EZILMIS;
+    throw e;
+  }
+  return menuResult;
+}
+
 module.exports = {
   ensureSetMenu, motorKopyasiMi, kitapAdiCikar, webZKabukIndexiMi, MENU_ISARETI, YEDEK_AD,
+  setMenuKapisi, SET_KOK_EZILMIS,
 };

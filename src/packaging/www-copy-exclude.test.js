@@ -99,18 +99,24 @@ test('EXCLUDED_SEGMENTS node_modules ve .git icerir', () => {
 });
 
 // --- Kaynak-sentinel: iki gercek cagri noktasinda filtre fiilen kullaniliyor mu? ---
+// NOT (2026-09-26, açık iş 5): iki çağrı noktası da artık `createWwwCopyFilter`'ı
+// `kok-yedek-dizin-disla.js`'in kök "_" dışlamasıyla `birlesikFiltre` ile VE'liyor
+// (bkz. kok-yedek-dizin-disla.test.js "BAĞLANTI" testleri) — bu yüzden desen
+// artık tek satırlık literal çağrı yerine, `createWwwCopyFilter(workingPath)`in
+// `fs.copy(workingPath, X, {...})` bloğu İÇİNDE hâlâ var olduğunu (birleşik
+// filtrenin İÇİNDE, EZİLMEMİŞ) doğrular.
 test('kaynak-sentinel: packageAndroid webapp kopyasi filtre kullanir', () => {
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  assert.match(
-    src,
-    /await fs\.copy\(workingPath, webAppPath, \{ filter: createWwwCopyFilter\(workingPath\) \}\)/
-  );
+  const i = src.indexOf('await fs.copy(workingPath, webAppPath,');
+  assert.notStrictEqual(i, -1, 'packageAndroid fs.copy çağrısı bulunamadı');
+  const blok = src.slice(i, src.indexOf('});', i) + 3);
+  assert.match(blok, /createWwwCopyFilter\(workingPath\)/, 'node_modules dışlaması kaybolmuş');
 });
 
 test('kaynak-sentinel: initializeCapacitorProject www kopyasi filtre kullanir', () => {
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  assert.match(
-    src,
-    /await fs\.copy\(workingPath, wwwPath, \{ filter: createWwwCopyFilter\(workingPath\) \}\)/
-  );
+  const i = src.indexOf('await fs.copy(workingPath, wwwPath,');
+  assert.notStrictEqual(i, -1, 'initializeCapacitorProject fs.copy çağrısı bulunamadı');
+  const blok = src.slice(i, src.indexOf('});', i) + 3);
+  assert.match(blok, /createWwwCopyFilter\(workingPath\)/, 'node_modules dışlaması kaybolmuş');
 });

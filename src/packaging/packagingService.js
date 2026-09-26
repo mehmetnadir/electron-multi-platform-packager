@@ -7,9 +7,11 @@ const pwaConfigManager = require('../server/pwa-config-manager');
 const { macSigningConfig } = require('../platforms/macos/mac-signing');
 const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-layout');
 const { createWwwCopyFilter } = require('./www-copy-exclude');
+const kokYedekDizinDisla = require('./kok-yedek-dizin-disla');
+const windowsSetupDogrulama = require('./windows-setup-dogrulama');
 const { ensureSetBookHomeButton } = require('./set-book-home-button');
 const { findSubBookDirs } = require('./sub-book-dirs');
-const { ensureSetMenu } = require('./set-menu');
+const { ensureSetMenu, setMenuKapisi } = require('./set-menu');
 const { injectFsShimIntoSubBooks } = require('./fs-shim-subbook-inject');
 const { ensureWritableTree } = require('./ensure-writable');
 const { checkAndroidGradleHeapPreflight } = require('./android-preflight');
@@ -501,8 +503,9 @@ MimeType=application/x-electron;
       // (sf425 ve Super Monsters 2 Set, ProBook'ta kanıtlı). Kapı VARSAYILAN KAPALI
       // (`EMPP_SET_MENU=1`) — üretim davranışını değiştirmek Nadir'in kararı (K1).
       // Özel menüsü olan SET'lere (Flashy 59480) DOKUNULMAZ; orijinal sayfa yedeklenir.
+      let menuResult = null;
       try {
-        const menuResult = await ensureSetMenu(workingPath, { appName });
+        menuResult = await ensureSetMenu(workingPath, { appName });
         if (menuResult.action === 'generated' || menuResult.action === 'no-root-index') {
           console.log(`🧭 SET menüsü üretildi (${menuResult.mode}): ${menuResult.books.join(', ')}`);
         } else if (menuResult.action === 'custom-menu-kept') {
@@ -511,6 +514,9 @@ MimeType=application/x-electron;
       } catch (menuError) {
         console.warn('⚠️ SET menüsü kontrolü başarısız (paketleme devam ediyor):', menuError.message);
       }
+      // 2026-09-26 (73768) — kök index ezilmiş/eksik SET paketi ÜRETİLMEZ: HATA, uyarı değil.
+      // try/catch DIŞINDA — yukarıdaki catch bu hatayı yutmamalı (startPackaging → job failed).
+      setMenuKapisi(menuResult);
 
       // ÖLÜ MOTOR TEMİZLİĞİ (2026-09-19) — KAPI VARSAYILAN AÇIK (`EMPP_OLU_TEMIZLIK=0` kapatır).
       // sm4 ölçümü: her alt-kitabın kökünde 39–43 MB js/css var, index.html'den
@@ -2085,6 +2091,13 @@ function closeSplashScreen() {
     const outputPath = path.join(tempPath, 'windows');
     await fs.ensureDir(outputPath);
 
+    // SESSİZ BAŞARI KAPISI, hazırlık adımı — açık iş 2 (2026-09-26): derleme
+    // BAŞLAMADAN önce çıktı dizininde duran her `.exe`'yi (önceki iş/deneme
+    // kalıntısı olabilir) SİLMEDEN kenara alır. Bu sayede derleme bu kez
+    // BAŞARISIZ olursa aşağıdaki ".exe ara" adımı eski dosyayı "yeni üretim"
+    // sanıp teslim edemez. Bkz. `windows-setup-dogrulama.js`.
+    await windowsSetupDogrulama.eskiCiktiyiKenaraAl(outputPath);
+
     // Progress update: 10% - Mevcut kurulum kontrol ediliyor
     if (io && jobId) {
       io.emit('packaging-progress', {
@@ -2200,7 +2213,12 @@ function closeSplashScreen() {
         "!temp",
         "!uploads",
         "!build",
-        "!**/temp/data/storage.im"
+        "!**/temp/data/storage.im",
+        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): `_` ile başlayan
+        // KÖK dizinler (ör. `_eski/`) pakete girmez. Tanım TEK yerde:
+        // `kok-yedek-dizin-disla.js` (`set-kabuk.js` `YEDEK_DIZIN_DESENI` ile
+        // BİREBİR aynı desen) — mac/linux config'leri de AYNI diziyi çağırır.
+        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
       ],
       // asar KAPALI — YALNIZ WINDOWS (2026-09-21, ölçümle). Gerekçe + geri dönüş
       // kapısı (EMPP_WINDOWS_ASARSIZ=0) tek yerde: src/packaging/windows-asarsiz.js.
@@ -2292,6 +2310,10 @@ function closeSplashScreen() {
     }
 
     // Electron Builder'ı çalıştır
+    // Derleme başlangıcı (2026-09-26, açık iş 2 katman b): teslim edilecek
+    // installer'ın GERÇEKTEN bu derlemede üretildiğini kanıtlamak için — bkz.
+    // aşağıdaki `windowsSetupDogrulama.dogrula` çağrısı.
+    const derlemeBaslangici = Date.now();
     await this.runElectronBuilder(configPath, 'win', outputPath);
 
     // Progress update: 90%
@@ -2340,11 +2362,22 @@ function closeSplashScreen() {
       throw new Error('Windows installer oluşturulamadı');
     }
 
+    // SESSİZ BAŞARI KAPISI, katman (b) — açık iş 2 (2026-09-26): bulunan .exe
+    // GERÇEKTEN bu derlemede mi üretildi? mtime bu derlemenin başlangıcından
+    // yeni olmalı VE adı beklenen `${appName}-${appVersion}-Setup.exe` (electron-
+    // builder'ın kendi `artifactName` şablonuyla birebir) olmalı. Tutmazsa eski
+    // dosya SİLİNMEDEN anlaşılır Türkçe hata fırlatılır.
+    const installerFullPath = path.join(outputPath, installerFile);
+    const dogrulamaSonucu = await windowsSetupDogrulama.dogrula(installerFullPath, appName, appVersion, derlemeBaslangici);
+    if (!dogrulamaSonucu.tamam) {
+      throw new Error(dogrulamaSonucu.hata);
+    }
+
     return {
       platform: 'windows',
       filename: installerFile,
-      path: path.join(outputPath, installerFile),
-      size: (await fs.stat(path.join(outputPath, installerFile))).size,
+      path: installerFullPath,
+      size: (await fs.stat(installerFullPath)).size,
       type: 'installer'
     };
   }
@@ -2381,7 +2414,10 @@ function closeSplashScreen() {
         "!node_modules",
         "node_modules/adm-zip",
         "!temp",
-        "!uploads"
+        "!uploads",
+        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26) — bkz. `packageWindows`
+        // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`.
+        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
       ],
       mac: {
         target: {
@@ -2557,7 +2593,12 @@ function closeSplashScreen() {
         "!node_modules",
         "node_modules/adm-zip",
         "!temp",
-        "!uploads"
+        "!uploads",
+        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26) — bkz. `packageWindows`
+        // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`. Pardus (.impark)
+        // `pardus-packager-build.sh` bu FONKSİYONUN BİREBİR kopyasını konteynerde
+        // çalıştırır — ayrı bir kod yolu YOK.
+        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
       ],
       linux: {
         // .impark yalnız AppImage'dan türetilir; deb 1,5 GB gövdede tek çekirdekli
@@ -2909,7 +2950,14 @@ StartupWMClass=${appName}
       // node_modules (prepareElectronFiles'ın workingPath köküne kurduğu Electron
       // devDependency'si) dışlanır — yoksa APK'ya Electron.app sızar (bkz. www-copy-exclude.js).
       const webAppPath = path.join(androidPath, 'webapp');
-      await fs.copy(workingPath, webAppPath, { filter: createWwwCopyFilter(workingPath) });
+      // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): `_` ile başlayan KÖK
+      // dizinler (ör. `_eski/`) APK'ya da sızmasın — bkz. `kok-yedek-dizin-disla.js`.
+      await fs.copy(workingPath, webAppPath, {
+        filter: kokYedekDizinDisla.birlesikFiltre(
+          createWwwCopyFilter(workingPath),
+          kokYedekDizinDisla.fsCopyFiltresi(workingPath)
+        ),
+      });
       
       // Android için gerekli dosyaları oluştur
       await this.generateAndroidFiles(webAppPath, appName, appVersion, logoPath, options);
@@ -4190,6 +4238,10 @@ if (!window.cordova) {
 
       const appDir = path.join(path.dirname(configPath), 'app');
       const electronBuilderBin = this.resolveElectronBuilderBinary();
+      // SESSİZ BAŞARI KAPISI, katman (a) girdisi (2026-09-26, Şef düzeltmesi):
+      // spawn ANI — win'de sıfır-dışı çıkışta bulunan bir Setup.exe'nin BU
+      // derlemede mi yoksa ÖNCEKİ bir derlemeden mi kaldığını ayırt etmek için.
+      const spawnZamani = Date.now();
 
       console.log('🔧 Electron Builder başlatılıyor:');
       console.log(`  - Platform: ${platform}`);
@@ -4236,18 +4288,48 @@ if (!window.cordova) {
         if (code === 0) {
           resolve(output);
         } else {
-          // Exit code 1 olsa bile Setup dosyası oluşturulmuş mu kontrol et
-          // (updateInfoBuilder hatası Setup dosyasını etkilemez)
-          const glob = require('glob');
+          // SESSİZ BAŞARI KAPISI, katman (a) — açık iş 2 (2026-09-26, Windows
+          // sözleşmesi; 2026-09-26 Şef düzeltmesi). BELİRTİ: eskiden win için
+          // "sıfır-dışı çıkışta bile çıktı dizininde HERHANGİ bir *Setup.exe
+          // var mı?" diye bakılıp varsa koşulsuz başarı sayılıyordu — bu, ÖNCEKİ
+          // bir derlemeden kalma eski bir Setup.exe'yi de kabul ediyordu.
+          //
+          // DÜZELTME BİR ÖNCEKİ TURDA AŞIRI GİTTİ: sıfır-dışı çıkışı KOŞULSUZ
+          // reddetmek, config'teki `publish: {provider:'generic', url:'https://
+          // example.com'}` yüzünden çalışan updateInfoBuilder'ın ZARARSIZ ağ/imza
+          // hatasını da (Setup.exe GERÇEKTEN bu derlemede üretilmiş olsa bile)
+          // reddediyordu — win-özel dalın asıl var oluş nedeni buydu.
+          //
+          // ŞİMDİKİ DAVRANIŞ: sıfır-dışı çıkışta yalnız çıktı dizininde mtime'ı
+          // BU spawn'dan (spawnZamani) YENİ olan bir *Setup.exe varsa "muhtemelen
+          // bu derlemede üretildi" sayılıp UYARIYLA kabul edilir — adın/ sürümün
+          // BİREBİR doğru olup olmadığını burası doğrulamaz, bu iş katman (b)'nin
+          // (`windows-setup-dogrulama.js` `dogrula()`, `packageWindows()` içinde
+          // çağrılır): taze ama YANLIŞ adlı/sürümlü bir dosya burada geçse de
+          // orada reddedilir. Dosya yoksa ya da mtime'ı spawn'dan ESKİYSE (önceki
+          // derlemeden kalma — bildirilen belirtinin BİREBİR kendisi) reddedilir.
           if (platform === 'win') {
+            const glob = require('glob');
             const setupFiles = glob.sync(path.join(outputPath, '**/*Setup.exe'));
-            if (setupFiles.length > 0) {
-              console.log('⚠️ Electron Builder hata verdi ama Setup dosyası oluşturuldu:', setupFiles[0]);
-              console.log('✅ Paketleme başarılı sayılıyor (update info hatası ignore edildi)');
+            let tazeDosya = null;
+            for (const dosyaYolu of setupFiles) {
+              try {
+                const stat = fs.statSync(dosyaYolu);
+                if (stat.mtimeMs >= spawnZamani && (!tazeDosya || stat.mtimeMs > tazeDosya.mtimeMs)) {
+                  tazeDosya = { yol: dosyaYolu, mtimeMs: stat.mtimeMs };
+                }
+              } catch {
+                // stat başarısızsa bu dosyayı "taze" sayma — devam
+              }
+            }
+            if (tazeDosya) {
+              console.warn(
+                `⚠️ exit ${code} ama Setup.exe bu derlemede üretildi (mtime ${new Date(tazeDosya.mtimeMs).toISOString()}) ` +
+                `— (b) katmanı adı doğrulayacak: ${tazeDosya.yol}`
+              );
               return resolve(output);
             }
           }
-
           console.error('❌ Tam hata çıktısı:', errorOutput || output);
           reject(new Error(`Electron Builder ${platform} build failed (exit code ${code})`));
         }
@@ -4397,7 +4479,14 @@ if (!window.cordova) {
     // 250 MB). www, Capacitor webDir'i ve doğrudan APK assets'ine gidiyor — dışlama şart.
     const wwwPath = path.join(webAppPath, 'www');
     await fs.ensureDir(wwwPath);
-    await fs.copy(workingPath, wwwPath, { filter: createWwwCopyFilter(workingPath) });
+    // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): bkz. `packageAndroid`
+    // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`.
+    await fs.copy(workingPath, wwwPath, {
+      filter: kokYedekDizinDisla.birlesikFiltre(
+        createWwwCopyFilter(workingPath),
+        kokYedekDizinDisla.fsCopyFiltresi(workingPath)
+      ),
+    });
 
     // KRİTİK (2026-08-04): Capacitor `www/index.html`i KÖKTE ister; yoksa
     // `cap sync android` "The web assets directory (./www) must contain an

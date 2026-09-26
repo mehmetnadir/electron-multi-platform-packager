@@ -16,6 +16,8 @@ const { spawnSync } = require('child_process');
 const { yazilacakSurum, acikMi } = require('./surum-normallestir');
 // TEK KAYNAK: sürüm kıyası burada YENİDEN YAZILMAZ (bkz. isNewer/cmpVersion).
 const { dahaYeniMi, parcalara } = require('./surum-kiyas');
+// TEK KAYNAK: okuyucu rozeti (bookN'in gerçek okuyucu sürümü) burada YENİDEN YAZILMAZ.
+const { rozetSurumuOkuEsz } = require('../packaging/motor-surumu');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.empp-agent', 'updates');
 
@@ -84,31 +86,164 @@ function currentVersion(buildDir) {
   try { return fs.readFileSync(path.join(buildDir, 'version.txt'), 'utf8').trim(); } catch (e) { return '1'; }
 }
 
+function unzipla(zipPath, hedef) {
+  const r = spawnSync('unzip', ['-o', '-q', zipPath, '-d', hedef], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`güncelleme açılamadı (${zipPath} → ${hedef}): ${(r.stderr || '').slice(-300)}`);
+}
+
 /**
- * Uygular; dönüş: { applied: bool, from, to, companyId, reason }.
- * Zip build köküne (app.config.js'in olduğu yere) açılır — electron.js extractAllTo(dirname, true).
+ * version.txt'yi yazar. 2026-09-21 bug-fix: yayıncının electron.js'i version.txt 3 parça
+ * değilse koşulsuz "eski" sayıp 350MB güncellemeyi tekrar tekrar indiriyordu (kök neden:
+ * zip adı ham yazılıyordu, örn "1.13.1.3"). Normalize et; edilemiyorsa `onceki`
+ * (unzip'ten ÖNCE okunmuş, güvenilir değer) geri yazılır — zip'in kendi içinde bozuk bir
+ * version.txt varsa unzip onu zaten açmış olabilir, "dokunma" fail-safe'i bunu da kapsar.
+ * `onceki` null ise (dosya hiç yoktu) ve normalleştirilemiyorsa zip'in yazdığına dokunulmaz.
+ */
+function surumDosyasiYaz(dizin, yeni, onceki) {
+  const hedef = path.join(dizin, 'version.txt');
+  if (acikMi()) {
+    const { deger } = yazilacakSurum(yeni, onceki);
+    if (deger !== null) fs.writeFileSync(hedef, deger);
+    else if (onceki !== null && onceki !== undefined) fs.writeFileSync(hedef, onceki);
+  } else {
+    fs.writeFileSync(hedef, yeni);
+  }
+}
+
+/**
+ * Yayıncının SET dalındaki hedefler: kökün `app.config.js` taşıyan DOĞRUDAN alt klasörleri
+ * (electron.js downloadUpdates: `readdirSync(dirname,{withFileTypes}).filter(isDirectory)`
+ * → `existsSync(<ad>/app.config.js)`). Doğal sıra (book2 < book10).
+ */
+function setKitapDizinleri(buildDir) {
+  let girisler = [];
+  try { girisler = fs.readdirSync(buildDir, { withFileTypes: true }); } catch (e) { return []; }
+  return girisler
+    .filter((g) => g.isDirectory() && fs.existsSync(path.join(buildDir, g.name, 'app.config.js')))
+    .map((g) => g.name)
+    .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+}
+
+/**
+ * Bir SET kitabının KENDİ okuyucu sürümü.
+ *
+ * KAYNAK: okuyucu ROZETİ — `bookN/index.html` → `<hash>.main.js` → `e.exports={i8:"X"}`
+ * (webpack'in package.json sürümü; sağ alttaki sürüm rozeti de budur). Okuyan:
+ * `packaging/motor-surumu.rozetSurumuOkuEsz` (tek kaynak).
+ *
+ * `bookN/version.txt` BİLEREK KULLANILMAZ — ölçüldü 2026-09-26: 25.09 SM3 build zip'inde
+ * üç bookN'in version.txt'si "1.11.5" ama okuyucusu 1.13.3'e yamalı (rozet 1.13.3,
+ * bd0c1a4f650802c98ebf.main.js). version.txt'ye güvenmek 1.13.1.3 güncellemesini
+ * "yeni" sanıp 1.13.3 okuyucuyu GERİ DÜŞÜRÜRDÜ. Rozet okunamıyorsa sürüm BİLİNMİYOR sayılır.
+ * @returns {{surum:string|null, kaynak:string}}
+ */
+function kitapOkuyucuSurumu(kitapDizini) {
+  const r = rozetSurumuOkuEsz(kitapDizini);
+  if (parcalara(r.surum)) return { surum: r.surum, kaynak: `rozet ${r.parca}` };
+  return {
+    surum: null,
+    kaynak: r.main ? `rozet okunamadı (${r.main})` : 'rozet okunamadı (index.html/main.js yok)',
+  };
+}
+
+function varsaOku(dosya) {
+  try { return fs.readFileSync(dosya, 'utf8').trim(); } catch (e) { return null; }
+}
+
+/**
+ * SET DALI (2026-09-26, 73768 Pardus ProBook RED): kökte app.config.js YOK → güncelleme
+ * yalnız app.config.js taşıyan alt klasörlere açılır, köke ASLA açılmaz.
+ *
+ * NEDEN: kök index.html set menüsüdür (Web-Z kabuğu). Eski kod zip'i koşulsuz köke açıyor,
+ * okuyucunun index.html'i (2.973 B, md5 9f8032915a19f3285dd2e3051ae5acc4) menünün üstüne
+ * yazılıyordu; okuyucu SET kökünde app.config.js bulamayıp sonsuza dek "yükleniyor"da
+ * kalıyordu. Yayıncının kendi electron.js'i (downloadUpdates, satır 175-186) köke hiç açmaz.
+ *
+ * Yayıncıdan BİLİNÇLİ SAPMA: yayıncı her bookN'e koşulsuz açar; biz kitabın kendi okuyucu
+ * sürümüne bakarız — güncelleme o kitaptan yeni değilse (ya da sürüm bilinmiyorsa)
+ * uygulanmaz. Sürüm düşürme yasak.
+ *
+ * KÖK version.txt KARARI: kitap sonuçlarından bağımsız olarak, normalleştirilmiş
+ * güncelleme sürümüne ilerletilir (tek kitaptaki aynı `surumDosyasiYaz` ile). Gerekçe:
+ *   1. Yayıncının davranışı: SET dalından sonra `setAppVersion(body)` KÖK version.txt'ye
+ *      yazar — kök version.txt "güncelleme kanalı bu sürüme kadar işlendi" damgasıdır.
+ *   2. Önbellek anahtarı: `runner.cachedZipIsStale` ve `local-build` zipStale KÖK
+ *      version.txt'yi okur. İlerletilmezse (ör. tüm kitaplar 1.13.3 diye atlandığında)
+ *      önbellek her işte STALE sayılır → her işte ~1 GB yeniden indirme + aynı sonuç
+ *      (kitap kararı deterministik, tekrar koşmak hiçbir şeyi değiştirmez).
+ *   3. Kapı m.11 ("Ş kapalı ya da version.txt 3 parçalı"): normalleştirme 3 parça yazar;
+ *      Ş (checkForUpdates) pakette `icerik-guncelleme.kanalSKapat` ile kapalı olduğundan
+ *      kök version.txt'nin çalışma anında indirme etkisi yoktur.
+ * Kök version.txt yalnız isNewer(kök, güncelleme) doğruyken yazılır → asla GERİ gitmez.
+ */
+function setDaliUygula(buildDir, upd, { from, companyId, log }) {
+  const kitaplar = setKitapDizinleri(buildDir);
+  const uygulanan = [];
+  const atlanan = [];
+  for (const kitap of kitaplar) {
+    const dizin = path.join(buildDir, kitap);
+    const s = kitapOkuyucuSurumu(dizin);
+    if (!s.surum) {
+      atlanan.push({ kitap, surum: null, kaynak: s.kaynak, neden: 'sürüm bilinmiyor' });
+      log(`⚠️ yayıncı güncellemesi ${upd.version} ${kitap}/ klasörüne UYGULANMADI: okuyucu `
+        + `sürümü belirlenemedi (${s.kaynak}) — sürüm düşürme riski, bilinçli atlandı`);
+      continue;
+    }
+    if (!dahaYeniMi(s.surum, upd.version)) {
+      atlanan.push({
+        kitap, surum: s.surum, kaynak: s.kaynak,
+        neden: `kitap okuyucusu ${s.surum} ≥ güncelleme ${upd.version} (sürüm düşürme yasak)`,
+      });
+      continue;
+    }
+    const oncekiTxt = varsaOku(path.join(dizin, 'version.txt'));
+    unzipla(upd.zipPath, dizin);
+    surumDosyasiYaz(dizin, upd.version, oncekiTxt);
+    uygulanan.push({ kitap, once: s.surum, kaynak: s.kaynak });
+  }
+  surumDosyasiYaz(buildDir, upd.version, from);
+  if (!kitaplar.length) {
+    log(`⚠️ yayıncı güncellemesi ${upd.version} HİÇBİR YERE açılmadı: kökte app.config.js yok `
+      + 've app.config.js taşıyan alt klasör de yok (kök ASLA ezilmez)');
+  }
+  const parcaUyg = uygulanan.map((u) => `${u.kitap} ${u.once}→${upd.version}`).join(', ');
+  const parcaAtl = atlanan.map((a) => `${a.kitap}: ${a.neden}${a.surum ? '' : ` [${a.kaynak}]`}`).join('; ');
+  const reason = `SET (kök korunur): ${uygulanan.length}/${kitaplar.length} kitaba uygulandı`
+    + (parcaUyg ? ` [${parcaUyg}]` : '')
+    + (parcaAtl ? `; atlandı: ${parcaAtl}` : '');
+  return {
+    applied: uygulanan.length > 0, from, to: upd.version, companyId, reason,
+    set: true, uygulanan, atlanan,
+  };
+}
+
+/**
+ * Uygular; dönüş: { applied, from, to, companyId, reason, set, uygulanan, atlanan }.
+ *   - Kökte app.config.js VAR (tek kitap): zip build köküne açılır — electron.js
+ *     extractAllTo(dirname, true). Bugünkü davranış aynen.
+ *   - YOK (SET): bkz. `setDaliUygula` — köke asla açılmaz.
+ * `uygulanan`: [{kitap, once, kaynak}] ('.' = kök/tek kitap); `atlanan`: [{kitap, surum, kaynak, neden}].
+ * opts: { updateDir?, log?(satır) } — log varsayılanı console.warn (atlama GÖRÜNÜR olmalı).
  */
 function applyPublisherUpdate(buildDir, opts = {}) {
+  const log = typeof opts.log === 'function' ? opts.log : (satir) => console.warn(satir);
   const companyId = companyIdFrom(buildDir);
   const from = currentVersion(buildDir);
   const upd = latestLocalUpdate(companyId, opts.updateDir);
   if (!upd) return { applied: false, from, to: null, companyId, reason: companyId ? 'yerel güncelleme yok' : 'kurum.txt yok' };
   if (!isNewer(from, upd.version)) return { applied: false, from, to: upd.version, companyId, reason: 'zaten güncel' };
-  const r = spawnSync('unzip', ['-o', '-q', upd.zipPath, '-d', buildDir], { encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`güncelleme açılamadı (${upd.zipPath}): ${(r.stderr || '').slice(-300)}`);
-  // 2026-09-21 bug-fix: yayıncının electron.js'i version.txt 3 parça değilse
-  // koşulsuz "eski" sayıp 350MB güncellemeyi tekrar tekrar indiriyordu (kök neden:
-  // zip adı ham yazılıyordu, örn "1.13.1.3"). Normalize et; edilemiyorsa mevcut
-  // (unzip'ten ÖNCEKİ) değeri geri yaz — zip'in kendi içinde bozuk bir version.txt
-  // varsa unzip onu build köküne zaten açmış olabilir, "dokunma" fail-safe'i bunu
-  // da kapsamalı (from = unzip'ten önce okunmuş, güvenilir değer).
-  if (acikMi()) {
-    const { deger } = yazilacakSurum(upd.version, from);
-    fs.writeFileSync(path.join(buildDir, 'version.txt'), deger !== null ? deger : from);
-  } else {
-    fs.writeFileSync(path.join(buildDir, 'version.txt'), upd.version);
+  if (!fs.existsSync(path.join(buildDir, 'app.config.js'))) {
+    return setDaliUygula(buildDir, upd, { from, companyId, log });
   }
-  return { applied: true, from, to: upd.version, companyId, reason: 'uygulandı' };
+  unzipla(upd.zipPath, buildDir);
+  surumDosyasiYaz(buildDir, upd.version, from);
+  return {
+    applied: true, from, to: upd.version, companyId, reason: 'uygulandı',
+    set: false, uygulanan: [{ kitap: '.', once: from, kaynak: 'version.txt' }], atlanan: [],
+  };
 }
 
-module.exports = { applyPublisherUpdate, latestLocalUpdate, isNewer, companyIdFrom, currentVersion, DEFAULT_DIR };
+module.exports = {
+  applyPublisherUpdate, latestLocalUpdate, isNewer, companyIdFrom, currentVersion, DEFAULT_DIR,
+  setKitapDizinleri, kitapOkuyucuSurumu,
+};

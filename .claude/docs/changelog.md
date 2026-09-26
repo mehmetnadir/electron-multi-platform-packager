@@ -1,3 +1,78 @@
+## 2026-09-26 (5) — Windows sözleşmesi açık iş 2 + 5: sessiz derleme başarısı + kök `_` dizin sızıntısı
+
+**Yetki:** Nadir onayıyla Şef (nadir-b8), ayrı çalışma ağacı (`_worktrees/win-acik-isler`,
+dal `fix/win-acik-isler-20260926`). Sözleşme `.claude/docs/windows-paketleme-sozlesmesi.md`
+"Üretimi etkilemeyen açık işler" madde 2 ve 5'i kapatır.
+
+**Açık iş 2 — makensis sessiz başarı:** `runElectronBuilder()` yalnız Windows'ta,
+electron-builder sıfır-dışı çıkış verdiğinde çıktı dizininde HERHANGİ bir `*Setup.exe`
+var mı diye bakıp varsa "başarılı" sayıyordu (updateInfoBuilder'ın zararsız hatasını
+tolere etmek için yazılmıştı) — ama bu, dosyanın BU derlemede üretildiğini hiç
+doğrulamıyordu: makensis GERÇEKTEN başarısız olup ÖNCEKİ bir derlemeden kalma bir
+Setup.exe duruyorsa, o ESKİ dosya teslim ediliyordu. İki katman düzeltme:
+  (a) `runElectronBuilder`: spawn ANI kaydedilir; win'de sıfır-dışı çıkışta yalnız
+      çıktı dizininde mtime'ı SPAWN ANINDAN yeni bir `*Setup.exe` varsa UYARIYLA
+      kabul edilir (`⚠️ exit N ama Setup.exe bu derlemede üretildi …`), ad/sürüm
+      burada doğrulanmaz; dosya yoksa ya da yalnız ESKİ (spawn'dan önceki) bir dosya
+      varsa reddedilir. **NOT (ilk turda aşırı gidilmişti, Şef düzeltmesi 2026-09-26):**
+      sıfır-dışı çıkışı KOŞULSUZ reddetmek denendi ama `packageWindows()` config'i
+      `publish: {provider:'generic', url:'https://example.com'}` taşıdığı için
+      updateInfoBuilder'ın ZARARSIZ ağ hatasını da (Setup.exe GERÇEKTEN üretilmiş
+      olsa bile) reddediyordu — win-özel dalın asıl var oluş nedeni tam bu tolerans
+      olduğu için mtime şartlı kabule geri dönüldü.
+  (b) `src/packaging/windows-setup-dogrulama.js` (yeni) — derleme BAŞLAMADAN önce
+      çıktı dizininde duran her `.exe`'yi SİLMEDEN `.eski-<ts>` sonekiyle kenara alır
+      (`eskiCiktiyiKenaraAl`); derleme bitince bulunan installer'ın mtime'ının bu
+      derlemenin başlangıcından yeni olduğunu VE adının beklenen
+      `${appName}-${appVersion}-Setup.exe` (electron-builder'ın kendi `artifactName`
+      şablonuyla birebir) olduğunu doğrular (`dogrula`) — tutmazsa anlaşılır Türkçe
+      hata, eski dosya silinmez. (a) taze ama YANLIŞ adlı bir dosyayı geçirse bile
+      (b) adı doğrulayıp reddeder — iki katman BİRLİKTE kapatıyor.
+  Testler: `windows-derleme-sessiz-basari.test.js` (8: exit0, exit≠0+dosya-yok,
+  4 senaryo — eski/taze-doğru-ad/taze-yanlış-ad/exit0+eski, mutasyon kanıtı,
+  kaynak-sentinel), `windows-setup-dogrulama.test.js` (12).
+  Mutasyonla doğrulandı (iki kez — ilk sürüm ve düzeltme sonrası ayrı ayrı):
+  spawn-anı tazelik koşulu kaldırılınca "ESKİ exe reddedilmeli" senaryosu +
+  mutasyon-sentinel testi düşüyor (kanıt: görev raporu).
+
+**Açık iş 5 — kök `_` dizinleri pakete sızıyor:** `set-kabuk.js`'in güncelleme kanalı
+beyaz listesi `_` ile başlayan KÖK dizinleri (ör. SM2 `_eski/`) zaten dışlıyordu, ama
+İLK PAKETLEME (build'in kendisi) tamamen ayrı bir kod yolu olduğu için bu dışlamayı
+hiç görmüyordu — dört platformun hepsinde (windows/macOS/linux-pardus'un
+electron-builder `files` dizisi, Android'in `fs.copy` filtresi). Tek tanım:
+`src/packaging/kok-yedek-dizin-disla.js` (yeni) — deseni `set-kabuk.js`
+`YEDEK_DIZIN_DESENI`'nden BİREBİR alır (kopya regex yok), iki tüketici biçimi sunar:
+`elektronBuilderDesenleri()` (glob: `!_*`, `!_*/**/*`) ve `fsCopyFiltresi(srcRoot)`
+(yalnız kök segment, yalnız dizin — `bookN/_x` motor dosyalarına dokunmaz). Beş çağrı
+noktasına (win/mac/linux `files[]`, android'in iki `fs.copy` filtresi) tek yerden
+bağlandı. Testler: `kok-yedek-dizin-disla.test.js` (8) — gerçek `app-builder-lib`
+`FileMatcher` sınıfıyla davranış testi dahil. Mutasyonla doğrulandı: wiring satırları
+kaldırılınca BAĞLANTI + fan-out-sapması testleri düşüyor.
+
+**Yan etki (düzeltildi):** `www-copy-exclude.test.js`'teki iki kaynak-sentinel testi
+artık birleşik filtre (`birlesikFiltre(createWwwCopyFilter(...), fsCopyFiltresi(...))`)
+yüzünden eski tek-satır regex'i yakalamıyordu — testler blok-tabanlı arama ile
+güncellendi (davranış aynı, yalnız arama biçimi).
+
+**Kapsam dışı bırakılan (bilerek):** PWA paketleme yolu (`fs.copy(workingPath, pwaPath)`,
+~satır 3790) hiçbir filtre taşımıyor — görev kapsamı yalnız windows/macOS/linux-pardus/
+android idi, PWA'ya dokunulmadı (mevcut, önceden var olan bir boşluk).
+
+**Test sayıları (Şef düzeltmesi sonrası, güncel):** değişen alan 4 dosya, standalone
+33/33 pass (`windows-setup-dogrulama` 10, `kok-yedek-dizin-disla` 8,
+`windows-derleme-sessiz-basari` 8 — 5'ten 8'e çıktı, dört senaryo + mutasyon kanıtı
+eklendi —, `www-copy-exclude` 7). Bu 4 dosya AYNI ANDA koşulunca `node:test`'in bilinen
+IPC seri hâle getirme sorunundan (bkz. `capacitor-splash.test.js` emsali) 1 test
+"deserialize" hatasıyla düşüyor — dosya tek başına koşulunca 0 fail; gerçek regresyon
+DEĞİL. `npm run test:set` 122 → 145 (140 pass, 5 skip — K15 root/uid, değişmedi). Tam takım
+(`npm test`) iki kez koşuldu: ilk turda (katman a "koşulsuz red" hâliyle) 1794 test/
+1785 pass/3 bilinen ön-var-olan FAIL; düzeltme sonrası (+3 yeni senaryo testiyle) 1797
+test/1789 pass/2 FAIL — ikisi de bilinen `_graveyard/` yokluğu (`windows-asarsiz.test.js`
+B4, `capacitor-config.test.js`), `capacitor-splash.test.js` IPC titreşimi bu turda hiç
+tetiklenmedi (flaky, tek başına her zaman 5/5). 0 YENİ FAIL, 6 skip (değişmedi).
+
+---
+
 ## 2026-09-19 (4) — K20: SET "ana ekran" butonu Windows'ta beyaz ekran (saha arızası)
 
 **Bildiren:** Nadir, üretilen exe'yi kurup açtıktan sonra. Kitap açıkken alt bardaki

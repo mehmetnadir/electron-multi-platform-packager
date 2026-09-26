@@ -124,3 +124,151 @@ test('SENTINEL: kapı EMPP_SURUM_NORMALLESTIR=0 ile kapatılırsa eski (ham) dav
     else delete process.env.EMPP_SURUM_NORMALLESTIR;
   }
 });
+
+// --- GERİLEME: 2026-09-26 SET KÖKÜ EZİLMESİ (73768 Pardus ProBook RED) ---
+//
+// Eski kod güncelleme zip'ini koşulsuz build KÖKÜNE açıyordu. SET'te kök index.html
+// set menüsüdür (Web-Z kabuğu); okuyucunun index.html'i onun üstüne yazılıyor, paket
+// sonsuza dek "yükleniyor"da kalıyordu. Yayıncının electron.js'i (downloadUpdates)
+// kökte app.config.js yoksa YALNIZ app.config.js taşıyan alt klasörlere açar.
+// Ek kural (bizim): kitabın KENDİ okuyucu sürümü (rozet) güncellemeden yeni değilse
+// ya da bilinmiyorsa o kitaba UYGULANMAZ — sürüm düşürme yasak.
+
+const crypto = require('node:crypto');
+const { kitapOkuyucuSurumu } = require('./publisher-update');
+
+const md5 = (f) => crypto.createHash('md5').update(fs.readFileSync(f)).digest('hex');
+const UPD_MAIN = 'b'.repeat(20) + '.main.js';
+const WEBZ_KOK_INDEX = '<!DOCTYPE html><html><head><title>SET menü</title></head><body>'
+  + '<div id="bookSetContainer"></div><script src="scripts/language-set.js"></script></body></html>';
+
+/** Okuyucu taşıyan kitap dizini. Rozet: index → <hash>.main.js → parça → e.exports={i8:"X"}. */
+function okuyucuKitabi(dizin, surum, hash) {
+  fs.mkdirSync(dizin, { recursive: true });
+  fs.writeFileSync(path.join(dizin, 'app.config.js'), 'const AppConfig = { setBook: { enable: true } };');
+  // version.txt BİLEREK yanlış (25.09 zip'lerindeki gibi) — karar ondan okunmamalı.
+  fs.writeFileSync(path.join(dizin, 'version.txt'), '1.11.5');
+  if (surum === null) {
+    fs.writeFileSync(path.join(dizin, 'index.html'), '<html><body>rozetsiz okuyucu</body></html>');
+    return;
+  }
+  const parca = 'c'.repeat(20);
+  fs.writeFileSync(path.join(dizin, 'index.html'),
+    `<html><head><script defer="defer" src="./${hash}.main.js"></script></head><body>${surum}</body></html>`);
+  fs.writeFileSync(path.join(dizin, `${hash}.main.js`), `var m={923:"${parca}"};`);
+  fs.writeFileSync(path.join(dizin, `${parca}.923.js`), `x=function(e){e.exports={i8:"${surum}"}}`);
+}
+
+/** SET build: kök = Web-Z kabuğu (app.config.js YOK); book1 1.11.5, book2 1.13.3, book3 rozetsiz. */
+function setFixture() {
+  const build = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-set-'));
+  fs.writeFileSync(path.join(build, 'kurum.txt'), '60\r\n');
+  fs.writeFileSync(path.join(build, 'version.txt'), '1.11.5');
+  fs.writeFileSync(path.join(build, 'index.html'), WEBZ_KOK_INDEX);
+  fs.mkdirSync(path.join(build, 'config'));
+  fs.writeFileSync(path.join(build, 'config', 'settings.json'), '{}');
+  fs.mkdirSync(path.join(build, 'scripts'));
+  fs.writeFileSync(path.join(build, 'scripts', 'language-set.js'), '// kabuk');
+  fs.mkdirSync(path.join(build, 'images'));
+  fs.writeFileSync(path.join(build, 'images', 'book1.png'), 'png');
+  okuyucuKitabi(path.join(build, 'book1'), '1.11.5', 'a'.repeat(20));
+  okuyucuKitabi(path.join(build, 'book2'), '1.13.3', 'd'.repeat(20));
+  okuyucuKitabi(path.join(build, 'book3'), null);
+  // Güncelleme zip'i: yayıncının 1.13.1.3 okuyucusu (index.html + main.js + version.txt).
+  const updRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-upd-'));
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-updsrc-'));
+  fs.writeFileSync(path.join(src, 'index.html'),
+    `<!doctype html><title>Akıllı Tahta Uygulaması</title><script defer="defer" src="./${UPD_MAIN}"></script>`);
+  fs.writeFileSync(path.join(src, UPD_MAIN), 'x=function(e){e.exports={i8:"1.13.1.3"}}');
+  fs.writeFileSync(path.join(src, 'version.txt'), '1.13.1.3');
+  fs.mkdirSync(path.join(updRoot, '060'), { recursive: true });
+  const zipPath = path.join(updRoot, '060', '1.13.1.3.zip');
+  spawnSync('zip', ['-q', '-r', zipPath, '.'], { cwd: src });
+  return { build, updRoot, updIndexMd5: md5(path.join(src, 'index.html')) };
+}
+
+function kos(build, updRoot) {
+  const satirlar = [];
+  const r = applyPublisherUpdate(build, { updateDir: updRoot, log: (s) => satirlar.push(s) });
+  return { r, satirlar };
+}
+
+test('GERİLEME: SET kökü — güncelleme sonrası kök index.html md5 DEĞİŞMEZ, köke okuyucu açılmaz', () => {
+  const { build, updRoot, updIndexMd5 } = setFixture();
+  const once = md5(path.join(build, 'index.html'));
+  const { r } = kos(build, updRoot);
+  assert.strictEqual(md5(path.join(build, 'index.html')), once, 'kök set menüsü ezildi');
+  assert.notStrictEqual(md5(path.join(build, 'index.html')), updIndexMd5);
+  assert.ok(!fs.existsSync(path.join(build, UPD_MAIN)), 'okuyucu main.js köke açılmış');
+  assert.ok(!fs.existsSync(path.join(build, 'app.config.js')), 'kökte app.config.js oluşmamalı');
+  assert.ok(!fs.existsSync(path.join(build, 'images', 'index.html')), 'app.config.js taşımayan klasöre açılmış');
+  assert.strictEqual(r.set, true);
+  // Kök version.txt kararı: normalleştirilmiş güncelleme sürümüne ilerler (önbellek anahtarı).
+  assert.strictEqual(fs.readFileSync(path.join(build, 'version.txt'), 'utf8'), '1.13.1');
+});
+
+test('SET bookN: eski okuyuculu kitap güncellenir (rozet 1.11.5 → 1.13.1.3)', () => {
+  const { build, updRoot, updIndexMd5 } = setFixture();
+  const { r } = kos(build, updRoot);
+  const b1 = path.join(build, 'book1');
+  assert.strictEqual(md5(path.join(b1, 'index.html')), updIndexMd5);
+  assert.strictEqual(kitapOkuyucuSurumu(b1).surum, '1.13.1.3');
+  assert.strictEqual(fs.readFileSync(path.join(b1, 'version.txt'), 'utf8'), '1.13.1', 'bookN version.txt da 3 parça');
+  assert.strictEqual(r.applied, true);
+  assert.deepStrictEqual(r.uygulanan.map((u) => [u.kitap, u.once]), [['book1', '1.11.5']]);
+  assert.match(r.uygulanan[0].kaynak, /^rozet /);
+});
+
+test('SET bookN: yeni okuyuculu kitap DÜŞÜRÜLMEZ (version.txt 1.11.5 yalan söylese de)', () => {
+  const { build, updRoot } = setFixture();
+  const b2 = path.join(build, 'book2');
+  const once = md5(path.join(b2, 'index.html'));
+  const { r } = kos(build, updRoot);
+  assert.strictEqual(md5(path.join(b2, 'index.html')), once, '1.13.3 okuyucu 1.13.1.3\'e düşürüldü');
+  assert.ok(!fs.existsSync(path.join(b2, UPD_MAIN)));
+  assert.strictEqual(kitapOkuyucuSurumu(b2).surum, '1.13.3');
+  assert.strictEqual(fs.readFileSync(path.join(b2, 'version.txt'), 'utf8'), '1.11.5', 'atlanan kitaba dokunulmaz');
+  const a = r.atlanan.find((x) => x.kitap === 'book2');
+  assert.ok(a, 'book2 atlananlarda raporlanmalı');
+  assert.strictEqual(a.surum, '1.13.3');
+  assert.match(a.neden, /sürüm düşürme yasak/);
+});
+
+test('SET bookN: sürümü bilinmeyen kitap atlanır, dönüşte ve günlükte GÖRÜNÜR raporlanır', () => {
+  const { build, updRoot } = setFixture();
+  const b3 = path.join(build, 'book3');
+  const once = md5(path.join(b3, 'index.html'));
+  const { r, satirlar } = kos(build, updRoot);
+  assert.strictEqual(md5(path.join(b3, 'index.html')), once);
+  assert.ok(!fs.existsSync(path.join(b3, UPD_MAIN)));
+  const a = r.atlanan.find((x) => x.kitap === 'book3');
+  assert.ok(a, 'book3 atlananlarda raporlanmalı');
+  assert.strictEqual(a.surum, null);
+  assert.strictEqual(a.neden, 'sürüm bilinmiyor');
+  assert.ok(satirlar.some((s) => s.includes('book3') && s.includes('UYGULANMADI')), 'sessiz atlama');
+  assert.match(r.reason, /1\/3 kitaba uygulandı/);
+  assert.match(r.reason, /book3: sürüm bilinmiyor/);
+});
+
+test('SET: ikinci koşu iş yapmaz (kök damgası ilerledi → önbellek STALE döngüsü yok)', () => {
+  const { build, updRoot } = setFixture();
+  kos(build, updRoot);
+  const { r } = kos(build, updRoot);
+  assert.strictEqual(r.applied, false);
+  assert.strictEqual(r.reason, 'zaten güncel');
+});
+
+test('Tek kitap: bugünkü davranış aynı — kökte app.config.js varsa zip köke açılır', () => {
+  const { build, updRoot } = fixture();
+  fs.writeFileSync(path.join(build, 'index.html'), '<html>eski okuyucu</html>');
+  // Tek kitapta alt klasörde app.config.js olsa bile SET dalı SEÇİLMEZ (yayıncı: kök önce).
+  fs.mkdirSync(path.join(build, 'alt'));
+  fs.writeFileSync(path.join(build, 'alt', 'app.config.js'), '// alt');
+  const r = applyPublisherUpdate(build, { updateDir: updRoot, log: () => {} });
+  assert.strictEqual(r.set, false);
+  assert.strictEqual(r.applied, true);
+  assert.strictEqual(fs.readFileSync(path.join(build, 'app.config.js'), 'utf8'), '// yeni');
+  assert.ok(fs.existsSync(path.join(build, 'new.main.js')), 'zip köke açılmalı');
+  assert.ok(!fs.existsSync(path.join(build, 'alt', 'new.main.js')), 'tek kitapta alt klasöre açılmaz');
+  assert.deepStrictEqual(r.uygulanan.map((u) => u.kitap), ['.']);
+});

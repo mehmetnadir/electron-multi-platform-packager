@@ -86,7 +86,9 @@ async function kaynakIsit({ bookId, downloadUrl, cacheRoot, diskTabaniGb = VARSA
     const buildDir = await findBuildDir(extractDir);
 
     try {
-      applyPublisherUpdate(buildDir);
+      // SET dalında atlanan kitaplar (sürüm bilinmiyor) GÖRÜNÜR olmalı — sonuç da günlüğe.
+      const upd = applyPublisherUpdate(buildDir, { log: (s) => kayit(`${bookId}: ${s}`) });
+      kayit(`yayıncı güncellemesi (${bookId}): ${upd.reason} (${upd.from} → ${upd.to || '-'})`);
     } catch (e) {
       kayit(`yayıncı güncellemesi uygulanamadı (${bookId}): ${e.message}`);
     }
