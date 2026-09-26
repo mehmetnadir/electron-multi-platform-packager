@@ -8,7 +8,9 @@
  * Kullanım:
  *   node tools/g-android/test-apk-uret.js --oturum g-e2e-73768 --kimlik 73768 \
  *     --taban https://127.0.0.1:8443/guncelleme --anahtar ~/.empp-agent/test-guncelleme-ed25519.key \
- *     --test-ca ~/.empp-agent/g-android-e2e/sertifika/ca.pem [--ad "SM3 G Test"]
+ *     --test-ca ~/.empp-agent/g-android-e2e/sertifika/ca.pem [--ad "SM3 G Test"] [--surum 2.51.3]
+ * `--surum` (G3): paketin sürümü — appVersion (→ www/empp-g-paket.json) ve claim `surum`
+ * (→ empp-set.json) olarak geçer; istemcinin monoton sürüm tabanı budur.
  * Açık anahtar ÖZEL anahtar dosyasından türetilir; özel anahtarın içeriği basılmaz, pakete girmez.
  * Çıktı: son satır `APK=<yol>`.
  */
@@ -29,6 +31,11 @@ const coz = (y) => (y && y.startsWith('~') ? path.join(process.env.HOME, y.slice
   const anahtar = coz(arg('anahtar'));
   const testCa = coz(arg('test-ca'));
   const ad = arg('ad', `G Test ${kimlik}`);
+  const surum = arg('surum');
+  if (surum && !/^2\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/.test(surum)) {
+    console.error(`--surum G3 biçiminde değil (2.<panel>.<sayaç>): ${surum}`);
+    process.exit(2);
+  }
   if (!oturum || !kimlik || !taban || !anahtar) {
     console.error('kullanım: --oturum --kimlik --taban --anahtar [--test-ca] [--ad]');
     process.exit(2);
@@ -59,7 +66,10 @@ const coz = (y) => (y && y.startsWith('~') ? path.join(process.env.HOME, y.slice
     platforms: ['android'],
     logoId: null,
     appName: ad,
-    packageOptions: { setKimligi: kimlik, guncellemeTabani: taban, guncellemeAcikAnahtari: acik },
+    ...(surum ? { appVersion: surum } : {}),
+    packageOptions: {
+      setKimligi: kimlik, guncellemeTabani: taban, guncellemeAcikAnahtari: acik, ...(surum ? { surum } : {}),
+    },
   }, io);
   const apk = r && r.android && (r.android.path || (r.android.result && r.android.result.path));
   console.log(`süre: ${Math.round((Date.now() - t0) / 1000)} sn`);
