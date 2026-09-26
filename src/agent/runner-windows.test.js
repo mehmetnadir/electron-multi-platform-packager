@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const AdmZip = require('adm-zip');
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const RUNNER = require('./runner.js');
@@ -231,9 +232,16 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {} } = {}) {
   const kanitDizini = tmp('kanit');
   const arsiv = tmp('arsiv');
   fs.mkdirSync(path.join(arsiv, '74390'));
-  fs.writeFileSync(path.join(arsiv, '74390', 'build.zip'), 'build-zip');
+  // build.zip GERÇEK zip (assets/ içerir): içeriksiz kaynak kapısının ZIP yolu (icerik-kapisi-zip,
+  // 26.09) arşiv/HIT kaynağını okur; düz metin artık (haklı olarak) [kaynak-iceriksiz] RED alır.
+  const buildZip = new AdmZip();
+  buildZip.addFile('index.html', Buffer.from('<html></html>'));
+  buildZip.addFile('assets/74390/thumbs/1.jpg', Buffer.from('build-zip'));
+  const buildZipBuf = buildZip.toBuffer();
+  fs.writeFileSync(path.join(arsiv, '74390', 'build.zip'), buildZipBuf);
   fs.writeFileSync(path.join(arsiv, '74390', 'kaynak.json'), JSON.stringify({
-    dosya: 'build.zip', md5: md5('build-zip'), boyut: 9, etiket: 'test', impark_kaynagi: 'yds-v51.exe' }));
+    dosya: 'build.zip', md5: md5(buildZipBuf), boyut: buildZipBuf.length, etiket: 'test',
+    impark_kaynagi: 'yds-v51.exe' }));
 
   const eskiConfig = {};
   for (const k of ['apiBase', 'packagerApi', ...WIN_ALANLARI]) eskiConfig[k] = CONFIG[k];
