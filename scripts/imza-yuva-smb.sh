@@ -123,27 +123,34 @@ if [ "$KOMUT" = hizli-kontrol ]; then # salt okuma: kip, hazırlık, tetik YOK
   py hizli "$2" ${3:+"$3"}; exit
 fi
 YEREL="${2:-}"; [ $# -ge 2 ] && shift 2 || set --
-KURU="${KURU:-0}"; TAVAN_DK=20; HIZLI=0; TOPLU=0; SURE_DOSYA=""
+KURU="${KURU:-0}"; TAVAN_DK=180; TAVAN2_DK=60; HIZLI=0; TOPLU=0; SURE_DOSYA=""
 while [ $# -gt 0 ]; do
   case "$1" in --kuru) KURU=1 ;; --hizli) HIZLI=1 ;; --tavan-dk) TAVAN_DK="${2:-}"; shift ;;
+    --tavan2-dk) TAVAN2_DK="${2:-}"; shift ;;
     *) hata 2 "bilinmeyen seçenek: $1" ;; esac; shift
 done
 case "$KOMUT" in hazirla|bekle-ve-tak|toplu) ;; *) sed -n '3,7p' "$0" >&2; exit 2 ;; esac
 [ -f "$YEREL" ] || hata 2 "dosya yok: $YEREL"
 case "$TAVAN_DK" in ''|*[!0-9]*) hata 2 "--tavan-dk tamsayı olmalı" ;; esac
-TAVAN_SN="${TAVAN_SN:-$((TAVAN_DK * 60))}"
+case "$TAVAN2_DK" in ''|*[!0-9]*) hata 2 "--tavan2-dk tamsayı olmalı" ;; esac
+TAVAN_SN="${TAVAN_SN:-$((TAVAN_DK * 60))}"   # 1. deneme tavanı (varsayılan 180 dk); TAVAN_SN geriye uyumlu üzerine yazar
+TAVAN2_SN="${TAVAN2_SN:-$((TAVAN2_DK * 60))}" # yuva temizlenip yeniden denenince 2. deneme tavanı (varsayılan 60 dk)
 if [ "$KURU" = 1 ]; then # yalnız yerel mkdtemp; SMB yolu reddedilir; tetik yalnız sahte
   smb_mi "${KURU_DIZIN:-}" && hata 2 "KURU: yerel KURU_DIZIN şart (SMB değil)"
   [ -d "$KURU_DIZIN" ] || hata 2 "KURU_DIZIN yok: $KURU_DIZIN"
   smb_mi "$(cd "$KURU_DIZIN" && pwd -P)" && hata 2 "KURU_DIZIN SMB'ye çıkıyor"
   KOK="$KURU_DIZIN"; HAZIR_DIZIN="$KOK/_hazir"; IMZALI_DIZIN="$KOK/imzali"
   TETIK_KOMUTU="${TETIK_KOMUTU:-}"
+  EXE_REMOVE_KOMUTU="${EXE_REMOVE_KOMUTU:-}" # test kancası — boşsa yalnız loglanır, hiçbir şey çalışmaz
+  BILDIR_KOMUTU="${BILDIR_KOMUTU:-}"         # test kancası — boşsa gerçek `bildir` ÇAĞRILMAZ, yalnız loglanır
   log "KURU KİP — sahte kök: $KOK"
 else
   KOK="$CANLI_KOK"; HAZIR_DIZIN="${HAZIR_DIZIN:-$KOK/_hazir}"
   IMZALI_DIZIN="${IMZALI_DIZIN:-$(cd "$(dirname "$YEREL")" && pwd)/imzali}"
-  unset IMZA_CAFILE IMZA_BEKLENEN_CN KURU_TAKAS_BOZ KURU_BOZ_DOSYA # test ayarları CANLIda yok
+  unset IMZA_CAFILE IMZA_BEKLENEN_CN KURU_TAKAS_BOZ KURU_BOZ_DOSYA EXE_REMOVE_KOMUTU BILDIR_KOMUTU # test ayarları CANLIda yok
   TETIK_KOMUTU="yayincilikadm book exe-create $YUVA_ID --wait 0" # SABİT
+  EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove $YUVA_ID"     # SABİT — 2. denemeden önce yuva temizliği
+  BILDIR_KOMUTU="bildir"                                         # SABİT — 2 denemede de tavan dolarsa
   log "CANLI KİP — yuva: $KOK/$YUVA_ID/windows.exe"
   sleep 5
 fi
@@ -212,19 +219,53 @@ tetik() { # toplu kip, taban alındıktan sonra: TETIK=1 ise ayrı süreçte ça
   else log "TETİK — AYRI terminalde ŞİMDİ çalıştır: $TETIK_KOMUTU"; fi
 }
 
-bekle_ve_tak() { # --hizli: imzalı dosya İNDİRİLMEZ, yuvada hızlı kontrolle kabul edilir
+yuva_durumu_logla() { # tavan dolunca: yuvada ne kaldığını İNDİRMEDEN ölç ve logla (hizli-kontrol ile)
+  if [ -f "$YUVA" ]; then
+    log "yuvada kalan (hizli-kontrol, bu koşuda ölçülen):"
+    py hizli "$YUVA" "$YEREL" 2>&1 | while IFS= read -r satir; do log "  $satir"; done
+  else
+    log "yuvada kalan (hizli-kontrol): dosya yok"
+  fi
+}
+
+exe_remove_calistir() { # yuvayı temizler: CANLI'de gerçek yayincilikadm, KURU'da test kancası
+  log "yuva temizleniyor (exe-remove): ${EXE_REMOVE_KOMUTU:-<tanımsız — atlanacak>}"
+  if [ -n "$EXE_REMOVE_KOMUTU" ]; then
+    local cikti; cikti=$(eval "$EXE_REMOVE_KOMUTU" 2>&1)
+    log "exe-remove çıktı: ${cikti:-<boş>}"
+  else
+    log "exe-remove komutu tanımsız — atlandı"
+  fi
+}
+
+bildir_gonder() { # $1 mesaj — bildir yoksa ya da hata verirse yalnız logla (çıkış yine 3 kalır)
+  local mesaj="$1" cikti
+  if [ -n "$BILDIR_KOMUTU" ] && command -v "$BILDIR_KOMUTU" >/dev/null 2>&1; then
+    cikti=$("$BILDIR_KOMUTU" onay "$mesaj" -b "İmza kuyruğu" -p yuksek -e warning 2>&1) \
+      && log "bildirim gönderildi: $mesaj" \
+      || log "bildirim HATA (yine de çıkış 3 kalır): $cikti"
+  else
+    log "bildirim komutu yok/çalışmıyor — yalnız logla: $mesaj"
+  fi
+}
+
+_bekle_ve_tak_deneme() { # $1 tavan_sn — TEK deneme. dönüş: 0 başarı · 3 tavan (yeniden denenebilir)
+                         # hata 2/4 (kalıcı) her zamanki gibi süreci doğrudan sonlandırır
+  local tavan_sn="$1"
   local bas gecen asama=pencere taban onceki simdi red="" b yk rc t_p="" t_t=""
   L() { log "[$asama +${gecen}s] $*"; }
   ayni_mi "$HAZIR" || hata 2 "hazırlık yok ya da yerelle aynı değil: $HAZIR (önce: hazirla)"
   bas=$(date +%s); taban=$(iz "$YUVA"); onceki="$taban"
-  log "başlangıç: yuva izi $taban · tavan $TAVAN_SN sn · aralık $ARALIK_SN sn"
+  log "başlangıç: yuva izi $taban · tavan ${tavan_sn} sn (bu deneme) · aralık $ARALIK_SN sn"
   if ayni_mi "$YUVA"; then log "yuvada zaten bizim dosya — imza aşamasına geçiliyor"; asama=imza
   else log "PENCERE BEKLENİYOR — exe-create tetiği şimdi çekilebilir"; [ "$TOPLU" = 0 ] || tetik
   fi
   while :; do
     gecen=$(( $(date +%s) - bas ))
-    [ "$gecen" -le "$TAVAN_SN" ] \
-      || hata 3 "tavan aşıldı ($TAVAN_SN sn), aşama: $asama, yuva: $(iz "$YUVA")"
+    if [ "$gecen" -gt "$tavan_sn" ]; then
+      log "tavan aşıldı (${tavan_sn} sn, bu denemede), aşama: $asama, yuva: $(iz "$YUVA")"
+      return 3
+    fi
     simdi=$(iz "$YUVA")
     if [ "$asama" = pencere ]; then
       if [ "$simdi" = "$taban" ]; then L "yuva $simdi — değişim yok"
@@ -255,7 +296,7 @@ bekle_ve_tak() { # --hizli: imzalı dosya İNDİRİLMEZ, yuvada hızlı kontroll
         fi
         case "$rc" in
           0) log "İMZALI: $yk"; log "  boyut $YEREL_BOYUT → $b B (+$((b - YEREL_BOYUT)) B)"
-            log "  süre (gözcü başından): pencere +${t_p:-?}s · takas +${t_t:-?}s · imza +${gecen}s"
+            log "  süre (bu koşuda, gözcü başından): pencere +${t_p:-?}s · takas +${t_t:-?}s · imza +${gecen}s"
             [ -z "$SURE_DOSYA" ] || echo "${t_p:-?} $((gecen - ${t_t:-0}))" > "$SURE_DOSYA"
             return 0 ;;
           4) hata 4 "yuvadaki imzalı dosya bizim exe'miz değil / imzacı yanlış (pencere kaçtı?)" ;;
@@ -266,6 +307,27 @@ bekle_ve_tak() { # --hizli: imzalı dosya İNDİRİLMEZ, yuvada hızlı kontroll
     fi
     onceki="$simdi"; sleep "$ARALIK_SN"
   done
+}
+
+bekle_ve_tak() { # 1. deneme (TAVAN_SN) → tavan dolarsa yuva temizle + yeniden hazırla + 2. deneme (TAVAN2_SN)
+                  # 2. deneme de tavan dolarsa: bildirim + çıkış 3. --hizli: imzalı dosya İNDİRİLMEZ
+  local rc
+  _bekle_ve_tak_deneme "$TAVAN_SN"; rc=$?
+  if [ "$rc" = 3 ]; then
+    log "1. deneme tavanı doldu (${TAVAN_SN} sn) — YENİDEN DENEME başlıyor (2. deneme tavanı ${TAVAN2_SN} sn)"
+    yuva_durumu_logla
+    exe_remove_calistir
+    hazirla
+    [ "$TOPLU" = 0 ] && tetik # TOPLU'da _bekle_ve_tak_deneme kendi pencere-aşamasında zaten tetikler
+    _bekle_ve_tak_deneme "$TAVAN2_SN"; rc=$?
+    if [ "$rc" = 3 ]; then
+      log "2. deneme de tavanı doldu (${TAVAN2_SN} sn) — imza kuyruğu 2 denemede de imzalamadı"
+      yuva_durumu_logla
+      bildir_gonder "$AD: $YUVA_ID imza kuyruğu 2 denemede imzalamadı (${TAVAN_DK}+${TAVAN2_DK} dk) — İmpark'tan düzeltme talebi"
+      hata 3 "imza kuyruğu 2 denemede de tavanı doldurdu ($AD, ${TAVAN_DK}+${TAVAN2_DK} dk)"
+    fi
+  fi
+  return "$rc"
 }
 
 toplu() { # önce HEPSİ hazırlanır; sonra sırayla: tetik → takas → imza → hızlı kontrol → _imzali
