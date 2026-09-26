@@ -51,6 +51,7 @@ const {
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
+const { hataOzeti } = require('./hata-ozeti');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -1999,8 +2000,13 @@ async function main() {
         await sleep(120000);
         continue;
       }
-      errlog('job failed:', job.bookId, job.platform, '-', agHatasiOzeti(e));
-      bildirGonder({ basarili: false, bookId: job.bookTitle || job.bookId, platform: job.platform, ayrinti: agHatasiOzeti(e) });
+      // Özet KÖKTEN kırpılır (hata-ozeti.js): kabul kapısının "[kabul] RED: …" sebebi
+      // mesajın sonunda; baştan 200'de kesmek onu yutuyordu (11845 pardus, 26.09).
+      // Boş .message (AggregateError) → agHatasiOzeti'nin code/errors çözümü.
+      const ozet = hataOzeti(e && typeof e.message === 'string' && e.message.trim()
+        ? e.message : agHatasiOzeti(e));
+      errlog('job failed:', job.bookId, job.platform, '-', ozet);
+      bildirGonder({ basarili: false, bookId: job.bookTitle || job.bookId, platform: job.platform, ayrinti: ozet });
       await postResultFailure(auth, job, e.message);
     }
   }
