@@ -119,6 +119,41 @@ test('parseNextJob: 200 with { job } -> normalized', () => {
   });
 });
 
+test('parseNextJob: claim G alanları (setKimligi, guncellemeTabani, surum) korunur', () => {
+  const job = parseNextJob(200, {
+    job: {
+      bookId: 45482, platform: 'pardus', downloadUrl: 'https://x/y.exe',
+      setKimligi: '45482', guncellemeTabani: 'https://cdn.ydspublishing.com/guncelleme', surum: '2.51.1',
+    },
+  });
+  assert.equal(job.setKimligi, '45482');
+  assert.equal(job.guncellemeTabani, 'https://cdn.ydspublishing.com/guncelleme');
+  assert.equal(job.surum, '2.51.1', 'GERİLEME (26.09 21:17): surum düşerse pardus G\'siz üretilir');
+  const yok = parseNextJob(200, {
+    job: { bookId: 1, platform: 'android', downloadUrl: 'u', surumYok: 'panel kodu yok', guncellemeTabaniYok: 'r2 yok' },
+  });
+  assert.equal(yok.surum, undefined);
+  assert.equal(yok.surumYok, 'panel kodu yok');
+  assert.equal(yok.guncellemeTabaniYok, 'r2 yok');
+});
+
+test('parseNextJob: runner.js/windows-serit.js\'in okuduğu claim alanlarının hepsi ayrıştırıcıdan geçer', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const kaynak = ['runner.js', 'windows-serit.js']
+    .map((d) => fs.readFileSync(path.join(__dirname, d), 'utf8')).join('\n');
+  const okunan = new Set([...kaynak.matchAll(/\bjob\.([A-Za-z_]+)/g)].map((m) => m[1]));
+  // Sunucunun (book-update next-job) claim'de gönderdiği alanlar.
+  const tam = {
+    bookId: 1, platform: 'pardus', downloadUrl: 'u', buildMethod: 'build', bookTitle: 't', publisherName: 'p',
+    setKimligi: 's', guncellemeTabani: 'https://x', surum: '2.1.1', surumYok: 'a', guncellemeTabaniYok: 'b',
+  };
+  const cikan = parseNextJob(200, { job: tam });
+  const eksik = [...okunan].filter((a) => a in tam && !(a in cikan));
+  assert.deepEqual(eksik, [], `parseNextJob şu claim alanlarını düşürüyor: ${eksik.join(', ')}`);
+  for (const a of ['surum', 'setKimligi', 'guncellemeTabani']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
+});
+
 test('parseNextJob: 200 bare object (defensive) -> normalized', () => {
   const job = parseNextJob(200, { bookId: 'b1', platform: 'macos', downloadUrl: 'https://x/y.exe' });
   assert.equal(job.bookId, 'b1');

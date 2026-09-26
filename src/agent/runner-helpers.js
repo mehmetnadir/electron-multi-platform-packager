@@ -108,6 +108,13 @@ function parseNextJob(status, body) {
     // adımı runner.js'te sessizce atlanır (varsayılan RET, tahmin ÜRETİLMEZ).
     ...(job.setKimligi != null ? { setKimligi: String(job.setKimligi) } : {}),
     ...(job.guncellemeTabani != null ? { guncellemeTabani: String(job.guncellemeTabani) } : {}),
+    // G3 sürümü (claim-surum, 2026-09-26): pardus G kimliği, mac/android monoton taban ve
+    // windows şeridi `job.surum` okur. Bu satır yokken sunucunun gönderdiği surum burada
+    // DÜŞÜYORDU → canlıda 45482 pardus "surum-yok" ile G'siz üretildi (21:17). Eksiklik
+    // sebepleri de taşınır ki ajan günlüğü sunucunun neden sürüm vermediğini söylesin.
+    ...(job.surum != null ? { surum: String(job.surum) } : {}),
+    ...(job.surumYok != null ? { surumYok: String(job.surumYok) } : {}),
+    ...(job.guncellemeTabaniYok != null ? { guncellemeTabaniYok: String(job.guncellemeTabaniYok) } : {}),
   };
 }
 
