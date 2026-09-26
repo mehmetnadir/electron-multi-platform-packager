@@ -263,13 +263,19 @@ function fsGetirKur(cikti) {
   return { getir, sayac };
 }
 
-test('UÇTAN UCA: üretici → dosya-sistemi tabanlı getir → kg.guncellemeyiCalistir GERÇEKTEN hedef kopyayı günceller', async () => {
+// D-2 sonrası (2026-09-26, Şef kararı + Nadir onayı): bu üreticinin çıktısı YAYINA GİTMEZ —
+// G manifestlerinin tek yazarı `tools/g-yayin` (Anahtar Zinciri imzası, `kanal:"G"`, G3 sürüm).
+// G istemcisi (e07bc37) tüm kiplerde `kanal == "G"` + `setKimligi` + monoton G3 sürüm şartı koyar;
+// bu eski üretici `kanal` yazmaz ve içerik-hash sürümü üretir → manifesti BİLEREK reddedilir.
+// Olumlu uçtan uca yol: `tools/g-uctan-uca` (g-yayin → gerçek HTTPS → istemci, yerinde + örtü).
+test('UÇTAN UCA (D-2 sonrası bu üretici yayına gitmiyor, olumlu yol tools/g-uctan-uca): eski üretici manifesti istemcide manifest-reddedildi:kanal-g-degil ile RED — hedef kopyaya dokunulmaz', async () => {
   const setKoku = ornekSetKoku();
   const cikti = gecici('cikti-e2e');
 
   const rapor = await uretici.main(['--set-koku', setKoku, '--set-kimligi', '11811', '--cikti', cikti,
     '--imza-anahtari', testAnahtarDosyasi()]);
   assert.strictEqual(rapor.imzali, true, 'manifest imzalanmalı (G4)');
+  assert.strictEqual(typeof rapor.surum, 'string', 'üreticinin raporu sürüm sha256sini taşımalı');
 
   // Hedef: eski bir kurulum kopyası (index.html eski, kalanı aynı, kitap kendi verisiyle).
   const hedefKok = agacKur(gecici('hedef-paket'), {
@@ -292,39 +298,21 @@ test('UÇTAN UCA: üretici → dosya-sistemi tabanlı getir → kg.guncellemeyiC
     zamanAsimi: 4000,
   });
 
-  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
-  assert.strictEqual(r.kabukIndirilen, 1, 'yalnız değişen index.html inmeliydi');
+  assert.strictEqual(r.durum, 'atlandi', JSON.stringify(r));
+  assert.strictEqual(r.sebep, 'manifest-reddedildi:kanal-g-degil', JSON.stringify(r));
+  assert.strictEqual(r.kabukIndirilen, 0, 'reddedilen manifestten hiçbir kabuk dosyası inmemeli');
+  assert.ok(!sayac.yollar.some((y) => y.includes('/dosya/')), 'reddedilen manifestin dosyası istenmemeli');
   assert.strictEqual(
     fs.readFileSync(path.join(hedefKok, 'index.html'), 'utf8'),
-    '<html>MENU v1</html>',
-    'hedef kopya güncellenmedi',
+    '<html>MENU ESKI</html>',
+    'reddedilen manifest hedef kopyaya DOKUNMAMALI',
   );
-  assert.strictEqual(
-    fs.readFileSync(path.join(hedefKok, 'core/logo.png'), 'utf8'),
-    'LOGOVERISI',
-    'değişmeyen kabuk dosyası korunmalı, yeniden inmemeliydi',
-  );
-  assert.ok(!sayac.yollar.some((y) => y.endsWith('/dosya/core/logo.png')),
-    'sha256 aynı olan dosya indirilmemeliydi');
   assert.strictEqual(
     fs.readFileSync(path.join(hedefKok, 'book7/veri.txt'), 'utf8'),
     'kitap verisi',
     'kitap içeriğine bu kanaldan DOKUNULMAZ',
   );
-  assert.ok(fs.existsSync(path.join(hedefKok, kg.DAMGA_ADI)), 'damga yazılmalı');
-  assert.strictEqual(typeof rapor.surum, 'string', 'üreticinin raporu sürüm sha256sini taşımalı');
-
-  // İkinci koşu: hedef artık güncel → manifest hiç indirilmemeli (iki kademe çalışıyor).
-  const { getir: getir2, sayac: sayac2 } = fsGetirKur(cikti);
-  const r2 = await kg.guncellemeyiCalistir({
-    taban: 'https://sahte-panel.invalid',
-    set: { setKimligi: '11811', imza: { alg: 'ed25519', acikAnahtar: TEST_ACIK } },
-    kok: hedefKok,
-    getir: getir2,
-    zamanAsimi: 4000,
-  });
-  assert.strictEqual(r2.durum, 'guncel');
-  assert.ok(!sayac2.yollar.some((y) => y.endsWith('manifest.json')), 'sürüm aynıysa manifest hiç indirilmemeli');
+  assert.ok(!fs.existsSync(path.join(hedefKok, kg.DAMGA_ADI)), 'reddedilen manifest damga yazmamalı');
 });
 
 test('G4: --imza-anahtari ile manifest.json.sig yazılır, tüketicinin doğrulayıcısı kabul eder', async () => {

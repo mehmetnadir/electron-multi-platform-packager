@@ -153,6 +153,12 @@ tanımlanırsa bu bir fan-out sapmasıdır; tek kaynağa bağlanıp sözleşme t
 
 ## Üretici (sunucu tarafı, 2026-09-22)
 
+> **YAYINA GİTMEYEN YOL (D-2, 26.09):** bu üretici ve onu çağıran `src/packaging/guncelleme-paketi.js`
+> (paketleyicinin `guncelleme.tar.gz`'si) artık yayına gitmez — runner tar'ı yüklemez, G'nin tek yazarı
+> `tools/g-yayin`. Çıktısı `kanal:"G"`/G3 sürüm taşımadığı için G istemcisi (e07bc37) onu
+> `manifest-reddedildi:kanal-g-degil` ile reddeder (testi buna çevrildi). Ölü kod karantinası canlıya
+> almadan SONRA ayrı iş.
+
 `scripts/guncelleme-manifesti-uret.js` — SET kökünden 3 uç noktayı düz dosya
 üretir; kabuk ayrımı `set-kabuk.js`'ten ölçülür (tahmin yok), `book\d+/` ve
 artefakt dizinlerine hiç girilmez. `surum` = kabuk sha256 listesinin
