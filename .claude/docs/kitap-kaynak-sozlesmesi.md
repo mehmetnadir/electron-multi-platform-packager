@@ -104,3 +104,11 @@ kuyruk İmpark exe'sini indirmez, yayıncı güncellemesi uygulamaz, şerit haz�
 düşer (eski kaynağa sessiz iniş yok). Dolu: 25.09 Üretim Masası zip'leri, 13 set (md5 doğrulandı). R2 `kaynak/`
 yansısı ve Windows işçisinin (srv21) aynı arşivi okuması açık. İlk kabul: 58336 (kesintisiz) + 58237 (kesintili) +
 bir aktivasyonlu set (45480).
+
+**Bayat arşiv kapısı (26.09):** `kaynak.json` `impark_kaynagi` = arşivin kapsadığı İmpark kaynak kimliği (dize ya da
+liste; ilk öğe zip'in üretildiği kaynak). Kimlik = runner'ın `srcVersionTuret(job.downloadUrl)` değeri, yani köprü
+exe'sinin adı (ör. `ShallWe8-v47.exe`). İşin kimliği listede yoksa iş `kaynak arşivi BAYAT: İmpark kaynağı X → Y;
+build zip yeniden üretilmeli` hatasıyla düşer (last_error + `bildir paket … -p yuksek -e warning`); eski zip'ten
+üretilmez, İmpark exe'sine düşülmez. Kıyas eşitliktir, sıralama değil. Alan yoksa bugünkü davranış + süreçte tek
+uyarı. Kör nokta: köprü İmpark'ın gerisinde kalırsa (45792: İmpark v48, köprü v47) güncelleme görünmez; next-job
+yükü İmpark statik adını taşımıyor. Setin yan girdileri (tek-kitap exe'leri) de kıyasa girmiyor.

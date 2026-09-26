@@ -744,8 +744,10 @@ test('processJob: hazır paket kontrolü kaynak indirmeden ÖNCE ve indirme blok
 test('processJob: kaynak arşivi srcVersion\'dan önce okunur, hazır paketi ve indirmeyi atlar', () => {
   const kaynak = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const arsivIdx = kaynak.indexOf('const arsiv = await arsivKaynagi(job.bookId);');
-  const surumIdx = kaynak.indexOf('const srcVersion = arsiv ? arsiv.srcVersion : srcVersionTuret(job.downloadUrl);');
+  // 2026-09-26 bayat arşiv kapısı: arşiv, işin güncel İmpark kimliğiyle birlikte okunur.
+  const arsivIdx = kaynak.indexOf(
+    'const arsiv = await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, uyar: warn });');
+  const surumIdx = kaynak.indexOf('const srcVersion = arsiv ? arsiv.srcVersion : imparkSrcVersion;');
   const arsivDalIdx = kaynak.indexOf('if (!hazirDevir && arsiv) {');
   const indirIdx = kaynak.indexOf('await downloadFile(job.downloadUrl, exePath);');
   assert.ok(arsivIdx > 0 && surumIdx > arsivIdx, 'arşiv srcVersion türetilmeden önce okunmalı');
