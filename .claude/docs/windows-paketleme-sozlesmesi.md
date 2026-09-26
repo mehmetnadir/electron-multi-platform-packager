@@ -113,16 +113,27 @@ Aktivasyon: çevrimdışı pakette `imKeys.dll` / İmpark DB anahtar kanalı old
 4. ✅ 3001 bayrakları platform kapsamlı: `EMPP_ICERIK_GUNCELLEME=windows`, `EMPP_SAYFA_WEBP=windows`,
    `EMPP_SET_GUNCELLEME=0` (üretim anahtarına kadar) — `run-agent.sh` + KANON tablosu.
 5. ✅ `_` önekli kök dizinler hiçbir platform paketine girmez (`436daa0`, `kok-yedek-dizin-disla.js`).
-6. Ölçülecek: aktivasyonlu kitapta aktivasyon akışı (26.09 test sürüyor; imKeys.dll uygulama çalışınca
-   İmpark'tan iner); G6 gerçek Windows'ta; B'nin A üstüne VM'de kurulumu (kapı madde 3);
+6. Aktivasyon (26.09): 45480 Marvel 11 (keypanel: 15 kitabın 13'ü kod ister) paketlendi, G1/G2 statik PASS,
+   başsız kabul GEÇTİ. Motorun kuralı (kod okundu, `da55ad5c…main.js` modül 6395): kapak başına
+   `imKeys.dll` varsa kod ekranı; yoksa çevrimiçi `HasZKitapKey`; ağ yoksa hata yutulur → kod SORULMAZ.
+   Yani başsız (ağsız) kabul aktivasyonu ölçemez; kanıt yalnız internetli VM testidir.
+   BEKLİYOR: Nadir VM testi (`~/vm-kapi/MARVEL11-AKTIVASYON-TEST-*`: kod ekranı, kalıcılık, B-üstüne-A).
+   Rapor: `arastirma/aktivasyon-windows-testi-2026-09-26.md`. Ayrıca ölçülecek: G6 gerçek Windows'ta;
    Defender/SmartScreen tarama süresi (bizim dışımızda).
 7. ✅ İmza: İmpark imza yuvası (66902) gerçek koşu 26.09 — SM2 A 715 MB imzalandı; imzacı İm Park Bilişim
    (DigiCert Trusted G4 Code Signing), `osslsigncode verify` Succeeded (zincir + CRL), imzalı exe Wine'da sessiz
    kuruldu (0, bütünlük hatası yok). Bu koşuda: hazırlık 462 sn, tetikten imzaya ~6 dk, toplam 13 dk 49 sn.
-   Bekleme kuralı yukarıda; betiğe işlenmesi sürüyor. Rapor: `arastirma/imza-yuvasi-gercek-kosu-2026-09-26.md`.
+   Bekleme kuralı betikte (`4e78243`: 180 dk → exe-remove + yeniden tetik → 60 dk → `bildir onay`;
+   92 test, mutasyonla doğrulandı). İkinci denemenin CANLI yolu henüz gerçek kuyrukta koşmadı. Rapor: `arastirma/imza-yuvasi-gercek-kosu-2026-09-26.md`.
    Yayımcı adı / Certum başvurusu ertelendi.
 8. Başsız kabul kapısı (`tools/kabul`, `b12d2ff`): SM2 Windows A GEÇTİ; runner'da mac+android açık,
    Windows paketleri srv21'de üretildiği için henüz runner kapısında değil.
+
+9. **Yayın ön şartı:** srv21 işçisi `build_method=build` satırını bugün tanımıyor; passthrough bizim
+   imzalı exe'mizi İmpark'ınkiyle ezebilir. Toplu akışın 5. adımından (Yayınla) önce işçi kodu + deploy
+   (Nadir onayı) şart.
+10. Kaynak ayrıntısı artık `kitap-kaynak-sozlesmesi.md`'de (TASLAK): düz zip kanonik, delta tamamlama,
+    İmpark exe yalnız fallback.
 
 ## Yapılmayacaklar
 Aktivasyon akışına dokunmak · yayıncının özel menüsüne dokunmak (K17) · asar'ı SET dışında değiştirmek ·

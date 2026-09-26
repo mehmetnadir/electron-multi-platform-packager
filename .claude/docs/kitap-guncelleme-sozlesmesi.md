@@ -1,4 +1,4 @@
-# SET güncelleme kanalı — sözleşme (exe tarafı)
+# SET güncelleme kanalı — sözleşme (exe tarafı)  `[SÖZLEŞME: TASLAK]`
 
 > **DÜZELTME 2026-09-21:** İlk sürüm yanlıştı — kitap başına (book1…book6) uç nokta
 > tasarlamıştı. **Set içindeki kitaplar zaten kendi uçlarından güncelleniyor.**
@@ -186,7 +186,7 @@ Yayınevi × kova ilkesi: taban yayıncının R2 config'inden çözülür, env v
    EN SON `surum.json` (tüketici tutarlı durum görsün); ardından `GET <taban>/set/<id>/surum.json`
    ile üretilen sürümü doğrular; eşleşmezse iş "yüklendi" sayılmaz.
 
-Tetikleyici (AÇIK SORU — Nadir): Windows SET paketi bugün elle (`.sm4-*-uret.js`) üretiliyor;
-boru hattında `windows` platformu origin exe'nin R2 kopyası. NSIS SET paketi ayrı bir platform
-(`windows-set`) mı olacak, yoksa `windows` teslimini mi değiştirecek? Cevaba kadar üç parça
-elle tetiklenen işte de çalışır.
+Tetikleyici — KAPANDI (Nadir, 2026-09-25): ayrı `windows-set` platformu YOK; tek `windows` satırı kalır,
+kökeni `build_method` taşır (`passthrough` = İmpark exe, `build` = bizim NSIS). Bkz.
+`windows-paketleme-sozlesmesi.md` "Teslim ve yedek". Açık kalan: srv21 işçisi `build_method=build`
+satırında İmpark exe'sini passthrough ile EZMEMELİ — bu kod + deploy onayı yayın ön şartıdır.
