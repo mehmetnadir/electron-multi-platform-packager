@@ -7,7 +7,7 @@
 ## A. Senin cevabın şart (deploy · kimlik · dış sistem)
 | # | Karar | Neden şimdi | Önerim |
 |---|---|---|---|
-| A1 | **45551 indirmeden kalksın mı?** Pasif set; R2'deki exe (1,18 GB) başka setin (59834 Maarif) içeriği | İndiren öğretmen yanlış kitabı alıyor | Evet: indirme linkini kapat (R2 dosyası Silinecekler'e değil `_pasif/`'e taşınır) |
+| A1 | **45550 + 45551 indirmeden kalksın mı?** Pasif setler. Windows exe'si 25.09 ölçümünde 59834 Maarif içeriğiydi; mac/android paketlerinde kitap klasörleri HİÇ yok (26.09 ölçüm, APK 18,5 MB); kaynak exe artık 75 MB ince/stub | İndiren öğretmen yanlış ya da boş kitap alıyor; yeniden üretim de boş çıkar (kabul RED) | Evet: indirme linkini kapat (R2 dosyası Silinecekler'e değil `_pasif/`'e taşınır) |
 | A2 | **`/go/<kod>/apk` 404** (3 kitapta ölçüldü) — düzeltme kodu yerelde, canlıda değil | Paylaşılan APK linki boş dönüyor | book-update deploy onayı; `apk` → android yönlendirmesi + bekçi |
 | A3 | **5 Windows kitap 19.09'dan beri bayat exe veriyor** (45448 · 45487 · 45449 · 45792 · 45100; bekçi `teslim_bayat`) | Bekçi 7 gündür kırmızı (güven kapısı aşıldı) | İmpark'ta exe yeniden üretilsin (exe-create) + passthrough yeniden kuyruk; onay senin |
 | A4 | **srv21 işçisi `build_method=build` tanısın** | Bizim imzalı exe'lerimizin yayını bunu bekliyor | Kod + deploy onayı |
