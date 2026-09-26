@@ -359,6 +359,7 @@ async function presignUpload(auth, job) {
  */
 const { applyPublisherUpdate, latestLocalUpdate } = require('./publisher-update');
 const { dahaYeniMi } = require('./surum-kiyas');
+const { arsivKaynagi } = require('./kaynak-arsivi');
 /**
  * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
  * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
@@ -1749,7 +1750,11 @@ async function processJob(auth, job) {
     // alıyordu, presigned URL'lerin sorgusunda literal '/' olmadığından bu SON
     // parça sorgu dizesinin tamamıydı (X-Amz-Algorithm_..._X-Amz-Cre... dizinleri) —
     // imza her presign'de değiştiği için cache asla HIT olmuyordu (runner-helpers.js).
-    const srcVersion = srcVersionTuret(job.downloadUrl);
+    // KAYNAK ARŞİVİ (2026-09-26, Nadir: "yeni arayüzle üret"): onaylı build zip varsa kaynak
+    // odur — İmpark exe'si indirilmez, yayıncı güncellemesi uygulanmaz, şerit paketi
+    // devralınmaz. Kayıt bozuksa arsivKaynagi hata fırlatır: eski kaynağa sessizce inilmez.
+    const arsiv = await arsivKaynagi(job.bookId);
+    const srcVersion = arsiv ? arsiv.srcVersion : srcVersionTuret(job.downloadUrl);
     const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
     const zipPath = path.join(work, 'build.zip');
 
@@ -1757,7 +1762,7 @@ async function processJob(auth, job) {
     // Mac'e yalnız kabul kapısı + R2 yüklemesi kalıyor. Ölçüm 2026-09-17: kontrol
     // indirmeden SONRA yapıldığı için her devralınan kitapta ~1,5 GB boşuna iniyor,
     // dar diskte (20 GB kapısı) gereksiz yer yiyordu.
-    const hazirDevir = packagerPlatform === 'pardus'
+    const hazirDevir = packagerPlatform === 'pardus' && !arsiv
       ? await hazirPardusPaketi({ bookId: job.bookId, srcVersion })
       : null;
     if (hazirDevir) log('pardus: HAZIR paket bulundu — kaynak indirme ATLANIYOR:', hazirDevir.impark || hazirDevir);
@@ -1772,7 +1777,7 @@ async function processJob(auth, job) {
     // Kapı düşerse bu bir PAKET KUSURU DEĞİLDİR — hata işaretlenir, satıra `failed`
     // yazılmaz, iş kirası dolunca kuyruğa döner ve ajan sıradakine geçer.
     if (packagerPlatform === 'pardus' && !hazirDevir) {
-      const kaynakBayt = await kaynakBoyutuTahmin({ cachedZip, downloadUrl: job.downloadUrl });
+      const kaynakBayt = await kaynakBoyutuTahmin({ cachedZip: arsiv ? arsiv.zip : cachedZip, downloadUrl: job.downloadUrl });
       const gerekliGb = pardusGerekliDiskGb({
         kaynakBayt,
         kat: Number(process.env.PARDUS_DISK_KAT || 5),
@@ -1791,7 +1796,13 @@ async function processJob(auth, job) {
     }
 
     let cacheHit = false;
-    if (!hazirDevir) {
+    if (!hazirDevir && arsiv) {
+      await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
+      log(`kaynak ARŞİVDEN (${arsiv.etiket || '-'}, md5 ${arsiv.md5}, ${(arsiv.boyut / 1e6).toFixed(0)}MB)`
+        + ' — İmpark exe indirilmedi, yayıncı güncellemesi uygulanmadı');
+      cacheHit = true;
+    }
+    if (!hazirDevir && !arsiv) {
     try {
       await fsp.access(cachedZip);
       if (cachedZipIsStale(cachedZip)) throw new Error('cache stale (publisher update)');

@@ -735,8 +735,22 @@ test('processJob: hazır paket kontrolü kaynak indirmeden ÖNCE ve indirme blok
   const dalIdx = kaynak.indexOf('if (!hazirDevir) await injectPardusIcon(');
   assert.ok(hazirIdx > 0, 'hazirDevir kısa devresi yok');
   assert.ok(indirIdx > hazirIdx, 'hazır kontrolü indirme/cache blokundan ÖNCE olmalı');
-  assert.match(kaynak.slice(indirIdx, indirIdx + 120), /if \(!hazirDevir\) \{/);
+  assert.match(kaynak.slice(indirIdx, indirIdx + 600), /if \(!hazirDevir && !arsiv\) \{/);
   assert.ok(dalIdx > 0, 'ikon enjeksiyonu hazır pakette atlanmalı');
+});
+
+// Kaynak arşivi (2026-09-26, Nadir: "yeni arayüzle üret"): arşiv kaydı varsa İmpark exe'si
+// indirilmez ve srv21 şeridinin (İmpark kaynağından üretilmiş) hazır paketi devralınmaz.
+test('processJob: kaynak arşivi srcVersion\'dan önce okunur, hazır paketi ve indirmeyi atlar', () => {
+  const kaynak = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const arsivIdx = kaynak.indexOf('const arsiv = await arsivKaynagi(job.bookId);');
+  const surumIdx = kaynak.indexOf('const srcVersion = arsiv ? arsiv.srcVersion : srcVersionTuret(job.downloadUrl);');
+  const arsivDalIdx = kaynak.indexOf('if (!hazirDevir && arsiv) {');
+  const indirIdx = kaynak.indexOf('await downloadFile(job.downloadUrl, exePath);');
+  assert.ok(arsivIdx > 0 && surumIdx > arsivIdx, 'arşiv srcVersion türetilmeden önce okunmalı');
+  assert.match(kaynak, /const hazirDevir = packagerPlatform === 'pardus' && !arsiv/);
+  assert.ok(arsivDalIdx > 0 && arsivDalIdx < indirIdx, 'arşiv dalı indirmeden önce olmalı');
 });
 
 // Açılış süresi paket boyutuyla ölçeklenmeli (ölçüm 2026-09-17, 45695): 1,5 GB SET
