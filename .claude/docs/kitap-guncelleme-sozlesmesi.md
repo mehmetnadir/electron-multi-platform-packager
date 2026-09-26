@@ -190,3 +190,23 @@ Tetikleyici — KAPANDI (Nadir, 2026-09-25): ayrı `windows-set` platformu YOK; 
 kökeni `build_method` taşır (`passthrough` = İmpark exe, `build` = bizim NSIS). Bkz.
 `windows-paketleme-sozlesmesi.md` "Teslim ve yedek". Açık kalan: srv21 işçisi `build_method=build`
 satırında İmpark exe'sini passthrough ile EZMEMELİ — bu kod + deploy onayı yayın ön şartıdır.
+
+## G yayın aracı (2026-09-26, dal `g-yayin`)
+
+Nadir 26.09: bütün paketlerde bizim istemcimiz (G) olacak. G üç şeyi uzaktan değiştirir: kök `index.html`,
+set bileşimi (kitap ekle/çıkar) ve `bookN/43e23fce2b7009474555a77.js`. Yayın aracı `tools/g-yayin/yayinla.js`:
+
+```
+node tools/g-yayin/yayinla.js --set-kimligi <id> --taban <https taban> --cikti <dizin> \
+  --panel <kod|ad> [--surum 2.p.s] [--onceki-surum 2.p.s] [--onceki-manifest <yol|https>] [--ilk] \
+  [--index <html>] [--motor bookN=<js>]... [--ekle bookN=<zip|dizin>]... [--cikar bookN[,bookM]] \
+  (--anahtar-zinciri | --anahtar-dosya [yol])
+node tools/g-yayin/yayinla.js dogrula --cikti <dizin> --set-kimligi <id> [--acik-anahtar <b64> | --anahtar-dosya [yol]]
+node tools/g-yayin/yayinla.js kuru-imza        # yalnız GEÇTİ/KALDI
+```
+
+- **Sürüm:** `2.<panel>.<sayaç>`, bilinen bütün önceki sürümlerden kesin büyük olmalı. Önceki sürüm kaynakları: imzalı önceki manifest, `--onceki-surum` (kurulu paket), yerel `surum.json`.
+- **Manifest birikimli:** önceki imzalı durum ile bu yayının değişiklikleri birleşir. İmzası tutmayan ya da başka sete ait önceki durum taşınmaz.
+- **Şema:** `{sema:1, kanal:"G", setKimligi, surum, onceki, uretim, anahtar, kabuk[], kitaplar[]}`. Windows istemcisiyle uyumlu; eklenen alanlar yok sayılır.
+- **Anahtar:** `--anahtar-zinciri` üretim anahtarını Anahtar Zinciri borusundan okur ve `31b8663b…2cf6` ile eşleşmesini ister. `--anahtar-dosya` yalnız TEST içindir; dosyada üretim anahtarı bulunursa araç reddeder.
+- R2 düzeni, yükleme sırası ve açık kararlar `g-yayin-r2-yol-tasarimi.md`'de. İstemci kuralları ve yerel HTTPS koşumu `tools/g-uctan-uca/README.md`'de.
