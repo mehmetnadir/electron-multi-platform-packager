@@ -14,7 +14,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
-  KAPI_ISARETI, bookNMi, degerlendir, dizinTara, icerikKapisiDenetle,
+  KAPI_ISARETI, acikMi, bookNMi, degerlendir, dizinTara, icerikKapisiDenetle,
 } = require('./icerik-kapisi');
 
 /** 11845 (SM3-v49.exe) tarzı — yalnız motor: kökte assets/ yok, bookN/ yok. */
@@ -144,4 +144,44 @@ test('[kaynak-iceriksiz] hatası GEÇİCİ AĞ HATASI sayılmaz (bildirim atlanm
   const { isTransientNetworkError } = require('./runner-helpers');
   const r = degerlendir({ hasAssets: false, hasBookN: false, kaynakAdi: 'SM3-v49.exe' });
   assert.equal(isTransientNetworkError(new Error(r.sebep)), false);
+});
+
+// ---------------------------------------------------------------------------
+// EMPP_ICERIK_KAPISI — kapatma anahtarı (2026-09-26, koordinatör ek işi):
+// canlıda yanlış-RED üretirse tüm üretim durmasın diye acil kapatma.
+// tanımsız/'1' = AÇIK (bugünkü davranış), '0' = KAPALI.
+// ---------------------------------------------------------------------------
+
+test('acikMi: env tanımsızsa AÇIK (varsayılan — bugünkü davranış)', () => {
+  assert.equal(acikMi({}), true);
+});
+
+test("acikMi: '1' AÇIK", () => {
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: '1' }), true);
+});
+
+test("acikMi: '0'/'false'/'kapali'/'kapalı' KAPALI", () => {
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: '0' }), false);
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: 'false' }), false);
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: 'kapali' }), false);
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: 'kapalı' }), false);
+  assert.equal(acikMi({ EMPP_ICERIK_KAPISI: 'KAPALI' }), false);
+});
+
+test('icerikKapisiDenetle: kapatma anahtarı KAPALIYSA içeriksiz kaynak bile GEÇER + log satırı düşer', async () => {
+  const kok = await motorKopyasiDizinKur(); // assets/bookN YOK — normalde RED
+  const loglar = [];
+  const sonuc = await icerikKapisiDenetle(kok, {
+    env: { EMPP_ICERIK_KAPISI: '0' },
+    log: (s) => loglar.push(s),
+  });
+  assert.equal(sonuc.gecti, true);
+  assert.equal(sonuc.sebep, null);
+  assert.ok(loglar.some((s) => s.includes('icerik-kapisi KAPALI (env)')), loglar.join('\n'));
+});
+
+test('icerikKapisiDenetle: anahtar AÇIKKEN (varsayılan) içeriksiz kaynak yine RED verir', async () => {
+  const kok = await motorKopyasiDizinKur();
+  const sonuc = await icerikKapisiDenetle(kok, { env: {} });
+  assert.equal(sonuc.gecti, false);
 });

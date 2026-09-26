@@ -1861,6 +1861,7 @@ async function processJob(auth, job) {
       // dersi) — iş burada görünür hatayla düşer, R2'ye hiçbir şey yüklenmez.
       const icerikSonuc = await icerikKapisiDenetle(buildDir, {
         kaynakAdi: path.basename(String(job.downloadUrl || '').split('?')[0]) || undefined,
+        log,
       });
       if (!icerikSonuc.gecti) {
         throw new Error(icerikSonuc.sebep);

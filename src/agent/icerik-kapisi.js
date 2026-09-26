@@ -27,6 +27,20 @@ const fsp = require('fs/promises');
 
 const KAPI_ISARETI = '[kaynak-iceriksiz]';
 
+/**
+ * KAPATMA ANAHTARI (2026-09-26, koordinatör ek isi): kapı canlıda yanlış-RED üretirse
+ * (ölçülmemiş bir tek-kitap/SET konvansiyonu — ne `assets/` ne `bookN/` kullanan meşru
+ * bir kaynak) TÜM üretim durur. `EMPP_ICERIK_KAPISI`: tanımsız ya da `1` (ya da başka
+ * herhangi bir "açık" değer) = AÇIK (bugünkü davranış); `0`/`false`/`kapali`/`kapalı` =
+ * KAPALI — kapı hiç çalışmaz, iş her zaman geçer, tek satır log düşer.
+ */
+function acikMi(env = process.env) {
+  const ham = env.EMPP_ICERIK_KAPISI;
+  if (ham === undefined || ham === null || ham === '') return true;
+  const s = String(ham).trim().toLowerCase();
+  return !(s === '0' || s === 'false' || s === 'kapali' || s === 'kapalı');
+}
+
 /** Kök dizin girdisi bir SET kitap dizini mi? (`book1`, `book12`, büyük/küçük harf duyarsız). */
 function bookNMi(adi) {
   return /^book\d+$/i.test(String(adi || ''));
@@ -69,19 +83,25 @@ async function dizinTara(kok) {
 }
 
 /**
- * Çağrı noktası: `dizinTara` + `degerlendir`i sarar.
+ * Çağrı noktası: `dizinTara` + `degerlendir`i sarar. Kapatma anahtarı KAPALI ise
+ * (bkz. `acikMi`) tarama hiç yapılmaz, iş her zaman GEÇER — `log` ile tek satır düşülür.
  *
  * @param {string} kok build dizini (extractSfx/findBuildDir çıktısı)
- * @param {{ kaynakAdi?: string }} [secenekler]
+ * @param {{ kaynakAdi?: string, env?: object, log?: (s: string) => void }} [secenekler]
  * @returns {Promise<{ gecti: boolean, sebep: string|null }>}
  */
-async function icerikKapisiDenetle(kok, { kaynakAdi = '' } = {}) {
+async function icerikKapisiDenetle(kok, { kaynakAdi = '', env = process.env, log = () => {} } = {}) {
+  if (!acikMi(env)) {
+    log('icerik-kapisi KAPALI (env) — kaynak denetlenmedi, geçti sayıldı');
+    return { gecti: true, sebep: null };
+  }
   const tarama = await dizinTara(kok);
   return degerlendir({ ...tarama, kaynakAdi });
 }
 
 module.exports = {
   KAPI_ISARETI,
+  acikMi,
   bookNMi,
   degerlendir,
   dizinTara,
