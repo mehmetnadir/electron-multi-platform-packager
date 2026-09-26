@@ -298,6 +298,132 @@ function tlsHazirla(dizin, { yenile = false, openssl = process.env.OPENSSL || 'o
   return { dizin: t, yeni: true };
 }
 
+/*
+ * Electron/Chromium (BoringSSL) kritik IP `nameConstraints`'i "unsupported name constraint
+ * type" diyerek REDDEDİYOR (26.09 canlı G testi, mac DMG + ProBook — ölçüldü:
+ * ~/.empp-agent/arastirma/g-istemci-canli-kanit-20260926.md). Yukarıdaki `CA_CNF`/`tlsHazirla`
+ * bu yüzden Electron istemcileri için KULLANILAMAZ; DOKUNULMADI (Windows/Node referans istemcisi
+ * `kos.js` hâlâ ona güveniyor). Bunun yerine ad kısıtı OLMAYAN, dolayısıyla HERHANGİ bir adı
+ * imzalayabilecek ikinci, kısa ömürlü (≤7 gün) ve YALNIZ bu fikstür koşumuna özel bir CA: genel CA
+ * deposuna eklenmez, ömrü kısadır, tek imzaladığı yaprak sertifika SUNUCU_EXT ile zaten
+ * 127.0.0.1/10.0.2.2/localhost'a sabitlidir (leaf SAN kısıtı nameConstraints'ten bağımsız çalışır,
+ * her istemcide desteklenir). `EMPP_G_TEST_GUVEN_CA` (bkz. `src/platforms/android/g-katmani.js`)
+ * ile aynı desen: Electron istemcisi bunu YALNIZ test kipinde, kendi güven deposuna (Android'de
+ * network-security-config, Electron'da örn. `https.globalAgent.options.ca` / süreç-içi CA
+ * listesi) ekler. `NODE_EXTRA_CA_CERTS` bu zincir için de KULLANILMAZ — canlı kanıtta Electron'un
+ * node kipi bu ortam değişkenini süreç başında dahi uygulamadı ("unable to verify the first
+ * certificate"); tek çalışan yol süreç içi CA listesine ekleme oldu.
+ */
+const CA_CNF_ELECTRON = `[req]
+distinguished_name = dn
+prompt = no
+[dn]
+CN = EMPP G uctan uca TEST CA ELECTRON (kisitsiz)
+[v3_ca]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+`;
+
+/** `CA_CNF_ELECTRON`in kısıtsız CA'sı ≤7 gün geçerli olmalı (ad kısıtı yok — sızarsa ömrü kısa kalsın). */
+const ELECTRON_CA_GUN = 7;
+
+/**
+ * Kısıtsız (nameConstraints YOK), ≤7 gün ömürlü ikinci test CA'sı + aynı SAN'lı (127.0.0.1/
+ * 10.0.2.2/localhost) sunucu sertifikası — YALNIZ Electron istemcileri için. `tlsHazirla`'nın
+ * ad-kısıtlı zincirini DEĞİŞTİRMEZ, ek çıktı üretir (`<dizin>/tls-electron/`). Süresi 1 saat
+ * içinde dolacaksa (`-checkend 3600`) ya da `yenile` verilmişse yeniden üretir; öncekini
+ * `_eski/`ye taşır (aynı desen, kısa ömür yüzünden `tlsHazirla`'dan daha sık yenilenir).
+ */
+function tlsHazirlaElectron(dizin, { yenile = false, openssl = process.env.OPENSSL || 'openssl' } = {}) {
+  const t = path.join(dizin, 'tls-electron');
+  const gerekli = ['ca.pem', 'ca.der', 'sunucu.pem', 'sunucu.key'];
+  const suresiGecerliMi = () => {
+    if (!gerekli.every((f) => fs.existsSync(path.join(t, f)))) return false;
+    try {
+      execFileSync(openssl, ['x509', '-in', path.join(t, 'ca.pem'), '-checkend', '3600'], {
+        stdio: 'ignore',
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+  if (!yenile && suresiGecerliMi()) return { dizin: t, yeni: false };
+  if (fs.existsSync(t)) {
+    const eski = path.join(dizin, '_eski', `${zamanDamgasi()}-tls-electron`);
+    fs.mkdirSync(path.dirname(eski), { recursive: true });
+    fs.renameSync(t, eski);
+  }
+  fs.mkdirSync(t, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(t, 'ca.cnf'), CA_CNF_ELECTRON);
+  fs.writeFileSync(path.join(t, 'sunucu.ext'), SUNUCU_EXT);
+  const kos = (args) => {
+    try {
+      execFileSync(openssl, args, { cwd: t, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      const iz = e.stderr ? e.stderr.toString('utf8').slice(0, 300) : e.message;
+      throw new Error(`openssl ${args[0]} başarısız: ${iz}`);
+    }
+  };
+  kos([
+    'req',
+    '-x509',
+    '-new',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    'ca.key',
+    '-out',
+    'ca.pem',
+    '-days',
+    String(ELECTRON_CA_GUN),
+    '-sha256',
+    '-config',
+    'ca.cnf',
+    '-extensions',
+    'v3_ca',
+  ]);
+  kos([
+    'req',
+    '-new',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-keyout',
+    'sunucu.key',
+    '-out',
+    'sunucu.csr',
+    '-config',
+    'ca.cnf',
+    '-subj',
+    '/CN=127.0.0.1',
+  ]);
+  kos([
+    'x509',
+    '-req',
+    '-in',
+    'sunucu.csr',
+    '-CA',
+    'ca.pem',
+    '-CAkey',
+    'ca.key',
+    '-set_serial',
+    '0x' + crypto.randomBytes(12).toString('hex'),
+    '-days',
+    String(ELECTRON_CA_GUN),
+    '-sha256',
+    '-extfile',
+    'sunucu.ext',
+    '-out',
+    'sunucu.pem',
+  ]);
+  kos(['x509', '-in', 'ca.pem', '-outform', 'der', '-out', 'ca.der']);
+  for (const f of ['ca.key', 'sunucu.key']) fs.chmodSync(path.join(t, f), 0o600);
+  return { dizin: t, yeni: true };
+}
+
 /* ------------------------------------------------------------------ fikstür */
 
 function nesliKenaraAl(dizin) {
@@ -355,6 +481,10 @@ async function hazirla(s = {}) {
   const eski = nesliKenaraAl(dizin);
   if (eski) gunluk(`önceki nesil taşındı: ${eski}`);
   const tls = tlsHazirla(dizin, { yenile: !!s.tlsYenile });
+  // Electron istemcileri ad-kısıtlı CA'yı BoringSSL'de "unsupported name constraint type" ile
+  // reddediyor (26.09 canlı kanıt) — ayrı, kısıtsız, ≤7 gün ömürlü ikinci zincir; ad-kısıtlı
+  // zincire (yukarıda) hiçbir şekilde dokunmaz.
+  const tlsElectron = tlsHazirlaElectron(dizin, { yenile: !!s.tlsYenile });
 
   const ozel = anahtar.dosyadanOku(anahtarDosya);
   const acik = anahtar.acikAnahtarB64(ozel);
@@ -644,6 +774,16 @@ async function hazirla(s = {}) {
       sunucuPem: path.join(tls.dizin, 'sunucu.pem'),
       sunucuKey: path.join(tls.dizin, 'sunucu.key'),
     },
+    // Electron istemcileri (test kipi `EMPP_G_TEST_GUVEN_CA`) için kısıtsız, kısa ömürlü ikinci
+    // zincir — `tls` alanı Windows/Node referans istemcisi (kos.js, NODE_EXTRA_CA_CERTS) için
+    // değişmeden kalır.
+    tlsElectron: {
+      ca: path.join(tlsElectron.dizin, 'ca.pem'),
+      caDer: path.join(tlsElectron.dizin, 'ca.der'),
+      sunucuPem: path.join(tlsElectron.dizin, 'sunucu.pem'),
+      sunucuKey: path.join(tlsElectron.dizin, 'sunucu.key'),
+      gunSayisi: ELECTRON_CA_GUN,
+    },
     senaryolar: o.SENARYOLAR.map((x) => ({
       ...x,
       taban: taban(x.ad),
@@ -677,6 +817,10 @@ async function main(argv) {
   console.log(`  taban ${h.taban}`);
   console.log(`  sunucu:  node tools/g-uctan-uca/sunucu.js --dizin ${h.dizin}`);
   console.log(`  referans: node tools/g-uctan-uca/kos.js --dizin ${h.dizin}`);
+  console.log(
+    `  electron: node tools/g-uctan-uca/sunucu.js --dizin ${h.dizin} --electron  ` +
+      `(CA ${h.tlsElectron.ca}, EMPP_G_TEST_GUVEN_CA, ${h.tlsElectron.gunSayisi} gün)`,
+  );
 }
 
 if (require.main === module) {
@@ -689,11 +833,14 @@ if (require.main === module) {
 module.exports = {
   hazirla,
   tlsHazirla,
+  tlsHazirlaElectron,
   indexHtml,
   webzIndex,
   k17Index,
   KITAPLAR,
   motor,
   CA_CNF,
+  CA_CNF_ELECTRON,
   SUNUCU_EXT,
+  ELECTRON_CA_GUN,
 };
