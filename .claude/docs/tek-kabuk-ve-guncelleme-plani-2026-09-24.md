@@ -114,3 +114,44 @@ scratchpad `sonuc/SABLON-TESPIT-{WEBZ,KOD,SAHA}.md`, `GUNCELLEME-TESPIT.md`, kar
 - Kitap içeriği YALNIZ İmpark kanalı K ile; SET kanalı içerik taşımaz.
 - Sunucudaki kitap içlerine dokunulmaz (player-guncelle §0b); bu plan bizim paketlerin içidir.
 - `rm` yok, `git add .` yok, deploy.sh yok; hedefli scp + yedek + pm2 reload.
+
+## Durum 2026-09-24 akşam (ölçüldü)
+| Faz | Durum | Kanıt |
+|---|---|---|
+| 0 | Grup 1-5 commitlendi (0efa7d8, 9bfb394, 0651f80, 4d80ae9, 16dc079); test globu genişledi | `npm test` 1652 test, 0 fail, 5 skip |
+| 1 | `set-menu.js` Web-Z kabuğuna dokunmuyor (29b8fc8); kabuk masaüstü `webz-kabuk-uret.swift` ile (book-update 802b249, 0ffc10d) | 73768 1.0.1: ProBook 3/3 kitap, kök menü Web-Z ile yan yana |
+| 2 | Kanal K çevrimdışı paketlerde (ef3aaa8) + packagingService bağlantısı (17244af) | ProBook 57806 book2 v2→v4, Y-A senaryosu; 22/22 mutant |
+| 3 | Motor + okuyucu kabuğu kanonikle değiştirme (e1f080c, 17244af); kapı `scripts/motor-kapisi.js` | 73768 DMG rc 4 → değiştirilmiş kopya rc 0; kabuk deneyi 3/3 açıldı, rozet 1.13.3, 1.0.2 Pardus ProBook KABUL (23:04, Tailscale): md5 eşit, bütünlük TAM, sapma 0.226/koyu 0.969/renk 56832, "Üniteye Git" → Ünite Seçin modalı (6 ünite, %99,8 piksel değişti); etkinlik (htmletk) tıklaması ölçülmedi |
+| Ü | Plan yazıldı (book-update `plan-kontrol-merkezi-2026-09-24.md`); ilerleme % ertelendi | — |
+| Pardus şeridi | ProBook'ta yerli üretim 367 sn (docker 1025), kabul yerel 51 sn; DEB kapalı Mac'te 259-427 sn | `probook-serit/RAPOR.md`; kayıt sırrı Nadir'de |
+| 3001 | 17244af ile yeniden başlatıldı (pid `~/.empp-agent/packager.pid`), ortam `~/.empp-agent/packager.env`; `setGuncelleme` kapısı KAPALI (sözleşme ONAYLI değil) | `/api/health` kapılar eskisiyle aynı |
+
+Açık: 73768 1.0.2 canlıya yükleme kararı (Nadir; Pardus kabul edildi, Mac imzalı derleme ofis bekliyor); etkinlik (htmletk) tıklama kanıtı; ProBook şeridi dosyalarının commit'i + runner yamaları; srv21 `:3093` set-menu.js eşitleme + systemd (Nadir); `r2.conf` anahtar döndürme (Nadir); `surum-kiyas.js` sağlık ucunda `None` (ölçülecek).
+
+## 2026-09-25 akşam — ölçülen durum (Şef, oturum 006cff11)
+
+- **Kök neden kesinleşti:** mac/android/pardus pipeline'ının kaynağı köprüdeki İmpark Windows exe'si
+  (`akillitahtalar/{bookId}/*.exe`, `bridge-source.ts`); paketleyici `set-menu.js` yalnız kök
+  `index.html` yazar, tema dosyalarını koymaz. 73768'in 25.09 android/mac paketleri düzeltme sonrası
+  yine eski kabukla çıktı. Denetim: 49 set kaydı, hiçbirinde kanonik kabuk yok
+  (`~/Downloads/Windows/RAPOR-2026-09-24/set-kabuk-denetim-2026-09-25.{csv,md}`).
+- **Seçilen yol (Nadir):** düzeltilmiş kabuk KAYNAĞA yazılır → build zip Nadir tarafından İmpark'a
+  yüklenir → yeni exe köprü kaynağı olur → mac/android/pardus o kaynaktan üretilir. 13 YDS setinin
+  build zip'i teslim edildi (`~/Downloads/Windows/*-BUILD-20260925/`, her birinde OKU.md).
+  Runner ZIP-kaynak yaması (`runner.js:610` yalnız `unrar l` doğrular) bu yolda GEREKMEDİ; ileride
+  `POST /jobs/:id/source` (sources/*.zip) kullanılacaksa gerekir.
+- **Araç eksikleri (Üretim Masası `webz-kabuk-uret` / `SetCiktiUretici`), plan maddesi:**
+  (a) menü sırası klasör numarasından değil `settings.json.books[].displayOrder`'dan gelmeli
+  (59834'te scratchpad türeviyle üretildi); (b) `assetIdGecerliMi` yalnız rakam kabul ediyor,
+  `assets/<id>/` diskte varsa kabul etmeli (45482 "Grade-8-Games"); (c) KV'de "Kitap N" yer tutucu
+  başlıkları için uyarı + panel Adi'den öneri.
+- **Kaynak/KV tutarsızlıkları (Nadir düzeltecek):** 45504 (3113 kapak/İçerik, 45141 eksik), 45481 ve
+  11859 ("Kitap N" başlıkları; Games/Test Book KV'de yok), 45549 (Games KV'de yok), 45551 (book4 kapağı
+  SW8'e ait; R2'deki 45551 exe'si Maarif içeriği, android apk boş motor — canlı dağıtım hatalı).
+- **3001 kapı arızası:** reboot sonrası run-agent.sh'ta `EMPP_SET_GUNCELLEME`/`EMPP_ICERIK_GUNCELLEME`
+  yoktu → varsayılan AÇIK; iki export eklendi, reçete koşul betiği bitmiş işi aktif saymayacak şekilde
+  düzeltildi, 3001 pid 52572 kapalı kapılarla doğrulandı (memory `kapi-bayraklari-reboot-sonrasi-acildi`).
+- **Windows:** NSIS test paketi üretildi (SM2, 807 MB, kapı 8 PASS/2 FAIL: version.txt 4 parça,
+  set kanalı kapalı), Nadir Windows'ta deniyor. İmza: Certum OV bulut (€209) alınacak + İmpark yuvası
+  SMB ile (aynı paylaşımda mv 0,15-0,18 sn, kopya 4,5 MB/s, Mac→Storage7 17 MB/s) yedek yol;
+  gözcü betiği `scripts/imza-yuva-smb.sh` (kuru koşu testli).

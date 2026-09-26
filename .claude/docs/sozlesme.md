@@ -26,7 +26,10 @@ kurum logolu paketler üretmek.
 | Pardus üretimi (`tools/pardus/pardus-packager-build.sh`) | build.zip → .impark (Docker, linux/amd64) | gömülü zenity ZORUNLU (yoksa paket reddedilir); disk kapısı 20 GB; `PARDUS_PARALEL=1` ile paralel | canlı |
 | srv21 üretim şeridi (`tools/agent/serit-uret.js` + srv21 `/opt/lane-hazirla.mjs`) | bookId → srv21'de hazırlık+derleme → Mac'e `.impark` | Mac ajanı yalnız kabul kapısı + R2 yüklemesi yapar; `EMPP_PARDUS_HAZIR_DIR` altındaki paket `srcVersion` eşleşirse devralınır; scp portu `-P 2222` | canlı |
 | linux deb hedefi (`EMPP_LINUX_DEB`) | build → AppImage (+ istenirse deb) | `.impark` yalnız AppImage'dan türer; `EMPP_LINUX_DEB=0` deb'i kapatır (1,5 GB gövdede xz 30+ dk) | canlı |
-| SET kök menüsü (`ensureSetMenu`, K17) | SET build'i → kökte menü sayfası | yalnız kök motor kopyasıysa çalışır; özel menüye DOKUNMAZ; `app.config.js` üretmez | canlı (kapı `EMPP_SET_MENU=1`) |
+| SET kök menüsü (`ensureSetMenu`, K17→29b8fc8) | SET build'i → kökte menü sayfası | Kabuğun tek üreticisi masaüstü Üretim Masası (`WebZTemaUretici`); `set-menu.js` artık Web-Z kabuğuna DOKUNMAZ, yalnız kabuk yoksa/kök motor kopyasıysa korur — HTML ÜRETMEZ (Faz 1 kararı, 24.09); yayıncı tasarımlı kök menüye DOKUNMAZ; `app.config.js` üretmez | canlı (kapı `EMPP_SET_MENU=1`) |
+| İmpark içerik güncelleme kanalı K (`src/runtime/icerik-guncelleme.js`, Faz 2) | `update.zip` → WORK/`.empp-gecici`'de açılır, BookContent md5 ile doğrulanır, sonra WORK'e taşınır | `adm-zip` çevrimdışı pakete istisnayla girer; `file:` örtüsü WORK'ü BASE önüne koyar; açma doğrulanmadan sürüm İLERLETİLMEZ (sahte ilerletme kapalı); boyut tavanı `VARSAYILAN_TAVAN_MB=4096` (zip bombası/disk koruması); kitap başına en fazla `ESKI_BASARISIZ_TAVAN=2` başarısız açma kenarı tutulur, fazlası silinir; kanal Ş (yayıncının motor/kabuk zip'i) BİLİNÇLİ KAPALI — motor/kabuk yalnız bizim SET kanalı + player-guncelle ile gider | canlı (`EMPP_ICERIK_GUNCELLEME`), ProBook saha ölçümü geçti (57806 book2 v2→v4), 22/22 mutant |
+| Motor + okuyucu kabuğu kanonikle değiştirme (`src/packaging/motor-surumu.js` + `okuyucu-kabugu.js`, Faz 3) | paket kökü → kanonik önbellekle (`~/.empp-agent/motor`, `kabuk/<sürüm>`) kıyaslanır, eskiyse değiştirilir | Eskisi ağaç DIŞINA `.empp-eski/` taşınır (silme yok); `paket.json.motorSurumu`/`kabukSurumu` yazılır; kanonik yoksa durum `bilinmiyor` (asla sahte "aynı" üretilmez); kapı `scripts/motor-kapisi.js` rc 0 ikisi de geçti · 1 motor düştü · 3 kabuk düştü · 4 ikisi de düştü · 2 kanonik bilinmiyor. Ölçüm 73768: DMG motor `ba539fb50c60`/kabuk `1.11.5` → Web-Z motor `03e8af70a0f3`/kabuk `1.13.3` | canlı (`EMPP_MOTOR_SURUMU`) |
+| ProBook Pardus şeridi (`tools/probook/*` + `src/agent/serit-secimi.js`) | bookId → ProBook'ta yerli derleme (Docker'sız) + yerel kabul + R2 | ProBook BİRİNCİL, Mac docker YEDEK (nabız 10 dk yok ya da disk kapısı düşükse otomatik eşikli devir + ntfy); sıkı sıra: indir→derle→bütünlük→kur+aç(kabul)→yükle→temizle (derlemede kabul KOŞMAZ); kendi jetonu (`AGENT_ENROLL_SECRET` ayrı kayıt, sır diske yazılmaz); kabul yerel dalı + manifest-tabanlı temizlik (yalnız kendi yazdığını siler) + ortak kilit (`~/.kabul.lock` O_EXCL, 60 dk bayat); DEB kapalı (`EMPP_LINUX_DEB=0`). Ölçüm Bloktest 2,2 GB: ProBook derleme 367 sn (Mac docker 1025), kabul 51 sn | canlı, sır elle bir kez girildi — kayıt (`kaydol.js`) henüz koşmadı |
 | ProBook kabul kapısı (`tools/pardus/probook-kabul.sh`) | üretilen .impark → gerçek Pardus makinesinde kurulur + açılır | kapı düşerse paket R2'ye YÜKLENMEZ; ölçüt pencere + piksel sapması (süreç sayısı DEĞİL) | canlı (kapı `EMPP_PARDUS_KABUL=1`) |
 | Windows kabul kapısı (`tools/windows/vm-kapi.js` + `src/windows/vm-kapi-karar.js` + `tools/windows/vm-kopru-sunucu.js`) | üretilen `.exe` → VMware Win11 VM'inde kurulur, açılır, ekran görüntüsü alınır | "Geçti" = çıkış 0 **ve** ekran görüntüsü **ve** süreç ayakta; sonuç gelmezse `zaman-asimi`, izleyici ölürse `bozuk`. Parola hiçbir yerde geçmez (`vmrun` guest işlemleri kimlik ister, snapshot istemez). Taşıma HTTP: Apple Silicon + Win11 ARM'da paylaşılan klasör YOK; sunucu yalnız `bridge*` arayüzüne bağlanır, yol öneki belirteç | araç hazır — misafirde izleyici tek seferlik elle başlatılır | **Çok makineli:** her makinenin kendi kuyruğu/kalbi/işareti vardır (`--makine <ad>`, varsayılan `vm` = Fusion misafiri); `calistir <komut>` ile uzak komut koşturulur (disk ölçümü/temizliği, sürüm sorgusu).
 | alt-kitap uyarlamaları (K3/K5/K6/K9) | SET build'i → her `bookN` için shim, manifest, `setBook.enable`, ad-alanlı VFS | ad deseni değil motor imzası (`index.html`+`app.config.js`) ile bulunur | canlı |
@@ -55,6 +58,7 @@ kurum logolu paketler üretmek.
 | kademeli kurulum (planlandı) | paket → açılış kümesi (motor + data + her alt-kitabın ilk 10 sayfası) + arka plan kümesi | Açılış eşiği ölçüldü: 542 MB → 97 MB. İçerik `app.asar`'dan ÇIKMADAN mümkün değil | **tasarım — kod yok** |
 | sayfa önbelleği (planlandı) | kitap açılınca arka planda kalan sayfaları mod1-çöz + önbelleğe yaz; **kanca `window.fetch` (ölçüldü) — `empp-fs-shim.js` `installFetch()` zaten orada** | Öncelik kuyruğu (atlanan sayfa öne alınır) · sayfa çevrilirken işçi durur · sürüm damgalı, kitap güncellenince düşer · disk tavanı şart | **tasarım — kod yok** |
 | yükleyici (Inno Setup, planlandı) | build → per-user `%LOCALAPPDATA%` tek ekranlı imzalı kurulum | Soru sorulmaz, UAC yok, bitince otomatik açılır; imza 66902 yuvasından | **tasarım — kod yok** |
+| imza yuvası gözcüsü (`scripts/imza-yuva-smb.sh`, 2026-09-25) | yerel exe → SMB `KitapTekExe/_hazir/` → pencerede 66902 yuvasına `mv` takası → İm Park imzalı kopya `imzali/<ad>-imzali.exe` | Yuva kimliği SABİT; imzalı sayılmak için pe_is_signed + gövde bayt eşliği (pencere kaçtıysa çıkış 4) + `osslsigncode verify` + imzacı CN; üzerine mv smbfs'te atomik değil; yavaş hatta `SMB_SHA=0`; `hizli-kontrol` İNDİRMEDEN <2 MB okuyarak imzalı+bizim der (Authenticode özetini doğrulamaz — yayın öncesi tam doğrulama şart); `toplu` önce hepsini hazırlar, sonra sırayla imzalatıp `_imzali/`'ye taşır, düşen pakette durur; canlı tetik yalnız `TETIK=1`; ayrıntı `scripts/OKU-imza-yuva-smb.md` | araç hazır (70 kuru test), **CANLI koşu yok** |
 
 ## Ekranlar ve Görevleri
 
@@ -89,12 +93,20 @@ kurum logolu paketler üretmek.
   Kuyruk boş temizliği `uploads`'u TOPTAN boşaltamaz: kontrolden sonra gelen yükleme silinir,
   unzip düşer ve paketleme işi sonsuza dek "ZIP bekleniyor"da asılı kalır (ölçüm 2026-09-17, 45792;
   son 10 dakikada dokunulmuş dizinler korunur).
+  3001 restart reçetesi: `~/.empp-agent/packager.env` ortamıyla, kuyruk BOŞKEN, `/api/health`
+  `commit`i çalışan HEAD ile eşleşince güvenli sayılır (pid `~/.empp-agent/packager.pid`) — 24.09
+  17244af ile böyle yeniden başlatıldı; kapılar öncekiyle aynı kaldı (`setGuncelleme` sözleşme
+  ONAYLI olmadığı için KAPALI).
 
 ## Yapılmayacaklar
 
 - SET için `app.config.js` / set konfigi üretmek (K1, Nadir kararı — geri alındı, `_graveyard`).
 - Paralel ağır build'i varsayılan yapmak (srv21 paylaşılan üretim sunucusu — nazik build kuralı).
 - Yayıncının kendi menüsü/özel index'i olan pakete dokunmak.
+- Windows'ta motor/kabuk kanonikle değiştirme (Faz 3) — ertelendi, şimdilik Mac/Linux/Android.
+- SET güncelleme paketi taslağı kapısı KAPALI — sözleşme ONAYLI değil (Nadir onayı bekliyor).
+- srv21 `:3093` canlı üreticisinin `set-menu.js`/kod eşitlemesi — HEAD'e çekmek K15/K17'yi siler,
+  önce commit kararı Nadir'in.
 
 - **Uzaktan destek** (RustDesk/AnyDesk/TeamViewer) — Nadir 18.09: KAPSAM DIŞI.
 
@@ -104,44 +116,31 @@ kurum logolu paketler üretmek.
 - macOS/Android'de üretim sonrası KABUL KAPISI YOK (pardus'ta ProBook, Windows'ta windows-kasa var). **Dahası: hatta "üret, bekle, onaylanınca yayınla" diye bir ara durum HİÇ YOK** — `runner.js` `postResultSuccess` build biter bitmez R2'ye yazar, `job done` der ve **yerel çalışma dizinini siler**; incelemek isteyen CDN'den geri indirir. Yani kuyruğa iş koymak = yayına onay vermek; bozuk paket her seferinde ÖNCE müşteriye gider. Kanıt 21.09: kaçak paketleyici yanlış kapılarla (`setMenu:false`, `sayfaWebp:true`) **7 paket** üretti, yedisi de kimse bakmadan canlıya çıktı; bozukluk ancak Nadir bir APK'yi kendi cihazında açınca fark edildi (45482: menü hiç gelmedi, doğrudan kitaba atladı). Gereken: `hold` durumu (üretildi · doğrulanmayı bekliyor · yayınlandı) + kabul kapısının YAYINDAN ÖNCE koşması. Mac kapısı ölçütü: asar kökünde `assets/`+`classlibraries/`, kök `index.html` gerçek SET menüsü mü (dosya varlığı DEĞİL, **davranış**), `bookN` tam, sayfalar PNG.
 - K17 menüsünde kitap adı kaynaktan (`BookContent.xml` `pdfUrl`) türetiliyor; panel/DB'deki
   gerçek kitap adlarına bağlanmalı mı?
+- 24.09 açık: 73768 1.0.2 teslimi (etkinlik kanıtı bekliyor), ProBook şeridi dosyalarının commit'i,
+  srv21 `:3093` eşitleme + systemd birimi, `r2.conf` açık metin R2 anahtarı döndürme.
 
 ## Değişiklik Günlüğü
 
 | Tarih | Ne Değişti | Hangi Oturum |
 |---|---|---|
 | 2026-09-22 | K8 Android kitap indir/güncelle + K9 Wi-Fi otomatik güncelleme (yerel ağ bilgisi eklentisi) eklendi | 476bac52 |
-| 2026-09-17 | İlk taslak; K17 (SET kök menüsü) + pardus paralel bayrağı + ProBook kabul kapısı (üretilen paket açılmadan yüklenmez) eklendi | 006cff11 |
-| 2026-09-17 | srv21 üretim şeridi + `EMPP_LINUX_DEB`; scp portu (-P) onarıldı; kuyruk-boş temizliği taze uploads'u koruyor; ProBook kapısına disk ön-kontrolü + AppRun (`resolve_executable`) kapısı | 006cff11 |
-| 2026-09-18 | pardus disk kapısı kaynak indirmeden ÖNCE soruluyor (gece 11 iş 1,5 GB'ı boşuna indirip düşmüştü) | 006cff11 |
-| 2026-09-18 | Electron verimliliği: dil budaması + açılış yaması + sayfa WebP (kapılı). Ölçüm: paketin %91'i app.asar, %97'si assets/ | 006cff11 |
-| 2026-09-18 | Kademeli kurulum + sayfa önbelleği + Inno Setup yükleyicisi sözleşmeye eklendi (tasarım). Ölçümler: `.claude/docs/yukleyici-arastirma-2026-09-18.md` §E-G | 006cff11 |
-| 2026-09-19 | K20 ana ekran yolu düzeltmesi (Windows beyaz ekran) + K21 açılış ağ politikası (`window.fetch` sarmalı; `?id=undefined` engellenir, canlılık probuna motorun beyan ettiği 5000 ms uygulanır). Ölçüm: 3 nokta ekranının %91'i ağ | 006cff11 |
-| 2026-09-19 | Pardus disk kapısı BOYUT ORANTILI oldu (`pardusGerekliDiskGb`: kaynak × 5, taban 15 GB) ve kapı düşünce satıra `failed` YAZILMIYOR (`ertelenebilirKaynakHatasi` → kira dolunca kuyruğa döner, ajan sıradaki işe geçer). Eski düz sabit 45 GB, 19 Eylül'de 8 işi sahte "PARDUS HATALI" yaptı | 006cff11 |
-| 2026-09-20 | K24 sayfa ön-getirme (sayfa geçişindeki bekleme) + K25 açılış ikilisi: ana süreçte güncelleme ötelemesi, bundle'larda ilk-sayfa süre bütçesi. Kök bulgu: 5 sn'lik "güvence" ağsız makinede NORMAL yoldu — sorgunun `.catch`'i yoktu | 006cff11 |
-| 2026-09-20 | K26 sabit splash beklemesi kaldırıldı (Nadir: "ölme eşşeğim ölme" — üç açılış göstergesi). Ayrıca paket güncelleme planı (Hat C: paket yapısı/yeni kitap) `.claude/docs/paket-guncelleme-plani-2026-09-20.md`'ye yazıldı; asar kilidi nedeniyle değişen içerik asar dışında olmalı | 006cff11 |
-| 2026-09-20 | Windows kabul kapısı: VM sürücüsü + karar modülü (18 test) + guest izleyici; taşıma HTTP köprüsüne alındı — Fusion 13 Apple Silicon + Win11 ARM misafirde paylaşılan klasörü DESTEKLEMİYOR (panel yok, vmx'te hgfs satırı yok). Köprü yalnız bridge* arayüzüne bağlanır, belirteç yol önekiyle korunur (12 test, gerçek HTTP) | 006cff11 |
-| 2026-09-20 | K27 üçüncü açılış göstergesi kaldırıldı (Nadir: "kalksın, hemen açılmalı"). Ölçüm: pakette "Kitap Açılıyor" 0, 5 sn güvence 0, işaret 10, "Kitap Güncelleniyor" 5 korundu. Ayrıca setId kararı plana yazıldı (panel üretir / elle girilebilir / global tekil / değişmez) | 006cff11 |
-| 2026-09-20 | Katman 1: paket kimlik manifesti (`paket.json`) — Nadir'in setId kararı uygulandı. Gerçek derlemede doğrulandı: `SET-super-monsters-4-8c8fd0f9135a`, 5 kitap, paket parmak izi; app.asar içinde bulundu | 006cff11 |
-| 2026-09-20 | Windows kapısı çok makineli: kuyruk/kalp/`BENDE` işareti makine bazlı ayrıldı (tek kuyrukta 8 görevin 1'i yanlış makineye gidiyordu), uzak komut (`calistir`) eklendi — Windows-Kasa x64 gerçek donanım kabul şeridi olarak devrede | 006cff11 |
-| 2026-09-21 | Sayfa WebP satırı düzeltildi: kapı hâlâ varsayılan KAPALI ama 2026-09-20 23:30–09-21 elle koşan bir süreç ProBook kabulü olmadan üretime karıştı (SM4 Windows); `webp-kapi-uyarisi.js` artık açık kapıyı günlüğe basıyor. Sürüm normalleştirme (`surum-normallestir.js`, varsayılan AÇIK — `checkVersion` 4 parçalı sürümü koşulsuz eski sayıp ~350 MB boşuna indiriyordu) ve VM izleyici sürüm tespiti (`izleyici-surum.js`, manuel runbook) eklendi. Anlık yama katmanı (`yama-katmani.js`+`yama-defteri.js`) HENÜZ BAĞLANMADI | 006cff11 |
-
-| 2026-09-21 | **Sürüm kıyas modülü** (`surum-kiyas.js`, 24 test) — `surum-normallestir` ile `publisher-update.isNewer` çakışıyordu: normalleştirilmiş 3 parçalı `version.txt` ile 4 parçalı zip adı her işte cache STALE üretiyor, her iş ~1 GB'ı boşuna indiriyordu; `runner.js cachedZipIsStale` yeni saf kıyasa bağlandı. **Windows paket kapısı** (`scripts/windows-paket-kapisi.js`, 45 test) — teslim öncesi 45 maddelik exe ölçümü, dört durumlu (ölçülemeyen madde PASS sayılmaz); üretim akışına HENÜZ bağlanmadı | 006cff11 |
-| 2026-09-21 (öğleden sonra) | **SET güncelleme kanalı** üretime girdi: `set-kabuk.js` (kabuk tanımı tek kaynak, 459 dosya/12 referans), `guncelleyici-enjekte.js` ana sürece (her giriş adayına), runtime `kitap-guncelleyici.js`; **Windows'ta asar KAPALI** (`windows-asarsiz.js`, varsayılan açık kapı; +%1,98 boyut, kitap EKLEME ancak böyle) + `"!build"` dışlaması; kapı madde 13 (yalnız üretilen exe'den) ve `girisDosyasiCoz` (asar/açık ağaç aynı giriş kararı; 69 test). SM4 gerçek exe: 10 PASS · 0 FAIL, 1.431.168.949 B. **Kaçak paketleyici 2. tekrar** (14:14, `setMenu:false`+`sayfaWebp:true`) → Shall We 5 mac DMG ölçümle BOZUK (SET menüsü yok, 20/20 WebP), R2'de müşteriye açık; yeniden üretim ajanın temiz restart'ını bekliyor. Kaynak ağaç `src/platforms/` %89 ölü ölçüldü, karantina hazır uygulanmadı. Bugünkü değişiklikler commit EDİLMEDİ | 006cff11 |
+| 2026-09-17 | İlk taslak; K17 SET kök menüsü + pardus paralel bayrağı + ProBook kabul kapısı + srv21 üretim şeridi + `EMPP_LINUX_DEB` + scp portu (-P) onarımı + kuyruk-boş temizliğinin taze uploads'u koruması | 006cff11 |
+| 2026-09-18 | Pardus disk kapısı indirmeden ÖNCE soruluyor (gece 11 iş boşuna düşmüştü); Electron verimliliği (dil budaması+açılış yaması+sayfa WebP kapılı, paket %91 app.asar); kademeli kurulum/sayfa önbelleği/Inno Setup tasarımı yazıldı | 006cff11 |
+| 2026-09-19 | K20 ana ekran yolu (Windows beyaz ekran) + K21 açılış ağ politikası; Pardus disk kapısı BOYUT ORANTILI (kaynak×5, taban 15 GB), düşünce `failed` YAZILMAZ (kuyruğa döner) | 006cff11 |
+| 2026-09-20 | K24 sayfa ön-getirme + K25 açılış ikilisi (güncelleme ötelemesi+ilk-sayfa süre bütçesi) + K26/K27 sabit splash ve 3. gösterge kaldırıldı; Katman 1 `paket.json` manifesti (setId); Windows kabul kapısı (VM+HTTP köprü, çok makineli kuyruk/kalp) | 006cff11 |
+| 2026-09-21 | Sayfa WebP kapı-uyarısı günlüğe basar; sürüm normalleştirme + **sürüm kıyas modülü** (`surum-kiyas.js`, cache STALE çakışması giderildi) + **Windows paket kapısı** (45 madde, dört durumlu) + VM izleyici sürüm tespiti; **SET güncelleme kanalı** ilk sürümü (kabuk tanımı+güncelleyici enjekte, Windows asarsız) | 006cff11 |
+| 2026-09-24 | **Faz 2** içerik kanalı K (`icerik-guncelleme.js`, 22/22 mutant) + **Faz 3** motor/kabuk kanonik değiştirme (`motor-surumu.js`+`okuyucu-kabugu.js`+kapı `motor-kapisi.js`) + packagingService bağlantıları; SET kök menüsü Web-Z kabuğuna dokunmaz oldu; **ProBook yerli Pardus şeridi** (kurulum+ajan birimi+yerel kabul+manifest temizliği+ortak kilit, Bloktest 2,2 GB 604 sn uçtan uca); test globu genişledi (1652 test, 0 fail) | ef3aaa8, e1f080c, 17244af, 29b8fc8, 420f21e, 0651f80 |
 
 ## Anlık yama katmanı (2026-09-21, HENÜZ BAĞLANMADI)
 
-Kurulu uygulamaya birkaç KB'lik bir düzeltmeyi (ör. `index.html` **2.973 bayt** vs paket
-1.890.051.700 bayt/13.677 dosya) yeniden kurulum olmadan uygulamak için iki modül yazıldı;
-canlı paketleme yoluna **bilerek bağlanmadı**, kapı `EMPP_YAMA=1` ile varsayılan KAPALI.
-Gerekçe: renderer `fs-shim` `fetch()`'i sarıyor ama **HTML navigasyonu fetch'ten geçmez**
-(`file://`'dan okunur), depoda protokol kancası yoktu.
+Kurulu uygulamaya küçük düzeltmeleri (ör. `index.html` 2.973 bayt vs paket 1,89 GB/13.677 dosya)
+yeniden kurulum olmadan uygulamak için `yama-katmani.js` (ana sürece `protocol.handle('file')`
+kancası, `userData/<YAMA_DIZIN>` önce aranır, atomik/idempotent, yol kaçışı reddedilir) ve
+`yama-defteri.js` (defteri çeker, sha256 doğrular, atomik rename, 5 MB bayt tavanı) yazıldı;
+canlı yola BİLİNÇLİ bağlanmadı, kapı `EMPP_YAMA=1` varsayılan KAPALI — renderer `fetch` sarmalı
+HTML navigasyonunu YAKALAMAZ, protokol kancası bu yüzden gerekti. Yayıncının kendi güncelleyicisi
+açılışta zaten ~350 MB indiriyor; bizim yolumuz İKİNCİ bloklayıcı güncelleme OLMAYACAK.
 
-- `src/packaging/yama-katmani.js` — ana sürece `protocol.handle('file')` kancası enjekte eder,
-  yol önce `userData/<YAMA_DIZIN>` altında aranır. Atomik (yarım enjeksiyon = pencere hiç açılmaz
-  riskiyle hiçbir şey eklenmez), idempotent, `../`/mutlak yol kaçışı reddedilir.
-- `src/packaging/yama-defteri.js` — `{surum, dosyalar:[{yol,sha256,bayt}]}` defterini çeker
-  (zaman aşımlı), sha256 doğrular, geçici ada yazıp rename ile atomik koyar, bayt bütçesini
-  (varsayılan 5 MB) aşarsa listeyi keser.
-
-Yayıncının kendi güncelleyicisi açılışta zaten ~350 MB indiriyor (uygulamadan, ~99 sn bekletiyor);
-bizim yolumuz İKİNCİ bloklayıcı güncelleme OLMAYACAK.
+**2026-09-26 — Windows paketleme sözleşmesi ONAYLI (Nadir).** `windows-paketleme-sozlesmesi.md`: G1–G6 uygulandı,
+kurulum ekranı kuralı (ilk kutu, evre metinleri, gerçek MB sayacı, tek yazma) ve zamanlama günlüğü eklendi.
+VM'de A 2.51.0 kuruldu, Nadir onayladı. Kod henüz `~/01dev/_worktrees/win-sozlesme`'de, commit bekliyor.
