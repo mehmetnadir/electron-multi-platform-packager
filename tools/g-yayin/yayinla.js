@@ -36,6 +36,8 @@ const gSurum = require('./g-surum');
 const anahtar = require('./anahtar');
 const zip = require('./zip-yaz');
 const durum = require('./durum');
+// Paketleyicinin alt-kitap fs-shim enjeksiyonu — TEK KAYNAK (bağımlılıksız saf modül).
+const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
 
 /** `src/packaging/set-kimligi.js` KIMLIK_DESENI ile aynı (sentinel testte kıyaslanır). */
 const KIMLIK_DESENI = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -294,7 +296,38 @@ function yerelSurumOku(setDizini) {
   }
 }
 
-/** Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış zip + içerik listesi. */
+/** Eklenen kitabın giriş sayfası — paketleyici de yalnız `<kitap>/index.html`'e enjekte eder. */
+const KITAP_INDEX = 'index.html';
+
+/**
+ * Eklenen kitabın `index.html`'ine paketleyicinin alt-kitap fs-shim etiketlerini koyar
+ * (`src/packaging/fs-shim-subbook-html.js` — TEK KAYNAK, kopya kural yok).
+ *
+ * NEDEN: G ile EKLENEN kitap paketleme anında pakette yoktu → `bookN/index.html` shim almadı →
+ * renderer `fs` okumaları örtüyü (mac/Pardus, 9529d11) ve WORK'ü (Windows yerinde) görmez,
+ * yazmalar pakete gider. Paketlenmiş bir kitapla aynı sayfayı taşısın diye arşiv SONRASI değil
+ * ÖNCESİ enjekte edilir; `dosyalar[]` ve arşiv sha256'sı enjekte edilmiş içerikten hesaplanır.
+ * İdempotent: etiketler zaten varsa bayta dokunulmaz. Sayfada BAŞKA bir kitabın ad-alanı yazılıysa
+ * (`__emppSubBook` ≠ hedef dizin — başka setten taşınmış kitap) RED: o kitap iki kitabın WORK'ünü
+ * karıştırır (K6), sessizce yayınlanmaz.
+ * @returns {{veri:Buffer, durum:'enjekte'|'zaten-var'}}
+ */
+function fsShimUygula(dizin, veri) {
+  const r = fsShimHtml.injectFsShimIntoSubBookHtml(veri.toString('utf8'), dizin);
+  if (r.existingSubBook !== null && r.existingSubBook !== dizin) {
+    throw new Error(
+      `--ekle ${dizin}: index.html başka kitabın ad-alanını taşıyor ` +
+        `(__emppSubBook=${JSON.stringify(r.existingSubBook)}); hedef dizinle aynı olmalı`,
+    );
+  }
+  if (!r.changed) return { veri, durum: 'zaten-var' };
+  return { veri: Buffer.from(r.html, 'utf8'), durum: 'enjekte' };
+}
+
+/**
+ * Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış zip + içerik listesi. Kök
+ * `index.html` paketleyicinin fs-shim enjeksiyonundan geçer (`fsShimUygula`).
+ */
 function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   const y = path.resolve(String(kaynak));
   let st;
@@ -305,20 +338,44 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   }
   fs.mkdirSync(geciciDizin, { recursive: true });
   const gecici = path.join(geciciDizin, `${dizin}-${process.pid}-${Date.now()}.zip`);
+  let fsShim = 'index-yok';
   if (st.isDirectory()) {
     const girdiler = zip.dizindenGirdiler(y);
     if (!girdiler.length) throw new Error(`--ekle ${dizin}: dizin boş: ${y}`);
+    const idx = girdiler.find((g) => g.yol === KITAP_INDEX);
+    if (idx) {
+      const sonuc = fsShimUygula(dizin, fs.readFileSync(idx.tam));
+      fsShim = sonuc.durum;
+      if (sonuc.durum === 'enjekte') idx.veri = sonuc.veri;
+    }
     zip.zipYaz(gecici, girdiler);
   } else if (st.isFile()) {
     fs.copyFileSync(y, gecici);
+    // Önce KAYNAK istemcinin okuyucusuyla denetlenir (güvensiz yol / sarmal dizin RED) — yeniden
+    // paketleme denetimsiz yazıcıyı kullanır, kötü girdiyi temize çekmemeli.
+    zip.zipIcerigi(gecici);
+    const girdiler = kg.arsivCozVarsayilan(fs.readFileSync(gecici));
+    const idx = girdiler.find((g) => g.yol.replace(/\\/g, '/') === KITAP_INDEX);
+    if (idx) {
+      const sonuc = fsShimUygula(dizin, idx.veri);
+      fsShim = sonuc.durum;
+      if (sonuc.durum === 'enjekte') {
+        idx.veri = sonuc.veri;
+        zip.zipYaz(
+          gecici,
+          girdiler.map((g) => ({ yol: g.yol.replace(/\\/g, '/'), veri: g.veri })),
+        );
+      }
+    }
   } else {
     throw new Error(`--ekle ${dizin}: kaynak dosya ya da dizin değil: ${y}`);
   }
   // İSTEMCİNİN okuyucusuyla açıp doğrular VE (yol,sha256,boyut) listesini üretir — bu liste
   // manifestin imzalı `dosyalar[]` alanına gider, istemci arşivi açmadan doğrulayabilsin diye.
+  // Enjeksiyon SONRASI son arşivden türetilir: liste ile arşiv baytı birebir tutar.
   const dosyalar = zip.zipIcerigi(gecici);
   const oz = dosyaSha256(gecici);
-  return { gecici, sha256: oz.sha256, boyut: oz.boyut, adet: dosyalar.length, dosyalar };
+  return { gecici, sha256: oz.sha256, boyut: oz.boyut, adet: dosyalar.length, dosyalar, fsShim };
 }
 
 function kitapAdi(dizin, sha) {
@@ -407,6 +464,9 @@ async function yayinla(a, ops = {}) {
     if (!durum.KITAP_DIZIN_DESENI.test(d))
       throw new Error(`--ekle: kitap dizini book<N> olmalı: ${d}`);
     const ar = kitapArsiviHazirla(d, y, geciciDizin);
+    if (ar.fsShim === 'index-yok') {
+      gunluk(`[uyari] --ekle ${d}: kökte index.html yok — fs-shim enjekte edilmedi`);
+    }
     const ad = kitapAdi(d, ar.sha256);
     const kaynak = `${taban}/set/${encodeURIComponent(setKimligi)}/kitap/${ad}`;
     arsivler.set(d, { ...ar, ad, kaynak });
@@ -526,6 +586,8 @@ async function yayinla(a, ops = {}) {
     degisenKabuk: yeni.ozet.degisenKabuk,
     dusenKabuk: yeni.ozet.dusenKabuk,
     degisenKitap: yeni.ozet.degisenKitap,
+    /** Eklenen kitap → fs-shim sonucu ('enjekte' | 'zaten-var' | 'index-yok'). */
+    fsShim: Object.fromEntries([...arsivler].map(([d, ar]) => [d, ar.fsShim])),
     yerelEksik: denetim.yerelEksik,
     cikti: setDizini,
     plan: null,

@@ -71,6 +71,8 @@ GET <kaynak>                            kitap arşivi (manifestteki mutlak adres
 ```
 
 Arşiv: zip (stored/deflate, Zip64 yok, UTF-8 ad), kökü kitap dizininin İÇİ (`index.html`, `sayfa/…`).
+Arşivdeki `index.html` paketleyicinin alt-kitap fs-shim etiketlerini taşır (`window.__emppSubBook="bookN"` +
+`../empp-fs-shim.js`; g-yayin tek kaynaktan enjekte eder) — istemci ikinci kez enjekte etmez.
 
 ## G istemcisi kuralları
 

@@ -136,6 +136,7 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 - **Hâlâ açık:** emülatörde uçtan uca (3 senaryo) + kabul önce/sonra koşulmadı; cihazda WebCrypto Ed25519
   ölçülmedi; APK `versionName` appVersion'a bağlı değil (paket sürümü ayrı dosyada); R2'ye gerçek yükleme yok
   (yerel `--cikti` ağacı, `yukle.js`'in plan/upload akışına android/ anahtarları henüz eklenmedi).
+- **AÇIK — Android G ile eklenen kitabı REDDEDER (26.09, `g-yayin-shim`):** paylaşılan arşiv Electron biçimi → `kitap-guncelleme-sozlesmesi.md` "G yayın aracı".
 
 ## Yapılmayacaklar
 Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon kanalına (ImWin32.dll, imKeys.dll) dokunmak ya da kod/anahtar gömmek · bayat paketleyici kopyasıyla üretmek · srv21'de ağır derlemeyi varsayılan yapmak · düz disk/önbellek sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m- zip'i kaynak almak.
