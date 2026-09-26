@@ -442,7 +442,13 @@ MimeType=application/x-electron;
       // KÖK INDEX DENETİMİ — kaynak anlık görüntüsü (2026-09-26, bkz. kok-index-denetimi.js
       // dosya başlığı). workingPath İLK DOLDURULDUĞUNDA, HİÇBİR yamadan (set-menu dahil)
       // önce alınır; set-menu adımından SONRA bu anlık görüntüyle karşılaştırılacak.
-      const kaynakKokIndexHtml = await kokIndexDenetimi.kokIndexOku(workingPath);
+      //
+      // T5 DÜZELTMESİ (2026-09-26): bu anlık görüntü aslında "yamalardan önce" DEĞİL —
+      // runner.js kendi `applyPublisherUpdate`'ini zip'i BURAYA yüklemeden ÖNCE uyguluyor,
+      // yani workingPath'in kök index'i zaten runner'ın güncellemesini görmüş olabilir.
+      // `kaynakSnapshotAl` runner'ın bıraktığı gerçek kaynağı (varsa) TERCİH eder — TEK
+      // okuma yolu, bkz. kok-index-denetimi.js.
+      const kaynakKokIndexHtml = await kokIndexDenetimi.kaynakSnapshotAl(workingPath);
 
       // SÜRÜM TÜRETME (2026-09-22, Nadir onayı) — bkz. src/packaging/surum-turet.js.
       // Ölçülen arıza: üretim tetikleyicileri (.sm4-k*-uret.js) appVersion'ı hep
@@ -1011,9 +1017,19 @@ MimeType=application/x-electron;
       // KÖK EZİLMİŞ demektir — harf kapısıyla AYNI ilke: yutma, yukarı taşı, iş düşsün.
       if (kokIndexDenetimi.acikMi()) {
         try {
-          await kokIndexDenetimi.paketeUygula(workingPath, kaynakKokIndexHtml, {
+          const kokIndexPoll = await kokIndexDenetimi.paketeUygula(workingPath, kaynakKokIndexHtml, {
             log: (s) => console.log(s),
           });
+          // Görünürlük köprüsü (2026-09-26, kok-index-log-koprusu.js): 'uyar' sonucu
+          // yalnız console.log'da kalmasın — job.results üzerinden runner'a (agent.log'a
+          // kalıcı yazan tek yer) taşınsın. Kipi/kararı DEĞİŞTİRMEZ, yalnız taşır.
+          if (kokIndexPoll && kokIndexPoll.sonuc) {
+            results.kokIndexDenetimi = {
+              mod: kokIndexPoll.mod,
+              sonuc: kokIndexPoll.sonuc.sonuc,
+              detay: kokIndexPoll.sonuc.detay,
+            };
+          }
         } catch (kokIndexErr) {
           if (kokIndexErr && kokIndexErr.kokIndexSonucu) throw kokIndexErr;
           console.warn('⚠️ kök index denetimi başarısız (paketleme devam ediyor):', kokIndexErr.message);

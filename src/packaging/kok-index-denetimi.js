@@ -55,12 +55,33 @@ function enjekteSatirlariCikar(html) {
 }
 
 /**
+ * `okuyucu-kabugu.js`'nin (`indexYenidenYaz`) köke yazdığı webpack content-hash'li
+ * `<20 hex>.main.js` / `<20 hex>.main.css` referansları — kanonik okuyucu sürümü
+ * değiştikçe hash de değişir, bu İÇERİK farkı DEĞİLDİR (2026-09-26, T2 — bkz.
+ * `~/.empp-agent/arastirma/set-koku-ezilmis-kok-neden-20260926.md` "yanlış-pozitif
+ * riski" bölümü: 11845 kaynak→paket kıyası TEK bu farktan `ezilmis` çıkıyordu).
+ * Kıyastan ÖNCE ikisi de aynı sabit adla değiştirilir; dosyanın kendisi paketten
+ * silinmez, yalnız KARŞILAŞTIRMA metni normalize edilir.
+ */
+const ANA_DOSYA_HASH_DESENI = /\b[0-9a-f]{20}\.main\.(js|css)\b/gi;
+
+/** `ANA_DOSYA_HASH_DESENI` eşleşmelerini sabit bir adla değiştirir. Saf. */
+function anaDosyaReferanslariniNormallestir(html) {
+  if (typeof html !== 'string') return html;
+  return html.replace(ANA_DOSYA_HASH_DESENI, 'HASH.main.$1');
+}
+
+/** Runner'ın güncellemeden ÖNCE bıraktığı gerçek kaynak kök index'i (bkz. T5 / dosya başlığı). */
+const KAYNAK_KOK_INDEX_MARKER = '.empp-kaynak-kok-index.html';
+
+/**
  * Karşılaştırmaya hazır normal biçim: enjekte satırlar çıkarılır, satır sonu biçimi
  * (CRLF/LF) birleştirilir, baş/son boşluk kırpılır. `null`/`undefined` → `null`. Saf.
  */
 function normalle(html) {
   if (html === null || html === undefined) return null;
-  return enjekteSatirlariCikar(String(html)).replace(/\r\n/g, '\n').trim();
+  return anaDosyaReferanslariniNormallestir(enjekteSatirlariCikar(String(html)))
+    .replace(/\r\n/g, '\n').trim();
 }
 
 /**
@@ -180,6 +201,28 @@ async function kokIndexOku(workingPath) {
 }
 
 /**
+ * `workingPath`'in GERÇEK kaynak anlık görüntüsünü alır (T5 — bkz. dosya başlığı).
+ * Runner'ın `applyPublisherUpdate`'ten HEMEN ÖNCE bıraktığı `KAYNAK_KOK_INDEX_MARKER`
+ * dosyası varsa ASIL kaynak odur — okunur okunmaz SİLİNİR (pakete sızmaz, tek okuma
+ * hakkı vardır). Yoksa (arşiv/hazır paket/publisher-update uygulanmamış akış) eski
+ * davranış sürer: `workingPath`'in kendi kök index'i "yamalardan önceki tek bilgi"
+ * sayılır. TEK okuma yolu — `packagingService.js` bunu tekrarlamaz.
+ *
+ * @param {string} workingPath
+ * @returns {Promise<string|null>}
+ */
+async function kaynakSnapshotAl(workingPath) {
+  const markerYolu = path.join(workingPath, KAYNAK_KOK_INDEX_MARKER);
+  try {
+    const html = await fs.readFile(markerYolu, 'utf8');
+    await fs.unlink(markerYolu).catch(() => {});
+    return html;
+  } catch (_) {
+    return kokIndexOku(workingPath);
+  }
+}
+
+/**
  * `packagingService.js` çağrı noktası: `workingPath`'in GÜNCEL kök index'ini okur,
  * önceden alınmış `kaynakHtml` anlık görüntüsüyle karşılaştırır.
  */
@@ -191,11 +234,15 @@ async function paketeUygula(workingPath, kaynakHtml, secenekler = {}) {
 module.exports = {
   ENJEKTE_SCRIPT_DESENI,
   enjekteSatirlariCikar,
+  ANA_DOSYA_HASH_DESENI,
+  anaDosyaReferanslariniNormallestir,
+  KAYNAK_KOK_INDEX_MARKER,
   normalle,
   karsilastir,
   modOku,
   acikMi,
   denetle,
   kokIndexOku,
+  kaynakSnapshotAl,
   paketeUygula,
 };
