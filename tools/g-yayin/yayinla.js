@@ -45,6 +45,15 @@ const KANAL = 'G';
 const R2_ONEKI = 'guncelleme';
 const CACHE_DEGISMEZ = 'public, max-age=31536000, immutable';
 const CACHE_DEGISKEN = 'no-cache';
+/**
+ * Android G ucu (sözleşme: `platform-kanallari-sozlesmesi.md` "Android G katmanı",
+ * istemci `src/platforms/android/empp-g-istemci.js`): `<taban>/set/<id>/android/{surum.json,
+ * manifest.json, manifest.json.sig, dosya/<yol>}`. TEK imza paylaşılır — Windows/mac ile AYNI
+ * `govde`/`imza` baytları android/ önekinde de yayınlanır (ikinci bir imzalama YOK); kitap
+ * arşivi de PAYLAŞILIR (`kitaplar[].kaynak` aynı `kitap/<ad>.zip` adresini gösterir, ayrı bir
+ * Android zip'i üretilmez). Android istemcisi manifestteki kendi bilmediği alanları yok sayar.
+ */
+const ANDROID_ONEKI = 'android';
 const GECICI_EK = '.g-yayin-gecici';
 const ALT_KOMUTLAR = ['yayinla', 'dogrula', 'kuru-imza', 'yukle', 'e2e'];
 
@@ -451,6 +460,10 @@ async function yayinla(a, ops = {}) {
     const hedef = path.join(setDizini, 'dosya', ...yol.split('/'));
     atomikYaz(hedef, v);
     ekle(2, `dosya/${yol}`, hedef, false);
+    // Android G ucu — AYNI baytlar, ayrı R2 anahtarı (istemci kendi kökünden okur).
+    const androidHedef = path.join(setDizini, ANDROID_ONEKI, 'dosya', ...yol.split('/'));
+    atomikYaz(androidHedef, v);
+    ekle(2, `${ANDROID_ONEKI}/dosya/${yol}`, androidHedef, false);
   }
   const arsivDizini = path.join(setDizini, 'surumler', surum);
   atomikYaz(path.join(arsivDizini, 'manifest.json'), govde);
@@ -471,8 +484,21 @@ async function yayinla(a, ops = {}) {
     path.join(setDizini, 'manifest.json' + kg.IMZA_UZANTI),
     false,
   );
+  // Android G ucu — TEK imza paylaşılır: aynı govde/imza baytları android/ önekinde de durur.
+  const androidDizini = path.join(setDizini, ANDROID_ONEKI);
+  atomikYaz(path.join(androidDizini, 'manifest.json'), govde);
+  atomikYaz(path.join(androidDizini, 'manifest.json' + kg.IMZA_UZANTI), imza);
+  ekle(4, `${ANDROID_ONEKI}/manifest.json`, path.join(androidDizini, 'manifest.json'), false);
+  ekle(
+    4,
+    `${ANDROID_ONEKI}/manifest.json${kg.IMZA_UZANTI}`,
+    path.join(androidDizini, 'manifest.json' + kg.IMZA_UZANTI),
+    false,
+  );
   atomikYaz(path.join(setDizini, 'surum.json'), surumJson);
   ekle(5, 'surum.json', path.join(setDizini, 'surum.json'), false);
+  atomikYaz(path.join(androidDizini, 'surum.json'), surumJson);
+  ekle(5, `${ANDROID_ONEKI}/surum.json`, path.join(androidDizini, 'surum.json'), false);
 
   // 8) Diskten geri oku ve doğrula.
   const denetim = ciktiDogrula({ cikti, setKimligi, acik: an.acik });
@@ -619,6 +645,29 @@ function ciktiDogrula({ cikti, setKimligi, acik }) {
         }
       }
     }
+  }
+  // Android G ucu — TEK imza paylaşılır: android/manifest.json(.sig) canonical'ın BİREBİR
+  // aynısı olmalı (ayrı bir yayın/imza YOK); android/dosya/<yol> aynı sha256'yı taşımalı.
+  const androidDizini = path.join(setDizini, ANDROID_ONEKI);
+  try {
+    const aGovde = fs.readFileSync(path.join(androidDizini, 'manifest.json'));
+    const aImza = fs.readFileSync(path.join(androidDizini, 'manifest.json' + kg.IMZA_UZANTI), 'utf8');
+    if (!aGovde.equals(govde) || aImza !== imza) {
+      hatalar.push('android/manifest.json(.sig) canonical manifestle birebir aynı değil');
+    }
+  } catch (e) {
+    hatalar.push(`android manifest ya da imza okunamadı: ${androidDizini}`);
+  }
+  for (const g of Array.isArray(m.kabuk) ? m.kabuk : []) {
+    if (!kg.kabukGirdisiGecerliMi(g) || !durum.gYoluMu(g.yol)) continue;
+    const y = path.join(androidDizini, 'dosya', ...g.yol.split('/'));
+    if (!fs.existsSync(y)) {
+      yerelEksik.push(`${ANDROID_ONEKI}/dosya/${g.yol}`);
+      continue;
+    }
+    const oz = dosyaSha256(y);
+    if (oz.sha256 !== g.sha256 || oz.boyut !== g.boyut)
+      hatalar.push(`${ANDROID_ONEKI}/dosya/${g.yol} sha256/boyut manifestle uyuşmuyor`);
   }
   if (yerelEksik.length)
     uyarilar.push(`yerelde olmayan taşınan dosya (R2'de olmalı): ${yerelEksik.join(', ')}`);
