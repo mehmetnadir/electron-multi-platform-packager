@@ -12,7 +12,7 @@
 | A3 | **5 Windows kitap 19.09'dan beri bayat exe veriyor** (45448 · 45487 · 45449 · 45792 · 45100; bekçi `teslim_bayat`) | Bekçi 7 gündür kırmızı (güven kapısı aşıldı) | İmpark'ta exe yeniden üretilsin (exe-create) + passthrough yeniden kuyruk; onay senin |
 | A3b | **11845 Super Monsters 3 Set - 2025 kaynağı bozuk:** İmpark exe'si (`SM3-v49.exe`) 14.09'dan beri ince (yalnız core+i18n, `bookN/` yok), `TekExeIndir/11845` 404. Canlıda mac 167 MB, android 10,5 MB (ikisi de kitapsız), pardus hiç yok | Aktif set, üç platformda da müşteriye boş paket gidiyor ya da hiç gitmiyor | İmpark'ta exe yeniden üretilsin (exe-create); o gelene dek 11845 yeniden üretimi anlamsız (kabul RED). Kanıt: `~/.empp-agent/arastirma/ince-kaynak-teshis-20260926.md` |
 | A4 | **srv21 işçisi `build_method=build` tanısın** | Bizim imzalı exe'lerimizin yayını bunu bekliyor | Kod + deploy onayı |
-| A5 | **Üretim ed25519 anahtarı + yedeği** | Windows SET kanalı ve toplu üretim bunu bekliyor | Anahtarı ben üreteyim, yedeği Anahtar Zinciri güvenli notu + ikinci kopya senin seçtiğin yer |
+| A5 | **Üretim ed25519 anahtarı + yedeği** — **KAPANDI (Nadir, 26.09)** | Windows SET kanalı ve toplu üretim bunu bekliyor | Üretildi. Özel anahtar: Anahtar Zinciri `empp-guncelleme-ed25519-uretim` + ikinci kopya srv21 `/root/.empp-anahtar/uretim-guncelleme-ed25519.pem` (0600). Açık anahtar `run-agent.sh`'ta `EMPP_GUNCELLEME_ACIK_ANAHTAR`. Parmak izi (SPKI sha256): `31b8663bf0202f7fca82595f8cabb4b46b348d60b4d6e47512836e5f721d2cf6`. `EMPP_SET_GUNCELLEME=windows`; mac/linux/android istemcisi gelince listeye eklenir |
 | A6 | **Pipeline DB parolası** bugün iki kez ajan çıktısına düştü (kök kapandı: betiklerde parola yok) | Sızmış parola hâlâ geçerli | Parola değişsin + salt-okur kullanıcı |
 | A7 | srv21'de satır içi parola taşıyan 7 betik (site-monitoring, mailjet, flashy-kv…) | Aynı sızıntı sınıfı | Aynı yöntemle cnf dosyasına geçireyim |
 
@@ -61,4 +61,13 @@
 
 ## F. Windows (ONAYLI sözleşmenin kapanışı)
 - Aktivasyon testi: `~/vm-kapi/MARVEL11-AKTIVASYON-TEST-*` — **internet açık** VM'de kod ekranı + kalıcılık + B-üstüne-A.
-- A4 + A5 kapanınca toplu üretim → yükle → sıralı imza → indir/doğrula → yayınla başlar.
+- A5 KAPANDI (yukarıda); A4 (srv21 işçisi `build_method=build` tanısı) açık kalan tek şart — o kapanınca
+  toplu üretim → yükle → sıralı imza → indir/doğrula → yayınla başlar.
+
+## G. Üretim yeri ve motor temizliği — KARARLANDI (Nadir, 26.09)
+Dört platformun ortak üretim/temizlik/güncelleme kuralları artık `platform-kanallari-sozlesmesi.md`
+"Ortak özellikler" (O1-O5) tablosunda tek yerde: üretim yeri (Pardus ProBook, düşerse Mac; Windows/dmg/apk
+bu Mac'te), motor temizliği (`olu-motor-temizligi.js` + `paket-disi-liste.js`), G'nin kapsamı (kök
+`index.html` + kitap listesi + kitabın **ANA** klasöründeki `43e23fce…js`; `htmletk/…/etk/` kapsam dışı),
+"kurulum klasörü" tanımı (Windows/Pardus: kurulum dizini; macOS: `.app` imzalı + `~/Library/Application
+Support/<app>/`; Android: kendi veri alanı) ve K kanalı. Burada tekrar edilmez.

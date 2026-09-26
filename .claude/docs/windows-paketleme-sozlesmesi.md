@@ -61,7 +61,8 @@ geçelim; sonra sırayla imzalatırız ve indiririz"):** imza kuyruğu tek yuval
 paralel işlerle doldurulur.
 1. **Üret (paralel):** kapsamdaki bütün Windows paketleri yerelde üretilir (kaynak: bugün İmpark exe'si,
    sonra kitap id'den build klasörü). Her paket başsız kabul kapısından (`tools/kabul`) GEÇER; RED olan
-   imzaya gitmez.
+   imzaya gitmez. Ağır işler (derleme + kabul) 2 slotlu semafordan geçer (`~/.empp-agent/agir.sh`, karar
+   defteri G); "paralel" bu tavanla sınırlı, sınırsız eşzamanlı derleme değildir.
 2. **Yükle (toplu):** GEÇEN paketlerin hepsi imza hazırlık dizinine (`KitapTekExe/_hazir/`) kopyalanıp
    geri okunur (`imza-yuva-smb.sh toplu`, `SMB_SHA=0`). Kopya süresi İmpark hattına bağlıdır (25.09
    0,2 MB/sn · 26.09 4,6 MB/sn); kopyalar imzadan önce biter, imza sırası kopya beklemez.
@@ -108,10 +109,12 @@ Aktivasyon: çevrimdışı pakette `imKeys.dll` / İmpark DB anahtar kanalı old
 2. ✅ Sessiz arıza kapandı (`436daa0`): exit≠0'da yalnız bu derlemede üretilmiş Setup.exe kabul edilir
    (updateInfoBuilder'ın zararsız hatası); teslimden önce taze mtime + birebir `<ad>-<sürüm>-Setup.exe` adı
    aranır, eski exe'ler silinmeden kenara alınır.
-3. Üretim ed25519 anahtar çifti (test anahtarı `~/.empp-agent/test-guncelleme-ed25519.key` üretime çıkmaz).
-   Toplu Windows üretiminden ÖNCE şart; yedek yeri Nadir kararı.
+3. ✅ Üretim ed25519 anahtar çifti üretildi (Nadir, 26.09 — karar defteri A5 KAPANDI; test anahtarı
+   `~/.empp-agent/test-guncelleme-ed25519.key` üretime çıkmaz). Anahtar detayı: `karar-defteri-2026-09-26.md` A5.
+   `EMPP_SET_GUNCELLEME=windows` AÇIK; toplu Windows üretimi artık bu şartla engellenmiyor.
 4. ✅ 3001 bayrakları platform kapsamlı: `EMPP_ICERIK_GUNCELLEME=windows`, `EMPP_SAYFA_WEBP=windows`,
-   `EMPP_SET_GUNCELLEME=0` (üretim anahtarına kadar) — `run-agent.sh` + KANON tablosu.
+   `EMPP_SET_GUNCELLEME=windows` (26.09, üretim anahtarı üretildikten sonra `0`'dan çevrildi) — `run-agent.sh`
+   + KANON tablosu. mac/linux/android istemcisi gelince listeye eklenir (karar defteri A5).
 5. ✅ `_` önekli kök dizinler hiçbir platform paketine girmez (`436daa0`, `kok-yedek-dizin-disla.js`).
 6. Aktivasyon (26.09): 45480 Marvel 11 (keypanel: 15 kitabın 13'ü kod ister) paketlendi, G1/G2 statik PASS,
    başsız kabul GEÇTİ. Motorun kuralı (kod okundu, `da55ad5c…main.js` modül 6395): kapak başına

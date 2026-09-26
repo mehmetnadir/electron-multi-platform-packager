@@ -18,13 +18,17 @@ Nadir'in beyanı spec'tir; Windows (`windows-paketleme-sozlesmesi.md`) dahil dö
 |---|---|---|---|
 | O1 | **Üretim yeri:** Pardus ProBook'ta (indir, paketle, kabul, temizlik, yükle); ProBook'a ulaşılamazsa Mac Docker. Windows, dmg, apk bu Mac'te. | Pardus fiilen Mac Docker'da; ProBook yalnız kabul. ProBook şeridi hazırlanıyor (runner bağlantısı, kurulum, kuru koşu) | ProBook `build_agents` kaydı: enroll sırrı srv21 `.env`'de, Nadir verir |
 | O2 | **Motor temizliği Windows'taki gibi:** index'ten ulaşılmayan, üst üste yazılmış webpack çıktıları (her kitapta 13 `*.main.js`) atılır; pakete girmeyecekler listesi tek kaynaktan. | Dört platformda açık: `olu-motor-temizligi.js` (varsayılan açık, pardus konteynerine `EMPP_OLU_TEMIZLIK=1` geçer) + `paket-disi-liste.js` (f63500c) | — |
-| O3 | **Uzaktan güncelleme (G), bizim kanalımız:** bizim index'imiz, index'le eklenen/çıkarılan kitaplar (set bileşimi) ve motor değişir. | Yalnız Windows'ta kod var (`src/runtime/kitap-guncelleyici.js`), KAPALI | Üretim ed25519 anahtarı (karar defteri A5). mac/android/pardus'ta istemci yok. Gövde salt-okunur: mac `.app` imzası, APK assets, AppImage squashfs. Bu yüzden G, kullanıcı veri dizinindeki imzalı bir örtüye yazar; kabuk açılışta imzası geçerli ve daha yeni örtü varsa onu yükler |
-| O4 | **Motor `43e23fce…js` güncelliği index'le birlikte bizde:** bizim derlememiz kanonik (24.09 karar 2, `tek-kabuk-ve-guncelleme-plani-2026-09-24.md`), G kanalıyla dağıtılır. | 73581 ölçümü: kök kopya `1bcb5b8c…`, dört kitap kopyası `f4437153…` (aynı), etkinlik kopyası `1c6096ef…` (üç farklı sürüm tek pakette) | G istemcisi (O3) |
+| O3 | **Uzaktan güncelleme (G), bizim kanalımız:** kök `index.html`, index'le eklenen/çıkarılan kitaplar (set bileşimi) ve her kitabın **ANA klasöründeki** `43e23fce2b7009474555a77.js` değişir (kapsam detayı O4). Arayüzden nasıl tetikleneceği **SONRA** kararlaştırılacak (Nadir 26.09); sunucuda manifest yokken istemci sessizdir (hata basmaz, bekler). | Yalnız Windows'ta kod var (`src/runtime/kitap-guncelleyici.js`), KAPALI | Üretim ed25519 anahtarı **ÜRETİLDİ** (karar defteri A5, KAPANDI); `EMPP_SET_GUNCELLEME=windows`. mac/android/pardus'ta istemci hâlâ yok — anahtar hazır, sarmalayıcı eksik. Gövde salt-okunur: mac `.app` imzası, APK assets, AppImage squashfs; **"kurulum klasörü" tanımı (Nadir 26.09):** Windows/Pardus'ta kurulum dizini (yazılabilir), macOS'ta `.app` imzalı + yazılabilir yer `~/Library/Application Support/<app>/`, Android'de uygulamanın kendi veri alanı. G bu yazılabilir yere imzalı bir örtü yazar; kabuk açılışta imzası geçerli ve daha yeni örtü varsa onu yükler |
+| O4 | **Motor `43e23fce…js` güncelliği index'le birlikte bizde:** bizim derlememiz kanonik (24.09 karar 2, `tek-kabuk-ve-guncelleme-plani-2026-09-24.md`), G kanalıyla dağıtılır. **Kapsam (Nadir 26.09):** G yalnız kitabın **ANA** klasöründeki kopyayı değiştirir; kitap index'i yalnız kendi dizinindekini çağırır. `htmletk/…/etk/` kopyaları **KAPSAM DIŞI**, G dokunmaz. | 73581 ölçümü: kök kopya `1bcb5b8c…`, dört kitap kopyası `f4437153…` (aynı, ANA klasör — G burayı hedefler), etkinlik kopyası `1c6096ef…` (üç farklı sürüm tek pakette, `htmletk/…/etk/` — kapsam dışı) | G istemcisi (O3) |
 | O5 | **Kitap içeriği İmpark güncellemeleriyle (K):** `GetKitapGuncellemeBilgi` → `ZKitapZipH`. | Android çalışıyor (74451); Pardus 26.09'da açıldı (`a0cc28d`); Windows (bizim NSIS) kod var, Windows'ta ölçülmedi; mac KAPALI | mac kapısı + başsız kabulde K senaryosu; Windows'ta bir ölçüm |
 
 Sonuç (itiraz, 26.09): G istemcisi olmayan paket sonradan uzaktan güncellenemez. 26.09 YDS koşusunun mac, android ve
 pardus paketleri G'siz çıkıyor; G gelince kullanıcılar bir kez daha yeni paket kurmalı. Koşu durdurulmadı, çünkü
 canlıdaki bozuk index'li paketler daha kötü.
+
+**Ortam (KARARLANDI, Nadir 2026-09-26):** paketleme/kabul ağır işleri (derleme, başsız kabul, tam test, emülatör)
+makine geneli 2 slotlu semafordan geçer (`~/.empp-agent/agir.sh`); başsız kabul kendi odak-ölçümüyle pencere
+çalmadığını doğrular. Detay: `sozlesme.md` Başsız kabul satırı.
 
 ## İşlevler
 | İşlev | Ne yapar | Nerede koşar | Masada nerede |
@@ -134,7 +138,7 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 | `PARDUS_DISK_KAT` / `_TABAN_GB` | 5 / 15 (`runner.js:1767-1768`) | tanımsız | `PARDUS_MIN_FREE_GB` BOŞ kalır (:49-57) |
 | `EMPP_SET_MENU` | Pardus betiğinde 1 (`pardus-packager-build.sh:116`) | `1` (:26) | |
 | `EMPP_ICERIK_GUNCELLEME` (K) | AÇIK (`icerik-guncelleme.js:77-78`) | `windows` (:36), yani üç platformda KAPALI | açık karar 6 |
-| `EMPP_SET_GUNCELLEME` / `EMPP_SAYFA_WEBP` | AÇIK / KAPALI | `0` / `windows` (:32,37) | |
+| `EMPP_SET_GUNCELLEME` / `EMPP_SAYFA_WEBP` | AÇIK / KAPALI | `windows` / `windows` (26.09, anahtar üretimiyle `0`→`windows`) | mac/linux/android eklenince genişler |
 | Canlı 3001 | `/api/health` kapıları yukarıdakiyle aynı; commit 2484677 ≠ HEAD b363059 | | fark: belge, imza betiği, kabul CLI'ı (her işte diskten okunur) |
 
 ## Açık kararlar (Nadir — tek tek sorulur)
@@ -169,10 +173,7 @@ sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m-
   fallback, kanal 1 bekçisi, hazır devralmada commit kontrolü, Android versionCode, AppRun hash-güvenli kıyas.
 
 ## Eskiyen belgeler (dosya:satır → ne değişmeli)
-- `electron-multi-platform-packager/.claude/docs/sozlesme.md:36` "varsayılan KAPALI" → canlıda `macos,android` AÇIK.
-- `…/sozlesme.md:117` "macOS/Android'de kabul kapısı YOK" → kapı var; eksik olanlar hold ve geri alma.
-- `…/sozlesme.md:26` "disk kapısı 20 GB" → boyut orantılı (kaynak×5, taban 15).
-- `…/sozlesme.md:32` ProBook şeridi "canlı" → kod var, ajan kayıtlı değil, runner'a bağlı değil.
+- ~~`sozlesme.md:26,32,36,117`~~ düzeltildi (26.09, bu oturum): disk kapısı/ProBook durumu/kabul kapısı/başsız kabul canlı değeri.
 - `book-update/.claude/docs/masaustu-mobil-paketleme.md:11` Android ajanı Server21 → Mac ajanı (Server21 son nabız 09-09).
 - `…/masaustu-mobil-paketleme.md:12` kaynak `/Uploads/KitapTekExe` → köprü R2 (`build-agents.ts:289-300`), hedef build zip.
 - `book-update/.claude/docs/paket-yapilari-tek-kitap-vs-set.md:60-61` "tüm SET paketleri açılmıyor" → bu belge §SET.
