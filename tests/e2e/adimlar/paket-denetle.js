@@ -16,6 +16,9 @@
  *   g-istemci  giriş betiğinde EMPP_SET_GUNCELLEME + require, empp-set-guncelleyici.js yanında, empp-set.json
  *   g-anahtar  empp-set.json → imza.acikAnahtar parmak izi (sha256 SPKI DER) = üretim (anahtar BASILMAZ)
  *   g-taban    empp-set.json → taban = https://cdn.ydspublishing.com/guncelleme
+ *              (varsayılan `panel-yok.invalid` = taban hiç verilmemiş → KALDI, açık mesajla)
+ *   Android    www kökünde (assets/public) empp-g-istemci.js + empp-g-kabuk.js + empp-g-nacl.js,
+ *              empp-g-paket.json {surum}, empp-set.json {setKimligi, taban, imza} (g-katmani.js)
  *
  * Yazma YOK: paket yalnız okunur; DMG `-nobrowse -readonly` bağlanır, uygulama çalıştırılmaz.
  * Kullanım:
@@ -37,7 +40,17 @@ const ELECTRON_AILELERI = new Set(['nsis', 'sfx-rar5', 'sfx-rar4', 'appimage', '
 const MOTOR_RE = /^(book\d+\/)?43e23fce2b7009474555a77\.js$/i;
 const G_MODUL = 'empp-set-guncelleyici.js';
 const G_SET = 'empp-set.json';
+/** Android G (src/platforms/android/g-katmani.js → WWW): www kökündeki dosyalar. */
+const G_ANDROID = Object.freeze({
+  istemci: 'empp-g-istemci.js',
+  kabuk: 'empp-g-kabuk.js',
+  nacl: 'empp-g-nacl.js',
+  paket: 'empp-g-paket.json',
+});
+/** set-kimligi.js VARSAYILAN_TABAN: bilerek çözülemeyen adres — taban verilmemiş demektir. */
+const OLU_TABAN_RE = /(^|\.|\/\/)panel-yok\.invalid(\/|$)/i;
 const G_ISARET = 'EMPP_SET_GUNCELLEME';
+const ARALIK_PENCERE = 4 * 1024 * 1024;
 const ICERIK_ADIMLARI = ['index', '43e23', 'g-istemci', 'g-anahtar', 'g-taban'];
 
 const ad = (alt) => `paket-denetle/${alt}`;
@@ -74,11 +87,12 @@ function secimYap(liste) {
   if (kume.has('index.html')) webKok = '';
   else if (kume.has('build/index.html')) webKok = 'build/';
   const secilen = new Set();
-  for (const a of ['package.json', 'main.js', 'electron.js', G_SET, G_MODUL])
+  for (const a of ['package.json', 'main.js', 'electron.js', G_SET, G_MODUL, G_ANDROID.paket])
     if (kume.has(a)) secilen.add(a);
   if (webKok !== null) {
     secilen.add(`${webKok}index.html`);
-    if (webKok && kume.has(`${webKok}${G_SET}`)) secilen.add(`${webKok}${G_SET}`);
+    for (const a of [G_SET, G_ANDROID.paket])
+      if (webKok && kume.has(`${webKok}${a}`)) secilen.add(`${webKok}${a}`);
     for (const p of liste)
       if (p.startsWith(webKok) && MOTOR_RE.test(p.slice(webKok.length))) secilen.add(p);
   }
@@ -197,14 +211,6 @@ function icerikDegerlendir(test, r, beklenen, aile) {
       setHata = `${G_SET} JSON çözülemedi: ${e.message}`;
     }
   }
-  if (!ELECTRON_AILELERI.has(aile) && !setYolu) {
-    const neden = {
-      sebep: `${aile}: G istemcisinin paket içi yerleşimi tanımlı değil (Android G bağlanmadı) ve ${G_SET} yok`,
-    };
-    for (const a of ['g-istemci', 'g-anahtar', 'g-taban'])
-      satirlar.push(O.sonuc(test, ad(a), DURUM.OLCULEMEDI, { olcum: neden }));
-    return satirlar;
-  }
   const eksik = [];
   const gOlcum = {
     giris: giris ? `${giris.yol} (${giris.kaynak})` : null,
@@ -223,6 +229,28 @@ function icerikDegerlendir(test, r, beklenen, aile) {
     }
     gOlcum.modul_yaninda = r.liste.includes(`${girisDizin}${G_MODUL}`);
     if (!gOlcum.modul_yaninda) eksik.push(`${G_MODUL} giriş betiğinin yanında yok`);
+  } else if (aile === 'apk') {
+    // Android: istemci www kökünde, Java eklentisi dex'te (dex taranmaz — www dosyaları yeter)
+    const www = webKok || '';
+    const yok = [G_ANDROID.istemci, G_ANDROID.kabuk, G_ANDROID.nacl].filter(
+      (a) => !r.liste.includes(`${www}${a}`),
+    );
+    gOlcum.android_www = { eksik: yok };
+    for (const a of yok) eksik.push(`www kökünde ${a} yok`);
+    const pj = [`${www}${G_ANDROID.paket}`, G_ANDROID.paket].find((y) => t.has(y));
+    if (!pj) eksik.push(`${G_ANDROID.paket} yok (paket sürüm tabanı)`);
+    else {
+      try {
+        const p = JSON.parse(t.get(pj).toString('utf8'));
+        if (!p || typeof p !== 'object' || !('surum' in p))
+          eksik.push(`${G_ANDROID.paket} içinde surum alanı yok`);
+        else if (p.surum !== null && typeof p.surum !== 'string')
+          eksik.push(`${G_ANDROID.paket} surum metin değil`);
+        else gOlcum.paket_surumu = p.surum; // null geçerli: istemci yalnız son G'ye kıyaslar
+      } catch (e) {
+        eksik.push(`${G_ANDROID.paket} JSON çözülemedi: ${e.message}`);
+      }
+    }
   }
   if (!setYolu) eksik.push(`${G_SET} yok`);
   else if (setHata) eksik.push(setHata);
@@ -275,11 +303,13 @@ function icerikDegerlendir(test, r, beklenen, aile) {
     const taban = typeof setJson.taban === 'string' ? setJson.taban.replace(/\/+$/, '') : null;
     const bek = String(beklenen.taban || O.VARSAYILAN_TABAN).replace(/\/+$/, '');
     const tutar = !!taban && (taban === bek || taban.startsWith(`${bek}/`));
-    satirlar.push(
-      O.sonuc(test, ad('g-taban'), tutar ? DURUM.GECTI : DURUM.KALDI, {
-        olcum: { taban, beklenen: bek },
-      }),
-    );
+    const olcum = { taban, beklenen: bek };
+    if (taban && OLU_TABAN_RE.test(taban)) {
+      olcum.sebep =
+        `taban varsayılan ölü adres (${taban}) — üretimde EMPP_GUNCELLEME_TABANI / guncellemeTabani ` +
+        'verilmemiş; kanal hiçbir sunucuya gitmez, paket uzaktan güncellenemez';
+    } else if (!taban) olcum.sebep = `${G_SET} içinde taban yok`;
+    satirlar.push(O.sonuc(test, ad('g-taban'), tutar ? DURUM.GECTI : DURUM.KALDI, { olcum }));
   }
   return satirlar;
 }
@@ -547,6 +577,29 @@ async function paketDenetle(p) {
     );
   }
 
+  // 2b) aralık izi: boyut + ilk/son N bayt md5 (N = min(4 MB, boyut/4)) — çok parçalı ETag'de
+  //     CDN ↔ üretilen paket "kısmi eşlik" kıyası için (cdn-md5-kiyas). Tam indirme değildir.
+  t0 = Date.now();
+  try {
+    const n = Math.min(ARALIK_PENCERE, Math.floor(okuyucu.boyut / 4));
+    const bas =
+      tespit.basTampon && tespit.basTampon.length >= n
+        ? tespit.basTampon.subarray(0, n)
+        : await okuyucu.oku(0, n);
+    const son = await okuyucu.oku(okuyucu.boyut - n, n);
+    ozet.aralik = {
+      boyut: okuyucu.boyut,
+      pencere: n,
+      bas_md5: O.md5(bas),
+      son_md5: O.md5(son),
+      sure_ms: Date.now() - t0,
+    };
+  } catch (e) {
+    ozet.aralik = { boyut: okuyucu.boyut, hata: e.message };
+  }
+  if (okuyucu.bas && okuyucu.bas.meta && Object.keys(okuyucu.bas.meta).length)
+    ozet.meta = okuyucu.bas.meta;
+
   // 3) indir (yalnız istenirse)
   if (p.url && p.indir) {
     t0 = Date.now();
@@ -725,4 +778,5 @@ module.exports = {
   kanonikMotorMd5,
   MOTOR_RE,
   BILINEN_AILELER,
+  G_ANDROID,
 };

@@ -326,10 +326,53 @@ test('RED: taban cdn.ydspublishing.com/guncelleme değil → g-taban KALDI', () 
   );
 });
 
-test('APK: G yerleşimi tanımsız ve empp-set.json yok → G satırları ÖLÇÜLEMEDİ (KALDI değil)', () => {
-  const { d } = degerlendir({ setJson: false }, {}, 'apk');
-  for (const a of ['g-istemci', 'g-anahtar', 'g-taban']) assert.equal(d[a].durum, 'OLCULEMEDI', a);
+test('Android G: www istemci dosyaları + empp-g-paket.json + empp-set.json → GECTI, sürüm yazılır', () => {
+  const anahtar = S.testAnahtari();
+  const s2 = androidDegerlendir({ anahtar });
+  for (const a of ['g-istemci', 'g-anahtar', 'g-taban']) assert.equal(s2[a].durum, 'GECTI', a);
+  assert.equal(s2['g-istemci'].kanit.olcum.paket_surumu, '1.4.2');
+  assert.equal(s2['43e23'].durum, 'GECTI');
 });
+
+test('RED Android: G istemcisi yok / empp-g-paket.json yok ya da bozuk → g-istemci KALDI', () => {
+  const yok = androidDegerlendir({ gIstemci: false })['g-istemci'];
+  assert.equal(yok.durum, 'KALDI');
+  assert.deepEqual(yok.kanit.olcum.android_www.eksik, [
+    'empp-g-istemci.js',
+    'empp-g-kabuk.js',
+    'empp-g-nacl.js',
+  ]);
+  assert.equal(androidDegerlendir({ paketJson: null })['g-istemci'].durum, 'KALDI');
+  assert.equal(androidDegerlendir({ paketJson: '{bozuk' })['g-istemci'].durum, 'KALDI');
+  assert.equal(androidDegerlendir({ paketJson: '{"surum":null}' })['g-istemci'].durum, 'GECTI');
+  const hic = androidDegerlendir({ gIstemci: false, paketJson: null, setJson: false });
+  for (const a of ['g-istemci', 'g-anahtar', 'g-taban']) assert.equal(hic[a].durum, 'KALDI', a);
+});
+
+test('RED: taban panel-yok.invalid (taban verilmemiş) → g-taban KALDI, açık mesajla', () => {
+  const t = androidDegerlendir({ taban: 'https://panel-yok.invalid/set-guncelleme' })['g-taban'];
+  assert.equal(t.durum, 'KALDI');
+  assert.match(t.kanit.olcum.sebep, /panel-yok\.invalid/);
+  assert.match(t.kanit.olcum.sebep, /EMPP_GUNCELLEME_TABANI/);
+  const e = degerlendir({ taban: 'https://panel-yok.invalid/set-guncelleme' }).d['g-taban'];
+  assert.match(e.kanit.olcum.sebep, /ölü adres/);
+});
+
+function androidDegerlendir(secenek = {}) {
+  const anahtar = secenek.anahtar || S.testAnahtari();
+  const agac = S.androidAgaci({ anahtar, ...secenek });
+  const liste = Object.keys(agac);
+  const { secilen } = PD.secimYap(liste);
+  const toplanan = new Map([...secilen].map((k) => [k, Buffer.from(agac[k])]));
+  const bek = {
+    md5_43e23: S.md5(S.KANONIK),
+    parmak_izi: anahtar.parmakIzi,
+    taban: 'https://cdn.ydspublishing.com/guncelleme',
+  };
+  const kaynak = { kok: 'assets/public', liste, toplanan };
+  const satirlar = PD.icerikDegerlendir('T4', kaynak, bek, 'apk');
+  return Object.fromEntries(satirlar.map((x) => [x.adim.replace('paket-denetle/', ''), x]));
+}
 
 /* --------------------------------------------------------------------- asar */
 
@@ -362,21 +405,30 @@ test('asar: yerel okuma ve parça sınırlarında akıştan toplama birebir; hep
 
 /* ------------------------------------------------ içerik açıcılar (gerçek araç) */
 
-test('APK içeriği gerçek unzip ile: K1/K2 ölçülür; G ÖLÇÜLEMEDİ', async () => {
-  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
-  delete agac['package.json'];
-  delete agac['main.js'];
+test('APK içeriği gerçek unzip ile: K1/K2 + Android G (empp-g-paket.json okunur)', async () => {
+  const anahtar = S.testAnahtari();
+  const agac = S.androidAgaci({ anahtar });
   const apk = S.apkYap(path.join(D, 'icerik.apk'), agac);
   const r = await PD.paketDenetle({
     paket: apk,
-    beklenen: { md5_43e23: S.md5(S.KANONIK), md5_index: S.md5(Buffer.from(agac['index.html'])) },
+    beklenen: {
+      md5_43e23: S.md5(S.KANONIK),
+      md5_index: S.md5(Buffer.from(agac['index.html'])),
+      parmak_izi: anahtar.parmakIzi,
+    },
     calisma: path.join(D, 'calisma'),
   });
   assert.equal(durum(r, 'icerik-ac'), 'GECTI');
   assert.equal(satir(r, 'icerik-ac').kanit.olcum.kok, 'assets/public');
-  assert.equal(durum(r, 'index'), 'GECTI');
-  assert.equal(durum(r, '43e23'), 'GECTI');
-  assert.equal(durum(r, 'g-istemci'), 'OLCULEMEDI');
+  assert.ok(satir(r, 'icerik-ac').kanit.olcum.toplanan.includes('empp-g-paket.json'));
+  for (const a of ['index', '43e23', 'g-istemci', 'g-anahtar', 'g-taban'])
+    assert.equal(durum(r, a), 'GECTI', a);
+  const gsiz = S.androidAgaci({ anahtar, gIstemci: false, paketJson: null });
+  const r2 = await PD.paketDenetle({
+    paket: S.apkYap(path.join(D, 'icerik-gsiz.apk'), gsiz),
+    calisma: path.join(D, 'calisma'),
+  });
+  assert.equal(durum(r2, 'g-istemci'), 'KALDI');
 });
 
 test(
@@ -525,9 +577,10 @@ test('CDN Range desteklemiyorsa baştan okuma kesilir, ortadan okuma ÖLÇÜLEME
     assert.equal(r.ozet.aile, 'nsis');
     assert.equal(durum(r, 'imza'), 'OLCULEMEDI');
     assert.ok(
-      r.ozet.indirilen <= 4 * 1024 * 1024 + 64 && r.ozet.indirilen < fs.statSync(paket).size,
-      `istemci ${r.ozet.indirilen} B aldı`,
+      r.ozet.indirilen < fs.statSync(paket).size,
+      `istemci ${r.ozet.indirilen} B aldı (tam indirme olmamalı)`,
     );
+    assert.ok(r.ozet.aralik.hata, 'Range yoksa aralık izi ölçülemez');
   } finally {
     await s.kapat();
   }
@@ -585,4 +638,83 @@ test('cdn-md5-kiyas: çok parçalı ETag md5 sayılmaz → ÖLÇÜLEMEDİ', () =
     cdnMd5Kiyas.cdnMd5({ ozet: { etag: '"cf1c4ae353cd1d061c2690df594006fd"' } }).md5,
     'cf1c4ae353cd1d061c2690df594006fd',
   );
+});
+
+/* ------------------------------------------------ CDN ↔ üretilen: kısmi eşlik */
+
+function uzakYerel(ua, ya, ozetEk = {}) {
+  const uzak = {
+    girdi: { tur: 'url', deger: 'https://cdn/x.impark' },
+    ozet: { aile: 'appimage', boyut: ua.boyut, etag: '"abc123-19"', aralik: ua, ...ozetEk },
+  };
+  const yerel = ya
+    ? { girdi: { tur: 'paket', deger: '/u/x.impark' }, ozet: { aile: 'appimage', aralik: ya } }
+    : null;
+  return [uzak, yerel];
+}
+
+test('kısmi eşlik: çok parçalı ETag + aynı boyut ve ilk/son pencere md5 → SARI (GECTI değil)', () => {
+  const a = { boyut: 100, pencere: 25, bas_md5: 'a', son_md5: 'b' };
+  const k = cdnMd5Kiyas.kiyasla(...uzakYerel(a, { ...a }));
+  assert.equal(k.durum, 'SARI');
+  assert.equal(k.olcum.sinif, 'kismi-eslik');
+  assert.match(k.olcum.sebep, /tam md5 değil/);
+});
+
+test('RED kısmi eşlik: boyut farklı → KALDI; aynı boyut son pencere farklı → KALDI', () => {
+  const a = { boyut: 100, pencere: 25, bas_md5: 'a', son_md5: 'b' };
+  assert.equal(cdnMd5Kiyas.kiyasla(...uzakYerel(a, { ...a, boyut: 101 })).durum, 'KALDI');
+  const k = cdnMd5Kiyas.kiyasla(...uzakYerel(a, { ...a, son_md5: 'c' }));
+  assert.equal(k.durum, 'KALDI');
+  assert.match(k.olcum.sebep, /son_md5/);
+});
+
+test('R2 üst verisi sha256 ↔ üretilen sha256: eşit GECTI, farklı KALDI; yalnız boyut SARI/KALDI', () => {
+  const a = { boyut: 100, pencere: 25, bas_md5: 'a', son_md5: 'b' };
+  const [uzak] = uzakYerel(a, null, { meta: { sha256: 'F'.repeat(64) } });
+  assert.equal(cdnMd5Kiyas.kiyasla(uzak, null, { uretilen_sha256: 'f'.repeat(64) }).durum, 'GECTI');
+  assert.equal(cdnMd5Kiyas.kiyasla(uzak, null, { uretilen_sha256: 'e'.repeat(64) }).durum, 'KALDI');
+  const [u2] = uzakYerel(a, null);
+  assert.equal(cdnMd5Kiyas.kiyasla(u2, null, { uretilen_boyut: 100 }).durum, 'SARI');
+  assert.equal(cdnMd5Kiyas.kiyasla(u2, null, { uretilen_boyut: 99 }).durum, 'KALDI');
+  assert.equal(cdnMd5Kiyas.kiyasla(u2, null, {}).durum, 'OLCULEMEDI');
+});
+
+test('uçtan uca kısmi eşlik: CDN (Range) ↔ yerel üretilen aynı dosya SARI, son bayt farklı KALDI', async () => {
+  const yerel = S.appimageYap(path.join(D, 'uretilen.impark'), { bytesUsed: 9 * 1024 * 1024 });
+  const bozuk = path.join(D, 'cdn-bozuk.impark');
+  const b = fs.readFileSync(yerel);
+  b[b.length - 1] ^= 0xff;
+  fs.writeFileSync(bozuk, b);
+  const ayni = await sunucu(yerel, { basliklar: { ETag: '"0123456789abcdef0123456789abcdef-3"' } });
+  const farkli = await sunucu(bozuk, {
+    basliklar: { ETag: '"0123456789abcdef0123456789abcdef-3"' },
+  });
+  try {
+    const y = {
+      girdi: { tur: 'paket', deger: yerel },
+      ...(await PD.paketDenetle({ paket: yerel, icerik: false })),
+    };
+    for (const [s, beklenenDurum] of [
+      [ayni, 'SARI'],
+      [farkli, 'KALDI'],
+    ]) {
+      const u = {
+        girdi: { tur: 'url', deger: s.url },
+        ...(await PD.paketDenetle({ url: s.url, icerik: false })),
+      };
+      assert.ok(u.ozet.indirilen < b.length, 'tam indirme olmamalı');
+      const [satirK] = await cdnMd5Kiyas.kos({
+        test: 'T2',
+        paketSonuclari: [u, y],
+        beklenen: {},
+        testeUygun: () => true,
+      });
+      assert.equal(satirK.durum, beklenenDurum, s.url);
+      assert.equal(satirK.kanit.olcum.uretilen_paket, yerel);
+    }
+  } finally {
+    await ayni.kapat();
+    await farkli.kapat();
+  }
 });

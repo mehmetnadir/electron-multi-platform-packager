@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Uçtan uca sağlık gece koşusu — ŞABLON (kurulum: tests/e2e/gece/README.md).
+  22:00 akşam (T1-T5), 07:30 sabah (T5 doğrulaması); kip betikte saatten seçilir.
+  ProcessType=Standard: Background ağı ve G/Ç'yi kısıyor (25.09 bekçi dersi: 1,4 sn → 30 sn).
+  PATH açıkça verilir: launchd ~/.local/bin (bildir) ve nvm node dizinini görmez.
+  __DEPO__ / __HOME__ / __NODE_DIZIN__ kurulumda sed ile doldurulur.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.empp.e2e-saglik</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__DEPO__/tests/e2e/gece/e2e-gece.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__DEPO__</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>22</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+  </array>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:__NODE_DIZIN__:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LANG</key>
+    <string>tr_TR.UTF-8</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/.empp-agent/e2e/gece.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.empp-agent/e2e/gece.log</string>
+</dict>
+</plist>

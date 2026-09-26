@@ -110,6 +110,12 @@ async function uzakOkuyucu(url, { zamanAsimiMs = 30000 } = {}) {
     icerik_turu: h.headers['content-type'] || null,
     range: h.headers['accept-ranges'] || null,
     cf_mitigated: h.headers['cf-mitigated'] || null,
+    // R2 özel üst verisi (x-amz-meta-*) — yükleyen sha/md5 yazdıysa CDN md5 kıyasına girer
+    meta: Object.fromEntries(
+      Object.entries(h.headers)
+        .filter(([k]) => k.startsWith('x-amz-meta-'))
+        .map(([k, v]) => [k.slice('x-amz-meta-'.length), String(v)]),
+    ),
     url: h.url,
   };
   const okuyucu = {
