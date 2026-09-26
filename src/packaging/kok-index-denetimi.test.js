@@ -18,7 +18,8 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   enjekteSatirlariCikar, normalle, karsilastir, modOku, acikMi, denetle,
-  kokIndexOku, paketeUygula,
+  kokIndexOku, paketeUygula, anaDosyaReferanslariniNormallestir,
+  KAYNAK_KOK_INDEX_MARKER, kaynakSnapshotAl,
 } = require('./kok-index-denetimi');
 const { MENU_ISARETI } = require('./set-menu');
 
@@ -215,4 +216,98 @@ test('paketeUygula: gerçek ağaçta motor-sayfa kaynağı + üretilen menü GE�
   await fs.writeFile(path.join(kok, 'index.html'), URETILEN_MENU);
   const r = await paketeUygula(kok, MOTOR_KOPYASI, { env: {} });
   assert.strictEqual(r.sonuc.sonuc, 'uretilen-menu-beklenir');
+});
+
+// ─────────────────────── T2/T3 — main.js/css content-hash yanlış-pozitifi (2026-09-26) ───────────────────────
+//
+// Rapor "Yapısal risk": okuyucu kabuğu (`okuyucu-kabugu.js` `indexYenidenYaz`) kanonik sürüm
+// değiştikçe `<20 hex>.main.js`/`.main.css` referansını YENİDEN YAZAR — bu bir kök ezilmesi
+// DEĞİL, kanonik okuyucunun kendi sürüm yükseltmesidir. 11845 kaynak→paket kıyası TEK bu
+// farktan (+ paketleyici enjeksiyonu) `ezilmis` çıkıyordu (yanlış pozitif).
+
+test('anaDosyaReferanslariniNormallestir: main.js/main.css hash\'lerini sabit adla değiştirir', () => {
+  const html = '<script src="./a8f43f74c72b65a3dd05.main.js"></script>'
+    + '<link href="bd0c1a4f650802c98abc.main.css">';
+  const n = anaDosyaReferanslariniNormallestir(html);
+  assert.match(n, /HASH\.main\.js/);
+  assert.match(n, /HASH\.main\.css/);
+  assert.doesNotMatch(n, /a8f43f74c72b65a3dd05/);
+});
+
+test('anaDosyaReferanslariniNormallestir: string olmayan girdiyi olduğu gibi döner', () => {
+  assert.strictEqual(anaDosyaReferanslariniNormallestir(null), null);
+});
+
+test('T2 — GERİLEME: yalnız main.js hash değişimi + paketleyici enjeksiyonu → sadik (11845 dersi)', () => {
+  // Kaynak: 11845'in İmpark kökü (motor sayfası, hash a8f43f74c72b65a3dd05).
+  const kaynak = MOTOR_KOPYASI;
+  // Paket: okuyucu kabuğu kanonik main.js'i günceller (hash bd0c1a4f650802c98ebf'e döner) VE
+  // paketleyici kendi script'lerini enjekte eder — İKİSİ de İÇERİK farkı DEĞİL.
+  const guncel = paketleyiciEnjekteEt(
+    MOTOR_KOPYASI.replace('a8f43f74c72b65a3dd05.main.js', 'bd0c1a4f650802c98ebf.main.js'),
+  );
+  const r = karsilastir(kaynak, guncel);
+  assert.strictEqual(r.sonuc, 'sadik', `beklenmedik: ${r.sonuc} — ${r.detay}`);
+});
+
+test('T3 — GERİLEME: hash farkının ÖTESİNDE gerçek menü kaybı hâlâ ezilmis (yanlış-negatif YOK)', () => {
+  // 45551 arşiv kabuğu (Web-Z, özel yayıncı menüsü) → İmpark motor sayfasına dönüşmüş.
+  // Normalizasyon yalnız main.js/css hash'ini yutar; menünün KENDİSİ farklı kalır.
+  const r = karsilastir(YAYINCI_MENUSU, MOTOR_KOPYASI);
+  assert.strictEqual(r.sonuc, 'ezilmis');
+});
+
+test('T2 kontrol: farklı hash + FARKLI gövde (gerçek menü değişikliği) yine ezilmis', () => {
+  const kaynak = MOTOR_KOPYASI;
+  const guncelFarkliGovde = MOTOR_KOPYASI
+    .replace('a8f43f74c72b65a3dd05.main.js', 'bd0c1a4f650802c98ebf.main.js')
+    .replace('<body>', '<body><div id="baska-bir-menu">yeni içerik</div>');
+  const r = karsilastir(kaynak, guncelFarkliGovde);
+  assert.strictEqual(r.sonuc, 'ezilmis', 'yalnız hash normalizasyonu gerçek içerik farkını maskelemez');
+});
+
+// ─────────────────────────────── T5 — kaynak anlık görüntüsü köprüsü (2026-09-26) ───────────────────────────────
+//
+// Rapor: packagingService kendi "kaynak" anlık görüntüsünü workingPath İLK DOLDURULDUĞUNDA
+// alıyordu — ama o an zaten RUNNER'IN `applyPublisherUpdate`'i UYGULANMIŞ hâldeydi (zip
+// güncellemeden SONRA kuruluyor). `kaynakSnapshotAl`, runner'ın güncellemeden ÖNCE bıraktığı
+// `KAYNAK_KOK_INDEX_MARKER` dosyasını (varsa) TERCİH eder.
+
+test('T5 — GERİLEME: runner marker\'ı VARSA gerçek (güncelleme-öncesi) kaynak kabul edilir', async () => {
+  const dir = await tempDir();
+  // workingPath'in GÜNCEL kökü: runner'ın publisher-update'i zaten uygulanmış (motor sayfası).
+  await fs.writeFile(path.join(dir, 'index.html'), MOTOR_KOPYASI);
+  // Runner'ın güncellemeden HEMEN ÖNCE bıraktığı gerçek kaynak: Web-Z kabuğu (yayıncı menüsü).
+  await fs.writeFile(path.join(dir, KAYNAK_KOK_INDEX_MARKER), YAYINCI_MENUSU);
+
+  const kaynak = await kaynakSnapshotAl(dir);
+  assert.strictEqual(kaynak, YAYINCI_MENUSU, 'marker TERCİH edilmeliydi, workingPath kökü DEĞİL');
+
+  // Marker okunur okunmaz silinmeli — pakete SIZMAZ.
+  await assert.rejects(fs.access(path.join(dir, KAYNAK_KOK_INDEX_MARKER)));
+
+  // Bugünkü (T5 düzeltmesi öncesi) davranışı simüle etseydik kaynak workingPath'in KENDİ
+  // kökü (MOTOR_KOPYASI) olurdu → motorKopyasiMi(kaynak)=true, güncel de aynı MOTOR_KOPYASI
+  // (K17 tetiklenmedi çünkü zaten "bir menü" vardı) → 'sadik' — ARIZA GİZLENİRDİ.
+  const guncelHtml = await fs.readFile(path.join(dir, 'index.html'), 'utf8');
+  const eskiDavranisSonuc = karsilastir(MOTOR_KOPYASI, guncelHtml);
+  assert.strictEqual(eskiDavranisSonuc.sonuc, 'sadik', 'DÜZELTMEDEN ÖNCE bu satır test kırmızıydı');
+
+  // DÜZELTİLMİŞ akış: gerçek kaynak (marker'dan) Web-Z kabuğuydu, paket sessizce motor
+  // sayfasına dönüşmüş → kök EZİLMİŞ doğru tespit edilir.
+  const r = karsilastir(kaynak, guncelHtml);
+  assert.strictEqual(r.sonuc, 'ezilmis', `beklenmedik: ${r.sonuc} — ${r.detay}`);
+});
+
+test('T5: marker YOKSA eski davranış sürer — workingPath kendi kök index kaynak sayılır', async () => {
+  const dir = await tempDir();
+  await fs.writeFile(path.join(dir, 'index.html'), YAYINCI_MENUSU);
+  const kaynak = await kaynakSnapshotAl(dir);
+  assert.strictEqual(kaynak, YAYINCI_MENUSU);
+});
+
+test('T5: kök index hiç yoksa (marker de yok) null döner (hata fırlatmaz)', async () => {
+  const dir = await tempDir();
+  const kaynak = await kaynakSnapshotAl(dir);
+  assert.strictEqual(kaynak, null);
 });

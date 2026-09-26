@@ -386,6 +386,9 @@ async function presignUpload(auth, job) {
 const { applyPublisherUpdate, latestLocalUpdate } = require('./publisher-update');
 const { dahaYeniMi } = require('./surum-kiyas');
 const { arsivKaynagi } = require('./kaynak-arsivi');
+const { icerikKapisiDenetle } = require('./icerik-kapisi');
+const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
+const { KAYNAK_KOK_INDEX_MARKER: KOK_INDEX_KAYNAK_MARKER } = require('../packaging/kok-index-denetimi');
 /**
  * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
  * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
@@ -828,7 +831,10 @@ async function packagerPoll(jobId, packagerPlatform) {
         if (!verdict.ok) {
           throw new Error(`packager job completed without a usable package: ${verdict.message}`);
         }
-        return; // completed + doğrulandı
+        // job.results taşır (bkz. packagingService.js `results.kokIndexDenetimi`) — kök
+        // index denetiminin 'uyar' sonucunu agent.log'a bastırmak için çağırana döner
+        // (kok-index-log-koprusu.js). Var olan davranışa dokunmaz, yalnız ek bilgi taşır.
+        return (res.data && res.data.job && res.data.job.results) || null; // completed + doğrulandı
       }
     }
     await sleep(5000);
@@ -1581,6 +1587,14 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
     warn('pardus: dogrula/rapor.txt eksik veya AppRun/asar-has satırı yok (araç eksikse beklenir) —', raporPath);
   }
 
+  // Kök index denetimi görünürlük köprüsü (2026-09-26) — konteynerin stdout'u zaten
+  // `$OUT/raw/packager.log`'a `tee` ile yazılıyor (packager-entry.sh); `work` silinmeden
+  // ÖNCE burada okunup agent.log'a taşınır. dogrula/rapor.txt ile AYNI desen.
+  const packagerLogPath = path.join(outDir, 'raw', 'packager.log');
+  const packagerLogMetni = await fsp.readFile(packagerLogPath, 'utf8').catch(() => '');
+  const kokIndexSatiri = pardusLogundanCikar(packagerLogMetni);
+  if (kokIndexSatiri) log(`pardus: ${kokIndexSatiri} [kitap ${kimlik.bookId || '?'}, platform pardus]`);
+
   await fsp.copyFile(builtPath, artifactPath);
   const mb = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
   log(`pardus: impark hazır — ${artifactPath} (${mb}MB)`);
@@ -1866,6 +1880,30 @@ async function processJob(auth, job) {
       const buildDir = await findBuildDir(extractDir);
       log('build dir:', buildDir);
 
+      // İÇERİKSİZ KAYNAK KAPISI (2026-09-26) — bkz. src/agent/icerik-kapisi.js dosya başlığı
+      // ve `~/.empp-agent/arastirma/set-koku-ezilmis-kok-neden-20260926.md`. Kaynak açıldıktan
+      // hemen SONRA, paketlemeye (yayıncı güncellemesi/zipDir/upload) GİRMEDEN ÖNCE: kökte
+      // `assets/` YOK ve hiç `bookN/` dizini YOK ise kaynak yalnız motordur (11845 SM3-v49.exe
+      // dersi) — iş burada görünür hatayla düşer, R2'ye hiçbir şey yüklenmez.
+      const icerikSonuc = await icerikKapisiDenetle(buildDir, {
+        kaynakAdi: path.basename(String(job.downloadUrl || '').split('?')[0]) || undefined,
+        log,
+      });
+      if (!icerikSonuc.gecti) {
+        throw new Error(icerikSonuc.sebep);
+      }
+
+      // KÖK INDEX DENETİMİ İÇİN GERÇEK KAYNAK ANLIK GÖRÜNTÜSÜ (2026-09-26, T5 — bkz.
+      // kok-index-denetimi.js dosya başlığı ve set-koku-ezilmis-kok-neden raporu). Aşağıdaki
+      // `applyPublisherUpdate` kökü ezebilir (bu satırın kendisi bunu belgeliyor); packagingService
+      // kendi anlık görüntüsünü BUNDAN SONRA (zip yüklendiğinde) alıyordu — yani "kaynak" sandığı
+      // şey zaten runner'ın güncellemesini görmüş oluyordu. Gerçek kaynağı — güncellemeden
+      // HEMEN ÖNCEki kökü — rezerve bir dosyaya bırakıyoruz; packagingService bunu okuyup siler.
+      const kaynakKokIndexOnce = await fsp.readFile(path.join(buildDir, 'index.html'), 'utf8').catch(() => null);
+      if (kaynakKokIndexOnce !== null) {
+        await fsp.writeFile(path.join(buildDir, KOK_INDEX_KAYNAK_MARKER), kaynakKokIndexOnce, 'utf8');
+      }
+
       // Yayıncı güncellemesi (version.html/zip) paketleme anında uygulanır — macOS'ta
       // çalışma zamanında uygulanamaz (asar salt-okunur), bkz. publisher-update.js.
       try {
@@ -1909,7 +1947,14 @@ async function processJob(auth, job) {
       const logoId = await packagerLogoIdFor(job.publisherName);
       jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, job.setKimligi, job.guncellemeTabani);
       log('packager jobId:', jobId, '- polling...');
-      await packagerPoll(jobId, packagerPlatform);
+      const pollSonuclari = await packagerPoll(jobId, packagerPlatform);
+      // Kök index denetimi görünürlük köprüsü (2026-09-26) — bkz. kok-index-log-koprusu.js.
+      if (pollSonuclari && pollSonuclari.kokIndexDenetimi) {
+        const satir = kokIndexOzetSatiriKur({
+          bookId: job.bookId, platform: job.platform, ...pollSonuclari.kokIndexDenetimi,
+        });
+        if (satir) log(satir);
+      }
 
       log('downloading artifact...');
       await packagerDownload(jobId, packagerPlatform, artifactPath);
