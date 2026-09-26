@@ -102,7 +102,7 @@ test('runner.js: kapı imzadan SONRA, R2 yüklemesinden ÖNCE çağrılır (sent
   const govde = kaynak.slice(kaynak.indexOf('async function processJob('));
   const imza = govde.indexOf('await signAndNotarizeMac(artifactPath)');
   const kapi = govde.indexOf('await basliksizKabul(artifactPath, packagerPlatform, job, work)');
-  const yukle = govde.indexOf('await postResultSuccess(auth, job, artifactPath)');
+  const yukle = govde.indexOf('await postResultSuccess(auth, job, yayinYolu)');
   assert.ok(imza > 0 && kapi > 0 && yukle > 0, 'üç çağrı da processJob içinde olmalı');
   assert.ok(imza < kapi, 'kapı imzadan SONRA (noter/zımba denetimi imzalı paketi görmeli)');
   assert.ok(kapi < yukle, 'kapı yüklemeden ÖNCE (RED alan paket R2\'ye gitmemeli)');
@@ -113,4 +113,9 @@ test('sonucYorumla: son satırlardan sebep derler', () => {
   const k = K.sonucYorumla({ kod: 1, cikti: 'x\n[kabul] SONUÇ: RED (5 sn)\n[kabul]   - a\n[kabul]   - b' }, 60000);
   assert.equal(k.durum, 'RED');
   assert.match(k.sebep, /SONUÇ: RED.*- a.*- b/);
+});
+
+test('kapiArgumanlari: cli varsayılanı tools/kabul CLI; yalnız verilince ezilir (Windows şeridi testleri)', () => {
+  assert.equal(K.kapiArgumanlari({ ...temel, env: {} })[0], K.CLI);
+  assert.equal(K.kapiArgumanlari({ ...temel, env: {}, cli: '/sahte/kabul.js' })[0], '/sahte/kabul.js');
 });

@@ -16,6 +16,8 @@
  *      -> POST {PACKAGER}/api/package -> poll /api/package-status -> download artifact
  *   5. macos: codesign + notarytool + stapler — NOTER KAPISI (2026-09-26): herhangi biri
  *      düşerse DMG YÜKLENMEZ (geçici sınıf ertelenir; AGENT_NOTER_ZORUNLU=0 eski best-effort)
+ *      windows (yalnız EMPP_RUNNER_WINDOWS=1): statik kapı + G → başsız kabul → İmpark imza yuvası
+ *      → Authenticode doğrulama → kabul; yayına YALNIZ imzalı kopya gider (windows-serit.js)
  *   6. POST {API}/agents/{id}/result (multipart: file + fields) | on failure: status=failed
  * Heartbeat: POST {API}/agents/{id}/heartbeat every ~15s.
  *
@@ -47,10 +49,10 @@ const {
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
-  guncellemeDosyalariniSirala, guncellemeIcerikTipi, tarListesiniAyristir,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
+const windowsSerit = require('./windows-serit');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -120,6 +122,9 @@ const CONFIG = {
   dockerReadyPollMs: Number(process.env.AGENT_DOCKER_READY_POLL_MS || 75000),
   imparkButunlukPy: process.env.IMPARK_BUTUNLUK_PY
     || path.join(os.homedir(), '.claude', 'skills', 'pardus-yonetim', 'impark-butunluk.py'),
+  // WINDOWS ŞERİDİ (2026-09-26): imza yuvası, kilit, kapı, kanıt ayarları — windows-serit.js.
+  // Şerit yalnız EMPP_RUNNER_WINDOWS=1 ile açılır (mapPlatform); imza her koşulda zorunludur.
+  ...windowsSerit.varsayilanAyarlar(),
 };
 
 const log = (...args) => console.log(new Date().toISOString(), '[agent]', ...args);
@@ -279,6 +284,19 @@ function macAraciSaglamMi() {
   return saglam;
 }
 
+// İmza yuvası erişilebilirliği (60 sn önbellek, arka planda ölçülür — heartbeat'i bekletmez).
+// Ölçülmediyse false: windows ilan edilmez (yanlış negatifin bedeli 60 sn gecikme).
+let _imzaYuvasi = { t: 0, erisilir: false, suruyor: false };
+function imzaYuvasiDurumu() {
+  if (!_imzaYuvasi.suruyor && Date.now() - _imzaYuvasi.t >= 60000) {
+    _imzaYuvasi.suruyor = true;
+    windowsSerit.imzaYuvasiErisilirMi(CONFIG)
+      .then((erisilir) => { _imzaYuvasi = { t: Date.now(), erisilir, suruyor: false }; })
+      .catch(() => { _imzaYuvasi = { t: Date.now(), erisilir: false, suruyor: false }; });
+  }
+  return _imzaYuvasi.erisilir;
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   const caps = etkinYetenekler(CONFIG.caps, {
@@ -288,6 +306,11 @@ function guncelYetenekler() {
     // Araç zinciri yalnız mac istenen durumlarda ölçülür — pardus/android koşarken
     // boşuna xcrun çağırmayalım.
     macAraci: CONFIG.caps.some((c) => c === 'macos' || c === 'mac') ? macAraciSaglamMi() : undefined,
+    // Windows yalnız anahtar açıkken VE imza yuvası (İmpark VPN + Storage7) erişilirken ilan edilir:
+    // aksi hâlde iş kiralanır, ~20 dk üretilir, imzada düşer. AGENT_CAPS'a windows eklemek ayrı karar.
+    windowsAcik: process.env.EMPP_RUNNER_WINDOWS === '1',
+    imzaYuvasi: CONFIG.caps.includes('windows') && process.env.EMPP_RUNNER_WINDOWS === '1'
+      ? imzaYuvasiDurumu() : undefined,
   });
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
@@ -535,6 +558,7 @@ async function postResultSuccess(auth, job, artifactPath) {
   if (res.status !== 200) {
     throw new Error(`result(completed) rejected: HTTP ${res.status} ${JSON.stringify(res.data)}`);
   }
+  return { r2ObjectKey: presigned.r2ObjectKey, publicUrl: presigned.publicUrl };
 }
 
 async function postResultFailure(auth, job, errorMessage) {
@@ -925,163 +949,14 @@ async function packagerReleaseJob(jobId) {
 }
 
 // ---------------------------------------------------------------------------
-// SET güncelleme kanalı — Runner parçası (3/3, 2026-09-23).
-// bkz. .claude/docs/kitap-guncelleme-sozlesmesi.md "Sunucu tarafı — TASARIM".
-// Windows SET işi artefaktı R2'ye yüklendikten SONRA (packagerReleaseJob'dan ÖNCE —
-// o çağrı packager'daki jobId'yi siler, guncelleme ucu da onunla gider) çalışır.
+// SET güncelleme (G) kanalı: runner G set dosyalarını HİÇBİR YERE yüklemez (Şef kararı, Nadir
+// onayı 2026-09-26). G manifestlerinin tek yazarı `g-yayin` aracıdır (tools/g-yayin/yayinla.js,
+// Anahtar Zinciri imzası); paketleyicinin guncelleme.tar.gz'si `guncelleme/` yoluna yüklenirse G
+// durumunu siler. Runner, g-yayin'in ilk manifesti (`--ilk`) için kök index.html'in yolu +
+// sha256'sını ve paket sürümünü Windows iş kanıtına yazar (windows-serit.js). 2026-09-23 tarihli
+// yükleme yolu (parça 3/3: tar indir → presign → PUT → surum.json doğrula) bu yüzden
+// kaldırıldı; paketleyici setKimligi + guncellemeTabani'yi yine alır (G istemcisi pakete girer).
 // ---------------------------------------------------------------------------
-
-/**
- * SET güncelleme paketini (`surum.json`/`manifest.json`/`dosya/**`, tek `.tar.gz`)
- * AYNI packager jobId'sinden indirir. Eski packager sürümünde uç yoksa (HTTP 404,
- * `guncelleme-paketi-yok`) `false` döner — çağıran bunu "adım atlandı, iş yine de
- * başarılı" sayar (eski packager uyumu). Başka her HTTP/ağ hatası FIRLATILIR —
- * sessiz yutma YOK.
- *
- * `--retry-all-errors` KASITLI OLARAK verilmiyor: 404'ü boşuna 3 kez denemek yerine
- * doğrudan "atlandı" yoluna düşülsün; gerçek ağ/5xx hataları curl'ün varsayılan
- * retry davranışıyla (bağlantı/5xx) zaten yeniden denenir.
- *
- * @returns {Promise<boolean>} true = indirildi, false = 404 (adım atlanacak)
- */
-async function guncellemeTarIndir(jobId, destPath) {
-  await fsp.rm(destPath, { force: true }).catch(() => {});
-  const res = await run('curl', [
-    '-sS', '-4', '-L',
-    '--retry', '3', '--retry-delay', '2',
-    '-w', '%{http_code}',
-    '-o', destPath,
-    joinUrl(CONFIG.packagerApi, `api/download/${jobId}/guncelleme`),
-  ]);
-  const httpCode = Number(String(res.stdout || '').trim()) || 0;
-  if (httpCode === 404) return false; // guncelleme-paketi-yok — eski packager, adım atlanır
-  if (res.code !== 0 || httpCode < 200 || httpCode >= 300) {
-    throw new Error(`guncelleme paketi indirilemedi: curl exit ${res.code}, HTTP ${httpCode} ${res.stderr.slice(-200)}`);
-  }
-  const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
-  if (size === 0) throw new Error('guncelleme paketi boş indi (HTTP 200 ama 0 bayt)');
-  return true;
-}
-
-/** API'den SET güncelleme dosyaları için presigned PUT URL'leri ister. */
-async function presignGuncelleme(auth, { bookId, platform, setKimligi, dosyalar }) {
-  const res = await axios.post(
-    joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-guncelleme`),
-    { bookId, platform, setKimligi, dosyalar },
-    { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
-  );
-  if (res.status !== 200 || !res.data || !Array.isArray(res.data.dosyalar)) {
-    throw new Error(`presign-guncelleme failed: HTTP ${res.status} ${JSON.stringify(res.data)}`);
-  }
-  return res.data; // { taban, dosyalar: [{yol, uploadUrl, r2ObjectKey}] }
-}
-
-/** Tek bir güncelleme dosyasını presigned URL'e PUT eder. Ağ hatasında yeniden dener. */
-async function guncellemeDosyaYukle(localYol, uploadUrl, contentType) {
-  const res = await run('curl', [
-    '-sS', '-4', '--fail', '-X', 'PUT',
-    '-H', `Content-Type: ${contentType || 'application/octet-stream'}`,
-    '--upload-file', localYol,
-    '--retry', '5', '--retry-delay', '3', '--retry-all-errors',
-    uploadUrl,
-  ]);
-  if (res.code !== 0) {
-    throw new Error(`guncelleme dosyası yüklenemedi (${path.basename(localYol)}): curl exit ${res.code} ${res.stderr.slice(-160)}`);
-  }
-}
-
-/**
- * Yayınlanan `surum.json`'u okuyup üretilen sürümle karşılaştırır — tüketici
- * tutarlı durum görsün diye eklenen son adım. EŞLEŞMEZSE FIRLATIR: sözleşme
- * "eşleşmezse iş 'yüklendi' sayılmaz, hata metni görünür — sessiz yutma YOK" der.
- */
-async function guncellemeSurumDogrula(taban, setKimligi, beklenenSurum) {
-  const res = await axios.get(joinUrl(taban, `set/${setKimligi}/surum.json`), {
-    timeout: 30000, validateStatus: () => true,
-  });
-  if (res.status !== 200 || !res.data || typeof res.data.surum !== 'string') {
-    throw new Error(`guncelleme doğrulama: surum.json okunamadı (HTTP ${res.status})`);
-  }
-  if (res.data.surum !== beklenenSurum) {
-    throw new Error(`guncelleme doğrulama: sürüm eşleşmedi (üretilen ${beklenenSurum}, yayınlanan ${res.data.surum})`);
-  }
-}
-
-/**
- * SET güncelleme paketini indirir, sıraya göre (`dosya/*` → `manifest.json` →
- * EN SON `surum.json`) R2'ye yükler, ardından yayınlanan `surum.json`'u karşılaştırarak
- * DOĞRULAR. `job.setKimligi` çağıran tarafından zaten kontrol edilmiş kabul edilir.
- * `job.guncellemeTabani` yoksa adım (tahmin ÜRETİLMEDEN) atlanır.
- *
- * @param {{agentId:string, token:string}} auth
- * @param {{bookId:string, platform:string, setKimligi:string, guncellemeTabani?:string}} job
- * @param {string|null} jobId  packager jobId (guncelleme tar'ı AYNI job'tan iner)
- */
-async function guncellemeSetiYukleVeDogrula(auth, job, jobId) {
-  const setKimligi = job.setKimligi;
-  const taban = job.guncellemeTabani;
-  if (!taban) {
-    warn(`guncelleme: claim guncellemeTabani taşımıyor — adım ATLANDI (set ${setKimligi})`);
-    return;
-  }
-  if (!jobId) {
-    warn(`guncelleme: packager jobId yok — adım ATLANDI (set ${setKimligi})`);
-    return;
-  }
-
-  const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-guncelleme-'));
-  try {
-    const tarPath = path.join(work, 'guncelleme.tar.gz');
-    const indi = await guncellemeTarIndir(jobId, tarPath);
-    if (!indi) {
-      log(`guncelleme: packager 'guncelleme-paketi-yok' (404) — adım ATLANDI (set ${setKimligi}), iş başarılı kalıyor (eski packager uyumu)`);
-      return;
-    }
-
-    const listRes = await run('tar', ['-tzf', tarPath]);
-    if (listRes.code !== 0) throw new Error(`guncelleme paketi listelenemedi: tar exit ${listRes.code} ${listRes.stderr.slice(-200)}`);
-    const goreliYollar = tarListesiniAyristir(listRes.stdout, setKimligi);
-    if (goreliYollar.length === 0) {
-      throw new Error(`guncelleme paketi 'set/${setKimligi}/' altında dosya içermiyor`);
-    }
-
-    const extractDir = path.join(work, 'acik');
-    await fsp.mkdir(extractDir, { recursive: true });
-    const x = await run('tar', ['-xzf', tarPath, '-C', extractDir]);
-    if (x.code !== 0) throw new Error(`guncelleme paketi açılamadı: tar exit ${x.code} ${x.stderr.slice(-200)}`);
-
-    const siraliYollar = guncellemeDosyalariniSirala(goreliYollar);
-    const kok = path.join(extractDir, 'set', setKimligi);
-
-    if (!siraliYollar.includes('surum.json')) throw new Error("guncelleme paketinde 'surum.json' yok");
-    const surumBeklenen = JSON.parse(await fsp.readFile(path.join(kok, 'surum.json'), 'utf8')).surum;
-    if (!surumBeklenen) throw new Error("guncelleme paketindeki surum.json'da 'surum' alanı yok");
-
-    const dosyalar = [];
-    for (const yol of siraliYollar) {
-      const boyut = (await fsp.stat(path.join(kok, yol))).size;
-      dosyalar.push({ yol, boyut, contentType: guncellemeIcerikTipi(yol) });
-    }
-
-    log(`guncelleme: ${dosyalar.length} dosya (set ${setKimligi}) presign isteniyor...`);
-    const presigned = await presignGuncelleme(auth, { bookId: job.bookId, platform: job.platform, setKimligi, dosyalar });
-    const uploadByYol = new Map((presigned.dosyalar || []).map((d) => [d.yol, d]));
-
-    // SIRALI yükleme — dosya/* → manifest.json → EN SON surum.json (tüketici tutarlı
-    // durum görsün). Paralel/toplu yükleme bu garantiyi bozar, KULLANILMAZ.
-    for (const yol of siraliYollar) {
-      const hedef = uploadByYol.get(yol);
-      if (!hedef || !hedef.uploadUrl) throw new Error(`guncelleme: '${yol}' için presigned URL yok`);
-      await guncellemeDosyaYukle(path.join(kok, yol), hedef.uploadUrl, guncellemeIcerikTipi(yol));
-      log(`  guncelleme yüklendi: ${yol}`);
-    }
-
-    await guncellemeSurumDogrula(presigned.taban || taban, setKimligi, surumBeklenen);
-    log(`guncelleme: set ${setKimligi} doğrulandı — surum ${surumBeklenen}`);
-  } finally {
-    await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
-  }
-}
 
 /**
  * Cache girdisinin mtime'ını şimdiye çeker — TTL temizleyicisi için
@@ -1740,6 +1615,13 @@ async function processJob(auth, job) {
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
   try {
+    // WINDOWS ŞERİDİ ön koşulu — kaynak İNDİRİLMEDEN (windows-serit.js): claim sürümü
+    // 2.<panel kodu>.<paket sayacı> (sözleşme madde 1), kimlik = book_id, G tabanı https,
+    // imza betiği + osslsigncode + statik kapı var, imza yuvası erişilir. Düşerse iş görünür
+    // hatayla düşer (aşağıdaki catch: bekçi bildirimi), hiçbir şey indirilmez/üretilmez.
+    const winPlan = packagerPlatform === 'windows' ? windowsSerit.onKosul(job) : null;
+    if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
+
     // 1-3. Source cache: the extracted web `build.zip` is produced ONCE per
     //      (book, source-version) and REUSED across platforms + retries — the
     //      SAME web build feeds apk / impark / dmg. This avoids re-downloading
@@ -1867,8 +1749,12 @@ async function processJob(auth, job) {
     }
     } // if (!hazirDevir) — hazır paketde kaynak indirme/çıkarma/zip adımları atlanır
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
-    const appVersion = '1.0.0';
-    const artifactPath = path.join(work, `artifact${artifactExtension(packagerPlatform)}`);
+    // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten
+    // türetir (surum-turet.js). Windows dosya adı imza yuvasında (_hazir/_imzali) runner'a ait görünür.
+    const appVersion = winPlan ? winPlan.surum : '1.0.0';
+    const artifactPath = path.join(work, winPlan
+      ? windowsSerit.imzaDosyaAdi(job.bookId, appName, winPlan.surum)
+      : `artifact${artifactExtension(packagerPlatform)}`);
     let jobId = null; // pardus dalında yerel HTTP packager hiç devreye girmez — jobId yok
 
     if (packagerPlatform === 'pardus') {
@@ -1881,7 +1767,8 @@ async function processJob(auth, job) {
       const sessionId = await packagerUploadBuild(zipPath, appName, appVersion);
       log('packager session:', sessionId, '- starting package...');
       const logoId = await packagerLogoIdFor(job.publisherName);
-      jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId, job.setKimligi, job.guncellemeTabani);
+      jobId = await packagerStartPackage(sessionId, packagerPlatform, appName, appVersion, logoId,
+        winPlan ? winPlan.setKimligi : job.setKimligi, winPlan ? winPlan.guncellemeTabani : job.guncellemeTabani);
       log('packager jobId:', jobId, '- polling...');
       await packagerPoll(jobId, packagerPlatform);
 
@@ -1894,22 +1781,31 @@ async function processJob(auth, job) {
       await signAndNotarizeMac(artifactPath);
     }
 
-    // 4b. Başsız kabul kapısı — RED alan paket R2'ye YÜKLENMEZ (bayrak kapalıysa no-op).
-    await basliksizKabul(artifactPath, packagerPlatform, job, work);
+    // 4b. Yayın öncesi kapılar — RED alan paket R2'ye YÜKLENMEZ.
+    //   windows: sözleşmeli zincir (statik kapı + G madde 13, başsız kabul, _hazir, imza yuvası,
+    //            Authenticode doğrulama + md5, imzalı kopyada kabul). Yayına YALNIZ imzalı ve
+    //            doğrulanmış kopya gider; imzasız yayın yolu YOK, imzayı kapatan anahtar YOK.
+    //   diğerleri: başsız kabul (bayrak kapalıysa no-op).
+    let yayinYolu;
+    let winZincir = null;
+    if (packagerPlatform === 'windows') {
+      winZincir = await windowsSerit.yayinOncesiZincir({
+        artifactPath, job, plan: winPlan, work, jobId, cfg: CONFIG, log, sleep,
+        aktivasyon: aktivasyonBeklenir(job.bookTitle),
+      });
+      yayinYolu = winZincir.imzaliYol;
+    } else {
+      await basliksizKabul(artifactPath, packagerPlatform, job, work);
+      yayinYolu = artifactPath;
+    }
 
     // 5. POST artifact FILE back (server uploads to R2).
     log('posting result (completed) with artifact file...');
-    await postResultSuccess(auth, job, artifactPath);
+    const yayin = await postResultSuccess(auth, job, yayinYolu);
+    // Windows iş kanıtına R2 anahtarı (md5 + kök index + sürüm zincirde yazıldı).
+    if (winZincir) await windowsSerit.yayinKaniti(winZincir, yayin, CONFIG, log);
 
-    // SET güncelleme kanalı (2026-09-23, parça 3/3): Windows SET işi başarıyla
-    // yüklendiyse VE claim setKimligi taşıyorsa, packager'ın AYNI jobId'de ürettiği
-    // guncelleme paketini indir/sıraya göre yükle/doğrula — packagerReleaseJob'dan
-    // ÖNCE (o çağrı packager'daki jobId'yi siler, guncelleme ucu da onunla gider).
-    // Eşleşme doğrulaması düşerse iş BAŞARISIZ sayılır (aşağıdaki catch'e düşer) —
-    // ana artifact zaten R2'de olsa da sessiz yutma YOK.
-    if (packagerPlatform === 'windows' && job.setKimligi) {
-      await guncellemeSetiYukleVeDogrula(auth, job, jobId);
-    }
+    // G set tar'ı runner'dan HİÇBİR YERE yüklenmez — tek yazar g-yayin (bkz. yukarıdaki not).
 
     // Artifact R2'ye gitti — packager'ın yerel kopyasını tutmanın anlamı yok.
     // Bu adım eksikti: her üretim packager'ın output/ dizininde 1-3 GB bırakıyor,
@@ -1919,8 +1815,15 @@ async function processJob(auth, job) {
 
     log('job done:', job.bookId, job.platform);
     let boyutMb = null;
-    try { boyutMb = Math.round(fs.statSync(artifactPath).size / 1e6); } catch (_) {}
+    try { boyutMb = Math.round(fs.statSync(yayinYolu).size / 1e6); } catch (_) {}
     bildirGonder({ basarili: true, bookId: job.bookTitle || job.bookId, platform: job.platform, boyutMb });
+  } catch (e) {
+    // Windows şeridi düştü: R2'ye hiçbir şey yazılmadı. Görünür hata + bekçi bildirimi; failed /
+    // erteleme kararını ana döngü verir (postResultFailure ya da kira dönüşü).
+    if (packagerPlatform === 'windows') {
+      await windowsSerit.bekciBildir({ bookId: job.bookId, bookTitle: job.bookTitle, hata: e }, warn);
+    }
+    throw e;
   } finally {
     currentJob = null; // idle again — stop extending the lease
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
@@ -2061,7 +1964,5 @@ module.exports = {
   packagerReleaseJob,
   touchCacheEntry,
   ensureDockerReady, runPardusScript, runKabulBetigi, buildPardusArtifact, hazirPardusPaketi, pardusKabulKapisi, heartbeat, injectPardusIcon,
-  // SET güncelleme kanalı (2026-09-23) — testler için dışa açık.
-  guncellemeSetiYukleVeDogrula, guncellemeTarIndir, presignGuncelleme, guncellemeDosyaYukle, guncellemeSurumDogrula,
-  packagerStartPackage,
+  packagerStartPackage, postResultSuccess,
 };

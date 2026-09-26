@@ -35,9 +35,9 @@ function kapiEtkinMi(platform, env = process.env) {
   return (liste.length ? liste : VARSAYILAN_PLATFORMLAR).includes(String(platform || '').toLowerCase());
 }
 
-/** Kapı CLI argümanları. Saf. */
-function kapiArgumanlari({ artifactPath, platform, bookId, aktivasyon, calismaDizini, env = process.env }) {
-  const a = [CLI, artifactPath, '--platform', platform, '--calisma', calismaDizini, '--tut'];
+/** Kapı CLI argümanları. Saf. `cli` yalnız testlerde sahte kapı için ezilir (Windows şeridi). */
+function kapiArgumanlari({ artifactPath, platform, bookId, aktivasyon, calismaDizini, env = process.env, cli = CLI }) {
+  const a = [cli, artifactPath, '--platform', platform, '--calisma', calismaDizini, '--tut'];
   if (bookId !== undefined && bookId !== null && bookId !== '') a.push('--kitap-id', String(bookId));
   if (aktivasyon) a.push('--aktivasyon');
   if (platform === 'android' && env.EMPP_BASLIKSIZ_KABUL_CIHAZ === '0') a.push('--cihaz-yok');
@@ -117,7 +117,7 @@ async function basliksizKabulKapisi(p) {
   const zamanAsimiMs = Number(env.AGENT_BASLIKSIZ_KABUL_TIMEOUT_MS || 20 * 60 * 1000);
   const kapiDizini = path.join(p.calismaDizini, 'basliksiz-kabul');
   const argumanlar = kapiArgumanlari({ ...p, calismaDizini: kapiDizini, env });
-  log(`${p.platform}: başsız kabul kapısı başlıyor (odak çalmadan) —`, CLI);
+  log(`${p.platform}: başsız kabul kapısı başlıyor (odak çalmadan) —`, argumanlar[0]);
   const calistir = p.calistir || varsayilanCalistir;
   const r = await calistir(argumanlar, { zamanAsimiMs, env, satir: (s) => log('  ', s) });
   const k = sonucYorumla(r, zamanAsimiMs);
