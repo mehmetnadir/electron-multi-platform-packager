@@ -1,3 +1,110 @@
+## 2026-09-26 (7) — Akşam canlıya alma: G kanalı, Windows şeridi, içerik kapıları, kabul E6/E7/E8
+
+**Yetki:** Nadir 26.09 ~18:45 — "karar aldığımız her şey canlıda olana kadar devam, testler dahil".
+Tüm gün süren entegrasyon (`birlesik-20260926` → `birlesik2` → `birlesik3` → `agent-mode`)
+akşam boyunca art arda canlıya alındı; son durum `agent-mode` = `cdb5ed4`, süreç kaynağı
+`~/.empp-agent/arastirma/birlestirme-notlari-20260926.md`. run-agent.sh yedeği:
+`~/.empp-agent/yedek/run-agent.sh.20260926-canliya-alma-oncesi`.
+
+**Canlıya alınan parçalar:**
+- **G kanalı istemcileri — mac/Pardus örtü + Windows yerinde + Android; Android EKLEME kapıda RED:**
+  monoton sürüm + set kimliği + "ya hep ya hiç" tüm kiplerde birleşti (`e07bc37`, `445fed5`,
+  `9d49ead`); üç güvenlik açığı kapandı — Docker'a claim alanları+açık anahtar, tabansız/
+  anahtarsız pakete enjeksiyon YOK, renderer fs-shim örtü okuma (`b82f76d`..`3a37126`,
+  `95b879e`). Android istemcisi (RouteProcessor katmanı, EmppG eklentisi, üç güvenlik kuralı)
+  geldi (`8101b3e`, `a7ff0b6`) ve Android paketlerinde AÇILDI (`EMPP_SET_GUNCELLEME`'ye `android`,
+  Nadir: "tüm paketlerde güncelleme istemcisi olsun"). Manifest her eklemeyi sonraki yayınlara
+  taşıdığından bir ekleme sonrası o setin Android'i hiçbir G güncellemesini (motor dahil)
+  alamıyor — kalıcı donma riski; koruma g-yayin `--ekle` KAPISINDA: anahtarsız `--ekle` RED,
+  bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` (dal `g-yayin-android-kapi`,
+  `233854f`, agent-mode'a merge bekliyor). Kalıcı çözüm Nadir A/B seçimi (öneri:
+  `~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md`).
+- **Claim sürüm / monoton taban:** mac ve Android G tabanı artık HTTP yolunda claim sürümünü
+  `empp-set.json`/`empp-g-paket.json`'a yazıyor (`012760d`, merge `0959b20`); ProBook yerel
+  şeridi Docker eşiyle aynı G kimliğini taşıyor (`19a94e3`). Sürümün kalıcı kaynağı book-update
+  DB'sindeki `paket_sayaci` — packager yalnız okur.
+- **Windows şeridi (runner):** üretim + 13 G'lik kapı + kabul + **sıralı imza** +
+  **Authenticode doğrulama**, SONRA R2'ye yükleme (`d825123`); gerçek zip fikstürüyle
+  doğrulandı — düz metin `build.zip` fikstürü içeriksiz-kaynak kapısını geçiyordu (`f353aea`);
+  eski üreticinin manifesti G istemcisinde RED bekleniyor (D-2, `3a10a29`). Canlı env:
+  `EMPP_RUNNER_WINDOWS=1` + `AGENT_CAPS`'a `windows` (imza yuvası evden erişilemezse ilan
+  edilmez → evde güvenli).
+- **İçerik kapısı (dizin + zip):** içeriksiz kaynağın paketlenmesini engelleyen kapı artık
+  arşiv VE önbellek-HIT (zip) yollarında da çalışıyor (`d4023dc`, `7579a75`, merge `62df779`);
+  acil kapatma anahtarı `EMPP_ICERIK_KAPISI` (`6cf0b23`, tanımsız/`1` = açık). Canlı ölçüm:
+  7 zip'ten 4 GEÇER/3 RED (45550/45551/11845 bilinen + yeni bulgu), yanlış-RED yok.
+- **İmpark içerik merdiveni S0/S1:** kitap içeriğini İmpark'ın son sürümüne otomatik
+  yükseltir — S0 üretim başında her `bookN` için İmpark sürümünü sorar, S1 geride kalanlara
+  en yeni `ZKitapZipH`'yi uygular, kök korunur (`2d3d5cf`, merge `23a909e`); anahtar
+  `EMPP_ARSIV_MERDIVEN` (varsayılan kapalı, canlıda AÇIK). `menuCoz` artık iki menü biçimini
+  (127/17 ve 27/5) çözüyor — Lingoland 72378/73581 düzeltmesi (`42e3982`).
+- **Kabul E6/E7/E8 (ProBook canlı):** CDP (`--remote-debugging-port`) ile kitap açılıp
+  `GetKitapGuncellemeBilgi` yakalanıyor (E6/E7), **ayrı HOME zorunlu** (E8) çünkü gerçek ev
+  eski paketi de GEÇTİ sayıyor — canlı ölçüm: gerçek ev v36 gördü rc=0 (yanlış GEÇTİ),
+  ayrı ev v33 gördü rc=3 (doğru GÜNCEL-DEĞİL) (`6df85e0`, `69ce84f`, merge `0054fa6`). Canlı
+  env: `KABUL_CDP=1` (ayrı ev varsayılan açık; kapalıysa E7 ÖLÇÜLEMEDİ sınıfına düşer).
+- **Motor kanonik:** 43e23... motor sürümü artık iki Pardus şeridinde (Docker + ProBook
+  yerel) aynı `~/.empp-agent/motor/kanonik.json` kaynağından geliyor, `paket.json.motorSurumu`
+  sha12 kanıtı taşıyor — E3/T6/D-1 (`7d8ec97`, merge `592da3a`).
+- **WebP içerik önbelleği (~90x):** sayfa PNG→WebP dönüşümüne kaynak-md5 tabanlı içerik-adresli
+  önbellek eklendi — 20 sayfalık ölçümde 87,8 sn → 0,98 sn (`4c60666`, merge `8a1c40a`).
+  Anahtar `EMPP_WEBP_ONBELLEK` (tanımsız = varsayılan dizin + açık, `0` = tamamen kapalı),
+  tavan `EMPP_WEBP_ONBELLEK_GB` (varsayılan 30 GB, en eski erişilen budanır).
+- **g-yayin dosyalar[] / fs-shim / menü:** `ekle` girdisine imzalı `dosyalar[]` listesi kondu
+  (`90d7a58`/`525f1fd`, merge `48776eb`); G ile eklenen kitabın `index.html`'ine
+  paketleyicinin fs-shim'i otomatik enjekte ediliyor — ortak modül
+  `src/packaging/fs-shim-subbook-html.js` (`823c84a`, merge `bc1ef52`); SET kök menüsü
+  (Web-Z kartları + K17 kök index.html) `--ekle`/`--cikar` ile tutarlı güncelleniyor,
+  tanınmayan menü biçimi RED (`098515f` set-menu-bicim.js, `01938fe`, merge `f119b3c`);
+  Android ucu (manifest+sürüm+dosya) g-yayin'den üretiliyor, tek imza paylaşılıyor
+  (`4eb3be4`, merge `4977990`).
+- **Eski G üreticisi karantinası (D-2):** `packagingService.js`'in artık hiçbir tüketicisi
+  kalmayan eski G paketleme çağrısı kaldırıldı — kanıt: runner artık G tar'ı yüklemiyor,
+  istemci `kanal-g-degil` RED ediyor; 4 dosya `_graveyard/2026-09-26-g-eski-uretici/`'ye
+  taşındı (git izliyor) + `OKU.md`, D-2 SENTINEL + `olu-yol-kapisi` KARANTİNA listesine
+  eklendi (`360555e`, merge `579585e`).
+- **Yükleme kanıtı (sha256+boyut):** runner R2'ye PUT'tan ÖNCE dosyanın sha256+boyutunu
+  akışla hesaplayıp `/result`'a ekliyor, hata durumunda uyarı basıp yüklemeye devam ediyor
+  (`7271e8b`); e2e `db-kanit` adımı book-update DB'sindeki bu değerleri CDN'deki gerçek
+  dosyayla karşılaştırıyor (`1cc9513`, merge `b815be8`). Karşı taraf (book-update) migration
+  024 (`file_sha256`) ile bunu kabul ediyor.
+- **e2e sağlık koşucusu — gece launchd HENÜZ KURULMADI:** uçtan uca sağlık iskeleti + statik
+  paket denetçisi (T1-T5, K1/K2, `7f8c6de`, merge `86e1154`), Android G denetimi + gece koşusu
+  sarmalayıcısı + launchd şablonu (`320af49`, `02ddaa7`, merge `bc6e271`), sonra canlı koda
+  bağlama (`kesif.js`: pipeline-sql→CDN URL, 8 ölçüm; `7dc0ed3`, `a160b2f`, merge `c3bec09`,
+  son `cdb5ed4`). **Neden kurulmadı:** ilk elle koşuda (121 sn) T1-T5 hepsi ÖLÇÜLEMEDİ çıktı —
+  gerekçelerin bir kısmı o an bayat (g-electron henüz birleşmemişti); her gece yüksek
+  öncelikli sahte kırmızı bekçi güvenini kırar (bkz. gate-system.md "Bekçi Güven Gate") →
+  önce koşucu canlı veriye bağlandı, gerçek satır (74390 demo kaydı) gelene kadar
+  `launchctl bootstrap` bilerek ERTELENDİ (plist hazır: `~/Library/LaunchAgents/
+  com.empp.e2e-saglik.plist`, `plutil` ile doğrulandı).
+
+**Canlı env (run-agent.sh, bu akşam eklenen/değişen):** `EMPP_SET_GUNCELLEME=windows,macos,linux,android`
+· `EMPP_ICERIK_GUNCELLEME=mac,windows` · `EMPP_ARSIV_MERDIVEN=1` · `KABUL_CDP=1` ·
+`EMPP_RUNNER_WINDOWS=1` + `AGENT_CAPS` içine `windows` eklendi. `EMPP_ICERIK_KAPISI` ve
+`EMPP_WEBP_ONBELLEK` run-agent.sh'ta tanımlı değil — kod varsayılanları zaten AÇIK.
+`EMPP_PROBOOK_SERIT` bilerek run-agent.sh'a KONMADI (bkz. Kalan açıklar).
+
+**Kalan açıklar (canlıya alınmadı / karar bekliyor):**
+- **Android G ekleme kalıcı donma riski:** manifest her eklemeyi sonraki yayınlara taşıdığından
+  bir ekleme sonrası set Android'de hiçbir G güncellemesi (motor dahil) alamıyor; K17 kök
+  `index.html` değişikliği de Android'de RED olabilir (ölçülmedi). Nadir'e 3 soru + 4 seçenek
+  (A: tek manifest + kitap başına android arşiv adresi — ÖNERİLEN; B: ayrı imzalı Android
+  manifesti; C: cihazda dönüşüm — önerilmez; D: eklemede android ucu yok) —
+  `g-android-kitap-ekleme-onerisi-20260926.md` (150 satır).
+- **Başsız kabul K4:** mac/android/windows başsız kabulünde güncellik katmanı (E7'nin eşi)
+  yok; dal `kabul-k4-basliksiz` açıldı, `KABUL_K4` anahtarı varsayılan kapalı olacak.
+- **ProBook şeridi kayıt sırrı:** `EMPP_PROBOOK_SERIT` şeridi koda bağlandı (`13acb01`,
+  LAN-yalnız arşiv eşleme + yetim onarımı + kuru koşu) ama run-agent.sh'ta kayıt sırrı +
+  LAN arşiv eşlemesi doğrulanana kadar AÇILMADI — Nadir'de bekleyen, dokunulmaz.
+- **Panel kodu olmayan kitaplar sürüm kuralı:** 57 Windows kitabının 26'sında panel adında
+  `vNN` yok (Flashy, Lingoland, Gold, Fen fasikülleri) → claim sürümü yok, runner Windows işi
+  görünür hatayla düşer; öneri (panel kodu yoksa `2.0.<sayaç>`) Nadir'in kararını bekliyor.
+- **G sürüm ad alanı tekilleştirme:** g-yayin manifest sürümü ile book-update `paket_sayaci`
+  aynı sayaçtan artmazsa aynı `2.51.N` iki farklı içeriğe işaret edebilir; sonraki iş bu
+  numarayı yalnız DB'nin vermesi (aynı özetle farklı içerik RED). Bu gece G yayını bilinçli
+  olarak yalnız 74390 + `--onayli` ile sınırlı tutuldu.
+
 ## 2026-09-26 (6) — Pakete girmeyecekler: Windows politikası dört platformda, tek liste
 
 **Nadir:** "diğer os'ların paketlerini üretirken windows paketinde uyguladığımız gereksizleri atma

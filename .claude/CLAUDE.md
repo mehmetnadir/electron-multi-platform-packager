@@ -100,7 +100,7 @@
 | `.claude/docs/deploy.md` | srv21 dağıtım kuralları (ff-only, restart-yalnız-kuyruk-boşken, iki ayrı kopya uyarısı) |
 | `project-switch.md` | Librarian pointer |
 
-Son Güncelleme: 2026-09-09 (K11b-K16 — 2. res.download, kısmi-hata özet sayımı, /api/health commit/startedAt, Android Gradle heap ön-kontrolü, root/uid test sertleştirme, srv21 deploy.md)
+Son Güncelleme: 2026-09-26 — akşam canlıya alma: G kanalı (mac/Pardus/Windows/Android istemci; Android EKLEME g-yayin kapısında RED), Windows şeridi (imza yuvası+Authenticode+R2), içerik kapısı, İmpark içerik merdiveni S0/S1, kabul E6/E7/E8 (KABUL_CDP), motor kanonik, WebP içerik önbelleği, D-2 eski G üreticisi karantinası, yükleme kanıtı (sha256+boyut) — önceki: 2026-09-09 (K11b-K16)
 
 - **Ajan logo/ikon (2026-09-12):** `pickLogoId` yayıncı ADINI `/api/logos` kayıtlarıyla eşler — kayıt yoksa/ad farklıysa sessizce varsayılan ikon. Pardus için zip kökünde `ico.png` şart → `injectPardusIcon` (runner.js) kayıtlı logoyu ekler. Yeniden başlatma: `touch ~/.empp-agent/yeniden-baslat.istek` (işler arasında temiz çıkış).
 - **Ajan duraklatma bayrağı (2026-09-12):** `~/.empp-agent/duraklat.istek` durdukça ajan yeni iş almaz (süren iş biter); kaldıran çağırandır. Bu Mac'te elle üretim koşarken (paketleyici 4 paralel iş kabul ediyor, iki Gradle aynı `@capacitor/android` build dizinini paylaşıp R.jar yarışıyla düşüyor) bayrağı koy, paketleyici boşalınca üret, sonra kaldır. `yeniden-baslat.istek` ise tek kullanımlık restart.
@@ -156,3 +156,25 @@ Son Güncelleme: 2026-09-09 (K11b-K16 — 2. res.download, kısmi-hata özet say
   paketleme kusuru değil, "süreç iki zorlamalı taskkill'e rağmen ölmedi" demektir.
   Override noktası **`customCheckAppRunning`** makrosudur (aynı dosyada `!ifmacrodef`
   ile aranır). Teşhis için Windows'ta üreme şart — Mac'ten ölçülemez.
+
+- **Kapı bayraklarının kaynağı `~/.empp-agent/run-agent.sh` (2026-09-26 akşam canlıya alma):**
+  yeni anahtarlar — `EMPP_RUNNER_WINDOWS` (kapalı→1: Windows şeridi + imza yuvası + `AGENT_CAPS`'a
+  `windows`), `EMPP_ARSIV_MERDIVEN` (kapalı→1: İmpark içerik merdiveni S0/S1), `KABUL_CDP`
+  (kapalı→1: ProBook CDP kabul, ayrı ev varsayılan açık). `EMPP_ICERIK_KAPISI` ve
+  `EMPP_WEBP_ONBELLEK` run-agent.sh'ta YOK — kod varsayılanları zaten AÇIK (dokunmadan çalışır).
+  `EMPP_PROBOOK_SERIT` kod varsayılanı kapalı VE run-agent.sh'ta da bilerek KONMADI (kayıt sırrı
+  + LAN arşiv eşlemesi doğrulanana kadar).
+- **Kabul gerçek HOME'da eski paketi de GEÇTİ sayar (2026-09-26, canlı ölçüm):** ProBook'ta
+  gerçek ev v36 (öğretmen profilindeki eski indirme) görüp rc=0 verdi; ayrı HOME v33 görüp
+  doğru rc=3 verdi. `KABUL_CDP=1` iken E7 SADECE ayrı ev'de güvenilir — eski ev asla GEÇTİ.
+- **G manifestinin TEK yazarı g-yayin — runner tar yüklemez (D-2, 2026-09-26):** eski G
+  paketleme çağrısı `packagingService.js`'ten kaldırıldı (`_graveyard/2026-09-26-g-eski-uretici/`).
+  Yeni bir G üretim/yayın yolu eklerken manifesti ASLA runner/build tarafında yazma — istemci
+  `kanal-g-degil` ile RED eder, bu bilinçli bir kapı.
+- **Android G EKLEME kalıcı donma riski (2026-09-26, karar bekliyor):** G manifesti her
+  eklemeyi sonraki yayınlara taşıdığından bir kitap eklendikten sonra o setin Android'i
+  hiçbir G güncellemesini (motor dahil) alamıyor. Android G istemcisi paketlerde AÇIK
+  (`EMPP_SET_GUNCELLEME=windows,macos,linux,android`); koruma g-yayin `--ekle` KAPISINDA:
+  anahtarsız `--ekle` RED, bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` (rapor +
+  manifest yanında `ANDROID-DONUK.txt`), dal `g-yayin-android-kapi` (`233854f`, agent-mode'a
+  merge bekliyor). Kalıcı çözüm Nadir A/B seçimi — bkz. changelog (7), `g-android-kitap-ekleme-onerisi-20260926.md`.
