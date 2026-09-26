@@ -105,9 +105,8 @@ kurum logolu paketler üretmek.
 - Paralel ağır build'i varsayılan yapmak (srv21 paylaşılan üretim sunucusu — nazik build kuralı).
 - Yayıncının kendi menüsü/özel index'i olan pakete dokunmak.
 - Windows'ta motor/kabuk kanonikle değiştirme (Faz 3) — ertelendi, şimdilik Mac/Linux/Android.
-- SET güncelleme kanalı (`EMPP_SET_GUNCELLEME`): Windows'ta AÇIK (üretim ed25519 anahtarı üretildi, karar
-  defteri A5 KAPANDI, 26.09). mac/linux/android için istemci yok — kanal o platformlarda kapalı kalır,
-  anahtar hazır olduğu için değil, sarmalayıcı yazılmadığı için (`windows-paketleme-sozlesmesi.md` madde 3).
+- G kanalını (`EMPP_SET_GUNCELLEME`, kapı platform başına) kabul geçmeden açmak: istemci Windows (yerinde),
+  mac/Pardus (örtü), Android'de var; üretim ed25519 anahtarı hazır (A5 KAPANDI 26.09); kapı yalnız Windows'ta AÇIK. Kapsam/"kurulum klasörü": `platform-kanallari-sozlesmesi.md` O1–O4.
 - srv21 `:3093` canlı üreticisinin `set-menu.js`/kod eşitlemesi — HEAD'e çekmek K15/K17'yi siler,
   önce commit kararı Nadir'in.
 
@@ -148,8 +147,3 @@ açılışta zaten ~350 MB indiriyor; bizim yolumuz İKİNCİ bloklayıcı günc
 **2026-09-26 — Windows paketleme sözleşmesi ONAYLI (Nadir).** `windows-paketleme-sozlesmesi.md`: G1–G6 uygulandı,
 kurulum ekranı kuralı (ilk kutu, evre metinleri, gerçek MB sayacı, tek yazma) ve zamanlama günlüğü eklendi.
 VM'de A 2.51.0 kuruldu, Nadir onayladı. Kod ana ağaçta (`ded619e`, `c11aae0`, `436daa0`); imza bekleme kuralı `4e78243`.
-
-**2026-09-26 — Üretim ed25519 anahtarı üretildi (karar defteri A5 KAPANDI).** Detay `karar-defteri-2026-09-26.md`
-A5 satırında; bu belgede yalnız kanal durumu (yukarıda). Üretim yeri, motor temizliği, G'nin kapsamı
-(kitabın ANA klasörü, `htmletk/…/etk/` kapsam dışı) ve "kurulum klasörü" tanımı: `platform-kanallari-sozlesmesi.md`
-"Ortak özellikler" O1-O4.

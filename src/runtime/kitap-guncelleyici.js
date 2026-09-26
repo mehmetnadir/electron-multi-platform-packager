@@ -49,8 +49,9 @@
  * TÜM kiplerde: Windows yerinde + mac/Pardus örtü):
  *   • İmzası doğru manifest de ancak `kanal == "G"`, `setKimligi == paketin gömülü kimliği`
  *     ve `surum` G3 biçiminde (`2.<panel>.<sayaç>`) + KURULU sürümden KESİN BÜYÜKse uygulanır.
- *     Kurulu sürüm = max(paketin `package.json` sürümü, son uygulanan G sürümü). Aynı anahtarla
- *     imzalı ESKİ bir manifestin yeniden oynatılması (geri alma) ve başka setin manifesti reddedilir.
+ *     Kurulu sürüm = max(paketin `package.json` sürümü, `empp-set.json` `surum`u (claim), son
+ *     uygulanan G sürümü). Aynı anahtarla imzalı ESKİ bir manifestin yeniden oynatılması
+ *     (geri alma) ve başka setin manifesti reddedilir.
  *   • Windows'ta da her şey önce `.empp-gecici/` altında hazırlanır (indir + sha256/boyut doğrula
  *     + kitap arşivini aç); TEK bir dosya bile tutmazsa canlı ağaca HİÇ dokunulmaz. Uygulama
  *     kısa bir rename dizisidir (önce kitaplar, sonra kabuk, EN SON `index.html`); günce
@@ -370,6 +371,8 @@ function setiNormalize(veri) {
     imzaAnahtari: (imza.alg === IMZA_ALG && typeof imza.acikAnahtar === 'string') ? imza.acikAnahtar : '',
     taban: typeof n.taban === 'string' ? n.taban : '',
     damga: typeof n.damga === 'string' ? n.damga : '',
+    /** Paketin G sürümü (claim `surum`, G3); monoton tabana girer. Yoksa ''. */
+    surum: typeof n.surum === 'string' ? n.surum : '',
     sebep: typeof n.sebep === 'string' ? n.sebep : '',
     kabukDosyalari: dizi(n.kabukDosyalari),
     kitapDizinleri: dizi(n.kitapDizinleri),
@@ -1026,7 +1029,8 @@ async function guncellemeyiCalistir(p) {
       uygulanan = damga ? damga.surum : null;
     }
     const paketSurumu = await paketSurumuOku(fsm, kok);
-    const kurulu = enBuyukGSurum([uygulanan, paketSurumu]);
+    // Taban: paketin package.json sürümü, empp-set.json'daki paket G sürümü (claim), son uygulanan.
+    const kurulu = enBuyukGSurum([uygulanan, paketSurumu, set.surum || null]);
     rapor.kuruluSurum = kurulu;
     if (uygulanan && uygulanan === uzakSurum) {
       rapor.durum = 'guncel';
@@ -1972,6 +1976,81 @@ function ortuGorunumu(d, kok, fsS) {
   return cikti;
 }
 
+/** Ana sürecin renderer'a bıraktığı örtü işaretleri (EMPP_WORK_DIR ile aynı yol: env). */
+const ORTU_ENV_ETKIN = 'EMPP_G_ORTU_KOKU_ETKIN';
+const ORTU_ENV_SURUM = 'EMPP_G_ORTU_SURUM_ETKIN';
+
+/**
+ * RENDERER fs-shim'i için örtü OKUYUCUSU — YALNIZ OKUMA (yazma yolu/WORK değişmez).
+ *
+ * NEDEN (2026-09-26 ölçümü, SM4 11811 build'i, `book1/ab436b32….main.js`): kitap okuyucusu kitap
+ * dosyalarını renderer'da `window.require('fs')` ile okur — `assets/<id>/data/BookContent.xml`
+ * `existsSync` + `readFileSync` (+DOMParser), kapak için `readdirSync(assets/<id>)`, `imKeys.dll`
+ * ve `kurum.txt` `existsSync/readFileSync`. Yollar `path.join(window.__dirname, …)` =
+ * `…/app.asar/bookN/…`. G ile EKLENEN kitap pakette olmadığı için bu okumalar `file:` zincirini
+ * (zincirKur) HİÇ görmez → ENOENT. Bu okuyucu aynı imzalı etkin durumdan (ortuDurumuYukle)
+ * mutlak paket yolunu örtü nesnesine çevirir; eklenen kitabın dizinlerini listeler.
+ *
+ * Ana süreç örtüyü kurunca `EMPP_G_ORTU_KOKU_ETKIN` + `EMPP_G_ORTU_SURUM_ETKIN` yazar; renderer
+ * `surum` aynıysa kullanır (oturum ortasında uygulanan güncelleme sonraki açılışa kalır — ana
+ * sürecin sunduğuyla karışmasın).
+ * @param {{kok:string, ortuKoku:string, surum?:string, fsSenkron?:object}} o
+ * @returns {null | {surum:string, yol:(mutlak:string)=>string|null,
+ *   liste:(mutlakDizin:string)=>null|{tam:boolean, adlar:string[], cikar:string[], dizinMi:(ad:string)=>boolean}}}
+ */
+function ortuFsOkuyucu(o) {
+  const fsS = (o && o.fsSenkron) || require('fs');
+  const kok = nodePath.resolve(String((o && o.kok) || ''));
+  if (!o || !o.ortuKoku) return null;
+  const d = ortuDurumuYukle({ kok, ortuKoku: o.ortuKoku, fsSenkron: fsS });
+  if (!d.gecerli) return null;
+  if (o.surum && d.surum !== o.surum) return null;
+  const goreli = (m) => {
+    if (typeof m !== 'string' || !m) return null;
+    const r = nodePath.relative(kok, nodePath.resolve(m));
+    if (r === '') return '';
+    if (r.startsWith('..') || nodePath.isAbsolute(r)) return null;
+    return r.split(nodePath.sep).join('/');
+  };
+  // Örtünün getirdiği dizin → çocuk adları (eklenen kitapların tüm dizinleri + kabuk örtüsü yolları).
+  const dizinler = new Map();
+  const yolEkle = (y) => {
+    const p = y.split('/');
+    for (let i = 0; i < p.length; i++) {
+      const ust = p.slice(0, i).join('/');
+      if (!dizinler.has(ust)) dizinler.set(ust, new Set());
+      dizinler.get(ust).add(p[i]);
+    }
+  };
+  for (const kitap of d.kitaplar.values()) for (const ic of kitap.dosyalar.keys()) yolEkle(kitap.dizin + '/' + ic);
+  for (const y of d.ortuYollari) yolEkle(y);
+  const eklenenDal = (rel) => rel !== '' && d.eklenen.has(rel.split('/')[0].toLowerCase());
+  const yokKoku = nodePath.join(d.ortuKoku, '.yok');
+  return {
+    surum: d.surum,
+    yol(mutlak) {
+      const rel = goreli(mutlak);
+      if (rel == null || rel === '') return null;
+      const r = ortuCoz(d, rel, fsS);
+      if (r && r.tur === 'ortu') return r.yol;
+      // Eklenen kitabın DİZİNİ (book4, book4/assets/1 …): var ve dizin görünsün.
+      if (eklenenDal(rel) && dizinler.has(rel)) return d.nesneKoku;
+      if (r && r.tur === 'yok') return nodePath.join(yokKoku, rel); // gizli → ENOENT
+      return null;
+    },
+    liste(mutlakDizin) {
+      const rel = goreli(mutlakDizin);
+      if (rel == null) return null;
+      const dizinMi = (ad) => dizinler.has(rel === '' ? ad : rel + '/' + ad);
+      const adlar = dizinler.has(rel) ? [...dizinler.get(rel)] : [];
+      if (eklenenDal(rel)) return { tam: true, adlar, cikar: [], dizinMi };
+      const cikar = rel === '' ? [...d.cikarilan] : [];
+      if (!adlar.length && !cikar.length) return null;
+      return { tam: false, adlar, cikar, dizinMi };
+    },
+  };
+}
+
 /** Mutlak dosya yolu (file: isteği) → örtü kararı; paket kökü dışındaysa `null`. */
 function ortuCozMutlak(d, kok, mutlak, fsS) {
   if (!d || !d.gecerli || typeof mutlak !== 'string' || !mutlak) return null;
@@ -2116,6 +2195,12 @@ function ortuSunucusunuKur(p) {
         const k = zincir.kur({ protocol: electron.protocol, net: electron.net, log });
         sonuc.durum = k.yontem === 'yok' ? 'kurulamadi' : 'kuruldu';
         sonuc.yontem = k.yontem;
+        if (sonuc.durum === 'kuruldu') {
+          // Renderer fs-shim'i (kitap okuyucusunun fs okumaları) AYNI etkin durumu okusun.
+          const env = o.env || process.env;
+          env[ORTU_ENV_ETKIN] = ortuKoku;
+          env[ORTU_ENV_SURUM] = String(d.surum);
+        }
         log(`[empp-ortu] örtü etkin: sürüm ${String(d.surum).slice(0, 12)}…, ${d.ortuYollari.size} kabuk `
           + `dosyası, eklenen [${[...d.eklenen].join(',')}], gizlenen [${[...d.cikarilan].join(',')}] `
           + `(file: ${k.yontem}, kök ${ortuKoku})`);
@@ -2181,6 +2266,9 @@ module.exports = {
   arsivGez,
   kitapTuretilmisDogrula,
   ortuGorunumu,
+  ORTU_ENV_ETKIN,
+  ORTU_ENV_SURUM,
+  ortuFsOkuyucu,
   // Örtü (mac + Pardus, 2026-09-26)
   ORTU_DIZIN_ADI,
   ORTU_ETKIN,

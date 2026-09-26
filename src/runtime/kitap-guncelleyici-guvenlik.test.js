@@ -578,3 +578,138 @@ test('ortuGorunumu: etkin görünüm = paket + örtü, gizlenenler yok', async (
   assert.ok(!g.has('book2/index.html'));
   assert.strictEqual(icerik('book1/index.html'), '<html>kitap1</html>');
 });
+
+/* ============================================ (4) PAKETİN G SÜRÜMÜ (claim `surum`, 2026-09-26) */
+// package.json sürümü G3 değilken (Pardus/Windows paketleri '1.0.0' ile üretilir) taban yoktu:
+// paketin içerdiği sürümün imzalı manifesti ilk açılışta yeniden oynatılabiliyordu. Claim'in
+// `surum`u empp-set.json'a yazılır ve monoton tabana girer.
+function setSurumlu(kok, set, surum) {
+  const s = Object.assign({}, set, { surum });
+  fs.writeFileSync(path.join(kok, 'empp-set.json'), JSON.stringify(s));
+  return s;
+}
+
+test('WINDOWS set sürümü: package.json G3 değil, empp-set.json surum=2.5.3 → eşit/eski imzalı manifest RET', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '2.5.3');
+  const once = ozet(kok);
+  const a = await kos(kok, s, tam('2.5.3', { surumTetik: '2.5.8' }));
+  assert.strictEqual(a.r.sebep, 'manifest-reddedildi:surum-eski', JSON.stringify(a.r));
+  assert.strictEqual(a.r.kuruluSurum, '2.5.3');
+  assert.deepStrictEqual(ozet(kok), once, 'ağaç aynı kalmalı');
+  const b = await kos(kok, s, tam('2.5.4'));
+  assert.strictEqual(b.r.durum, 'guncellendi', JSON.stringify(b.r));
+});
+
+test('ÖRTÜ set sürümü: empp-set.json surum tabanı ilk kurulumda da geçerli — eski manifest örtü kurmaz', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '2.5.3');
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const { r } = await ortuKos(kok, s, ortuKoku, tam('2.5.2', { surumTetik: '2.5.8' }));
+  assert.strictEqual(r.sebep, 'manifest-reddedildi:surum-eski');
+  assert.ok(!fs.existsSync(ortuKoku), 'örtü dizini oluşmamalı');
+});
+
+test('set sürümü G3 değilse (bozuk/elle) yok sayılır — package.json/damga tabanı geçerli kalır', async () => {
+  const { kok, set } = paketKur({ surum: '1.0.0' });
+  const s = setSurumlu(kok, set, '9.9.9.9');
+  const { r } = await kos(kok, s, tam('2.5.1'));
+  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
+});
+
+/* ==================== (5) İMZALI dosyalar[] — yayın aracı 90d7a58 biçimi (örtü, 2026-09-26) */
+// Yayın aracı artık `ekle` girdisine imzalı `dosyalar[{yol,sha256,boyut}]` koyuyor (zipIcerigi =
+// istemcinin okuyucusuyla türetilmiş döküm). Örtü bu listeyi kullanır: arşiv doğrulanıp açılır,
+// dosyalar listeyle kıyaslanır, arşiv SAKLANMAZ (disk ×2 biter). Liste yoksa eski davranış.
+const ZY = require('../../tools/g-yayin/zip-yaz');
+const KITAP4 = { 'index.html': '<html>kitap4</html>', [MOTOR]: YENI_MOTOR, 'alt/veri.json': '{"a":1}' };
+/** Kitabı GERÇEK yayın aracının yazıcısıyla arşivler; liste = yayın aracının `zipIcerigi`si. */
+function yayinAraciArsivi(dosyalar) {
+  const zipYolu = path.join(tmp('ya'), 'kitap.zip');
+  ZY.zipYaz(zipYolu, Object.entries(dosyalar).map(([yol, v]) => ({ yol, veri: Buffer.from(v) })));
+  return { zip: fs.readFileSync(zipYolu), liste: ZY.zipIcerigi(zipYolu) };
+}
+function imzaliTam(surum, ek = {}) {
+  const a = yayinAraciArsivi(KITAP4);
+  return Object.assign(tam(surum), {
+    listesiz: false,
+    kitaplar: [
+      { dizin: 'book2', durum: 'cikar' },
+      { dizin: 'book4', durum: 'ekle', dosyalar: KITAP4, zip: a.zip, dosyaListesi: a.liste },
+    ],
+  }, ek);
+}
+const zipNesneleri = (ortuKoku) => fs.readdirSync(path.join(ortuKoku, kg.ORTU_NESNE)).filter((a) => a.endsWith('.zip'));
+const etkinOku = (ortuKoku) => JSON.parse(fs.readFileSync(path.join(ortuKoku, kg.ORTU_ETKIN), 'utf8'));
+
+test('ÖRTÜ imzalı dosyalar[] (yayın aracı biçimi): arşiv SAKLANMAZ, liste türetilmez, kitap sunulur', async () => {
+  const { kok, set } = paketKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const m = imzaliTam('2.5.4');
+  assert.deepStrictEqual(m.kitaplar[1].dosyaListesi.map((d) => d.yol), [MOTOR, 'alt/veri.json', 'index.html'].sort());
+  const { r, istekler } = await ortuKos(kok, set, ortuKoku, m);
+  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
+  assert.strictEqual(istekler.filter((y) => y === '/arsiv/book4.zip').length, 1);
+  const d = kg.ortuDurumuYukle({ kok, ortuKoku });
+  assert.strictEqual(d.gecerli, true, d.sebep);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/index.html'), ['ortu', '<html>kitap4</html>']);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/alt/veri.json'), ['ortu', '{"a":1}']);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/listede-yok.js'), ['yok']);
+  assert.deepStrictEqual(zipNesneleri(ortuKoku), [], 'imzalı listede arşiv nesnesi SAKLANMAMALI');
+  assert.ok(!(etkinOku(ortuKoku).kitapListeleri || {}).book4, 'imzalı listede türetilmiş liste yazılmamalı');
+  assert.ok(!fs.readdirSync(ortuKoku).some((a) => a.includes('gecici')), 'geçici artık kalmamalı');
+});
+
+test('ÖRTÜ imzalı: sonraki sürümde nesneler varken arşiv YENİDEN İNDİRİLMEZ', async () => {
+  const { kok, set } = paketKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  await ortuKos(kok, set, ortuKoku, imzaliTam('2.5.4'));
+  const b = await ortuKos(kok, set, ortuKoku, imzaliTam('2.5.5', { kabuk: { 'index.html': 'MENU v3' } }));
+  assert.strictEqual(b.r.durum, 'guncellendi', JSON.stringify(b.r));
+  assert.ok(!b.istekler.includes('/arsiv/book4.zip'), b.istekler.join(','));
+  assert.strictEqual(b.r.kitapZatenKurulu, 1);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/alt/veri.json'), ['ortu', '{"a":1}']);
+});
+
+test('ÖRTÜ geçiş: listesiz kurulumdan (arşiv saklı) imzalı listeye — indirme yok, arşiv nesnesi budanır', async () => {
+  const { kok, set } = paketKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const a = yayinAraciArsivi(KITAP4);
+  const kitap = { dizin: 'book4', durum: 'ekle', dosyalar: KITAP4, zip: a.zip, dosyaListesi: a.liste };
+  const ilk = await ortuKos(kok, set, ortuKoku, tam('2.5.4', { kitaplar: [{ dizin: 'book2', durum: 'cikar' }, kitap] }));
+  assert.strictEqual(ilk.r.durum, 'guncellendi', JSON.stringify(ilk.r));
+  assert.strictEqual(zipNesneleri(ortuKoku).length, 1, 'listesiz: arşiv saklanır (bugünkü davranış)');
+  const b = await ortuKos(kok, set, ortuKoku, tam('2.5.5', { listesiz: false, kitaplar: [{ dizin: 'book2', durum: 'cikar' }, kitap] }));
+  assert.strictEqual(b.r.durum, 'guncellendi', JSON.stringify(b.r));
+  assert.ok(!b.istekler.includes('/arsiv/book4.zip'), b.istekler.join(','));
+  assert.deepStrictEqual(zipNesneleri(ortuKoku), [], 'imzalı listeye geçince arşiv nesnesi budanmalı');
+  assert.strictEqual(kg.ortuDurumuYukle({ kok, ortuKoku }).gecerli, true);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/index.html'), ['ortu', '<html>kitap4</html>']);
+});
+
+test('ÖRTÜ geriye uyum: aynı manifestte imzalı listeli + listesiz kitap — yalnız listesizin arşivi saklanır', async () => {
+  const { kok, set } = paketKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const m = imzaliTam('2.5.4');
+  m.kitaplar.push({ dizin: 'book5', durum: 'ekle', dosyalar: { 'index.html': '<html>kitap5</html>' } });
+  m.dosyalarSil = 'book5';
+  const { r } = await ortuKos(kok, set, ortuKoku, m);
+  assert.strictEqual(r.durum, 'guncellendi', JSON.stringify(r));
+  const etkin = etkinOku(ortuKoku);
+  assert.ok(etkin.kitapListeleri.book5 && !etkin.kitapListeleri.book4);
+  assert.deepStrictEqual(zipNesneleri(ortuKoku), [etkin.kitapListeleri.book5.arsiv]);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book5/index.html'), ['ortu', '<html>kitap5</html>']);
+  assert.deepStrictEqual(ortuOku(kok, ortuKoku, 'book4/alt/veri.json'), ['ortu', '{"a":1}']);
+});
+
+test('ÖRTÜ imzalı: yayın aracı listesi arşivle uyuşmazsa (arşivde listesiz dosya) kitap EKLENMEZ, örtü oluşmaz', async () => {
+  const { kok, set } = paketKur();
+  const ortuKoku = path.join(tmp('ud'), 'empp-guncelleme');
+  const a = yayinAraciArsivi(KITAP4);
+  const eksikListe = a.liste.filter((d) => d.yol !== 'alt/veri.json');
+  const { r } = await ortuKos(kok, set, ortuKoku, imzaliTam('2.5.4', {
+    kitaplar: [{ dizin: 'book4', durum: 'ekle', dosyalar: KITAP4, zip: a.zip, dosyaListesi: eksikListe }],
+  }));
+  assert.strictEqual(r.durum, 'kismi', JSON.stringify(r));
+  assert.ok(!fs.existsSync(path.join(ortuKoku, kg.ORTU_ETKIN)), 'etkin yazılmamalı');
+});

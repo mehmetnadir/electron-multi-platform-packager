@@ -972,7 +972,97 @@ function tarListesiniAyristir(cikisMetni, setKimligi) {
   return sonuc;
 }
 
+/**
+ * PARDUS (Docker) BETİĞİNE GİDEN ORTAM (2026-09-26): G kanalının manifest doğrulama AÇIK anahtarı
+ * (`EMPP_GUNCELLEME_ACIK_ANAHTAR`, SPKI DER base64 ed25519) pakete gömülsün diye betiğe — oradan
+ * `-e` ile konteynere — geçer. Açık anahtar sır DEĞİLDİR. Geçerli bir ed25519 AÇIK anahtar değilse
+ * (boş, bozuk, RSA, özel anahtar DER/PEM) DÜŞÜRÜLÜR: pakette G kapalı kalır, sebep döner.
+ * Özel anahtar bu yoldan ASLA geçmez. Saf: yalnız `crypto` ile ayrıştırır.
+ * @returns {{env: object, gAnahtari: string|null, sebep: string}}
+ */
+function pardusBetikEnv(env, job) {
+  const cikti = { ...(env || {}) };
+  const ham = typeof cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR === 'string'
+    ? cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR.trim() : '';
+  let sebep = '';
+  if (!ham) sebep = 'yok';
+  else if (/PRIVATE|BEGIN /i.test(ham)) sebep = 'ozel-anahtar-ya-da-pem';
+  else {
+    try {
+      const k = require('crypto').createPublicKey({ key: Buffer.from(ham, 'base64'), format: 'der', type: 'spki' });
+      if (k.asymmetricKeyType !== 'ed25519') sebep = 'ed25519-degil';
+    } catch (e) { sebep = 'gecersiz'; }
+  }
+  if (sebep) delete cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR;
+  else cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR = ham;
+  const g = pardusGKimligi(job);
+  // Kimlik YALNIZ claim'den gelir: ajan ortamından sızmış eski bir değer konteynere geçmez.
+  for (const ad of Object.values(PARDUS_G_ENV)) delete cikti[ad];
+  for (const [alan, ad] of Object.entries(PARDUS_G_ENV)) {
+    if (g.kimlik[alan]) cikti[ad] = g.kimlik[alan];
+  }
+  return {
+    env: cikti, gAnahtari: sebep ? null : ham, sebep, gKimlik: g.kimlik, gSebepler: g.sebepler,
+  };
+}
+
+/**
+ * Claim'in G alanlarının (`setKimligi`, `guncellemeTabani`, `surum`) konteynere giden ortam
+ * değişkeni adları. `tools/pardus/pardus-packager-build.sh` bunları `-e` ile geçirir,
+ * `tools/pardus/packager-run-linux.js` jobInfo'ya koyar (HTTP yolunda /api/package gövdesi).
+ */
+const PARDUS_G_ENV = Object.freeze({
+  setKimligi: 'EMPP_G_SET_KIMLIGI',
+  guncellemeTabani: 'EMPP_G_GUNCELLEME_TABANI',
+  surum: 'EMPP_G_SURUM',
+});
+/** `src/packaging/set-kimligi.js` KIMLIK_DESENI ile AYNI (test çiviler). */
+const G_SET_KIMLIGI_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+
+/**
+ * Claim'in G kimliğini doğrular (SAF). Geçersiz alan DÜŞÜRÜLÜR ve sebebi döner — paketleme
+ * durmaz, yalnız o pakette G kanalı kurulmaz (packagingService taban/kimlik yoksa enjekte etmez).
+ *  - setKimligi: set-kimligi deseni (URL yoluna girer).
+ *  - guncellemeTabani: https (ya da yerel http), kullanıcı bilgisi YOK, `.invalid` yer tutucu DEĞİL.
+ *  - surum: G3 (`2.<panel>.<sayaç>`) — istemcinin monoton tabanına girer.
+ * @returns {{kimlik: {setKimligi:string|null, guncellemeTabani:string|null, surum:string|null},
+ *            sebepler: string[]}}
+ */
+function pardusGKimligi(job) {
+  const j = job || {};
+  const kimlik = { setKimligi: null, guncellemeTabani: null, surum: null };
+  const sebepler = [];
+  const ham = (v) => (v == null ? '' : String(v).trim());
+
+  const s = ham(j.setKimligi);
+  if (!s) sebepler.push('set-kimligi-yok');
+  else if (!G_SET_KIMLIGI_RE.test(s)) sebepler.push('set-kimligi-gecersiz');
+  else kimlik.setKimligi = s;
+
+  const t = ham(j.guncellemeTabani).replace(/\/+$/, '');
+  if (!t) sebepler.push('taban-yok');
+  else {
+    let u = null;
+    try { u = new URL(t); } catch (e) { u = null; }
+    const guvenli = require('../runtime/kitap-guncelleyici').adresGuvenliMi(t);
+    if (!u || !guvenli || /\s/.test(t)) sebepler.push('taban-gecersiz');
+    else if (u.username || u.password) sebepler.push('taban-kimlik-bilgisi-tasiyor');
+    else if (/\.invalid$/i.test(u.hostname)) sebepler.push('taban-yer-tutucu');
+    else kimlik.guncellemeTabani = t;
+  }
+
+  const v = ham(j.surum);
+  if (!v) sebepler.push('surum-yok');
+  else if (!require('../runtime/kitap-guncelleyici').gSurumCoz(v)) sebepler.push('surum-gecersiz');
+  else kimlik.surum = v;
+
+  return { kimlik, sebepler };
+}
+
 module.exports = {
+  pardusBetikEnv,
+  pardusGKimligi,
+  PARDUS_G_ENV,
   pauseRequested,
   etkinYetenekler,
   srcVersionTuret,

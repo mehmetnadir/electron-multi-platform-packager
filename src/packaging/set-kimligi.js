@@ -201,7 +201,8 @@ function haritaUret(g = {}) {
   // Dışarıdan gelen ek sebep (örn. API katmanının attığı geçersiz taban notu)
   // kimlik sebebiyle BİRLEŞTİRİLİR — biri diğerini ezmez.
   const imzaCozum = imzaAnahtariCoz(g.imzaAcikAnahtari, g.env || {});
-  const sebepler = [cozum.sebep, g.sebep].filter((s) => typeof s === 'string' && s);
+  const surumCozum = surumCoz(g.surum);
+  const sebepler = [cozum.sebep, g.sebep, surumCozum.sebep].filter((s) => typeof s === 'string' && s);
 
   return {
     sema: SEMA_SURUMU,
@@ -219,7 +220,23 @@ function haritaUret(g = {}) {
     kitapDizinleri: kitaplar,
     imza: imzaCozum.imza,
     imzaSebebi: imzaCozum.sebep,
+    surum: surumCozum.surum,
   };
+}
+
+/**
+ * Paketin G sürümü (claim `surum`, G3 `2.<panel>.<sayaç>`; 2026-09-26). İstemci bunu monoton
+ * kıyasın TABANINA katar: pakette zaten bulunan sürümün (ya da eskisinin) imzalı manifesti
+ * yeniden oynatılamaz. Yoksa `null`; G3 değilse düşürülür + sebep (sessiz değil).
+ * @returns {{surum: string|null, sebep: string|null}}
+ */
+function surumCoz(ham) {
+  if (ham == null || String(ham).trim() === '') return { surum: null, sebep: null };
+  const v = String(ham).trim();
+  if (!require('../runtime/kitap-guncelleyici').gSurumCoz(v)) {
+    return { surum: null, sebep: `istekteki surum G3 değil (${JSON.stringify(v).slice(0, 40)}) — yok sayıldı` };
+  }
+  return { surum: v, sebep: null };
 }
 
 /**
@@ -293,7 +310,7 @@ async function kitapDizinleriBul(paketKoku) {
 async function paketeYaz(paketKoku, secenekler = {}) {
   const {
     log = () => {}, setKimligi, guncellemeTabani = null, env = process.env, damga, sebep,
-    imzaAcikAnahtari = null,
+    imzaAcikAnahtari = null, surum = null,
   } = secenekler;
 
   const kabukListesi = await kabukDosyalariBul(paketKoku);
@@ -309,6 +326,7 @@ async function paketeYaz(paketKoku, secenekler = {}) {
     kapsamDisiDallar: kapsamDisi,
     imzaAcikAnahtari,
     env,
+    surum,
   });
 
   await fs.writeFile(
@@ -329,6 +347,6 @@ module.exports = {
   KABUK: kabuk, KABUK_DIZINLERI: kabuk.KABUK_DIZINLERI, KABUK_IMZASI: kabuk.IMZA,
   KITAP_DIZIN_DESENI, KIMLIK_DESENI,
   acikMi, kimlikGecerliMi, setKimligiCoz, tabanCoz, yolNormalle,
-  kabukDosyalariTopla, kitapDizinleriTopla, damgaCoz, haritaUret, imzaAnahtariCoz,
+  kabukDosyalariTopla, kitapDizinleriTopla, damgaCoz, haritaUret, imzaAnahtariCoz, surumCoz,
   kabukDosyalariBul, kapsamDisiDallariBul, kitapDizinleriBul, paketeYaz,
 };

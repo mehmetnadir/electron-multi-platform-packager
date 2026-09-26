@@ -23,7 +23,15 @@
   var COPY = ['copyFile', 'copyFileSync']; // kaynak okuma, hedef WORK
   var OPEN = ['open', 'openSync']; // flag'e göre
 
-  function makeResolver(pathMod, realFs, WORK, BASE) {
+  /**
+   * ORTU (2026-09-26, G örtüsü — mac/Pardus): ana süreç G örtüsünü kurduysa (env
+   * EMPP_G_ORTU_KOKU_ETKIN) paketteki G modülünden OKUYUCU alınır: paket yolu → imzalı örtü nesnesi.
+   * YALNIZ OKUMA: WORK'te olmayan dosya paketten önce örtüde aranır; yazma yolu değişmez.
+   * Ölçüm: kitap okuyucusu BookContent.xml / kapak / imKeys.dll'i renderer'da fs ile okur — G ile
+   * EKLENEN kitap pakette yok, file: zinciri bu okumaları görmez. Örtü yoksa (Windows, eski paket,
+   * env yok) ORTU = null ve davranış BİREBİR eskisi.
+   */
+  function makeResolver(pathMod, realFs, WORK, BASE, ORTU) {
     function rel(p) {
       if (typeof p !== 'string' || !p) return null;
       if (/^file:/i.test(p)) return null;
@@ -53,13 +61,22 @@
       var r = rel(p); if (r == null) return p;
       var w = pathMod.join(WORK, r);
       try { if (realFs.existsSync(w)) return w; } catch (e) {}
-      return pathMod.join(BASE, r);
+      var b = pathMod.join(BASE, r);
+      if (ORTU) { try { var o = ORTU.yol(b); if (o) return o; } catch (e) {} }
+      return b;
     }
     return { rel: rel, toWork: toWork, toRead: toRead };
   }
 
-  function createShim(realFs, pathMod, WORK, BASE) {
-    var R = makeResolver(pathMod, realFs, WORK, BASE);
+  function createShim(realFs, pathMod, WORK, BASE, ORTU) {
+    var R = makeResolver(pathMod, realFs, WORK, BASE, ORTU);
+    /** Örtünün getirdiği adı (Dirent isteniyorsa) dizin/dosya bilgisiyle sanal girdiye çevirir. */
+    function sanal(ad, L, opts) {
+      if (!(opts && typeof opts === 'object' && opts.withFileTypes)) return ad;
+      var dz = !!(L && L.dizinMi(ad));
+      return { name: ad, isFile: function () { return !dz; }, isDirectory: function () { return dz; },
+        isSymbolicLink: function () { return false; } };
+    }
     var shim = {};
     Object.keys(realFs).forEach(function (k) {
       var v = realFs[k];
@@ -70,13 +87,31 @@
       else if (OPEN.indexOf(k) !== -1) shim[k] = function () { var a = Array.prototype.slice.call(arguments); var f = String(a[1] || 'r'); a[0] = /[wa+]/.test(f) ? R.toWork(a[0]) : R.toRead(a[0]); return v.apply(realFs, a); };
       else if (k === 'readdirSync') shim[k] = function (p, opts) {
         // Dizin listesi: work + paket BİRLEŞİMİ (yalnız work'e bakınca paket içerikleri kayboluyordu)
-        var r = R.rel(p); if (r == null) return v.call(realFs, p, opts);
+        var r = R.rel(p);
+        // Örtü varken sayfanın KENDİ dizini (BASE) de birleşik listelenir (eklenen/gizli kitaplar).
+        if (r == null && ORTU && typeof p === 'string' && pathMod.resolve(p) === pathMod.resolve(BASE)) r = '';
+        if (r == null) return v.call(realFs, p, opts);
         var seen = {}, out = [];
-        [pathMod.join(WORK, r), pathMod.join(BASE, r)].forEach(function (d) {
-          var list = []; try { list = v.call(realFs, d, opts); } catch (e) {}
+        var ekle = function (list) {
           list.forEach(function (ent) { var name = typeof ent === 'string' ? ent : ent.name; if (!seen[name]) { seen[name] = 1; out.push(ent); } });
-        });
-        if (!out.length) return v.call(realFs, pathMod.join(BASE, r), opts); // ENOENT'i gerçek fs fırlatsın
+        };
+        var oku = function (d) { try { return v.call(realFs, d, opts); } catch (e) { return []; } };
+        ekle(oku(pathMod.join(WORK, r)));
+        var bYol = pathMod.join(BASE, r);
+        var L = null;
+        if (ORTU) { try { L = ORTU.liste(bYol); } catch (e) { L = null; } }
+        if (L && L.tam) {
+          // G ile eklenen kitabın dizini: listesi TAMAMEN örtüden (pakette yok).
+          ekle(L.adlar.map(function (ad) { return sanal(ad, L, opts); }));
+          return out;
+        }
+        var taban = oku(bYol);
+        if (L && L.cikar.length) {
+          taban = taban.filter(function (ent) { var n = String(typeof ent === 'string' ? ent : ent.name).toLowerCase(); return L.cikar.indexOf(n) === -1; });
+        }
+        ekle(taban);
+        if (L) ekle(L.adlar.map(function (ad) { return sanal(ad, L, opts); }));
+        if (!out.length) return v.call(realFs, bYol, opts); // ENOENT'i gerçek fs fırlatsın
         return out;
       };
       else if (k === 'readdir') shim[k] = function (p, opts, cb) {
@@ -91,11 +126,16 @@
         var v = P[k]; if (typeof v !== 'function') { sp[k] = v; return; }
         if (WRITE_ALL.indexOf(k) !== -1) sp[k] = function () { var a = Array.prototype.slice.call(arguments); a[0] = R.toWork(a[0]); return v.apply(P, a); };
         else if (WRITE_TWO.indexOf(k) !== -1 || COPY.indexOf(k) !== -1) sp[k] = function () { var a = Array.prototype.slice.call(arguments); a[0] = R.toRead(a[0]); a[1] = R.toWork(a[1]); return v.apply(P, a); };
+        else if (k === 'readdir' && ORTU) sp[k] = function (p, opts) {
+          // Örtü varken promises.readdir de birleşik listeyi verir (tek dizine toRead eklenen
+          // kitapta nesne deposunu listelerdi).
+          return new Promise(function (coz, red) { try { coz(shim.readdirSync(p, opts)); } catch (e) { red(e); } });
+        };
         else sp[k] = function () { var a = Array.prototype.slice.call(arguments); if (typeof a[0] === 'string') a[0] = R.toRead(a[0]); return v.apply(P, a); };
       });
       shim.promises = sp;
     }
-    shim.__empp = { WORK: WORK, BASE: BASE };
+    shim.__empp = { WORK: WORK, BASE: BASE, ORTU: ORTU || null };
     return shim;
   }
 
@@ -164,6 +204,26 @@
     }
   }
 
+  /**
+   * G örtüsü okuyucusu (renderer). Ana süreç kurmadıysa (env yok) ya da G modülü pakette yoksa null.
+   * Ana sürecin yüklediği SÜRÜMLE aynı değilse de null (oturum ortasında uygulanan güncelleme).
+   */
+  function ortuOkuyucu(realRequire, realFs, pathMod, proc, kok) {
+    try {
+      var env = (proc && proc.env) || {};
+      var ortuKoku = env.EMPP_G_ORTU_KOKU_ETKIN;
+      if (!ortuKoku) return null;
+      var modul = pathMod.join(kok, 'empp-set-guncelleyici.js');
+      if (!realFs.existsSync(modul)) return null;
+      var g = realRequire(modul);
+      if (!g || typeof g.ortuFsOkuyucu !== 'function') return null;
+      return g.ortuFsOkuyucu({ kok: kok, ortuKoku: ortuKoku, surum: env.EMPP_G_ORTU_SURUM_ETKIN || '', fsSenkron: realFs });
+    } catch (e) {
+      try { console.warn('[empp-fs-shim] G örtüsü okuyucusu kurulamadı:', e && e.message); } catch (_) {}
+      return null;
+    }
+  }
+
   function kokBul(pathMod, BASE, subBook) {
     return subBook ? pathMod.resolve(BASE, subBook.split('/').map(function () { return '..'; }).join('/')) : BASE;
   }
@@ -199,12 +259,14 @@
       // ayni (regresyon yok, `fs-shim-subbook.test.js`'te test edilir).
       var subBook = (typeof win.__emppSubBook === 'string' && win.__emppSubBook) ? win.__emppSubBook : '';
       var WORK = subBook ? pathMod.join(WORK_ROOT, subBook) : WORK_ROOT;
-      var shim = createShim(realFs, pathMod, WORK, BASE);
+      var kok = kokBul(pathMod, BASE, subBook);
+      var ORTU = ortuOkuyucu(realRequire, realFs, pathMod, proc, kok);
+      var shim = createShim(realFs, pathMod, WORK, BASE, ORTU);
       win.require = function (name) { return name === 'fs' ? shim : realRequire.apply(this, arguments); };
       installFetch(win, realFs, pathMod, WORK, BASE);
       Object.keys(realRequire).forEach(function (k) { try { win.require[k] = realRequire[k]; } catch (e) {} });
       win.__emppFsShim = shim;
-      icerikKancasi(win, realRequire, realFs, pathMod, makeResolver(pathMod, realFs, WORK, BASE), WORK, kokBul(pathMod, BASE, subBook));
+      icerikKancasi(win, realRequire, realFs, pathMod, makeResolver(pathMod, realFs, WORK, BASE, ORTU), WORK, kok);
       return shim;
     } catch (e) {
       try { console.warn('[empp-fs-shim] kurulamadı:', e && e.message); } catch (_) {}
@@ -212,6 +274,6 @@
     }
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl, icerikKancasi, kokBul };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl, icerikKancasi, kokBul, ortuOkuyucu };
   if (isRenderer) install(window);
 })();
