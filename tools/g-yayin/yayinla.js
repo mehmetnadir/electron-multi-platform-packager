@@ -7,7 +7,9 @@
  * R2'ye YAZMAZ; çıktı R2 anahtar düzenini birebir yansıtan yerel bir dizindir.
  *
  * Kapsam (Nadir 26.09): kök `index.html`, set bileşimi (kitap ekle/çıkar), her kitabın
- * `bookN/43e23fce2b7009474555a77.js` motoru. Sözleşmeler: `windows-paketleme-sozlesmesi.md`
+ * `bookN/43e23fce2b7009474555a77.js` motoru. Set bileşimi MENÜYÜ de kapsar: `--ekle`/`--cikar`
+ * kurulu paketin menü dosyalarını tutarlı günceller (`menu.js`; taban `--menu-taban` ya da önceki
+ * G durumu); menü biçimi tanınmazsa yayın RED. Sözleşmeler: `windows-paketleme-sozlesmesi.md`
  * G3/G4, `platform-kanallari-sozlesmesi.md` O3/O4, tasarım `g-yayin-r2-yol-tasarimi.md`.
  *
  *   Sürüm   `2.<panel>.<sayaç>`, bilinen her önceki sürümden KESİN büyük (g-surum.js).
@@ -36,6 +38,7 @@ const gSurum = require('./g-surum');
 const anahtar = require('./anahtar');
 const zip = require('./zip-yaz');
 const durum = require('./durum');
+const menu = require('./menu');
 // Paketleyicinin alt-kitap fs-shim enjeksiyonu — TEK KAYNAK (bağımlılıksız saf modül).
 const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
 
@@ -143,6 +146,8 @@ function argsAyristir(argv) {
     motorlar: {},
     ekle: {},
     cikar: [],
+    menuTaban: null,
+    baslik: {},
     anahtarZinciri: false,
     anahtarDosya: null,
     acikAnahtar: null,
@@ -183,7 +188,11 @@ function argsAyristir(argv) {
           .map((s) => s.trim())
           .filter(Boolean),
       );
-    else if (b === '--anahtar-zinciri') a.anahtarZinciri = true;
+    else if (b === '--menu-taban') a.menuTaban = deger();
+    else if (b === '--baslik') {
+      const [k, v] = ciftAyir(deger(), b);
+      a.baslik[k] = v;
+    } else if (b === '--anahtar-zinciri') a.anahtarZinciri = true;
     else if (b === '--anahtar-dosya') {
       const d = liste[i + 1];
       if (d !== undefined && !d.startsWith('--')) {
@@ -339,9 +348,16 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   fs.mkdirSync(geciciDizin, { recursive: true });
   const gecici = path.join(geciciDizin, `${dizin}-${process.pid}-${Date.now()}.zip`);
   let fsShim = 'index-yok';
+  // Menü girdisi için (menu.kitapBilgisi): kitap kimliği başına BookContent.xml'in ilk 8 KB'ı.
+  const xmlBaslari = {};
+  const xmlBasiAl = (yol, veriAl) => {
+    const m = menu.BOOKCONTENT_RE.exec(yol);
+    if (m && !(m[1] in xmlBaslari)) xmlBaslari[m[1]] = veriAl().subarray(0, 8192).toString('utf8');
+  };
   if (st.isDirectory()) {
     const girdiler = zip.dizindenGirdiler(y);
     if (!girdiler.length) throw new Error(`--ekle ${dizin}: dizin boş: ${y}`);
+    for (const g of girdiler) xmlBasiAl(g.yol, () => fs.readFileSync(g.tam));
     const idx = girdiler.find((g) => g.yol === KITAP_INDEX);
     if (idx) {
       const sonuc = fsShimUygula(dizin, fs.readFileSync(idx.tam));
@@ -355,6 +371,7 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
     // paketleme denetimsiz yazıcıyı kullanır, kötü girdiyi temize çekmemeli.
     zip.zipIcerigi(gecici);
     const girdiler = kg.arsivCozVarsayilan(fs.readFileSync(gecici));
+    for (const g of girdiler) xmlBasiAl(g.yol.replace(/\\/g, '/'), () => g.veri);
     const idx = girdiler.find((g) => g.yol.replace(/\\/g, '/') === KITAP_INDEX);
     if (idx) {
       const sonuc = fsShimUygula(dizin, idx.veri);
@@ -375,7 +392,106 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   // Enjeksiyon SONRASI son arşivden türetilir: liste ile arşiv baytı birebir tutar.
   const dosyalar = zip.zipIcerigi(gecici);
   const oz = dosyaSha256(gecici);
-  return { gecici, sha256: oz.sha256, boyut: oz.boyut, adet: dosyalar.length, dosyalar, fsShim };
+  return {
+    gecici,
+    sha256: oz.sha256,
+    boyut: oz.boyut,
+    adet: dosyalar.length,
+    dosyalar,
+    fsShim,
+    menuKaynak: { yollar: dosyalar.map((g) => g.yol), xmlBaslari },
+  };
+}
+
+/**
+ * Önceki imzalı G durumundaki bir kabuk dosyasının BAYTLARI: önce bu çıktı dizinindeki kopya,
+ * yoksa/tutmuyorsa canlı uç (`<taban>/set/<id>/dosya/<yol>`); ikisinde de imzalı sha256+boyut
+ * şart (menü tabanı kurcalanmış bir kopyadan kurulmaz).
+ */
+async function oncekiKabukVerisi(g, { setDizini, taban, setKimligi, getir }) {
+  const yerel = path.join(setDizini, 'dosya', ...g.yol.split('/'));
+  if (fs.existsSync(yerel)) {
+    const v = fs.readFileSync(yerel);
+    if (v.length === g.boyut && sha256(v) === g.sha256) return v;
+  }
+  const yol = g.yol.split('/').map(encodeURIComponent).join('/');
+  const adres = `${taban}/set/${encodeURIComponent(setKimligi)}/dosya/${yol}`;
+  const al =
+    typeof getir === 'function' ? getir : (u) => kg.varsayilanGetir(u, { zamanAsimi: 30000 });
+  let y = null;
+  try {
+    y = await al(adres);
+  } catch (e) {
+    y = null;
+  }
+  if (y && y.durum === 200) {
+    const v = Buffer.from(y.govde);
+    if (v.length === g.boyut && sha256(v) === g.sha256) return v;
+    throw new Error(`önceki G menü dosyası imzalı sha256 ile tutmuyor: ${adres}`);
+  }
+  throw new Error(
+    'önceki G menü dosyası bulunamadı (yerel kopya yok/tutmuyor, uç HTTP ' +
+      `${y ? y.durum : 'hata'}): ${g.yol}`,
+  );
+}
+
+/**
+ * Kurulu menünün bilinen hâli (`menu.TABAN_YOLLARI`). Kaynak sırası dosya başına:
+ * `--index` (yalnız index.html) > önceki imzalı G durumu > `--menu-taban <paketlenmiş SET kökü>`.
+ * `--menu-taban`'da `empp-set.json` varsa set kimliği bu yayınınkiyle aynı olmalı.
+ */
+async function menuTabanlariTopla(girdi) {
+  const { menuTaban, onceki, setDizini, taban, setKimligi, indexVeri, getir } = girdi;
+  const tabanlar = new Map();
+  const kaynaklar = {};
+  const oncekiKabuk = new Map(((onceki && onceki.kabuk) || []).map((g) => [g.yol, g]));
+  let dizin = null;
+  if (menuTaban) {
+    dizin = path.resolve(String(menuTaban));
+    let st;
+    try {
+      st = fs.statSync(dizin);
+    } catch (e) {
+      throw new Error(`--menu-taban bulunamadı: ${dizin}`);
+    }
+    if (!st.isDirectory()) throw new Error(`--menu-taban dizin değil: ${dizin}`);
+    const envanter = path.join(dizin, 'empp-set.json');
+    if (fs.existsSync(envanter)) {
+      let e;
+      try {
+        e = JSON.parse(fs.readFileSync(envanter, 'utf8'));
+      } catch (h) {
+        throw new Error(`--menu-taban: empp-set.json okunamadı: ${envanter}`);
+      }
+      if (e && e.setKimligi != null && String(e.setKimligi) !== setKimligi) {
+        throw new Error(
+          '--menu-taban başka setin paketi ' +
+            `(empp-set.json setKimligi ${e.setKimligi} ≠ ${setKimligi})`,
+        );
+      }
+    }
+  }
+  const kaydet = (yol, veri, kaynak) => {
+    tabanlar.set(yol, veri);
+    kaynaklar[yol] = { kaynak, sha256: sha256(veri) };
+  };
+  for (const yol of menu.TABAN_YOLLARI) {
+    if (yol === durum.INDEX_YOLU && indexVeri) {
+      kaydet(yol, indexVeri, '--index');
+      continue;
+    }
+    const g = oncekiKabuk.get(yol);
+    if (g) {
+      kaydet(yol, await oncekiKabukVerisi(g, { setDizini, taban, setKimligi, getir }), 'onceki-G');
+      continue;
+    }
+    if (!dizin) continue;
+    const y = path.join(dizin, ...yol.split('/'));
+    if (fs.existsSync(y) && fs.statSync(y).isFile()) {
+      kaydet(yol, fs.readFileSync(y), '--menu-taban');
+    }
+  }
+  return { tabanlar, kaynaklar };
 }
 
 function kitapAdi(dizin, sha) {
@@ -471,6 +587,49 @@ async function yayinla(a, ops = {}) {
     const kaynak = `${taban}/set/${encodeURIComponent(setKimligi)}/kitap/${ad}`;
     arsivler.set(d, { ...ar, ad, kaynak });
     degisiklik.ekle[d] = { kaynak, sha256: ar.sha256, boyut: ar.boyut, dosyalar: ar.dosyalar };
+  }
+
+  // 4b) Menü: `--ekle`/`--cikar` kurulu paketin menüsüne yansır (menu.js) — biçim tanınmazsa,
+  //     taban yoksa ya da eklenen kitabın menü girdisi kurulamıyorsa yayın RED (sessiz geçiş yok).
+  const basliklar = a.baslik || {};
+  for (const d of Object.keys(basliklar)) {
+    if (!(d in (a.ekle || {})))
+      throw new Error(`--baslik ${d}: yalnız --ekle edilen kitaba verilir`);
+  }
+  let menuRaporu = null;
+  if (Object.keys(degisiklik.ekle).length || degisiklik.cikar.length) {
+    const t = await menuTabanlariTopla({
+      menuTaban: a.menuTaban,
+      onceki,
+      setDizini,
+      taban,
+      setKimligi,
+      indexVeri: yazilacakKabuk.get(durum.INDEX_YOLU) || null,
+      getir: ops.getir,
+    });
+    const bilgiler = {};
+    for (const [d, ar] of arsivler) {
+      const mk = ar.menuKaynak;
+      bilgiler[d] = menu.kitapBilgisi(d, mk.yollar, mk.xmlBaslari, basliklar[d]);
+    }
+    const m = menu.menuGuncelle({ tabanlar: t.tabanlar, ekle: bilgiler, cikar: degisiklik.cikar });
+    for (const [yol, v] of m.dosyalar) {
+      yazilacakKabuk.set(yol, v);
+      const oz = { sha256: sha256(v), boyut: v.length };
+      if (yol === durum.INDEX_YOLU) degisiklik.index = oz;
+      else (degisiklik.menu = degisiklik.menu || {})[yol] = oz;
+    }
+    for (const [d, b] of Object.entries(bilgiler)) {
+      if (!b.ad) {
+        gunluk(`[uyari] --ekle ${d}: kitap adı yok (--baslik, BookContent.xml) — varsayılan ad`);
+      }
+    }
+    menuRaporu = {
+      bicim: m.bicim,
+      kitaplar: m.kitaplar,
+      degisen: [...m.dosyalar.keys()].sort(),
+      tabanlar: t.kaynaklar,
+    };
   }
 
   // 5) Yeni tam durum.
@@ -588,6 +747,8 @@ async function yayinla(a, ops = {}) {
     degisenKitap: yeni.ozet.degisenKitap,
     /** Eklenen kitap → fs-shim sonucu ('enjekte' | 'zaten-var' | 'index-yok'). */
     fsShim: Object.fromEntries([...arsivler].map(([d, ar]) => [d, ar.fsShim])),
+    /** `--ekle`/`--cikar`'ın menüye yansıması: biçim, kitap sonuçları, değişenler, tabanlar. */
+    menu: menuRaporu,
     yerelEksik: denetim.yerelEksik,
     cikti: setDizini,
     plan: null,

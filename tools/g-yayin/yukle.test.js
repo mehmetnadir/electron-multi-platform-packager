@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const yk = require('./yukle');
 const y = require('./yayinla');
 const anahtar = require('./anahtar');
+const { MENU_ISARETI } = require('../../src/packaging/set-menu-bicim');
 
 const HEDEF = yk.YUKLEME_BEYAZ_LISTE['74390'];
 
@@ -129,7 +130,11 @@ async function yayinlaOrnek(o) {
       ilk: true,
       oncekiSurum: '2.7.1',
       panel: 7,
-      index: o.yaz('i.html', '<!doctype html><html><body>v2</body></html>'),
+      // Kök menü K17 sade biçiminde: `--ekle` menüye yansır (menu.js), tanınmayan kök RED.
+      index: o.yaz(
+        'i.html',
+        `${MENU_ISARETI}\n<!doctype html><html><body>\n  <main>\n  </main>\n</body></html>\n`,
+      ),
       motorlar: { book1: o.yaz('m.js', 'motor') },
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
       cikar: [],

@@ -26,7 +26,18 @@ const SENARYOLAR = [
     zorunlu: true,
     not:
       '2.90.1 → 2.90.3 (2.90.2 atlanır): index v3, book1+book2 motor v2, book4 eklenir, ' +
-      'book3 çıkar',
+      'book3 çıkar; Web-Z menüsü (yama + settings.json + set-menu.json) book4 gösterir, ' +
+      'book3 göstermez',
+  },
+  {
+    ad: 'menu-k17',
+    beklenen: 'guncellendi',
+    zorunlu: true,
+    kurulu: 'kurulu-k17',
+    beklenenDosyasi: 'beklenen-menu-k17.json',
+    not:
+      'K17 (paketleyici) kök menülü paket 2.90.1 → 2.90.2: book4 eklenir (index.html kartı), ' +
+      'book3 çıkar (kartı kalkar)',
   },
   {
     ad: 'imza-bozuk',

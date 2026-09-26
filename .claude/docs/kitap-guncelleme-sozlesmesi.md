@@ -217,6 +217,7 @@ set bileşimi (kitap ekle/çıkar) ve `bookN/43e23fce2b7009474555a77.js`. Yayın
 node tools/g-yayin/yayinla.js --set-kimligi <id> --taban <https taban> --cikti <dizin> \
   --panel <kod|ad> [--surum 2.p.s] [--onceki-surum 2.p.s] [--onceki-manifest <yol|https>] [--ilk] \
   [--index <html>] [--motor bookN=<js>]... [--ekle bookN=<zip|dizin>]... [--cikar bookN[,bookM]] \
+  [--menu-taban <paketlenmiş SET kökü>] [--baslik bookN=<ad>]... \
   (--anahtar-zinciri | --anahtar-dosya [yol])
 node tools/g-yayin/yayinla.js dogrula (--cikti <dizin> | --uzak <taban>) --set-kimligi <id> [--surum 2.p.s] [--arsivler]
 node tools/g-yayin/yayinla.js kuru-imza        # yalnız GEÇTİ/KALDI
@@ -230,6 +231,8 @@ node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → can
 - **Anahtar:** `--anahtar-zinciri` üretim anahtarını Anahtar Zinciri borusundan okur ve `31b8663b…2cf6` ile eşleşmesini ister. `--anahtar-dosya` yalnız TEST içindir; dosyada üretim anahtarı bulunursa araç reddeder.
 - R2 düzeni, yükleme sırası ve açık kararlar `g-yayin-r2-yol-tasarimi.md`'de. İstemci kuralları ve yerel HTTPS koşumu `tools/g-uctan-uca/README.md`'de.
 - **`ekle` içi imzalı dosya listesi (26.09):** her `kitaplar[]` `durum:"ekle"` girdisi artık isteğe bağlı `dosyalar:[{yol,sha256,boyut}]` taşıyabilir (arşivin İSTEMCİ okuyucusuyla türetilmiş birebir dökümü, yol kaçışı RED, alan yoksa eski istemci/eski manifest değişmeden çalışır) — amaç istemcinin arşivi AÇMADAN bu imzalı listeyle doğrulayabilmesi (mac/Pardus örtü kipindeki "açılışta yeniden doğrula → diskte ×2 yer" sorununu önler); `yayinla.js`'in `dogrula` (yerel ve `--uzak`) alt komutu listeyi arşivle kıyaslayıp uyuşmazsa RED verir.
+- **Menü (26.09, dal `g-yayin-menu`):** `--ekle`/`--cikar` menüyü de günceller; değişen menü dosyası imzalı `kabuk[]`'a girer (sha256+boyut, örtüde içerik-adresli nesne — `kitaplar[].dosyalar[]` kitaba göreli olduğu için orada DEĞİL). İki biçim: **Web-Z** → `scripts/cevrimdisi-yama.js` (`window.__setSettings`; `file://` altında kartların tek kaynağı) + `config/settings.json` + varsa `set-menu.json` birlikte (yama ile settings ayrışmışsa RED); **K17** → kök `index.html` kartı, paketleyici satırının baytı. Başka biçim ya da taban yoksa yayın RED; zaten var/yok → bayt değişmez.
+  - Taban: `--index` > önceki imzalı G durumu (yerel `dosya/`, yoksa uç; imzalı sha256 şart) > `--menu-taban` (`empp-set.json` set kimliği aynı olmalı). Girdi: ad `--baslik` > arşivin `BookContent.xml` `pdfUrl` adı > menüdeki ad > "Kitap N"; assetId arşivde `BookContent.xml` taşıyan TEK `assets/<id>/` (Web-Z'de zorunlu, tema kimliksiz kartı eler); kapak o dizinin `thumbs/1.jpg`'i (Web-Z'de yoksa RED).
 - **Eklenen kitaba fs-shim (26.09, dal `g-yayin-shim`):** `kitapArsiviHazirla` eklenen kitabın kök `index.html`'ine
   paketleyicinin alt-kitap etiketlerini (`window.__emppSubBook="bookN"` + `../empp-fs-shim.js`) koyar — tek kaynak
   `src/packaging/fs-shim-subbook-html.js` (paketleyici `injectFsShimIntoSubBooks` de onu çağırır). Arşiv ve imzalı

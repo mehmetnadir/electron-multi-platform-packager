@@ -36,9 +36,12 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { findSubBookDirs } = require('./sub-book-dirs');
+// Biçim kuralları (imza, kart satırı, kapak adayları, ad çıkarma) TEK KAYNAKTA: G yayın aracı
+// (`tools/g-yayin/menu.js`) `--ekle`/`--cikar`'ı kurulu menüye yansıtırken aynısını kullanır.
+const bicim = require('./set-menu-bicim');
 
 // Üretilen sayfanın imzası — idempotentlik ve testler bunu arar.
-const MENU_ISARETI = '<!-- empp-set-menu v1 -->';
+const { MENU_ISARETI, kacis, webZKabukIndexiMi } = bicim;
 const YEDEK_AD = 'index-motor.yedek.html';
 
 /** Kök index.html motorun tek-kitap sayfasının kopyası mı? */
@@ -64,11 +67,6 @@ async function webZKabuguVarMi(rootPath) {
     && (await fs.pathExists(path.join(rootPath, 'scripts', 'language-set.js')));
 }
 
-/** Kök index.html masaüstünün ürettiği Web-Z kabuğu mu? */
-function webZKabukIndexiMi(html) {
-  return typeof html === 'string' && html.includes('scripts/language-set.js');
-}
-
 /** Kitabın kendi kapak küçük görselini bul (assets/<id>/thumbs/1.jpg). */
 async function kapakYolu(rootPath, bookDir) {
   const assetsDir = path.join(rootPath, bookDir, 'assets');
@@ -81,9 +79,8 @@ async function kapakYolu(rootPath, bookDir) {
     return null;
   }
   for (const id of ids) {
-    for (const aday of [path.join('thumbs', '1.jpg'), path.join('thumbs', '1.png'),
-      path.join('pages', '1.png'), path.join('pages', '1.jpg')]) {
-      if (await fs.pathExists(path.join(assetsDir, id, aday))) {
+    for (const aday of bicim.KAPAK_ADAYLARI) {
+      if (await fs.pathExists(path.join(assetsDir, id, ...aday.split('/')))) {
         return [bookDir, 'assets', id, aday].join('/').replace(/\\/g, '/');
       }
     }
@@ -120,15 +117,10 @@ async function kitapAdiCikar(rootPath, bookDir) {
     } catch (e) {
       continue;
     }
-    const m = /pdfUrl="[^"]*?\/?([^"/]+)\.pdf"/i.exec(bas);
-    if (!m) continue;
-    const ad = m[1].replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-    // YDS PDF'leri sayısal adlı (pdf/15792.pdf) — bu bir kitap ADI değil, kimlik.
-    // Kimliği ad diye basmak 73768'de kartlara "15792" yazdırdı (2026-09-24).
-    if (!ad || /^[\d\s]+$/.test(ad)) continue;
-    return ad.split(' ')
-      .map((k) => (/^\d+$/.test(k) ? k : k.charAt(0) + k.slice(1).toLowerCase()))
-      .join(' ');
+    // YDS PDF'leri sayısal adlı (pdf/15792.pdf) — kimlik, ad değil → null (set-menu-bicim.js).
+    const ad = bicim.kitapAdiBookContenttan(bas);
+    if (!ad) continue;
+    return ad;
   }
   return null;
 }
@@ -142,11 +134,6 @@ async function assets2Varligi(rootPath, bookDir) {
     buton: (await fs.pathExists(buton)) ? `assets2/${bookDir}-button.png` : null,
     kapak: (await fs.pathExists(kapak)) ? `assets2/${bookDir}.png` : null,
   };
-}
-
-function kacis(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /** Yayıncı tasarımlı menü (assets2 mevcut) — Flashy'deki çalışan iskeletin aynısı. */
@@ -192,13 +179,7 @@ ${kapaklar}
 /** Kendi kendine yeten sade menü (assets2 yok) — kapaklar kitabın kendi thumbs'ından. */
 function sadeMenu(kitaplar, opts) {
   const baslik = kacis(opts.appName || 'Akıllı Tahta');
-  const kartlar = kitaplar.map((k, i) => {
-    const gorsel = k.kapak
-      ? `<img src="${kacis(k.kapak)}" alt="${kacis(k.ad)}">`
-      : `<div class="yok">${i + 1}</div>`;
-    return `      <a class="kart" href="${kacis(k.dir)}/index.html">${gorsel}` +
-      `<span>${kacis(k.ad)}</span></a>`;
-  }).join('\n');
+  const kartlar = kitaplar.map((k, i) => bicim.sadeKartHtml(k, i)).join('\n');
   return `${MENU_ISARETI}
 <!DOCTYPE html>
 <html lang="tr">

@@ -6,10 +6,13 @@
  * sayılacak örnek SET ağacını, olumsuz senaryoları ve yerel TLS sertifikasını üretir.
  *
  *   <dizin>/kurulu/        paket 2.90.1'in kurulu ağacı (set 99901; empp-set.json'da TEST
- *                          açık anahtarı)
+ *                          açık anahtarı). Kök menü Web-Z (sf425) biçiminde: kartlar
+ *                          `scripts/cevrimdisi-yama.js` + `config/settings.json` + `set-menu.json`.
+ *   <dizin>/kurulu-k17/    aynı paket, kök menü K17 (paketleyici sade menüsü) — "menu-k17"
  *   <dizin>/kaynak/        yayının girdileri (index v2/v3, motor v2, book4/)
  *   <dizin>/senaryolar/<ad>/set/99901/…   sunucu.js'in servis ettiği ağaçlar
  *   <dizin>/beklenen.json  güncelleme sonrası ağaç (gDosyalari + tabanDosyalari + olmamali)
+ *   <dizin>/beklenen-menu-k17.json  aynısı, "menu-k17" senaryosu için
  *   <dizin>/hazirlik.json  port, taban, senaryolar, TLS ve anahtar bilgisi
  *   <dizin>/tls/           ca.pem, ca.der (istemci güveni), sunucu.pem/.key
  *
@@ -28,6 +31,8 @@ const zip = require('../g-yayin/zip-yaz');
 const yayin = require('../g-yayin/yayinla');
 const { MOTOR_DOSYA_ADI } = require('../g-yayin/durum');
 const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
+const setMenuBicim = require('../../src/packaging/set-menu-bicim');
+const menu = require('../g-yayin/menu');
 const { VARSAYILAN_DIZIN } = require('./sunucu');
 const o = require('./ortak');
 
@@ -50,6 +55,84 @@ function indexHtml(baslik, kitaplar, surum) {
   );
 }
 
+/** Kitap kimliği (assetId) + adı — menü girdileri ve `assets/<id>/` ağacı bunlardan. */
+const KITAPLAR = {
+  book1: { id: '58101', ad: 'Ana Kitap' },
+  book2: { id: '58102', ad: 'Çalışma Kitabı' },
+  book3: { id: '58103', ad: 'Test Kitabı' },
+  book4: { id: '58104', ad: 'G Eklenen Kitap 4' },
+};
+
+/** Web-Z (sf425) kabuğunun kök sayfası — kartları ÇİZMEZ, menü dosyalarından okur. */
+function webzIndex(baslik, surum) {
+  return (
+    '<!doctype html>\n<html lang="tr"><head><meta charset="utf-8">' +
+    `<title>${baslik}</title></head><body data-g-surum="${surum}"><div id="app"></div>\n` +
+    '<script src="scripts/cevrimdisi-yama.js"></script>\n' +
+    '<script src="scripts/language-set.js"></script>\n</body></html>\n'
+  );
+}
+
+/** Web-Z menü dosyaları (Üretim Masası `WebZTemaUretici` biçimi, kısaltılmış). */
+function webzMenuYaz(kok, kitaplar) {
+  const books = {};
+  kitaplar.forEach((d, i) => {
+    books[d] = {
+      assetId: KITAPLAR[d].id,
+      contentType: 'book',
+      coverUrl: `images/${d}.png`,
+      displayOrder: i,
+      title: KITAPLAR[d].ad,
+    };
+  });
+  const ayarlar = { bookCount: kitaplar.length, books, setTitle: 'G Test Seti' };
+  const ayar = JSON.stringify(ayarlar, null, 2);
+  yaz(kok, 'config/settings.json', ayar + '\n');
+  yaz(
+    kok,
+    'scripts/cevrimdisi-yama.js',
+    '/* Üretim Masası — çevrimdışı yaması (G uçtan uca fikstürü). */\n(function () {\n' +
+      `  "use strict";\n  window.__setSettings = ${ayar};\n  window.__cevrimdisi = true;\n})();\n`,
+  );
+  yaz(kok, 'scripts/language-set.js', '/* sf425 teması — fikstürde gövdesiz */\n');
+  yaz(
+    kok,
+    'set-menu.json',
+    JSON.stringify(
+      {
+        kitaplar: kitaplar.map((d) => ({
+          ad: KITAPLAR[d].ad,
+          assetId: KITAPLAR[d].id,
+          klasor: d,
+          grup: '',
+        })),
+        setAdi: 'G Test Seti',
+        tema: 'webZSf425',
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+}
+
+/** K17 (paketleyici `set-menu.js`) sade menüsü — kart satırı tek kaynaktan. */
+function k17Index(baslik, kitaplar) {
+  const kartlar = kitaplar
+    .map((d, i) =>
+      setMenuBicim.sadeKartHtml(
+        { dir: d, ad: KITAPLAR[d].ad, kapak: `${d}/assets/${KITAPLAR[d].id}/thumbs/1.jpg` },
+        i,
+      ),
+    )
+    .join('\n');
+  return (
+    `${setMenuBicim.MENU_ISARETI}\n<!DOCTYPE html>\n<html lang="tr">\n` +
+    '<head><script src="empp-fs-shim.js"></script>\n  <meta charset="utf-8">\n' +
+    `  <title>${baslik}</title>\n</head>\n<body>\n  <header><h1>${baslik}</h1></header>\n` +
+    `  <main>\n${kartlar}\n  </main>\n</body>\n</html>\n`
+  );
+}
+
 function motor(s) {
   return (
     `/* ${MOTOR_DOSYA_ADI} — G uçtan uca sahte motoru */\n` +
@@ -67,6 +150,43 @@ function kitapYaz(kok, dizin, motorSurumu, ekSayfa) {
   yaz(kok, `${dizin}/${MOTOR_DOSYA_ADI}`, motor(motorSurumu));
   yaz(kok, `${dizin}/sayfa/1.txt`, `${dizin} sayfa 1\n`);
   if (ekSayfa) yaz(kok, `${dizin}/sayfa/${ekSayfa}`, `${dizin} ek sayfa\n`);
+  // Gerçek kitap gibi `assets/<kimlik>/`: menü girdisinin kimliği ve kapağı buradan (menu.js).
+  const k = KITAPLAR[dizin];
+  yaz(kok, `${dizin}/assets/${k.id}/data/BookContent.xml`, `<Book pdfUrl="pdf/${k.id}.pdf"/>\n`);
+  yaz(kok, `${dizin}/assets/${k.id}/thumbs/1.jpg`, `${dizin} kapak\n`);
+}
+
+/** Paketin kurulu ağacı (2.90.1): menü, book1-3, package.json, empp-set.json. */
+function kuruluYaz(kok, menuYaz, tabanAdresi, acik) {
+  menuYaz(kok);
+  for (const b of ['book1', 'book2', 'book3']) kitapYaz(kok, b, 'v1');
+  yaz(
+    kok,
+    'package.json',
+    JSON.stringify(
+      { name: 'g-uctan-uca-seti', productName: 'G Uçtan Uca Seti', version: o.PAKET_SURUMU },
+      null,
+      2,
+    ) + '\n',
+  );
+  yaz(
+    kok,
+    kg.VARSAYILAN_SET_ADI,
+    JSON.stringify(
+      {
+        sema: 2,
+        setKimligi: o.SET_KIMLIGI,
+        taban: tabanAdresi,
+        damga: o.PAKET_SURUMU,
+        kabukDosyalari: ['index.html'],
+        kapsamDisiDallar: [],
+        kitapDizinleri: ['book1', 'book2', 'book3'],
+        imza: { alg: kg.IMZA_ALG, acikAnahtar: acik },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
 }
 
 /* ------------------------------------------------------------------ TLS */
@@ -183,10 +303,12 @@ function tlsHazirla(dizin, { yenile = false, openssl = process.env.OPENSSL || 'o
 function nesliKenaraAl(dizin) {
   const adlar = [
     'kurulu',
+    'kurulu-k17',
     'kaynak',
     'senaryolar',
     'calisma',
     'beklenen.json',
+    'beklenen-menu-k17.json',
     'hazirlik.json',
     'son-kosu.json',
   ].filter((a) => fs.existsSync(path.join(dizin, a)));
@@ -240,50 +362,30 @@ async function hazirla(s = {}) {
   const taban = (senaryo) => `https://127.0.0.1:${port}/${senaryo}/guncelleme`;
   const senaryoDizini = (ad) => path.join(dizin, 'senaryolar', ad);
 
-  // 1) Kurulu paket (2.90.1): book1-3, index v1.
+  // 1) Kurulu paket (2.90.1): book1-3, index v1. İki kök menü biçimi: Web-Z (asıl) ve K17.
   const kurulu = path.join(dizin, 'kurulu');
-  yaz(
+  const ilkUc = ['book1', 'book2', 'book3'];
+  kuruluYaz(
     kurulu,
-    'index.html',
-    indexHtml('G Test Seti v1', ['book1', 'book2', 'book3'], o.PAKET_SURUMU),
+    (k) => {
+      yaz(k, 'index.html', webzIndex('G Test Seti v1', o.PAKET_SURUMU));
+      webzMenuYaz(k, ilkUc);
+    },
+    taban('gecerli'),
+    acik,
   );
-  for (const b of ['book1', 'book2', 'book3']) kitapYaz(kurulu, b, 'v1');
-  yaz(
-    kurulu,
-    'package.json',
-    JSON.stringify(
-      { name: 'g-uctan-uca-seti', productName: 'G Uçtan Uca Seti', version: o.PAKET_SURUMU },
-      null,
-      2,
-    ) + '\n',
-  );
-  yaz(
-    kurulu,
-    kg.VARSAYILAN_SET_ADI,
-    JSON.stringify(
-      {
-        sema: 2,
-        setKimligi: o.SET_KIMLIGI,
-        taban: taban('gecerli'),
-        damga: o.PAKET_SURUMU,
-        kabukDosyalari: ['index.html'],
-        kapsamDisiDallar: [],
-        kitapDizinleri: ['book1', 'book2', 'book3'],
-        imza: { alg: kg.IMZA_ALG, acikAnahtar: acik },
-      },
-      null,
-      2,
-    ) + '\n',
+  const kuruluK17 = path.join(dizin, 'kurulu-k17');
+  kuruluYaz(
+    kuruluK17,
+    (k) => yaz(k, 'index.html', k17Index('G Test Seti K17', ilkUc)),
+    taban('menu-k17'),
+    acik,
   );
 
-  // 2) Yayın girdileri.
+  // 2) Yayın girdileri. `--index` Web-Z kabuğudur (kartlar menü dosyalarında).
   const kaynak = path.join(dizin, 'kaynak');
-  yaz(kaynak, 'index-v2.html', indexHtml('G Test Seti v2', ['book1', 'book2', 'book4'], '2.90.2'));
-  yaz(
-    kaynak,
-    'index-v3.html',
-    indexHtml('G Test Seti v3', ['book1', 'book2', 'book4'], o.SON_SURUM),
-  );
+  yaz(kaynak, 'index-v2.html', webzIndex('G Test Seti v2', '2.90.2'));
+  yaz(kaynak, 'index-v3.html', webzIndex('G Test Seti v3', o.SON_SURUM));
   yaz(kaynak, 'index-eski.html', indexHtml('G Test Seti ESKİ (geri alma)', ['book1'], '2.90.0'));
   yaz(kaynak, 'index-baska.html', indexHtml('BAŞKA SET 99902', ['book9'], '2.90.5'));
   yaz(kaynak, 'motor-v2.js', motor('v2'));
@@ -310,6 +412,8 @@ async function hazirla(s = {}) {
       panel: o.PANEL,
       index: k('index-v2.html'),
       motorlar: { book2: k('motor-v2.js') },
+      // Kurulu menünün tabanı paketin kendisi: book4 menüye girer, book3 kalkar (menu.js).
+      menuTaban: kurulu,
       ekle: { book4: k('book4') },
       cikar: ['book3'],
     }),
@@ -350,6 +454,7 @@ async function hazirla(s = {}) {
       oncekiSurum: o.PAKET_SURUMU,
       panel: o.PANEL,
       index: k('index-v2.html'),
+      menuTaban: kurulu,
       ekle: { book4: k('book4') },
       cikar: ['book3'],
     }),
@@ -426,6 +531,21 @@ async function hazirla(s = {}) {
     { recursive: true },
   );
 
+  // 4a) menu-k17 — K17 (paketleyici) kök menülü pakette aynı üyelik değişikliği (index yok:
+  //     kartlar index.html'dedir, G onu düzenler).
+  const rK17 = await yayin.yayinla(
+    ortak('menu-k17', {
+      ilk: true,
+      oncekiSurum: o.PAKET_SURUMU,
+      panel: o.PANEL,
+      menuTaban: kuruluK17,
+      ekle: { book4: k('book4') },
+      cikar: ['book3'],
+    }),
+    { gunluk },
+  );
+  if (rK17.menu.bicim !== 'k17') throw new Error(`menu-k17 biçimi: ${rK17.menu.bicim}`);
+
   // 4b) Yalan tetik: imzasız surum.json istemciyi manifeste kadar götürür; ret İMZALI manifestin
   //     kimlik/sürüm denetiminden gelmeli (yalnız surum.json'a bakan istemci burada düşer).
   for (const [kaynakAd, hedefAd] of [['geri-alma', 'geri-alma-tetik'], ['baska-set', 'baska-set-tetik']]) {
@@ -453,22 +573,58 @@ async function hazirla(s = {}) {
   gDosyalari['book4/index.html'] = o.sha256(
     Buffer.from(fsShimHtml.injectFsShimIntoSubBookHtml(book4Index, 'book4').html, 'utf8'),
   );
-  const tabanDosyalari = {};
-  for (const [y, s] of Object.entries(taban0)) {
-    if (y.startsWith('book3/') || y in gDosyalari) continue;
-    tabanDosyalari[y] = s;
-  }
-  const beklenen = {
-    setKimligi: o.SET_KIMLIGI,
-    paketSurumu: o.PAKET_SURUMU,
-    surum: o.SON_SURUM,
-    gDosyalari,
-    tabanDosyalari,
-    olmamali: ['book3'],
-    yoksay: o.DURUM_DOSYALARI,
-    kurulu: taban0,
+  // Menü: eklenen kitap menüde, çıkarılan yok — beklenen = kurulu menü + menu.js dönüşümü (tek
+  // kaynak); içerik ayrıca `uctan-uca.test.js`'te düz JSON/metinle sınanır.
+  const book4Girdileri = zip.dizindenGirdiler(path.join(kaynak, 'book4'));
+  const book4Bilgisi = menu.kitapBilgisi(
+    'book4',
+    book4Girdileri.map((g) => g.yol),
+    {
+      [KITAPLAR.book4.id]: fs.readFileSync(
+        path.join(kaynak, 'book4', 'assets', KITAPLAR.book4.id, 'data', 'BookContent.xml'),
+        'utf8',
+      ),
+    },
+    null,
+  );
+  const menuDonusumu = (kok, ek) => {
+    const tabanlar = new Map(
+      menu.TABAN_YOLLARI.filter((y) => fs.existsSync(path.join(kok, y))).map((y) => [
+        y,
+        fs.readFileSync(path.join(kok, y)),
+      ]),
+    );
+    for (const [y, v] of Object.entries(ek || {})) tabanlar.set(y, v);
+    const ekle = { book4: book4Bilgisi };
+    return menu.menuGuncelle({ tabanlar, ekle, cikar: ['book3'] }).dosyalar;
   };
-  fs.writeFileSync(path.join(dizin, 'beklenen.json'), JSON.stringify(beklenen, null, 2) + '\n');
+  const v2 = { 'index.html': fs.readFileSync(k('index-v2.html')) };
+  for (const [y, v] of menuDonusumu(kurulu, v2)) {
+    gDosyalari[y] = o.sha256(v);
+  }
+  const beklenenYaz = (ad, kurulu0, g, surum) => {
+    const tabanDosyalari = {};
+    for (const [y, s] of Object.entries(kurulu0)) {
+      if (y.startsWith('book3/') || y in g) continue;
+      tabanDosyalari[y] = s;
+    }
+    const b = {
+      setKimligi: o.SET_KIMLIGI,
+      paketSurumu: o.PAKET_SURUMU,
+      surum,
+      gDosyalari: g,
+      tabanDosyalari,
+      olmamali: ['book3'],
+      yoksay: o.DURUM_DOSYALARI,
+      kurulu: kurulu0,
+    };
+    fs.writeFileSync(path.join(dizin, ad), JSON.stringify(b, null, 2) + '\n');
+  };
+  beklenenYaz('beklenen.json', taban0, gDosyalari, o.SON_SURUM);
+  const gK17 = {};
+  for (const [y, s] of Object.entries(gDosyalari)) if (y.startsWith('book4/')) gK17[y] = s;
+  for (const [y, v] of menuDonusumu(kuruluK17)) gK17[y] = o.sha256(v);
+  beklenenYaz('beklenen-menu-k17.json', o.agacOzeti(kuruluK17), gK17, rK17.surum);
 
   const hazirlik = {
     olusturma: uretim,
@@ -488,7 +644,11 @@ async function hazirla(s = {}) {
       sunucuPem: path.join(tls.dizin, 'sunucu.pem'),
       sunucuKey: path.join(tls.dizin, 'sunucu.key'),
     },
-    senaryolar: o.SENARYOLAR.map((x) => ({ ...x, taban: taban(x.ad) })),
+    senaryolar: o.SENARYOLAR.map((x) => ({
+      ...x,
+      taban: taban(x.ad),
+      ...(x.kurulu ? { kurulu: path.join(dizin, x.kurulu) } : {}),
+    })),
     yayinlar: [r1.plan, r2.plan],
   };
   fs.writeFileSync(path.join(dizin, 'hazirlik.json'), JSON.stringify(hazirlik, null, 2) + '\n');
@@ -526,4 +686,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { hazirla, tlsHazirla, indexHtml, motor, CA_CNF, SUNUCU_EXT };
+module.exports = {
+  hazirla,
+  tlsHazirla,
+  indexHtml,
+  webzIndex,
+  k17Index,
+  KITAPLAR,
+  motor,
+  CA_CNF,
+  SUNUCU_EXT,
+};
