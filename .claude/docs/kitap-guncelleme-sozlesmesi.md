@@ -245,6 +245,8 @@ node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → can
   bundle `window.isApp=true` yaması — `normalizeBookViewerViewports`) Electron'u bozacağı için paylaşılan arşive
   KONAMAZ → ayrı Android arşivi + manifestte platform başına kaynak gerekir (şema + iki istemci). Electron fs-shim
   etiketi Android'de etkisizdir (android shim önce `__emppFsShim` kurar; fs-shim onu görünce kurulmaz).
+- **Kapı — `--ekle` Android'i dondurur (26.09, dal `g-yayin-android-kapi`):** Android paketlerinde G açık olduğundan `--ekle` içeren yayın varsayılan RED (neden + öneri yolu + anahtar; imza anahtarı ve girdiler okunmadan); bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` → rapor `android{donuk,yeniEkleme,devralinanEkleme}` + manifest yanında `ANDROID-DONUK.txt` (yüklenmez, durum çözülünce kalkar).
+  Devralınan ekleme (önceki imzalı durumda `ekle`, bu yayında yeni ekleme yok) anahtarsız geçer ama donuk raporlanır; `--cikar`/`--index`/`--motor`/menü kapıdan geçmez; kalıcı çözüm (öneri A/B) Nadir kararında: `~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md`.
 
 ## G istemcisi — kimlik, monoton sürüm, ya hep ya hiç (2026-09-26, dal `g-electron`)
 

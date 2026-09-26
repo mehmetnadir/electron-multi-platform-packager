@@ -415,10 +415,14 @@ async function hazirla(s = {}) {
       // Kurulu menünün tabanı paketin kendisi: book4 menüye girer, book3 kalkar (menu.js).
       menuTaban: kurulu,
       ekle: { book4: k('book4') },
+      // Android ekleme kapısı (yayinla.js `androidEklemeKapisi`): bu koşum Electron istemcisini
+      // sınar; Android ucunun donmasını BİLİNÇLİ kabul eder (anahtarsız --ekle RED).
+      androidEklemeDondururKabul: true,
       cikar: ['book3'],
     }),
     { gunluk },
   );
+  // r2: devralınan ekleme (book4) + yeni ekleme YOK → anahtarsız geçer (bugünkü akış).
   const r2 = await yayin.yayinla(
     ortak('gecerli', {
       panel: o.PANEL,
@@ -456,6 +460,7 @@ async function hazirla(s = {}) {
       index: k('index-v2.html'),
       menuTaban: kurulu,
       ekle: { book4: k('book4') },
+      androidEklemeDondururKabul: true,
       cikar: ['book3'],
     }),
     { gunluk },
@@ -540,6 +545,7 @@ async function hazirla(s = {}) {
       panel: o.PANEL,
       menuTaban: kuruluK17,
       ekle: { book4: k('book4') },
+      androidEklemeDondururKabul: true,
       cikar: ['book3'],
     }),
     { gunluk },
@@ -650,6 +656,8 @@ async function hazirla(s = {}) {
       ...(x.kurulu ? { kurulu: path.join(dizin, x.kurulu) } : {}),
     })),
     yayinlar: [r1.plan, r2.plan],
+    /** Android ekleme kapısı raporları (`yayinla` → `android`): gecerli r1/r2 + menu-k17. */
+    android: { gecerli: [r1.android, r2.android], menuK17: rK17.android },
   };
   fs.writeFileSync(path.join(dizin, 'hazirlik.json'), JSON.stringify(hazirlik, null, 2) + '\n');
   return hazirlik;

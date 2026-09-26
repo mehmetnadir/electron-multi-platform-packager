@@ -137,6 +137,7 @@ async function yayinlaOrnek(o) {
       ),
       motorlar: { book1: o.yaz('m.js', 'motor') },
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+      androidEklemeDondururKabul: true,
       cikar: [],
     },
     { gunluk: () => {} },
