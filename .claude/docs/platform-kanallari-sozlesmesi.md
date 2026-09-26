@@ -17,7 +17,7 @@ Nadir'in beyanı spec'tir; Windows (`windows-paketleme-sozlesmesi.md`) dahil dö
 |---|---|---|---|
 | O1 | **Üretim yeri:** Pardus ProBook'ta (indir, paketle, kabul, temizlik, yükle); ProBook'a ulaşılamazsa Mac Docker. Windows, dmg, apk bu Mac'te. | Pardus fiilen Mac Docker'da; ProBook yalnız kabul. ProBook şeridi kodda, kapalı (13acb01; kuru koşu 73581 geçti) | ProBook `build_agents` kaydı: enroll sırrı srv21 `.env`'de, Nadir verir |
 | O2 | **Motor temizliği Windows'taki gibi:** index'ten ulaşılmayan, üst üste yazılmış webpack çıktıları (her kitapta 13 `*.main.js`) atılır; pakete girmeyecekler listesi tek kaynaktan. | Dört platformda açık: `olu-motor-temizligi.js` (varsayılan açık, pardus konteynerine `EMPP_OLU_TEMIZLIK=1` geçer) + `paket-disi-liste.js` (f63500c) | — |
-| O3 | **Uzaktan güncelleme (G), bizim kanalımız:** kök `index.html`, index'le eklenen/çıkarılan kitaplar (set bileşimi) ve her kitabın **ANA klasöründeki** `43e23fce2b7009474555a77.js` değişir (kapsam detayı O4). Arayüzden nasıl tetikleneceği **SONRA** kararlaştırılacak (Nadir 26.09); sunucuda manifest yokken istemci sessizdir (hata basmaz, bekler). | Windows (yerinde) + mac/Pardus (örtü) aynı modülde (`src/runtime/kitap-guncelleyici.js`, g-electron e07bc37); kapı platform başına (`EMPP_SET_GUNCELLEME`, `platform-kapisi.js`), mac/Pardus için henüz AÇILMADI | Üretim ed25519 anahtarı **ÜRETİLDİ** (karar defteri A5, KAPANDI); `EMPP_SET_GUNCELLEME=windows`. Android'de istemci yok. **"kurulum klasörü" tanımı (Nadir 26.09):** Windows/Pardus'ta kurulum dizini (yazılabilir), macOS'ta `.app` imzalı + yazılabilir yer `~/Library/Application Support/<app>/`, Android'de uygulamanın kendi veri alanı. Gövde salt-okunur (mac `.app` imzası, Pardus `app.asar`) → G örtüye yazar: mac `userData/empp-guncelleme`, Pardus `<kurulum>/resources/empp-guncelleme`. Örtü içerik-adresli (`nesne/<sha256>`), `etkin.json` imzalı manifesti taşır; açılışta imza + taban kimliği + kabuk nesneleri doğrulanır, tutmayan örtü yüklenmez; ana süreç `file:` isteğini örtüden, yoksa paketten sunar (K ile ortak zincir). Tüm kiplerde: monoton sürüm, `kanal`/`setKimligi`, ya hep ya hiç (`kitap-guncelleme-sozlesmesi.md` "G istemcisi — kimlik…") |
+| O3 | **Uzaktan güncelleme (G), bizim kanalımız:** kök `index.html`, index'le eklenen/çıkarılan kitaplar (set bileşimi) ve her kitabın **ANA klasöründeki** `43e23fce2b7009474555a77.js` değişir (kapsam detayı O4). Arayüzden nasıl tetikleneceği **SONRA** kararlaştırılacak (Nadir 26.09); sunucuda manifest yokken istemci sessizdir (hata basmaz, bekler). | Windows (yerinde) + mac/Pardus (örtü) aynı modülde (`src/runtime/kitap-guncelleyici.js`, g-electron e07bc37); kapı platform başına (`EMPP_SET_GUNCELLEME`, `platform-kapisi.js`), mac/Pardus için henüz AÇILMADI | Üretim ed25519 anahtarı **ÜRETİLDİ** (karar defteri A5, KAPANDI); `EMPP_SET_GUNCELLEME=windows`. Android istemcisi ayrı (§Android G katmanı), kapısı kapalı. **"kurulum klasörü" tanımı (Nadir 26.09):** Windows/Pardus'ta kurulum dizini (yazılabilir), macOS'ta `.app` imzalı + yazılabilir yer `~/Library/Application Support/<app>/`, Android'de uygulamanın kendi veri alanı. Gövde salt-okunur (mac `.app` imzası, Pardus `app.asar`) → G örtüye yazar: mac `userData/empp-guncelleme`, Pardus `<kurulum>/resources/empp-guncelleme`. Örtü içerik-adresli (`nesne/<sha256>`), `etkin.json` imzalı manifesti taşır; açılışta imza + taban kimliği + kabuk nesneleri doğrulanır, tutmayan örtü yüklenmez; ana süreç `file:` isteğini örtüden, yoksa paketten sunar (K ile ortak zincir). Tüm kiplerde: monoton sürüm, `kanal`/`setKimligi`, ya hep ya hiç (`kitap-guncelleme-sozlesmesi.md` "G istemcisi — kimlik…") |
 | O4 | **Motor `43e23fce…js` güncelliği index'le birlikte bizde:** bizim derlememiz kanonik (24.09 karar 2, `tek-kabuk-ve-guncelleme-plani-2026-09-24.md`), G kanalıyla dağıtılır. **Kapsam (Nadir 26.09):** G yalnız kitabın **ANA** klasöründeki kopyayı değiştirir; kitap index'i yalnız kendi dizinindekini çağırır. `htmletk/…/etk/` kopyaları **KAPSAM DIŞI**, G dokunmaz. | 73581 ölçümü: kök kopya `1bcb5b8c…`, dört kitap kopyası `f4437153…` (aynı, ANA klasör — G burayı hedefler), etkinlik kopyası `1c6096ef…` (üç farklı sürüm tek pakette, `htmletk/…/etk/` — kapsam dışı) | G istemcisi (O3) |
 | O5 | **Kitap içeriği İmpark güncellemeleriyle (K):** `GetKitapGuncellemeBilgi` → `ZKitapZipH`. | Android çalışıyor (74451); Pardus 26.09'da açıldı (`a0cc28d`); Windows (bizim NSIS) kod var, Windows'ta ölçülmedi; mac KAPALI | mac kapısı + başsız kabulde K senaryosu; Windows'ta bir ölçüm |
 
@@ -128,12 +128,36 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 7. **Android APK'ya artan versionCode ve kalıcı, yedekli bir imza anahtarı verilsin mi?** Öneri: evet, versionCode = panel sürüm kodu × 1000 + sayaç. Anahtar bugünkü debug anahtarı kalsın, yedeği alınsın. Gerekçe: anahtar kaybolursa kurulu APK'lar güncellenemez.
 8. **Kabuldeki "aktivasyon bekleniyor" işareti keypanel.db'den mi gelsin?** Öneri: evet. Gerekçe: runner başlık regex'i kullanıyor (`runner.js:1714`), kaynak sözleşmesi keypanel diyor (`kitap-kaynak-sozlesmesi.md:49-53`).
 
+## Android G katmanı (O3/O4 — dal `g-android`, 26.09)
+- **Yer:** politika JS'de (`src/platforms/android/empp-g-istemci.js`: iki kademe, imza, kapsam, plan), mekanizma Java'da
+  (`g-java/com/empp/g/`: `EmppGKatman` saf JDK, `EmppGRota` Capacitor RouteProcessor, `EmppGPlugin` köprü).
+  Kurulum `g-katmani.js` ← `packagingService.configureAndroidG`; YALNIZ `www/empp-set.json` varsa (kapı
+  `EMPP_SET_GUNCELLEME`; canlıda `windows` → Android'de bugün KAPALI).
+- **Katman:** `filesDir/empp-g` = `depo/<sha256>` (kabuk) · `kitap/<dizin>-<sha16>/` (eklenen kitap) · `hazirlik/` ·
+  `durum.txt`. WebView isteği önce katmandan, yoksa APK'dan; çıkarılan kitap 404. APK değişince katman atılır.
+- **Uç:** `<taban>/set/<kimlik>/android/{surum.json, manifest.json, manifest.json.sig, dosya/…}` — Android'e uyarlanmış
+  ağaçtan; Windows manifesti Android'e uygulanmaz. İmza: WebCrypto Ed25519, yoksa gömülü tweetnacl 1.0.3; ikisi de
+  yoksa KAPALI.
+- **Üç güvenlik kuralı (Electron `kitap-guncelleyici.js` e07bc37 ile aynı):**
+  1. *Monoton sürüm:* manifest `surum` G3 (`2.<panel>.<sayaç>`) ve KURULU sürümden KESİN büyük olmalı. Kurulu =
+     max(`empp-g-paket.json` [paketleme anındaki appVersion], son uygulanan G); G3 olmayan paket sürümü kıyasa
+     girmez. `surum.json` imzasız tetiktir. Java `uygula` da aynı kuralı uygular (savunma derinliği).
+  2. *Kimlik:* `kanal == "G"` ve `setKimligi == gömülü kimlik` değilse RET; `surum.json` başka seti söylüyorsa
+     manifest istenmez.
+  3. *Ya hep ya hiç:* kabuk (`yaz`) ve kitap (`kitapKur`) önce `hazirlik/`'e iner + boyut/sha256 doğrulanır; tek
+     hata → `uygula` hiç çağrılmaz. Kesinleşme tek `uygula` = tek `durum.txt` rename'i.
+- **Kanıt:** `node --test src/platforms/android/{empp-g-istemci,g-katmani,empp-android-shim-g,g-java}.test.js`;
+  mutasyon `node tools/g-android/g-mutasyon.js` (15 mutant: kural başına ≥3, JS + Java).
+- **Açık:** emülatörde uçtan uca (3 senaryo) + kabul önce/sonra koşulmadı; cihazda WebCrypto Ed25519 ölçülmedi; yayın
+  aracı (`tools/g-yayin`) Android ucunu üretmiyor; APK `versionName` appVersion'a bağlı değil (paket sürümü ayrı
+  dosyada).
+
 ## Yapılmayacaklar
 Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon kanalına (ImWin32.dll, imKeys.dll) dokunmak ya da kod/anahtar gömmek · bayat paketleyici kopyasıyla üretmek · srv21'de ağır derlemeyi varsayılan yapmak · düz disk/önbellek sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m- zip'i kaynak almak.
 
 ## Uygulama durumu (26.09)
 - Kod var ve canlı: noter kapısı, Pardus disk kapısı, ProBook kabulü, başsız kabul (macos+android), SET düzeltmeleri, sürüm türetme, Android K8/K9.
-- Kod var, devrede değil: ProBook şeridi (`EMPP_PROBOOK_SERIT`, arşiv eşleme, yetim onarımı; bekleyen: kayıt sırrı + ilk arşiv eşleme).
+- Kod var, devrede değil: ProBook şeridi (`EMPP_PROBOOK_SERIT`, arşiv eşleme, yetim onarımı; bekleyen: kayıt sırrı + ilk arşiv eşleme); Android G istemcisi (`src/platforms/android/`, g-android; kapı `EMPP_SET_GUNCELLEME` android içermiyor).
 - Kod yok: build zip'i kaynak alma (runner SFX bekliyor), hold durumu, kabul kanıtı ekranı, artefakt geçmişi, srv21 fallback, kanal 1 bekçisi, hazır devralmada commit kontrolü, Android versionCode, AppRun hash-güvenli kıyas.
 
 ## Eskiyen belgeler
