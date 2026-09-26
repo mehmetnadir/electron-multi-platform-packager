@@ -94,12 +94,6 @@ publisherFilePath="$resourcesPath/kurum.txt"
 # Kurulu sürüm işareti: kurulum doğrulanınca paketin APP_VERSION'ı buraya yazılır.
 versionMarker="$appPath/.empp-version"
 
-# $1 > $2 ise 0 döner. sort -V sayısal karşılaştırır: 1.12.10 > 1.12.9 (sözlük sırası
-# bunu ters çevirirdi). sort -V desteklenmiyorsa boş çıktı → "büyük değil" → güvenli taraf.
-version_gt() {
-    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
-}
-
 installedVersion=""
 if [ -f "$versionMarker" ]; then
     installedVersion=$(head -n 1 "$versionMarker" 2>/dev/null | tr -d '[:space:]')
@@ -109,8 +103,11 @@ fi
 # tazelemeden eski kopyayı çalıştırmak, düzeltilmiş paketi indiren müşteriye hâlâ
 # eskisini gösteriyordu ("Kitap Güncelleniyor %0"). Kural:
 #   paket == kurulu       → dokunma, çalıştır (hızlı yol)
-#   paket <  kurulu       → düşürme yok, kuruluyu çalıştır (stderr'e tek satır not)
-#   işaret yok / paket >  → eski kurulumu kenara al (mv, silme YOK), yeniden kur
+#   işaret yok / paket != kurulu → eski kurulumu kenara al (mv, silme YOK), yeniden kur
+# SIRALAMA YOK (2026-09-26): sürüm içerik parmak izinden türetilir (`surum-turet.js`,
+# `1.<hash>.<hash>`) — sıralanamaz. Eski `version_gt` (sort -V) kıyası düzeltilmiş paketi
+# ~yarı olasılıkla "eski" sayıp kurmuyor, müşteri bozuk kurulumda kalıyordu. Windows
+# customInit ile aynı anlam: aynıysa aç, farklıysa kur.
 # Kullanıcı verisi (~/.empp-work, ~/.config) kurulum dizininin DIŞINDADIR; dokunulmaz.
 # WORK menüsü ↔ yeni paket menüsü uzlaşması burada DEĞİL, uygulamanın ana sürecinde her
 # açılışta yapılır (empp-icerik-guncelleme.js uzlastir(): geride/sahte ilerlemiş WORK
@@ -122,11 +119,7 @@ if [ -f "$executablePath" ]; then
         "$executablePath" "$@" --no-sandbox
         exit 0
     fi
-    if [ -n "$installedVersion" ] && ! version_gt "$APP_VERSION" "$installedVersion"; then
-        if [ "$APP_VERSION" != "$installedVersion" ]; then
-            echo "Not: paket sürümü ($APP_VERSION) kurulu sürümden ($installedVersion) eski;" \
-                "kurulu sürüm çalıştırılıyor, düşürme yapılmadı." >&2
-        fi
+    if [ -n "$installedVersion" ] && [ "$APP_VERSION" = "$installedVersion" ]; then
         "$executablePath" "$@" --no-sandbox
         exit 0
     fi

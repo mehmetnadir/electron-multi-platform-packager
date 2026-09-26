@@ -151,23 +151,33 @@ test('daha yeni paket (1.12.10 > 1.12.9): eskisi .yedek-*, yenisi kurulur, veri 
     assert.match(zenityGunlugu(home), /--progress/);
   });
 
-test('eski paket (1.12.9) / yeni kurulum (1.12.10): düşürme yok, kurulu çalışır, tek not',
+// 2026-09-26: sürüm içerik parmak izinden türetildiği için (`1.<hash>.<hash>`) SIRALANAMAZ;
+// kural "farklıysa kur". Eski davranış (büyükse kur) düzeltilmiş paketi ~yarı olasılıkla atlıyordu.
+test('sıralamada küçük görünen FARKLI sürüm (1.12.9 / kurulu 1.12.10): yeniden kurar, yeni paket çalışır',
   { skip: GERCEK_ZENITY_VAR }, () => {
     const { kok, home } = ortam();
     kurulmusOlsun(kok, home, '1.12.10', 'v2');
-    const mtime = eskiZamanaAl(ikiliYolu(home));
     gunlugunuSil(home);
-    const eski = sahteAppDir(kok, '1.12.9', 'v1');
-    const r = kos(eski, home);
+    const paket = sahteAppDir(kok, '1.12.9', 'v1');
+    const r = kos(paket, home);
     assert.strictEqual(r.status, 0, r.stderr);
-    assert.match(r.stdout, /CALISTI v2 /);
-    assert.strictEqual(isaret(home), '1.12.10');
-    assert.strictEqual(fs.statSync(ikiliYolu(home)).mtimeMs, mtime, 'kurulu ikili değişti');
-    assert.deepStrictEqual(yedekler(home), []);
-    assert.strictEqual(zenityGunlugu(home), '');
-    const notlar = r.stderr.split('\n').filter((s) => s.trim());
-    assert.strictEqual(notlar.length, 1, `stderr: ${r.stderr}`);
-    assert.ok(notlar[0].includes('1.12.9') && notlar[0].includes('1.12.10'), notlar[0]);
+    assert.match(r.stdout, /CALISTI v1 /);
+    assert.strictEqual(isaret(home), '1.12.9');
+    assert.strictEqual(yedekler(home).length, 1, 'eski kurulum kenara alınmadı');
+  });
+
+test('GERİLEME: içerik-hash sürümleri (kurulu 1.90000.5, paket 1.10000.7) — düzeltilmiş paket kurulur',
+  { skip: GERCEK_ZENITY_VAR }, () => {
+    const { kok, home } = ortam();
+    kurulmusOlsun(kok, home, '1.90000.5', 'bozuk');
+    gunlugunuSil(home);
+    const paket = sahteAppDir(kok, '1.10000.7', 'duzeltilmis');
+    const r = kos(paket, home);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stdout, /CALISTI duzeltilmis /);
+    assert.strictEqual(isaret(home), '1.10000.7');
+    const yedek = yedekler(home);
+    assert.strictEqual(yedek.length, 1, `yedek sayısı: ${yedek}`);
   });
 
 test('işaret yok (eski sistem kurulumu): aynı sürüm bile olsa yeniden kurar',

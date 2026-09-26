@@ -1672,6 +1672,17 @@ async function hazirPardusPaketi({ bookId, srcVersion } = {}) {
       warn(`pardus: hazır paket ATLANDI — kaynak sürümü tutmuyor (hazır=${bilgi.srcVersion}, iş=${srcVersion})`);
       return null;
     }
+    // PAKETLEYİCİ KİMLİĞİ (2026-09-26): kaynak aynı olsa da ESKİ paketleyici koduyla üretilmiş
+    // paket devralınmaz. Ölçülen: 16 hazır paket 18-20.09'da 27 gün geride srv21 koduyla
+    // üretilmişti; SET kökü düzeltmesinden (baefe86) sonra kuyruğa alınan 5 iş bozuk index'i
+    // yeniden yayınlayacaktı. Kimlik yoksa/tutmazsa güvenli taraf: normal derleme.
+    const buKimlik = require('../packaging/surum-turet').paketleyiciKaynakParmakIzi();
+    if (!bilgi.paketleyiciKimligi || bilgi.paketleyiciKimligi !== buKimlik) {
+      warn(`pardus: hazır paket ATLANDI — paketleyici kodu farklı ya da bilinmiyor `
+        + `(hazır=${bilgi.paketleyiciKimligi ? String(bilgi.paketleyiciKimligi).slice(0, 12) : 'yok'}, `
+        + `bu=${buKimlik.slice(0, 12)})`);
+      return null;
+    }
   } catch (_) {
     warn('pardus: hazır paketin .json bilgisi okunamadı — güvenli tarafta kalıp normal derleme yapılacak');
     return null;

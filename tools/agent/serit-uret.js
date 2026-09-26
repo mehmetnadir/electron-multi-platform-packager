@@ -62,8 +62,12 @@ async function main() {
 
   // Önce .json, sonra atomik rename: ajan yarım dosyayı ASLA görmez ve sürüm
   // bilgisi olmayan paketi devralmaz (hazirPardusPaketi .json yoksa atlar).
+  // Paketleyici kimliğini üreten makine bildirir (PAKETLEYICI=<sha256>); bildirmezse alan yazılmaz
+  // ve ajan paketi devralmaz (runner.js hazirPardusPaketi — eski kodla üretilmiş paket yayınlanmaz).
+  const paketleyiciKimligi = (String(uret.stdout).match(/PAKETLEYICI=([0-9a-f]{64})/) || [])[1];
   await fsp.writeFile(path.join(HAZIR, `${bookId}.json`),
-    JSON.stringify({ srcVersion, appName, yayinci, uretim: 'srv21', tarih: new Date().toISOString() }, null, 2));
+    JSON.stringify({ srcVersion, appName, yayinci, uretim: 'srv21', tarih: new Date().toISOString(),
+      ...(paketleyiciKimligi ? { paketleyiciKimligi } : {}) }, null, 2));
   await fsp.rename(gecici, path.join(HAZIR, `${bookId}.impark`));
   spawnSync('ssh', [...SSH, SRV21, `rm -rf /opt/lane-work/${bookId}`], { stdio: 'ignore' });
   kayit(`${bookId}: HAZIR (${(boyut / 1e6).toFixed(0)} MB, kaynak ${srcVersion}) — ajan devralacak`);

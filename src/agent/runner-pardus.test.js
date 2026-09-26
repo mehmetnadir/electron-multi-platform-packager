@@ -627,7 +627,9 @@ test('hazirPardusPaketi: kaynak sürümü AYNI ise devralınır, FARKLI ise yok 
   CONFIG.pardusHazirDir = dir;
   try {
     await fsp.writeFile(path.join(dir, '45704.impark'), Buffer.alloc(200000, 1));
-    await fsp.writeFile(path.join(dir, '45704.json'), JSON.stringify({ srcVersion: 'MP8-v49.exe' }));
+    const kimlik = require('../packaging/surum-turet').paketleyiciKaynakParmakIzi();
+    await fsp.writeFile(path.join(dir, '45704.json'),
+      JSON.stringify({ srcVersion: 'MP8-v49.exe', paketleyiciKimligi: kimlik }));
     const bulundu = await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v49.exe' });
     assert.ok(bulundu && bulundu.dosya.endsWith('45704.impark'));
     assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v50.exe' }), null,
@@ -635,6 +637,28 @@ test('hazirPardusPaketi: kaynak sürümü AYNI ise devralınır, FARKLI ise yok 
     // .json yoksa güvenli taraf: devralma yok
     await fsp.rm(path.join(dir, '45704.json'));
     assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v49.exe' }), null);
+  } finally {
+    CONFIG.pardusHazirDir = prev;
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('GERİLEME: hazır paket paketleyici kimliği YOK ya da FARKLI ise devralınmaz (baefe86 öncesi paket)', async () => {
+  const { hazirPardusPaketi } = require('./runner.js');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hazir-'));
+  const prev = CONFIG.pardusHazirDir;
+  CONFIG.pardusHazirDir = dir;
+  try {
+    await fsp.writeFile(path.join(dir, '59834.impark'), Buffer.alloc(200000, 1));
+    // 19.09 srv21 biçimi: kimlik alanı hiç yok
+    await fsp.writeFile(path.join(dir, '59834.json'),
+      JSON.stringify({ srcVersion: 'ShallWe5-MMv54.exe', uretim: 'srv21' }));
+    assert.equal(await hazirPardusPaketi({ bookId: '59834', srcVersion: 'ShallWe5-MMv54.exe' }), null,
+      'kimliksiz hazır paket devralınmamalı');
+    await fsp.writeFile(path.join(dir, '59834.json'),
+      JSON.stringify({ srcVersion: 'ShallWe5-MMv54.exe', paketleyiciKimligi: 'a'.repeat(64) }));
+    assert.equal(await hazirPardusPaketi({ bookId: '59834', srcVersion: 'ShallWe5-MMv54.exe' }), null,
+      'başka paketleyici koduyla üretilmiş paket devralınmamalı');
   } finally {
     CONFIG.pardusHazirDir = prev;
     await fsp.rm(dir, { recursive: true, force: true });
@@ -651,7 +675,8 @@ test('buildPardusArtifact: HAZIR paket varsa Docker derlemesi HİÇ çağrılmaz
   buf.write('hsqs', OFF, 'ascii');
   buf.writeBigUInt64LE(BigInt(500), OFF + 40);
   await fsp.writeFile(path.join(dir, '45704.impark'), buf);
-  await fsp.writeFile(path.join(dir, '45704.json'), JSON.stringify({ srcVersion: 'MP8-v49.exe' }));
+  await fsp.writeFile(path.join(dir, '45704.json'), JSON.stringify({ srcVersion: 'MP8-v49.exe',
+    paketleyiciKimligi: require('../packaging/surum-turet').paketleyiciKaynakParmakIzi() }));
   try {
     await withFakePardusScript(`#!/bin/bash\ntouch "$(dirname "$0")/DERLENDI"\nexit 1\n`, async (sdir) => {
       await withFakeKabul(`#!/bin/bash\necho "KABUL: $1" > "$(dirname "$0")/CAGRILDI"\nexit 0\n`, async (kdir) => {
