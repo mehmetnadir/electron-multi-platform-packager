@@ -40,11 +40,19 @@ node $G/tools/g-uctan-uca/dogrula.js <agac> --dizin $D      # kendi istemcinin s
 | `sha-uyusmaz` | değişmez | herkes | `dosya/index.html` sha256 tutmuyor; eklenen/çıkarılan kitap geri alınır |
 | `yol-kacisi` | değişmez | herkes | imzalı manifestte `../kacis.txt` |
 | `zip-kacisi` | değişmez | herkes | kitap arşivinde `../../kacti.txt` |
-| `kismi-bozuk` | değişmez | G istemcileri | bir motor bozuk: ya hep ya hiç |
-| `geri-alma` | değişmez | G istemcileri | imzalı ama 2.90.0 < paket 2.90.1 |
-| `baska-set` | değişmez | G istemcileri | imzalı ama `setKimligi` 99902 |
+| `kismi-bozuk` | değişmez | herkes | bir motor bozuk: ya hep ya hiç |
+| `geri-alma` | değişmez | herkes | imzalı ama 2.90.0 < paket 2.90.1 |
+| `baska-set` | değişmez | herkes | imzalı ama `setKimligi` 99902 |
+| `geri-alma-tetik` | değişmez | herkes | `geri-alma` + imzasız `surum.json` "2.90.9" der: ret İMZALI manifestten |
+| `baska-set-tetik` | değişmez | herkes | `baska-set` + `surum.json` "99901/2.90.9" der: ret İMZALI manifestten |
 
-Son üç satır referans Windows istemcisinde **AÇIK** raporlanır (bilinen eksik); G istemcileri geçmeli.
+2026-09-26: referans istemci (g-electron dalı) kısmi-bozuk / geri-alma / başka-set açıklarını
+kapattı — hepsi HERKES için zorunlu. `-tetik` senaryoları yalnız `surum.json`'a bakan istemciyi
+yakalar (tetik imzasızdır; asıl karar imzalı manifestin kimlik/sürüm denetimi).
+
+Örtü kipi (mac/Pardus): `node tools/g-uctan-uca/kos.js --dizin $D --kip ortu` — yazmalar
+`EMPP_G_ORTU_KOKU`'ya gider; sınanan ağaç örtünün etkin görünümüdür (`ortuGorunumu`) ve paket
+gövdesi her senaryoda birebir aynı kalmalıdır. Sonuç `son-kosu-ortu.json`.
 
 ## Uçlar ve biçim
 

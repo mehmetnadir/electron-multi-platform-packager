@@ -60,7 +60,7 @@ async function sunucuHazirla(h) {
  * İstemciyi ayrı süreçte koşar; raporu döner. ASENKRON olmalı: sunucu aynı süreçte
  * olabilir, eşzamanlı bekleme olay döngüsünü kilitler (kilitlenme).
  */
-function istemciKos(kok, taban, caYolu, zamanAsimiMs = 120000) {
+function istemciKos(kok, taban, caYolu, zamanAsimiMs = 120000, ekEnv = {}) {
   const betik = `
     const kg = require(${JSON.stringify(ISTEMCI)});
     const g = [];
@@ -74,6 +74,7 @@ function istemciKos(kok, taban, caYolu, zamanAsimiMs = 120000) {
         NODE_EXTRA_CA_CERTS: caYolu,
         EMPP_GUNCELLEME_TABANI: taban,
         EMPP_SET_GUNCELLEME: '1',
+        ...ekEnv,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -105,6 +106,23 @@ function istemciKos(kok, taban, caYolu, zamanAsimiMs = 120000) {
   });
 }
 
+/**
+ * Örtü kipinin ETKİN görünümünü (`ortuGorunumu`: paket + örtü, gizlenenler hariç) `hedef`
+ * dizinine kopyalar — ağaç kıyası Windows kipiyle aynı `agaciDogrula` ile yapılsın diye.
+ */
+function gorunumuYaz(kok, ortuKoku, hedef) {
+  const kg = require(ISTEMCI);
+  const d = kg.ortuDurumuYukle({ kok, ortuKoku });
+  fs.rmSync(hedef, { recursive: true, force: true });
+  fs.mkdirSync(hedef, { recursive: true });
+  for (const [y, kaynak] of kg.ortuGorunumu(d, kok)) {
+    if (o.DURUM_DOSYALARI.includes(y.split('/')[0])) continue;
+    fs.mkdirSync(path.dirname(path.join(hedef, y)), { recursive: true });
+    fs.copyFileSync(kaynak, path.join(hedef, y));
+  }
+  return hedef;
+}
+
 async function kos(s = {}) {
   const dizin = path.resolve(s.dizin || VARSAYILAN_DIZIN);
   const h = hazirlikOku(dizin);
@@ -118,9 +136,21 @@ async function kos(s = {}) {
       const yer = path.join(calisma, sen.ad);
       const kok = path.join(yer, 'kurulu');
       fs.cpSync(h.kurulu, kok, { recursive: true });
-      const c = await istemciKos(kok, sen.taban, h.tls.ca);
+      // --kip ortu (mac/Pardus): yazmalar örtüye gider; sınanan ağaç örtünün ETKİN görünümüdür
+      // ve paket gövdesi (kurulu/) HER senaryoda birebir aynı kalmalıdır.
+      const ortuKoku = s.kip === 'ortu' ? path.join(yer, 'ortu') : '';
+      const ekEnv = ortuKoku ? { EMPP_G_ORTU_KOKU: ortuKoku } : {};
+      const c = await istemciKos(kok, sen.taban, h.tls.ca, undefined, ekEnv);
       const kip = sen.beklenen === 'guncellendi' ? 'tam' : 'degismez';
-      const d = agaciDogrula(kok, beklenen, kip);
+      const agac = ortuKoku ? gorunumuYaz(kok, ortuKoku, path.join(yer, 'gorunum')) : kok;
+      const d = agaciDogrula(agac, beklenen, kip);
+      if (ortuKoku) {
+        const g = agaciDogrula(kok, beklenen, 'degismez');
+        if (!g.gecti) d.gecti = false;
+        d.farkli = d.farkli.concat(g.farkli.map((y) => 'GÖVDE:' + y));
+        d.fazla = d.fazla.concat(g.fazla.map((y) => 'GÖVDE:' + y));
+        d.eksik = d.eksik.concat(g.eksik.map((y) => 'GÖVDE:' + y));
+      }
       const disari = ['kacis.txt', 'kacti.txt'].filter(
         (f) => fs.existsSync(path.join(yer, f)) || fs.existsSync(path.join(kok, f)),
       );
@@ -128,11 +158,12 @@ async function kos(s = {}) {
       if (sen.beklenen === 'guncellendi') gecti = gecti && c.rapor.durum === 'guncellendi';
       let ikinci = null;
       if (sen.beklenen === 'guncellendi' && gecti) {
-        ikinci = (await istemciKos(kok, sen.taban, h.tls.ca)).rapor;
+        ikinci = (await istemciKos(kok, sen.taban, h.tls.ca, undefined, ekEnv)).rapor;
+        const agac2 = ortuKoku ? gorunumuYaz(kok, ortuKoku, path.join(yer, 'gorunum2')) : kok;
         gecti =
           ikinci.durum === 'guncel' &&
           ikinci.istek === 1 &&
-          agaciDogrula(kok, beklenen, 'tam').gecti;
+          agaciDogrula(agac2, beklenen, 'tam').gecti;
       }
       const sonuc = gecti ? 'GEÇTİ' : sen.zorunlu === 'yeni' ? 'AÇIK' : 'KALDI';
       sonuclar.push({
@@ -157,7 +188,9 @@ async function kos(s = {}) {
   }
   const zorunluKalan = sonuclar.filter((r) => r.zorunlu === true && r.sonuc !== 'GEÇTİ');
   const ozet = { gecti: zorunluKalan.length === 0, calisma, sonuclar };
-  fs.writeFileSync(path.join(dizin, 'son-kosu.json'), JSON.stringify(ozet, null, 2) + '\n');
+  ozet.kip = s.kip || 'yerinde';
+  const ad = s.kip === 'ortu' ? 'son-kosu-ortu.json' : 'son-kosu.json';
+  fs.writeFileSync(path.join(dizin, ad), JSON.stringify(ozet, null, 2) + '\n');
   return ozet;
 }
 
@@ -165,7 +198,11 @@ async function main(argv) {
   const s = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dizin') s.dizin = argv[++i];
+    else if (argv[i] === '--kip') s.kip = argv[++i];
     else throw new Error(`bilinmeyen argüman: ${argv[i]}`);
+  }
+  if (s.kip && s.kip !== 'ortu' && s.kip !== 'yerinde') {
+    throw new Error(`--kip yerinde|ortu olmalı: ${s.kip}`);
   }
   const r = await kos(s);
   for (const x of r.sonuclar) {

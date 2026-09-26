@@ -420,6 +420,16 @@ async function hazirla(s = {}) {
     { recursive: true },
   );
 
+  // 4b) Yalan tetik: imzasız surum.json istemciyi manifeste kadar götürür; ret İMZALI manifestin
+  //     kimlik/sürüm denetiminden gelmeli (yalnız surum.json'a bakan istemci burada düşer).
+  for (const [kaynakAd, hedefAd] of [['geri-alma', 'geri-alma-tetik'], ['baska-set', 'baska-set-tetik']]) {
+    const h = setKopyala(dizin, kaynakAd, hedefAd);
+    fs.writeFileSync(
+      path.join(h, 'surum.json'),
+      JSON.stringify({ surum: '2.90.9', uretim, setKimligi: o.SET_KIMLIGI }),
+    );
+  }
+
   // 5) Beklenen son ağaç — girdilerden BAĞIMSIZ hesaplanır (aracın çıktısından değil).
   const taban0 = o.agacOzeti(kurulu);
   const kaynakOz = o.agacOzeti(kaynak, []);

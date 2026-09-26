@@ -658,3 +658,81 @@ test('Y14c — başarılı açmadan SONRA aynı kitapta başarısız açma: men�
   f.writeFileSync(menuYol, m.menuKodla(m.kapakAyarla(m.menuCoz(f.readFileSync(menuYol)), '57806', { version: 5, URL: 'u5' })));
   assert.strictEqual(surumOku(path.join(o.WORK, 'classlibraries', 'ImWin32.dll')), 2);
 });
+
+// ─── PAYLAŞILAN file: ÖRTÜ ZİNCİRİ (2026-09-26, G kanalı mac + Pardus) ─────────────────
+// Electron'da `file` şemasına TEK kayıt yapılabilir. G örtüsü etkinken K zincire bağlanır;
+// zincir yokken (bugünkü Pardus/Windows) eski doğrudan kayıt DEĞİŞMEDEN koşmalı.
+const kg = require('./kitap-guncelleyici.js');
+const nodeUrl = require('node:url');
+
+test('ZİNCİR — GERİLEME: zincir YOKKEN K doğrudan tek kayıt yapar, eşleme eskisiyle birebir (bugünkü Pardus)', () => {
+  const k = kitapKur({ vb: 2, vw: 4, isaretSurum: 4 });
+  const kayitlar = [];
+  let h;
+  const protocol = { interceptFileProtocol: (s, fn) => { kayitlar.push(s); h = fn; return true; } };
+  const r = m.protokolKur({ protocol, baseKok: k.base, workKok: k.work, log: sessiz, kapsam: {} });
+  assert.strictEqual(r.yontem, 'intercept', 'zincirsiz yol doğrudan intercept olmalı');
+  assert.deepStrictEqual(kayitlar, ['file']);
+  const cagir = (rel) => { let out; h({ url: nodeUrl.pathToFileURL(path.join(k.base, rel)).toString() }, (o) => { out = o; }); return out; };
+  assert.deepStrictEqual(cagir('book2/assets/57806/htmletk/u1/index.html'), { path: path.join(k.a, 'htmletk', 'u1', 'index.html') });
+  assert.deepStrictEqual(cagir('book2/index.html'), { path: path.join(k.base, 'book2', 'index.html') });
+});
+
+test('ZİNCİR: G zinciri varken K çözücü ekler, protokol TEK kez kaydedilir, WORK eşlemesi aynı', () => {
+  const k = kitapKur({ vb: 2, vw: 4, isaretSurum: 4 });
+  const kapsam = {};
+  const zincir = kg.dosyaOrtusuZinciri(kapsam);
+  const kayitlar = [];
+  let h;
+  const protocol = { interceptFileProtocol: (s, fn) => { kayitlar.push(s); h = fn; return true; } };
+  const r = m.protokolKur({ protocol, baseKok: k.base, workKok: k.work, log: sessiz, kapsam });
+  assert.strictEqual(r.yontem, 'zincir-intercept');
+  // G sonra kendi çözücüsünü ekler ve kur'u yeniden çağırır → ikinci kayıt OLMAZ.
+  zincir.ekle('set-guncelleme', 20, (p) => (p.endsWith(path.join('book9', 'index.html')) ? { yok: true } : null));
+  const r2 = zincir.kur({ protocol });
+  assert.strictEqual(r2.yeni, false);
+  assert.deepStrictEqual(kayitlar, ['file'], 'file şemasına tek kayıt');
+  const cagir = (rel) => { let out; h({ url: nodeUrl.pathToFileURL(path.join(k.base, rel)).toString() + '?v=2#x' }, (o) => { out = o; }); return out; };
+  assert.deepStrictEqual(cagir('book2/assets/57806/htmletk/u1/index.html'), { path: path.join(k.a, 'htmletk', 'u1', 'index.html') }, 'K WORK kopyası önde');
+  assert.deepStrictEqual(cagir('book2/index.html'), { path: path.join(k.base, 'book2', 'index.html') }, 'kimse söz almazsa paket');
+  assert.deepStrictEqual(cagir('book9/index.html'), { error: kg.NET_DOSYA_YOK }, 'G gizlediği yolu 404');
+  assert.strictEqual(r.sayac.work, 1);
+});
+
+test('ZİNCİR: handle yolu (intercept yok) — K WORK kopyası net.fetch(bypass) ile, G yok → 404', async () => {
+  const k = kitapKur({ vb: 2, vw: 4, isaretSurum: 4 });
+  const kapsam = {};
+  const zincir = kg.dosyaOrtusuZinciri(kapsam);
+  let h; const cagrilar = [];
+  const protocol = { handle: (s, fn) => { h = fn; } };
+  const net = { fetch: async (u, o) => { cagrilar.push([u, o]); return 'yanit'; } };
+  const r = m.protokolKur({ protocol, net, baseKok: k.base, workKok: k.work, log: sessiz, kapsam });
+  assert.strictEqual(r.yontem, 'zincir-handle');
+  zincir.ekle('set-guncelleme', 20, (p) => (p.includes(`${path.sep}book9${path.sep}`) ? { yok: true } : null));
+  await h({ url: nodeUrl.pathToFileURL(path.join(k.base, 'book2/assets/57806/htmletk/u1/index.html')).toString(), method: 'GET', headers: {} });
+  assert.strictEqual(cagrilar[0][0], nodeUrl.pathToFileURL(path.join(k.a, 'htmletk', 'u1', 'index.html')).toString());
+  assert.strictEqual(cagrilar[0][1].bypassCustomProtocolHandlers, true);
+  const yanit = await h({ url: nodeUrl.pathToFileURL(path.join(k.base, 'book9/index.html')).toString(), method: 'GET', headers: {} });
+  assert.strictEqual(yanit.status, 404);
+});
+
+test('ZİNCİR — anaSurecKur (Pardus, K açık): global zincir varsa K ona bağlanır; ready\'de tek kayıt', () => {
+  const k = kitapKur({ vb: 2, vw: 4, icerik: false });
+  const { EventEmitter } = require('node:events');
+  const app = new EventEmitter();
+  app.getPath = () => '/yok'; app.isReady = () => false;
+  const kayitlar = [];
+  const protocol = { interceptFileProtocol: (s) => { kayitlar.push(s); return true; } };
+  const onceki = global.__emppDosyaOrtusu;
+  try {
+    const z = kg.dosyaOrtusuZinciri(global);
+    const r = m.anaSurecKur({ electron: { app, protocol }, kok: k.base, platform: 'linux', env: { EMPP_WORK_DIR: k.work } });
+    assert.strictEqual(r.durum, 'kuruldu');
+    app.emit('ready');
+    assert.deepStrictEqual(kayitlar, ['file']);
+    assert.strictEqual(z.kurulu, 'intercept');
+    assert.deepStrictEqual(z.cozuculer.map((c) => c.ad), ['icerik']);
+  } finally {
+    if (onceki === undefined) delete global.__emppDosyaOrtusu; else global.__emppDosyaOrtusu = onceki;
+  }
+});

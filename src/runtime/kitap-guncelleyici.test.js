@@ -34,12 +34,23 @@ const govdeYap = (r) => (Buffer.isBuffer(r) ? r : Buffer.from(typeof r === 'stri
 function imzaRotalariEkle(rotalar) {
   const sonuc = Object.assign({}, rotalar);
   for (const yol of Object.keys(rotalar)) {
-    const r = rotalar[yol];
+    const r = manifestVarsayilan(yol, rotalar[yol]);
     if (!yol.endsWith('/manifest.json') || r instanceof Error) continue;
+    sonuc[yol] = r;
     if (Object.prototype.hasOwnProperty.call(rotalar, yol + kg.IMZA_UZANTI)) continue;
     sonuc[yol + kg.IMZA_UZANTI] = imzala(govdeYap(r));
   }
   return sonuc;
+}
+/**
+ * Fikstür varsayılanı (kimlik denetimi, 2026-09-26): manifest NESNESİNDE `kanal`/`setKimligi`
+ * yoksa G kanalı + yolun set kimliği doldurulur. Reddi sınayan testler alanları AÇIKÇA verir.
+ */
+function manifestVarsayilan(yol, r) {
+  if (!yol.endsWith('/manifest.json') || !r || Buffer.isBuffer(r) || typeof r !== 'object'
+    || r instanceof Error || Array.isArray(r)) return r;
+  const k = (yol.match(/\/set\/([^/]+)\/manifest\.json$/) || [])[1];
+  return Object.assign({ kanal: 'G', setKimligi: k ? decodeURIComponent(k) : '9001' }, r);
 }
 
 /* ------------------------------------------------------------- yardımcılar */
@@ -179,9 +190,9 @@ test('E2E: yalnız index.html değişti → SADECE o iner, atomik yerine konur, 
       'book1/veri.txt': 'kitap icerigi',
     });
     const s = await sunucuKur({
-      '/set/9001/surum.json': { surum: 'a'.repeat(64), uretim: '2026-09-21T00:00:00Z' },
+      '/set/9001/surum.json': { surum: '2.1.10', uretim: '2026-09-21T00:00:00Z' },
       '/set/9001/manifest.json': {
-        surum: 'a'.repeat(64),
+        surum: '2.1.10',
         kabuk: [
           { yol: 'index.html', sha256: ozet(yeni), boyut: Buffer.byteLength(yeni) },
           { yol: 'assets2/stil.css', sha256: ozet(sabit), boyut: Buffer.byteLength(sabit) },
@@ -215,9 +226,9 @@ test('E2E: kitap EKLEME uçtan uca — gerçek arşiv iner, açılır, yerine ko
     const kabuk = '<html>MENU: book7 var</html>';
     const kok = paketKur({ 'index.html': '<html>MENU: bos</html>' });
     const s = await sunucuKur({
-      '/set/9001/surum.json': { surum: 'b'.repeat(64) },
+      '/set/9001/surum.json': { surum: '2.1.11' },
       '/set/9001/manifest.json': {
-        surum: 'b'.repeat(64),
+        surum: '2.1.11',
         kabuk: [{ yol: 'index.html', sha256: ozet(kabuk), boyut: Buffer.byteLength(kabuk) }],
         kitaplar: [{
           dizin: 'book7', durum: 'ekle', kaynak: 'ARSIV',
@@ -271,10 +282,10 @@ test('E2E: kitap EKLEME uçtan uca — gerçek arşiv iner, açılır, yerine ko
 test('E2E: sürüm değişmedi → manifest HİÇ indirilmez (gerçek sunucu istek sayacı)',
   async () => {
     const kok = paketKur({ 'index.html': 'x' });
-    fs.writeFileSync(path.join(kok, kg.DAMGA_ADI), JSON.stringify({ surum: 'c'.repeat(64) }));
+    fs.writeFileSync(path.join(kok, kg.DAMGA_ADI), JSON.stringify({ surum: '2.1.12' }));
     const s = await sunucuKur({
-      '/set/9001/surum.json': { surum: 'c'.repeat(64) },
-      '/set/9001/manifest.json': { surum: 'c'.repeat(64), kabuk: [], kitaplar: [] },
+      '/set/9001/surum.json': { surum: '2.1.12' },
+      '/set/9001/manifest.json': { surum: '2.1.12', kabuk: [], kitaplar: [] },
     });
     try {
       const r = await kg.guncellemeyiCalistir({ taban: s.taban, set: SET(), kok, zamanAsimi: 4000 });
@@ -333,9 +344,9 @@ function getirKur(haritaHam, { imzasiz = false } = {}) {
 test('sha256 uyuşmazlığı → hedef dosya BOZULMAZ, geçici dosya atılır', async () => {
   const kok = paketKur({ 'index.html': 'ORIJINAL' });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: 'd'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.13' },
     '/set/9001/manifest.json': {
-      surum: 'd'.repeat(64),
+      surum: '2.1.13',
       kabuk: [{ yol: 'index.html', sha256: 'f'.repeat(64), boyut: 5 }],
       kitaplar: [],
     },
@@ -345,7 +356,9 @@ test('sha256 uyuşmazlığı → hedef dosya BOZULMAZ, geçici dosya atılır', 
   assert.strictEqual(r.durum, 'kismi');
   assert.strictEqual(oku(kok, 'index.html'), 'ORIJINAL', 'HEDEFE DOKUNULMAMALIYDI');
   assert.ok(!varMi(kok, 'index.html' + kg.GECICI_UZANTI), 'geçici dosya atılmalı');
-  assert.strictEqual(r.geciciAtilan, 1);
+  // Ya hep ya hiç (2026-09-26): gövde doğrulanmadan hiçbir yere YAZILMAZ; hazırlık alanı atılır.
+  assert.ok(!varMi(kok, kg.GECICI_DIZIN), 'hazırlık alanı atılmalı');
+  assert.strictEqual(r.sebep, 'kabuk-sha256-uyusmaz');
   assert.ok(!varMi(kok, kg.DAMGA_ADI), 'damga yazılmamalı — sonraki açılışta yeniden denenir');
 });
 
@@ -353,9 +366,9 @@ test('boyut manifest ile uyuşmuyor → dosya atlanır, hedef korunur', async ()
   const yeni = 'YENI';
   const kok = paketKur({ 'index.html': 'ORIJINAL' });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: 'e'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.14' },
     '/set/9001/manifest.json': {
-      surum: 'e'.repeat(64),
+      surum: '2.1.14',
       kabuk: [{ yol: 'index.html', sha256: ozet(yeni), boyut: 9999 }],
       kitaplar: [],
     },
@@ -371,9 +384,9 @@ test('yol kaçışı: `../` içeren kabuk yolu REDDEDİLİR, indirme isteği bil
     const kok = paketKur({ 'index.html': 'x' });
     const disari = path.join(path.dirname(kok), 'kacak.txt');
     const { getir, sayac } = getirKur({
-      '/set/9001/surum.json': { surum: '1'.repeat(64) },
+      '/set/9001/surum.json': { surum: '2.1.1' },
       '/set/9001/manifest.json': {
-        surum: '1'.repeat(64),
+        surum: '2.1.1',
         kabuk: [{ yol: '../kacak.txt', sha256: ozet('kotu'), boyut: 4 }],
         kitaplar: [],
       },
@@ -416,7 +429,7 @@ test('ağ hatası (fırlatan getir) → sessiz atlama', async () => {
 test('setKimligi null → kanal HİÇ çalışmaz, tek istek bile yapılmaz + GÜNLÜĞE yazılır',
   async () => {
     const kok = paketKur({ 'index.html': 'x' });
-    const { getir, sayac } = getirKur({ '/set/9001/surum.json': { surum: 'z'.repeat(64) } });
+    const { getir, sayac } = getirKur({ '/set/9001/surum.json': { surum: '2.1.35' } });
     const satirlar = [];
     const r = await kg.guncellemeyiCalistir({
       taban: 'https://uc',
@@ -439,9 +452,9 @@ test('silme KAPALI (varsayılan): manifestte olmayan kabuk artığı için unlin
       'assets2/eski.js': 'artik',
     });
     const { getir } = getirKur({
-      '/set/9001/surum.json': { surum: '2'.repeat(64) },
+      '/set/9001/surum.json': { surum: '2.1.2' },
       '/set/9001/manifest.json': {
-        surum: '2'.repeat(64),
+        surum: '2.1.2',
         kabuk: [{ yol: 'assets2/yeni.js', sha256: ozet(yeni), boyut: Buffer.byteLength(yeni) }],
         kitaplar: [],
       },
@@ -466,9 +479,9 @@ test('silme AÇIK: yalnız kabuk artığı silinir, kitap dizinlerine DOKUNULMAZ
     'book1/veri.txt': 'kitap',
   });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '3'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.3' },
     '/set/9001/manifest.json': {
-      surum: '3'.repeat(64),
+      surum: '2.1.3',
       kabuk: [{ yol: 'assets2/yeni.js', sha256: ozet(yeni), boyut: Buffer.byteLength(yeni) }],
       kitaplar: [],
     },
@@ -490,9 +503,9 @@ test('kitap ÇIKARMA: dizin gider, HAYALET madde (.empp-silinecek) kalmaz', asyn
     'book2/veri.txt': 'silinecek kitap',
   });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '4'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.4' },
     '/set/9001/manifest.json': {
-      surum: '4'.repeat(64),
+      surum: '2.1.4',
       kabuk: [{ yol: 'index.html', sha256: ozet(kabuk), boyut: Buffer.byteLength(kabuk) }],
       kitaplar: [{ dizin: 'book2', durum: 'cikar' }],
     },
@@ -513,9 +526,9 @@ test('EKLEME yarıda kesildi (sha uyuşmadı) → menü BOZULMAZ: kabuk eski kal
     const kabuk = '<html>MENU: book7 var</html>';
     const kok = paketKur({ 'index.html': '<html>MENU: bos</html>' });
     const { getir } = getirKur({
-      '/set/9001/surum.json': { surum: '5'.repeat(64) },
+      '/set/9001/surum.json': { surum: '2.1.5' },
       '/set/9001/manifest.json': {
-        surum: '5'.repeat(64),
+        surum: '2.1.5',
         kabuk: [{ yol: 'index.html', sha256: ozet(kabuk), boyut: Buffer.byteLength(kabuk) }],
         kitaplar: [{
           dizin: 'book7', durum: 'ekle', kaynak: 'https://uc/arsiv.zip',
@@ -533,7 +546,7 @@ test('EKLEME yarıda kesildi (sha uyuşmadı) → menü BOZULMAZ: kabuk eski kal
       },
     });
     assert.strictEqual(r.durum, 'kismi');
-    assert.strictEqual(r.sebep, 'uyelik-eksik-kabuk-atlandi');
+    assert.strictEqual(r.sebep, 'kitap-hazirlanamadi');
     assert.ok(!varMi(kok, 'book7'), 'yarım kitap menüye GİRMEMELİ');
     assert.strictEqual(oku(kok, 'index.html'), '<html>MENU: bos</html>',
       'üyelik eksikken KABUK GÜNCELLENMEMELİ — yoksa menü olmayan kitabı gösterir');
@@ -545,9 +558,9 @@ test('SIRA KURALI: çıkarma + kabuk — kitap hamlesi kabuk yazımından ÖNCE 
   const kabuk = 'YENI MENU';
   const kok = paketKur({ 'index.html': 'ESKI MENU', 'book3/a.txt': 'x' });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '6'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.6' },
     '/set/9001/manifest.json': {
-      surum: '6'.repeat(64),
+      surum: '2.1.6',
       kabuk: [{ yol: 'index.html', sha256: ozet(kabuk), boyut: Buffer.byteLength(kabuk) }],
       kitaplar: [{ dizin: 'book3', durum: 'cikar' }],
     },
@@ -558,11 +571,14 @@ test('SIRA KURALI: çıkarma + kabuk — kitap hamlesi kabuk yazımından ÖNCE 
     taban: 'https://uc', set: SET(), kok, getir, fs: izle.fs,
   });
   assert.strictEqual(r.durum, 'guncellendi');
+  // Çıkarma: kitap dizini hazırlık alanının yedeğine TAŞINIR (atomik rename; kesinleşince atılır).
   const kitapIdx = izle.kayit.findIndex(
-    (k) => k.op === 'rename' && String(k.hedef).endsWith('book3' + kg.SILINECEK_UZANTI));
+    (k) => k.op === 'rename' && k.p === path.join(kok, 'book3')
+      && String(k.hedef).startsWith(path.join(kok, kg.GECICI_DIZIN)));
   const kabukIdx = izle.kayit.findIndex(
-    (k) => k.op === 'rename' && String(k.hedef).endsWith('index.html'));
-  assert.ok(kitapIdx !== -1, 'çıkarma önce `.empp-silinecek` adına taşımalı (atomik)');
+    (k) => k.op === 'rename' && k.hedef === path.join(kok, 'index.html'));
+  assert.ok(kitapIdx !== -1, 'çıkarma önce kitabı yedeğe taşımalı (atomik)');
+  assert.ok(!varMi(kok, 'book3') && !varMi(kok, kg.GECICI_DIZIN), 'kitap gitmeli, artık kalmamalı');
   assert.ok(kabukIdx !== -1);
   assert.ok(kitapIdx < kabukIdx, 'SIRA İHLALİ: kabuk kitap hamlesinden önce yazıldı');
   assert.deepStrictEqual(r.sira.map((x) => x.tur), ['kitap-cikar', 'kabuk']);
@@ -571,9 +587,9 @@ test('SIRA KURALI: çıkarma + kabuk — kitap hamlesi kabuk yazımından ÖNCE 
 test('kabuk yarım kalırsa üyelik GERİ ALINIR — hayalet menü oluşmaz', async () => {
   const kok = paketKur({ 'index.html': 'ESKI MENU', 'book4/a.txt': 'x' });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '7'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.7' },
     '/set/9001/manifest.json': {
-      surum: '7'.repeat(64),
+      surum: '2.1.7',
       kabuk: [{ yol: 'index.html', sha256: ozet('YENI'), boyut: 4 }],
       kitaplar: [{ dizin: 'book4', durum: 'cikar' }],
     },
@@ -591,9 +607,9 @@ test('arşiv içi yol kaçışı (zip-slip) → kitap eklenmez, kök dışına y
   const kok = paketKur({ 'index.html': 'MENU' });
   const disari = path.join(path.dirname(kok), 'kacak.txt');
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '8'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.8' },
     '/set/9001/manifest.json': {
-      surum: '8'.repeat(64),
+      surum: '2.1.8',
       kabuk: [],
       kitaplar: [{
         dizin: 'book9', durum: 'ekle', kaynak: 'https://uc/a.zip',
@@ -643,8 +659,8 @@ test('varsayılan RET: bozuk manifest / bozuk girdi / bilinmeyen üyelik durumu'
 
   const kok = paketKur({ 'index.html': 'ORIJINAL' });
   const { getir } = getirKur({
-    '/set/9001/surum.json': { surum: '9'.repeat(64) },
-    '/set/9001/manifest.json': { surum: '9'.repeat(64), kitaplar: [] }, // kabuk YOK
+    '/set/9001/surum.json': { surum: '2.1.9' },
+    '/set/9001/manifest.json': { surum: '2.1.9', kitaplar: [] }, // kabuk YOK
   });
   const r = await kg.guncellemeyiCalistir({ taban: 'https://uc', set: SET(), kok, getir });
   assert.strictEqual(r.durum, 'atlandi');
@@ -669,7 +685,7 @@ test('istisna sızmaz: fs tamamen patlasa bile rapor döner, throw olmaz', async
   const patlak = new Proxy({}, { get: () => () => { throw new Error('disk oldu'); } });
   const r = await kg.guncellemeyiCalistir({
     taban: 'https://uc', set: SET(), kok: '/olmayan', fs: patlak,
-    getir: async () => ({ durum: 200, govde: Buffer.from(JSON.stringify({ surum: 'a'.repeat(64) })) }),
+    getir: async () => ({ durum: 200, govde: Buffer.from(JSON.stringify({ surum: '2.1.10' })) }),
   });
   assert.ok(r && typeof r === 'object');
   assert.ok(['atlandi', 'kismi'].includes(r.durum));
@@ -710,9 +726,9 @@ test('guncellemeyiBaslat: empp-set.json okunur, env tabanı gömülüyü EZER', 
   }));
   const yeni = 'YENI';
   const s = await sunucuKur({
-    '/set/9001/surum.json': { surum: 'aa'.repeat(32) },
+    '/set/9001/surum.json': { surum: '2.1.40' },
     '/set/9001/manifest.json': {
-      surum: 'aa'.repeat(32),
+      surum: '2.1.40',
       kabuk: [{ yol: 'index.html', sha256: ozet(yeni), boyut: Buffer.byteLength(yeni) }],
       kitaplar: [],
     },
@@ -743,9 +759,9 @@ test('setiNormalize: kimliksiz set GÖRÜNÜR kalır, alanlar güvenli türe ind
 function g4Harita(uzer = {}) {
   const yeni = 'YENI-G4';
   return Object.assign({
-    '/set/9001/surum.json': { surum: 'e'.repeat(64) },
+    '/set/9001/surum.json': { surum: '2.1.14' },
     '/set/9001/manifest.json': {
-      surum: 'e'.repeat(64),
+      surum: '2.1.14',
       kabuk: [{ yol: 'index.html', sha256: ozet(yeni), boyut: Buffer.byteLength(yeni) }],
       kitaplar: [],
     },

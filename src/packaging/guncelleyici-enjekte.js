@@ -16,6 +16,12 @@
  *     (pencereyi açan `.then` bizden önce kayıtlıdır, sırayla koşar) ve üstüne
  *     `setTimeout` ile ötelenir. Ateşle-unut; `catch` ile yutulur.
  *
+ * ÖRTÜ (mac + Pardus, 2026-09-26): blok ayrıca main.js YÜKLENİRKEN (senkron) modülün
+ * `ortuSunucusunuKur`'unu çağırır — imzalı `.app` / `app.asar` gövdesi salt-okunur olduğu için
+ * güncel dosyalar yazılabilir bir örtüden `file:` kancasıyla sunulur ve kanca pencere
+ * yüklenmeden (`ready` anında) kurulmalıdır. Windows'ta (yerinde kip) ve örtü yokken bu çağrı
+ * hiçbir şey yapmaz; güncelleme akışı yine ötelenmiş ateşle-unut koşar.
+ *
  * NEDEN sona ekleniyor: `createWindow()` çağrısının kendisini yeniden yazmak
  * (acilis-guncelleme-oteleme.js'in yaptığı) burada gereksiz risk. Dosyanın
  * sonuna eklenen bağımsız blok yayıncı kodunun hiçbir ifadesine dokunmaz.
@@ -62,13 +68,17 @@ function blokUret(gecikmeMs = VARSAYILAN_GECIKME_MS) {
 /* ${ISARET}: set güncelleyici — pencere açıldıktan SONRA, ötelenmiş, ateşle-unut */
 try {
   (function () {
-    var __emppApp = require('electron').app;
+    var __emppElectron = require('electron');
+    var __emppApp = __emppElectron.app;
     if (!__emppApp || typeof __emppApp.whenReady !== 'function') return;
+    /* Örtü (mac + Pardus): imzası doğrulanmış güncel dosyalar paketin önünde sunulur;
+       kurulum ready anında, pencere yüklenmeden. Windows'ta ve örtü yokken hiçbir şey yapmaz. */
+    try { require('./${MODUL_ADI}').ortuSunucusunuKur({ electron: __emppElectron, kok: __dirname }); } catch (e) {}
     __emppApp.whenReady().then(function () {
       setTimeout(function () {
         try {
           var __emppGunc = require('./${MODUL_ADI}');
-          Promise.resolve(__emppGunc.guncellemeyiBaslat({ kok: __dirname }))
+          Promise.resolve(__emppGunc.guncellemeyiBaslat({ kok: __dirname, electron: __emppElectron }))
             .catch(function () {});
         } catch (e) {}
       }, ${gecikme});
