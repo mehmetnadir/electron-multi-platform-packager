@@ -193,7 +193,11 @@ function etkinYetenekler(caps, durum) {
   // kesin bir boolean geçer.
   const aracKirik = d.macAraci === false;
   const izin = !d.macDurdur && !aracKirik && (Boolean(d.ofiste) || Boolean(d.macSerbest));
-  return izin ? caps.slice() : caps.filter((c) => !macMi(c));
+  // WINDOWS (2026-09-26, windows-serit.js): yalnız `EMPP_RUNNER_WINDOWS=1` (windowsAcik) VE imza
+  // yuvası ölçülüp erişilir bulunduysa (imzaYuvasi === true) ilan edilir. İmzasız Windows paketi
+  // yayına çıkamayacağı için yuvaya ulaşamayan ajan işi hiç kiralamaz. Ölçülmediyse ilan YOK.
+  const windowsIzin = d.windowsAcik === true && d.imzaYuvasi === true;
+  return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows'));
 }
 
 /** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */

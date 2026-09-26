@@ -137,6 +137,7 @@ Aktivasyon: çevrimdışı pakette `imKeys.dll` / İmpark DB anahtar kanalı old
    (Nadir onayı) şart.
 10. Kaynak ayrıntısı artık `kitap-kaynak-sozlesmesi.md`'de (TASLAK): düz zip kanonik, delta tamamlama,
     İmpark exe yalnız fallback.
+11. Runner Windows şeridi dalda (`runner-windows`, `src/agent/windows-serit.js`), anahtar `EMPP_RUNNER_WINDOWS` KAPALI: üret → kapı (13 G) → kabul → `_hazir` → sıralı imza → osslsigncode + md5 → kabul → R2 `build_method=build`; imzasız yol yok, G set'ini runner yüklemez (tek yazar g-yayin).
 
 ## Yapılmayacaklar
 Aktivasyon akışına dokunmak · yayıncının özel menüsüne dokunmak (K17) · asar'ı SET dışında değiştirmek ·

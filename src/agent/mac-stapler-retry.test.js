@@ -322,7 +322,7 @@ test('NOTER KAPISI: imza kimliği tanımsız → DMG imzasız yüklenmez (KALICI
 test('kaynak-sentinel: processJob noter adımını try/catch ile SARMAZ ve yüklemeden ÖNCE çağırır', () => {
   const src = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
   const i = src.indexOf('await signAndNotarizeMac(artifactPath);');
-  const j = src.indexOf('await postResultSuccess(auth, job, artifactPath);');
+  const j = src.indexOf('const yayin = await postResultSuccess(auth, job, yayinYolu);');
   assert.ok(i > 0 && j > i, 'noter adımı yüklemeden önce olmalı');
   const onu = src.slice(src.lastIndexOf('// 4. macOS', i), j);
   assert.doesNotMatch(onu, /catch|try\s*\{/, 'noter hatası yutulmamalı');
