@@ -243,6 +243,35 @@ function adbKos(arac, seri, argumanlar, secenek = {}) {
   return kos(arac.adb, ['-s', seri, ...argumanlar], secenek);
 }
 
+/**
+ * Host aşırı yüklüyken (ölçüldü 26.09: load avg 133/10 çekirdek) virtio-wifi'nin sanal
+ * "AndroidWifi" erişim noktasına DHCP kirası zaman aşımına uğrayabiliyor: wlan0 L2'de
+ * BAĞLI (Supplicant COMPLETED) ama IP/DNS/varsayılan rota hiç gelmiyor, `dumpsys
+ * connectivity` "Active default network: none" basıyor ve WebView "Network is offline"
+ * ile açılıyor — kod/DNS-sunucusu/uçak-kipi sorunu DEĞİL. `svc wifi disable`+`enable`
+ * DHCP'yi yeniden tetikliyor, birkaç saniyede VALIDATED oluyor (ölçüldü). Saf değil (adb).
+ * @returns {Promise<boolean>} ağ VALIDATED oldu mu
+ */
+async function agHazirBekle(arac, seri, log, zamanAsimiSn = 20) {
+  const hazirMi = () => /VALIDATED/.test(String(adbKos(arac, seri, ['shell', 'dumpsys', 'connectivity'], { zamanAsimiMs: 8000 }).stdout || ''));
+  const beklermisin = async (sn) => {
+    const bas = Date.now();
+    while ((Date.now() - bas) / 1000 < sn) {
+      if (hazirMi()) return true;
+      await bekle(2000);
+    }
+    return false;
+  };
+  if (await beklermisin(zamanAsimiSn)) return true;
+  log('cihaz: ağ VALIDATED olmadı (DHCP zaman aşımı olası) — wifi kapat/aç ile yeniden tetikleniyor');
+  adbKos(arac, seri, ['shell', 'svc', 'wifi', 'disable']);
+  await bekle(2000);
+  adbKos(arac, seri, ['shell', 'svc', 'wifi', 'enable']);
+  const tamam = await beklermisin(zamanAsimiSn);
+  log(`cihaz: ağ yeniden deneme sonucu — ${tamam ? 'VALIDATED' : 'hâlâ ağsız'}`);
+  return tamam;
+}
+
 async function bootBekle(arac, seri, zamanAsimiSn, log, bitti = () => false) {
   const bas = Date.now();
   let son = '';
@@ -422,6 +451,8 @@ async function cihazKabulu(p) {
     adbKos(arac, seri, ['shell', 'settings', 'put', 'secure', 'immersive_mode_confirmations', 'confirmed']);
     const ekranId = etkinEkranCoz(adbKos(arac, seri, ['shell', 'dumpsys', 'display'], { zamanAsimiMs: 30000 }).stdout);
     sonuc.emulator.ekranId = ekranId;
+    sonuc.emulator.agHazir = await agHazirBekle(arac, seri, log);
+    if (!sonuc.emulator.agHazir) sonuc.sebepler.push('ağ VALIDATED olmadı (DHCP zaman aşımı, host yükünü kontrol et) — ölçüm ağsız devam edebilir');
 
     const kurBas = Date.now();
     const kur = adbKos(arac, seri, ['install', '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
