@@ -329,7 +329,11 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
 /**
  * @param {{apk:string, kanit:string, avd?:string, beklenenKart:number, setMi:boolean,
  *          kitapAdlari?:string[], aktivasyon?:boolean, log?:Function,
- *          bootSn?:number, menuBekleSn?:number, kitapBekleSn?:number}} p
+ *          bootSn?:number, menuBekleSn?:number, kitapBekleSn?:number,
+ *          mevcutSeri?:string, kurulumYok?:boolean}} p
+ *   `mevcutSeri`: ZATEN koşan emülatörde ölç (başlatma/kapatma yok) — uzaktan güncelleme (G)
+ *   gibi cihaz durumunu değiştiren bir adımın ÖNCESİ ve SONRASI aynı ölçütle ölçülsün diye.
+ *   `kurulumYok`: paket kurulu kalır (kurma/kaldırma yok); uygulama `am start -S` ile baştan açılır.
  * @returns {Promise<{durum:string, sebepler:string[], notlar:string[], ...}>}
  */
 async function cihazKabulu(p) {
@@ -358,9 +362,10 @@ async function cihazKabulu(p) {
 
   const oncekiler = cihazlariCoz(kos(arac.adb, ['devices']).stdout);
   const kullanilan = oncekiler.map((c) => Number((/^emulator-(\d+)$/.exec(c.seri) || [])[1])).filter(Boolean);
-  const port = bosPortSec(kullanilan);
-  if (!port) { sonuc.sebepler.push('boş emülatör portu yok'); return sonuc; }
-  const seri = `emulator-${port}`;
+  const mevcut = p.mevcutSeri || null;
+  const port = mevcut ? null : bosPortSec(kullanilan);
+  if (!mevcut && !port) { sonuc.sebepler.push('boş emülatör portu yok'); return sonuc; }
+  const seri = mevcut || `emulator-${port}`;
   sonuc.emulator = { seri, oncekiCihazlar: oncekiler.map((c) => c.seri), denemeler: [] };
 
   let emu = null;
@@ -368,8 +373,9 @@ async function cihazKabulu(p) {
   let emuLog = null;
   let kurulu = false;
   try {
-    let bootSn = null;
-    for (const avd of adaylar) {
+    let bootSn = mevcut ? 0 : null;
+    if (mevcut) sonuc.emulator.mevcut = true;
+    for (const avd of (mevcut ? [] : adaylar)) {
       log(`cihaz: ${avd} pencerisiz başlatılıyor (port ${port}; önceden koşan: ${oncekiler.map((c) => c.seri).join(',') || 'yok'})`);
       const logYolu = path.join(kanitDizin, `emulator-${avd}.log`);
       emuLog = fs.openSync(logYolu, 'w');
@@ -410,7 +416,7 @@ async function cihazKabulu(p) {
       return sonuc;
     }
     sonuc.emulator.acilisSn = bootSn;
-    const tur = kos('lsappinfo', ['info', '-only', 'ApplicationType', String(emu.pid)]).stdout || '';
+    const tur = emu ? (kos('lsappinfo', ['info', '-only', 'ApplicationType', String(emu.pid)]).stdout || '') : '';
     sonuc.emulator.uygulamaTuru = (/"ApplicationType"="([^"]*)"/.exec(tur) || [])[1] || 'kayıtsız (GUI uygulaması değil)';
     log(`cihaz: açıldı (${bootSn} sn) · emülatör süreç türü ${sonuc.emulator.uygulamaTuru}`);
     // Ekran uykusu/kilidi ölçümü bozmasın.
@@ -423,19 +429,23 @@ async function cihazKabulu(p) {
     const ekranId = etkinEkranCoz(adbKos(arac, seri, ['shell', 'dumpsys', 'display'], { zamanAsimiMs: 30000 }).stdout);
     sonuc.emulator.ekranId = ekranId;
 
-    const kurBas = Date.now();
-    const kur = adbKos(arac, seri, ['install', '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
-    sonuc.kurulumSn = Math.round((Date.now() - kurBas) / 1000);
-    if (kur.status !== 0 || !/Success/.test(String(kur.stdout))) {
-      sonuc.sebepler.push(`adb install düştü: ${String(kur.stdout || kur.stderr).trim().slice(-200)}`);
-      return sonuc;
+    if (!p.kurulumYok) {
+      const kurBas = Date.now();
+      const kur = adbKos(arac, seri, ['install', '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
+      sonuc.kurulumSn = Math.round((Date.now() - kurBas) / 1000);
+      if (kur.status !== 0 || !/Success/.test(String(kur.stdout))) {
+        sonuc.sebepler.push(`adb install düştü: ${String(kur.stdout || kur.stderr).trim().slice(-200)}`);
+        return sonuc;
+      }
+      kurulu = true;
+      log(`cihaz: kuruldu (${sonuc.kurulumSn} sn) — ${paketBilgi.paket}`);
+    } else {
+      log(`cihaz: kurulu paket kullanılıyor (kurulum/kaldırma yok) — ${paketBilgi.paket}`);
     }
-    kurulu = true;
-    log(`cihaz: kuruldu (${sonuc.kurulumSn} sn) — ${paketBilgi.paket}`);
     adbKos(arac, seri, ['logcat', '-c']);
     const hedef = paketBilgi.etkinlik ? `${paketBilgi.paket}/${paketBilgi.etkinlik}` : null;
     const bas = hedef
-      ? adbKos(arac, seri, ['shell', 'am', 'start', '-W', '-n', hedef], { zamanAsimiMs: 60000 })
+      ? adbKos(arac, seri, ['shell', 'am', 'start', '-W', ...(p.kurulumYok ? ['-S'] : []), '-n', hedef], { zamanAsimiMs: 60000 })
       : adbKos(arac, seri, ['shell', 'monkey', '-p', paketBilgi.paket, '-c', 'android.intent.category.LAUNCHER', '1']);
     sonuc.baslat = String(bas.stdout || '').trim().split('\n').slice(-3).join(' | ');
 
