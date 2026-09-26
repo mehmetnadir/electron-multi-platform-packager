@@ -208,6 +208,10 @@ function izliPaket(o) {
     '#!/bin/bash',
     `{ echo "HOME=$HOME"; echo "XDG_CONFIG_HOME=\${XDG_CONFIG_HOME:-}"; echo "XDG_CACHE_HOME=\${XDG_CACHE_HOME:-}";`
       + ` echo "XDG_DATA_HOME=\${XDG_DATA_HOME:-}"; echo "ARGS=$*"; } > "${iz}"`,
+    // Ayrı evde motorun K indirmesini taklit et: work/book1/<zip> + work/empp-icerik.log.
+    'if [ -n "${XDG_CONFIG_HOME:-}" ]; then W="$XDG_CONFIG_HOME/deneme-set/work"; mkdir -p "$W/book1/pages";'
+      + ' printf zipverisi > "$W/book1/44187-36.zip"; printf sayfa > "$W/book1/pages/1.png";'
+      + ' printf gunluk > "$W/empp-icerik.log"; printf yarim > "$W/indiriliyor.zip"; fi',
     'sleep 1', '',
   ].join('\n'), { mode: 0o755 });
   return iz;
@@ -235,7 +239,9 @@ async function bosPortTut(taban) {
 test('bayraklar varsayilan KAPALI: CDP/E8/aktivasyon-olculemedi yalniz acikca 1 ile', () => {
   const s = kaynak();
   assert.match(s, /CDP="\$\{KABUL_CDP:-0\}"/);
-  assert.match(s, /AYRI_EV="\$\{KABUL_AYRI_EV:-0\}"/);
+  assert.match(s, /if \[ -n "\$\{KABUL_AYRI_EV:-\}" \]; then AYRI_EV="\$KABUL_AYRI_EV"; else AYRI_EV="\$CDP"; fi/,
+    'ayrı ev yalnız CDP ile varsayılan açılır; CDP kapalıyken kapalı');
+  assert.match(s, /EV_GUN="\$\{KABUL_EV_GUN:-1\}"/);
   assert.match(s, /AKT_OLC="\$\{KABUL_AKTIVASYON_OLCULEMEDI:-0\}"/);
 });
 
@@ -253,7 +259,7 @@ test('bayraklar kapaliyken paket ESKISI GIBI baslar: gercek HOME, XDG yok, --rem
   assert.match(r.stdout, /eski kurulumlar gizleniyor \+ paket baslatiliyor/);
 });
 
-test('E8 + CDP: ayri ev (HOME+XDG), bos CDP portu (3000 degil, dolu port atlanir), ogretmen kurulumu GIZLENMEZ, eski ev budanir', async () => {
+test('CDP acik → ayri ev VARSAYILAN (KABUL_AYRI_EV verilmeden): HOME+XDG, bos CDP portu, ogretmen kurulumu GIZLENMEZ, indirilen K icerigi tutulmaz (liste+md5), 1 gunden eski ev budanir', async () => {
   const o = yerelOrtam();
   const iz = izliPaket(o);
   const ogretmen = path.join(o.home, 'DijiTap', 'DijiTap', 'Eski Set');
@@ -263,9 +269,11 @@ test('E8 + CDP: ayri ev (HOME+XDG), bos CDP portu (3000 degil, dolu port atlanir
   const evKok = path.join(o.home, 'empp-serit', 'kabul-ev');
   const eskiEv = path.join(evKok, 'ev-1-1');
   const baska = path.join(evKok, 'baska');
-  for (const d of [eskiEv, baska]) {
+  const dunkuEv = path.join(evKok, 'ev-2-2');
+  const tazeEv = path.join(evKok, 'ev-3-3');
+  for (const [d, saat] of [[eskiEv, 240], [baska, 240], [dunkuEv, 30], [tazeEv, 12]]) {
     fs.mkdirSync(d, { recursive: true });
-    const on = (Date.now() - 10 * 86400 * 1000) / 1000;
+    const on = (Date.now() - saat * 3600 * 1000) / 1000;
     fs.utimesSync(d, on, on);
   }
   const tut = await bosPortTut(9337);
@@ -273,7 +281,7 @@ test('E8 + CDP: ayri ev (HOME+XDG), bos CDP portu (3000 degil, dolu port atlanir
     const kanit = path.join(o.kok, 'kanit');
     const r = await new Promise((coz) => {
       const p = spawn('bash', [BETIK, o.paket, kanit], {
-        env: { ...temizEnv(o.env), KABUL_CDP: '1', KABUL_AYRI_EV: '1', KABUL_CDP_PORT_TABAN: String(tut.port) },
+        env: { ...temizEnv(o.env), KABUL_CDP: '1', KABUL_CDP_PORT_TABAN: String(tut.port) },
       });
       let out = '';
       p.stdout.on('data', (d) => { out += d; });
@@ -304,6 +312,21 @@ test('E8 + CDP: ayri ev (HOME+XDG), bos CDP portu (3000 degil, dolu port atlanir
     assert.ok(fs.existsSync(v.HOME), 'kabul evi kanıt olarak kalmalı');
     assert.equal(fs.existsSync(eskiEv), false, 'eski ev-* budanmalı');
     assert.ok(fs.existsSync(baska), 'ev-* dışı dizine dokunulmaz');
+    assert.equal(fs.existsSync(dunkuEv), false, 'varsayılan saklama 1 gün: 30 saatlik ev budanır');
+    assert.ok(fs.existsSync(tazeEv), '12 saatlik ev kalır');
+    // Kabulde indirilen K içeriği tutulmaz; yalnız liste + boyut + md5. Günlük kalır.
+    const w = path.join(v.HOME, '.config', 'deneme-set', 'work');
+    assert.deepEqual(fs.readdirSync(w), ['empp-icerik.log'], 'work altında yalnız *.log kalmalı');
+    const liste = fs.readFileSync(path.join(kanit, 'work-liste.txt'), 'utf8').trim().split('\n').sort();
+    const md5 = (x) => require('node:crypto').createHash('md5').update(x).digest('hex');
+    assert.deepEqual(liste, [
+      `${md5('zipverisi')} 9 .config/deneme-set/work/book1/44187-36.zip`,
+      `${md5('sayfa')} 5 .config/deneme-set/work/book1/pages/1.png`,
+      `${md5('yarim')} 5 .config/deneme-set/work/indiriliyor.zip`,
+    ].sort());
+    assert.match(ortam, /WORK_INDIRILEN=3 dosya, 19 B/);
+    assert.doesNotMatch(fs.readFileSync(path.join(kanit, 'ev-bitis.log'), 'utf8'), /^WORK /m);
+    assert.match(ortam, /EV_KULLANILAN=.*\/empp-serit\/kabul-ev\/ev-.* \(ayri\)/);
   } finally {
     tut.s.close();
   }
@@ -330,4 +353,19 @@ test('E8: kabul evi yolunda kabuk metakarakteri → OLCULEMEDI, hicbir sey calis
   });
   assert.equal(r.status, 4, r.stdout);
   assert.match(r.stdout, /gecersiz kabul evi yolu/);
+});
+
+test('CDP acik + acikca KABUL_AYRI_EV=0: gercek HOME ile acilir, UYARI + hangi ev kullanildigi kanita yazilir', () => {
+  const o = yerelOrtam();
+  const iz = izliPaket(o);
+  const kanit = path.join(o.kok, 'kanit');
+  const r = spawnSync('bash', [BETIK, o.paket, kanit], {
+    encoding: 'utf8', env: { ...temizEnv(o.env), KABUL_CDP: '1', KABUL_AYRI_EV: '0' }, timeout: 60000,
+  });
+  assert.equal(r.status, 1, r.stdout); // Mac'te pencere yok → RED; karar kuralı kabul-karar.test.js'te
+  const v = izOku(iz);
+  assert.equal(v.HOME, o.home);
+  assert.match(v.ARGS, /--remote-debugging-port=\d+/);
+  assert.match(r.stdout, /UYARI: KABUL_AYRI_EV=0 — uygulama GERCEK HOME ile acilacak; E7 guvenilmez, karar OLCULEMEDI olur/);
+  assert.match(fs.readFileSync(path.join(kanit, 'ortam.txt'), 'utf8'), /EV_KULLANILAN=.* \(GERCEK HOME\)/);
 });
