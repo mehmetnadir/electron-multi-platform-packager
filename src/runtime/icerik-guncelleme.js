@@ -33,28 +33,85 @@ var PAD_SON = 27;
 var PAD_ARA = 4;
 
 // ─── Menü (ImWin32.dll) kodlama ──────────────────────────────────────────────
-// Motorun kendi biçimi (main bundle, `E()`): 27 rastgele karakter + her karakterden sonra
-// 4 rastgele karakter + 27 rastgele karakter. Rastgeleler 1..125 (ASCII) — dosya UTF-8
-// yazıldığı için ÇÖZME dizgi (UTF-16 kod birimi) düzeyinde yapılır, bayt düzeyinde değil
-// (bayt düzeyi "İmpark" gibi çok baytlı karakterlerde kayıyor — ölçüldü).
+// Rastgeleler 1..125 (ASCII) — dosya UTF-8 yazıldığı için ÇÖZME dizgi (UTF-16 kod birimi)
+// düzeyinde yapılır, bayt düzeyinde değil (bayt düzeyi "İmpark" gibi çok baytlı karakterlerde
+// kayıyor — ölçüldü).
+//
+// İKİ BİÇİM (2026-09-26, okuyucunun kendi çözücüsü `w()` okundu — 72378 Lingoland
+// `a8f43f74c72b65a3dd05.main.js`):
+//   27/5   : 27 baş + her karakterden sonra 4 rastgele + 27 kuyruk. Motorun KENDİ yazıcısı
+//            (`E()`) bu biçimle yazar; 45482 gibi eski üretim menüleri de böyle.
+//   127/17 : 127 baş + her karakterden sonra 16 rastgele + 127 kuyruk. Panelin yeni exe
+//            üreticisi; 72378 ve 73581'in dört kitabı bu biçimde. Eskiden yalnız 27/5
+//            bilindiği için bu menüler "çözülemedi" sayılıyordu (K uzlaşması kör, merdiven S0
+//            ÖLÇÜLEMEDİ) — okuyucu ise ikisini de açıyor.
+// Seçim motorla AYNI sırada: s[127]=='<' ve s[len-144]=='>' → 127/17; s[27]=='<' ve
+// s[len-32]=='>' → 27/5; motor ikisi de tutmazsa 127/17 dener. Biz iki biçimi de deneriz ama
+// yalnız `<main` üreteni kabul ederiz (sahte çözüm yok).
+var BICIM_ESKI = { bas: PAD_BAS, ara: PAD_ARA, son: PAD_SON }; // 27/5
+var BICIM_YENI = { bas: 127, ara: 16, son: 127 }; // 127/17
 
-function menuCoz(veri) {
-  var s = Buffer.isBuffer(veri) ? veri.toString('utf8') : String(veri == null ? '' : veri);
-  if (/^\s*<\?xml|^\s*<main\b/.test(s)) return s; // zaten açık metin
-  if (s.length < PAD_BAS + PAD_SON + 1) return null;
-  var govde = s.slice(PAD_BAS, s.length - PAD_SON);
-  var out = '';
-  for (var i = 0; i < govde.length; i += PAD_ARA + 1) out += govde.charAt(i);
-  return /<main\b/.test(out) ? out : null;
+function menuMetni(veri) {
+  return Buffer.isBuffer(veri) ? veri.toString('utf8') : String(veri == null ? '' : veri);
 }
 
-function menuKodla(xml, rastgele) {
+function bicimleCoz(s, b) {
+  if (s.length < b.bas + b.son + 1) return null;
+  var govde = s.slice(b.bas, s.length - b.son);
+  var out = '';
+  for (var i = 0; i < govde.length; i += b.ara + 1) out += govde.charAt(i);
+  // Tam belge şartı: yanlış biçimle ya da kesik dosyada `<main` tesadüfen çıkabilir; motor o
+  // durumda XML'i ayrıştıramaz — biz de "çözüldü" demeyiz.
+  return /<main\b[\s\S]*<\/main>\s*$/.test(out) ? out : null;
+}
+
+/** Motorun deneme sırası (okuyucu `w()`): önce işaretlerin tuttuğu biçim. */
+function bicimSirasi(s) {
+  var n = s.length;
+  if (s.charAt(BICIM_YENI.bas) === '<' && s.charAt(n - BICIM_YENI.son - BICIM_YENI.ara - 1) === '>') return [BICIM_YENI, BICIM_ESKI];
+  if (s.charAt(BICIM_ESKI.bas) === '<' && s.charAt(n - BICIM_ESKI.son - BICIM_ESKI.ara - 1) === '>') return [BICIM_ESKI, BICIM_YENI];
+  return [BICIM_YENI, BICIM_ESKI];
+}
+
+/**
+ * Menünün kodlama biçimi: {bas, ara, son} ya da null (açık metin ya da çözülemez).
+ * Yeniden yazarken kaynağın biçimini korumak için (bkz. menuKodla üçüncü argüman).
+ */
+function menuBicimi(veri) {
+  var s = menuMetni(veri);
+  if (/^\s*<\?xml|^\s*<main\b/.test(s)) return null;
+  var sira = bicimSirasi(s);
+  for (var k = 0; k < sira.length; k++) {
+    if (bicimleCoz(s, sira[k])) return { bas: sira[k].bas, ara: sira[k].ara, son: sira[k].son };
+  }
+  return null;
+}
+
+function menuCoz(veri) {
+  var s = menuMetni(veri);
+  if (/^\s*<\?xml|^\s*<main\b/.test(s)) return s; // zaten açık metin
+  var sira = bicimSirasi(s);
+  for (var k = 0; k < sira.length; k++) {
+    var out = bicimleCoz(s, sira[k]);
+    if (out) return out;
+  }
+  return null;
+}
+
+/**
+ * @param {string} xml
+ * @param {Function} [rastgele] 0..1 üreteci (test için)
+ * @param {{bas:number, ara:number, son:number}} [bicim] verilmezse motorun kendi yazıcısının
+ *   biçimi (27/5). Var olan bir menü yeniden yazılırken `menuBicimi(eski)` verilir.
+ */
+function menuKodla(xml, rastgele, bicim) {
   var rnd = typeof rastgele === 'function' ? rastgele : Math.random;
+  var b = bicim && bicim.bas > 0 && bicim.ara >= 0 && bicim.son > 0 ? bicim : BICIM_ESKI;
   var t = '';
   function doldur(n) { for (var k = 0; k < n; k++) t += String.fromCharCode(Math.floor(125 * rnd()) + 1); }
-  doldur(PAD_BAS);
-  for (var i = 0; i < xml.length; i++) { t += xml.charAt(i); doldur(PAD_ARA); }
-  doldur(PAD_SON);
+  doldur(b.bas);
+  for (var i = 0; i < xml.length; i++) { t += xml.charAt(i); doldur(b.ara); }
+  doldur(b.son);
   return t;
 }
 
@@ -299,7 +356,8 @@ function uzlastir(o) {
       try {
         var wMenu = pathMod.join(o.workKok, rel, MENU_GORELI);
         if (!fsMod.existsSync(wMenu)) return;
-        var wXml = menuCoz(fsMod.readFileSync(wMenu));
+        var wHam = fsMod.readFileSync(wMenu);
+        var wXml = menuCoz(wHam);
         var bXml = menuCoz(fsMod.readFileSync(pathMod.join(o.baseKok, rel, MENU_GORELI)));
         if (!wXml || !bXml) {
           rapor.push({ kitap: rel || '.', sebep: 'cozulemedi' });
@@ -318,7 +376,7 @@ function uzlastir(o) {
         if (sonuc.degisti) {
           fsMod.mkdirSync(pathMod.join(eskiKok, 'classlibraries'), { recursive: true });
           fsMod.copyFileSync(wMenu, pathMod.join(eskiKok, MENU_GORELI));
-          fsMod.writeFileSync(wMenu, menuKodla(sonuc.xml, rastgele));
+          fsMod.writeFileSync(wMenu, menuKodla(sonuc.xml, rastgele, menuBicimi(wHam)));
         }
         sonuc.kenarayaAl.forEach(function (id) {
           var kaynak = assetsW(id);
@@ -678,7 +736,7 @@ function menuSuz(yeniVeri, eskiVeri, ctx) {
     ctx.log('[empp-icerik] SAHTE İLERLETME ENGELLENDİ: ' + c.ID + ' v' + e.version + '→v' + c.version + ' (içerik açılmadı)');
   });
   if (!degisti) return yeniVeri;
-  var kodlu = menuKodla(xml, ctx.rastgele);
+  var kodlu = menuKodla(xml, ctx.rastgele, menuBicimi(yeniVeri));
   return Buffer.isBuffer(yeniVeri) ? Buffer.from(kodlu, 'utf8') : kodlu;
 }
 
@@ -809,7 +867,8 @@ function rendererKur(win, o) {
 module.exports = {
   MENU_GORELI: MENU_GORELI, ISARET_ADI: ISARET_ADI, ESKI_DIZIN: ESKI_DIZIN, LOG_ADI: LOG_ADI,
   BASARISIZ_ADI: BASARISIZ_ADI, ESKI_BASARISIZ_TAVAN: ESKI_BASARISIZ_TAVAN, VENDOR_ADM_ZIP: VENDOR_ADM_ZIP, GECICI_DIZIN: GECICI_DIZIN, KILIT_ADI: KILIT_ADI, YAPISAL_DENEME: YAPISAL_DENEME,
-  menuCoz: menuCoz, menuKodla: menuKodla, kapaklar: kapaklar, kapakAyarla: kapakAyarla,
+  menuCoz: menuCoz, menuKodla: menuKodla, menuBicimi: menuBicimi, BICIM_ESKI: BICIM_ESKI, BICIM_YENI: BICIM_YENI,
+  kapaklar: kapaklar, kapakAyarla: kapakAyarla,
   kapakKarari: kapakKarari, menuUzlastir: menuUzlastir, uzlastir: uzlastir, menuDizinleri: menuDizinleri,
   kilitAl: kilitAl, zamanDamgasi: zamanDamgasi, girdiGoreli: girdiGoreli,
   dosyaEsle: dosyaEsle, protokolKur: protokolKur, anaSurecKur: anaSurecKur,

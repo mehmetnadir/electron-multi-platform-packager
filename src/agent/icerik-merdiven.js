@@ -640,9 +640,10 @@ async function s1Uygula(o) {
     // Menü sürümü YALNIZ içerik doğrulandıktan sonra ilerler (runtime menuSuz kalıbı).
     let m = menuler.get(s.kok);
     if (!m) {
-      const xml = ig.menuCoz(zipGirdiOku(o.zip, once.get(`${s.kok}${MENU}`)));
+      const ham = zipGirdiOku(o.zip, once.get(`${s.kok}${MENU}`));
+      const xml = ig.menuCoz(ham);
       if (!xml) throw new Error(`${s.kitap}: menü çözülemedi (S1)`);
-      m = { xml };
+      m = { xml, bicim: ig.menuBicimi(ham) }; // kaynağın kodlama biçimi korunur (27/5 ya da 127/17)
       menuler.set(s.kok, m);
     }
     m.xml = ig.kapakAyarla(m.xml, id, { version: s.vs, URL: s.data });
@@ -657,7 +658,7 @@ async function s1Uygula(o) {
   for (const [kok, m] of menuler) {
     const yol = path.join(sahne, kok, MENU);
     await fsp.mkdir(path.dirname(yol), { recursive: true });
-    await fsp.writeFile(yol, ig.menuKodla(m.xml));
+    await fsp.writeFile(yol, ig.menuKodla(m.xml, undefined, m.bicim));
   }
 
   // KÖK KORUMA 1: sahnedeki her dosya izin listesinde olmalı (zip'e girmeden).

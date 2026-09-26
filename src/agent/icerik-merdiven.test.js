@@ -235,6 +235,29 @@ test('S1: tek kitap (kök menü) — içerik assets/<ID>, kök index/motor dokun
   } finally { imp.kapat(); }
 });
 
+test('S0+S1: gerçek 127/17 menü (72378 Lingoland) ölçülür, S1 menüyü AYNI biçimde yazar', async () => {
+  const g = guncellemeZipKur(72378);
+  const imp = await sahteImpark({ surumler: { 72378: 19 }, zipler: { '72378-19': g } });
+  try {
+    const d = tmp('lingo');
+    const uc = `http://127.0.0.1:${imp.port}/TestlerMobil/GetKitapGuncellemeBilgi?id={bookId}&setMi={isSet}&versiyon={version}`;
+    yaz(d, 'index.html', '<html>tek</html>');
+    yaz(d, MOTOR, 'tek-motor');
+    yaz(d, 'app.config.js', `x={updateBookEndPoint: "${uc}"}`);
+    const gercekMenu = fs.readFileSync(path.join(__dirname, '..', 'runtime', 'fikstur', 'menu-127-17-72378-tek.dll'));
+    yaz(d, 'classlibraries/ImWin32.dll', gercekMenu);
+    kitapIcerigi(d, 72378);
+    const zip = zipla(d, path.join(tmp('lingozip'), 'build.zip'));
+    const r = await M.icerikMerdiveni({ zip, ...ortam() });
+    assert.deepEqual(r.satirlar.map((s) => [s.id, s.surum, s.durum]), [['72378', 18, 'GERIDE']]);
+    assert.equal(r.s1[0].sonra, 19);
+    const dz = M.zipDizini(zip);
+    const ham = M.zipGirdiOku(zip, dz.get('classlibraries/ImWin32.dll'));
+    assert.deepEqual(ig.menuBicimi(ham), { bas: 127, ara: 16, son: 127 }, 'kaynağın biçimi korunmalı');
+    assert.equal(ig.kapaklar(ig.menuCoz(ham))[0].version, 19);
+  } finally { imp.kapat(); }
+});
+
 test('S1: içerik önbelleği <ID>-<Vs> anahtarlı — ikinci işte yeniden indirilmez', async () => {
   const g = guncellemeZipKur(1001);
   const imp = await sahteImpark({ surumler: { 1001: 4, 1002: 5 } });
