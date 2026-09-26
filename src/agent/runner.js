@@ -412,6 +412,9 @@ const { arsivKaynagi } = require('./kaynak-arsivi');
 const { icerikKapisiDenetle } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 const { KAYNAK_KOK_INDEX_MARKER: KOK_INDEX_KAYNAK_MARKER } = require('../packaging/kok-index-denetimi');
+// İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
+// yolu tek fonksiyondan (EMPP_ARSIV_MERDIVEN=1, varsayılan kapalı). Ayrıntı: icerik-merdiven.js.
+const { icerikMerdiveni, merdivenAcik } = require('./icerik-merdiven');
 /**
  * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
  * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
@@ -1690,7 +1693,10 @@ async function processJob(auth, job) {
     // Mac'e yalnız kabul kapısı + R2 yüklemesi kalıyor. Ölçüm 2026-09-17: kontrol
     // indirmeden SONRA yapıldığı için her devralınan kitapta ~1,5 GB boşuna iniyor,
     // dar diskte (20 GB kapısı) gereksiz yer yiyordu.
-    const hazirDevir = packagerPlatform === 'pardus' && !arsiv
+    // Merdiven açıkken hazır paket DEVRALINMAZ: o paket srcVersion'la (exe adı) anahtarlı, içerik
+    // sürümünü taşımıyor — İmpark ZipVersiyon'u exe değişmeden artınca (45549: 3/3 kitap geride)
+    // eski içerikli paketi yayınlardık. Kaynak her işte S0'dan geçer.
+    const hazirDevir = packagerPlatform === 'pardus' && !arsiv && !merdivenAcik()
       ? await hazirPardusPaketi({ bookId: job.bookId, srcVersion })
       : null;
     if (hazirDevir) log('pardus: HAZIR paket bulundu — kaynak indirme ATLANIYOR:', hazirDevir.impark || hazirDevir);
@@ -1812,6 +1818,17 @@ async function processJob(auth, job) {
       }
     }
     } // if (!hazirDevir) — hazır paketde kaynak indirme/çıkarma/zip adımları atlanır
+
+    // İÇERİK MERDİVENİ (S0 + S1) — kaynak hazır (arşiv kopyası ya da önbellek/exe'den kurulan
+    // build.zip), paketlemeden ÖNCE. Yalnız İŞ KOPYASI (zipPath) değişir: arşiv ve kaynak önbelleği
+    // exe/arşiv katmanıdır, içerik katmanı her işte S0 ile İmpark'a sorulur ve ZKitapZipH önbelleği
+    // <ID>-<Vs> ile anahtarlıdır — önbellek HIT'i eski içeriği yeniden kullanamaz. Ölçülemeyen ya da
+    // kimliği tutmayan kitapta iş görünür hatayla düşer (eski içerikle devam YOK, gerekçe modülde).
+    if (!hazirDevir && merdivenAcik()) {
+      await icerikMerdiveni({
+        zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
+      });
+    }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten
     // türetir (surum-turet.js). Windows dosya adı imza yuvasında (_hazir/_imzali) runner'a ait görünür.
