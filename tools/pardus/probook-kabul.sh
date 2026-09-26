@@ -26,13 +26,18 @@
 #                 Uzak kipte CDP ucuna ssh -L tuneliyle baglanilir. KABUL_NODE (varsayilan node),
 #                 KABUL_CDP_PORT_TABAN (ProBook, 9337), KABUL_TUNEL_PORT_TABAN (Mac, 9437),
 #                 KABUL_KITAP_SN (60), KABUL_E7_SN (20).
-#   KABUL_AYRI_EV=1  E8: uygulama AYRI ev diziniyle kosar (HOME + XDG_CONFIG/CACHE/DATA_HOME):
+#   KABUL_AYRI_EV=1  E8: uygulama AYRI ev diziniyle kosar (HOME + XDG_CONFIG/CACHE/DATA_HOME).
+#                 KABUL_CDP=1 iken VARSAYILAN ACIK: E7 yalniz ayri evde guvenilir (canli olcum 26.09,
+#                 45482: gercek HOME'da K ortusu motora versiyon=36 sordurdu → yanlis GECTI; ayri evde
+#                 versiyon=33 → GUNCEL-DEGIL). KABUL_CDP=1 + acikca KABUL_AYRI_EV=0 → karar OLCULEMEDI
+#                 (cikis 4), ASLA GECTI.
 #                 ~/.config/<ad>/work 17.09'dan kalici — eski K indirmesi ya da aktivasyon anahtari
 #                 yanlis GECTI uretebilir. Ev: KABUL_EV (ProBook'ta tam yol) ya da
 #                 <KABUL_EV_KOK, varsayilan ~/empp-serit/kabul-ev>/ev-<damga>; baslangicta BOS olmali.
 #                 Ogretmen kurulumlari GIZLENMEZ (gizle/temizlik ev dizininde kosar). Ev dizini
-#                 kanita (ortam.txt) ve stdout'a yazilir; bitiste kurulum temizlenir, geri kalan
-#                 (userData = K/aktivasyon kaniti) KABUL_EV_GUN (3) gun tutulur.
+#                 kanita (ortam.txt) ve stdout'a yazilir; bitiste kurulum temizlenir, kabulde
+#                 indirilen K icerigi (userData/work/*) TUTULMAZ — yalniz liste + boyut + md5
+#                 (work-liste.txt); geri kalan (K gunlugu, aktivasyon izi) KABUL_EV_GUN (1) gun tutulur.
 #   KABUL_AKTIVASYON_OLCULEMEDI=1  aktivasyon ekraninda "ICERIK dogrulanmadi" ile GECTI yerine
 #                 cikis 4 (OLCULEMEDI). Kapaliyken bugunku kural.
 #
@@ -86,11 +91,12 @@ olculemedi(){ say "OLCULEMEDI: $*"; temizle; exit 4; }
 
 DAMGA=$(date +%s)
 CDP="${KABUL_CDP:-0}"
-AYRI_EV="${KABUL_AYRI_EV:-0}"
+# E7 YALNIZ AYRI EVDE GUVENILIR (Sef karari 26.09, canli olcum 45482): CDP acikken ayri ev varsayilan.
+if [ -n "${KABUL_AYRI_EV:-}" ]; then AYRI_EV="$KABUL_AYRI_EV"; else AYRI_EV="$CDP"; fi
 AKT_OLC="${KABUL_AKTIVASYON_OLCULEMEDI:-0}"
 CDP_TABAN="${KABUL_CDP_PORT_TABAN:-9337}"
 TUNEL_TABAN="${KABUL_TUNEL_PORT_TABAN:-9437}"
-EV_GUN="${KABUL_EV_GUN:-3}"
+EV_GUN="${KABUL_EV_GUN:-1}"
 TUNEL_PID=""
 EV_HAZIR=0
 EV_BUDA=0
@@ -174,13 +180,29 @@ temizle(){
 # E8 BITIS: gercek ~/DijiTap + ~/.config envanteri oncesiyle ayni mi (yalitim kaniti, T3);
 # kabul evi kanit olarak kalir (userData: K gunlugu, aktivasyon izi), KABUL_EV_GUN'den eski
 # ev-* dizinleri budanir (yalniz turetilmis kokte; elle verilen KABUL_EV'in ustune DOKUNULMAZ).
+# KABULDE INDIRILEN K ICERIGI TUTULMAZ (26.09 canli: eski paketi acan motor 290 MB indirdi):
+# <ev>/.config/*/work altindaki *.log disi her dosya once WORK <md5> <bayt> <yol> olarak
+# listelenir (kanit: work-liste.txt), sonra kaldirilir. Yalniz bu kosunun kendi evinde
+# (EV_HAZIR, KEV != gercek HOME).
 ev_bitir(){
   "${SSH[@]}" "bash -s" >"$KANIT/ev-bitis.log" 2>&1 <<UZAKEVSON
 KEV="$EV_IFADE"
 echo "ENVANTER_SONRA=\$( { ls -1A "\$HOME/DijiTap" "\$HOME"/DijiTap/*/ "\$HOME/.config"; } 2>/dev/null | cksum | awk '{print \$1"-"\$2}')"
+if [ -n "\$KEV" ] && [ "\$KEV" != "\$HOME" ] && [ -d "\$KEV/.config" ]; then
+  for w in "\$KEV"/.config/*/work; do
+    [ -d "\$w" ] || continue
+    find "\$w" -mindepth 1 -type f ! -name '*.log' | while IFS= read -r f; do
+      s=\$(wc -c < "\$f" | tr -d ' ')
+      m=\$( (md5sum "\$f" 2>/dev/null || md5 -q "\$f" 2>/dev/null) | cut -d' ' -f1)
+      echo "WORK \$m \$s \${f#\$KEV/}"
+    done
+    find "\$w" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null
+    find "\$w" -mindepth 1 -maxdepth 1 -type f ! -name '*.log' -exec rm -f {} + 2>/dev/null
+  done
+fi
 echo "KABUL_EV_KB=\$(du -sk "\$KEV" 2>/dev/null | cut -f1)"
 if [ "$EV_BUDA" = "1" ]; then
-  find "\$(dirname "\$KEV")" -mindepth 1 -maxdepth 1 -type d -name 'ev-*' -mtime +$EV_GUN -exec rm -rf {} + 2>/dev/null
+  find "\$(dirname "\$KEV")" -mindepth 1 -maxdepth 1 -type d -name 'ev-*' -mmin +$((EV_GUN * 1440)) -exec rm -rf {} + 2>/dev/null
 fi
 exit 0
 UZAKEVSON
@@ -194,6 +216,14 @@ UZAKEVSON
     say "UYARI: E8 gercek ~/DijiTap + ~/.config envanteri degisti (once=${ENVANTER_ONCE:-?} sonra=${sonra:-?})"
   fi
   echo "KABUL_EV_KB=$(sed -n 's/^KABUL_EV_KB=//p' "$KANIT/ev-bitis.log" | tail -1)" >> "$KANIT/ortam.txt"
+  local n b
+  sed -n 's/^WORK //p' "$KANIT/ev-bitis.log" > "$KANIT/work-liste.txt"
+  grep -v '^WORK ' "$KANIT/ev-bitis.log" > "$KANIT/ev-bitis.tmp" && mv -f "$KANIT/ev-bitis.tmp" "$KANIT/ev-bitis.log"
+  n=$(wc -l < "$KANIT/work-liste.txt" | tr -d ' ')
+  b=$(awk '{t += $2} END {print t + 0}' "$KANIT/work-liste.txt")
+  echo "WORK_INDIRILEN=$n dosya, $b B (icerik tutulmadi; liste+boyut+md5: work-liste.txt)" >> "$KANIT/ortam.txt"
+  [ "${n:-0}" -gt 0 ] && say "E8: kabulde indirilen K icerigi $n dosya / $((b / 1048576)) MB — tutulmadi (liste+boyut+md5: work-liste.txt)"
+  return 0
 }
 # KANIT ARŞİVİ (plan B.1, 2026-09-26): runner iş sonunda çalışma dizinini — kanıt dahil — siler.
 # EMPP_KANIT_ARSIV verilirse (ProBook şeridi: ~/empp-serit/kanit) kanıt oraya kopyalanır ve
@@ -344,6 +374,7 @@ UZAKEV
   say "paket ayri evde baslatiliyor"
 else
   echo "KABUL_EV=yok (gercek HOME; E8 kapali)" >> "$KANIT/ortam.txt"
+  [ "$CDP" = "1" ] && say "UYARI: KABUL_AYRI_EV=0 — uygulama GERCEK HOME ile acilacak; E7 guvenilmez, karar OLCULEMEDI olur"
   say "eski kurulumlar gizleniyor + paket baslatiliyor"
 fi
 BASLADI=1
@@ -469,6 +500,9 @@ WID=$(grep '^WID=' "$KANIT/bekle.log" | cut -d= -f2 | tail -1)
 APPPID=$(grep '^APPPID=' "$KANIT/bekle.log" | cut -d= -f2 | tail -1)
 PADI=$(grep '^PENCERE_ADI=' "$KANIT/bekle.log" | cut -d= -f2- | tail -1)
 SURE=$(grep '^SURE=' "$KANIT/bekle.log" | cut -d= -f2 | tail -1)
+EV_KULLANILAN=$(sed -n 's/^TABAN=//p' "$KANIT/bekle.log" | tail -1)
+EV_KULLANILAN="${EV_KULLANILAN%/DijiTap}"
+echo "EV_KULLANILAN=${EV_KULLANILAN:-?} ($([ "$AYRI_EV" = "1" ] && echo ayri || echo 'GERCEK HOME'))" >> "$KANIT/ortam.txt"
 [ -n "${WID:-}" ] || red "uygulama penceresi ${BEKLE} sn icinde acilmadi ($(tail -2 "$KANIT/bekle.log" | tr '\n' ' '))"
 say "pencere acildi (${SURE} sn): '$PADI' (wid=$WID) — cizim icin ${PENCERE} sn"
 
@@ -636,7 +670,7 @@ kabul_karar
 } >> "$KANIT/ortam.txt"
 temizle
 [ -n "$KARAR_NOT" ] && say "not: $KARAR_NOT"
-[ "$EV_HAZIR" = "1" ] && say "ev dizini: ${KEV_GERCEK:-?}"
+say "kullanilan ev: ${EV_KULLANILAN:-?} ($([ "$AYRI_EV" = "1" ] && echo ayri || echo 'GERCEK HOME'))"
 case "$KARAR_KOD" in
   0)
     if [ "$AKT_EKRAN" = "1" ]; then

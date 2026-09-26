@@ -15,11 +15,16 @@
 #   AKT_SERI   1 = aktivasyon kodlu seri (EMPP_AKTIVASYON_BEKLENIR)
 #   AKT_OLC    1 = KABUL_AKTIVASYON_OLCULEMEDI (içerik ölçülemeyen aktivasyon → ÖLÇÜLEMEDİ)
 #   CDP        1 = E6/E7 koşturuldu (KABUL_CDP)
+#   AYRI_EV    1 = uygulama ayrı ev diziniyle açıldı (E8; CDP=1 iken varsayılan)
 #   E6 E6_SEBEP      GECTI | RED | OLCULEMEDI | ATLANDI
 #   E7 E7_AYRINTI E7_ONERI   DOLU | BOS | YOK | OLCULEMEDI | ATLANDI
 # Çıktı: KARAR_KOD, KARAR (GECTI|RED-KUSUR|RED-GUNCEL-DEGIL|OLCULEMEDI), KARAR_SEBEP, KARAR_NOT
 #
 # Öncelik (gerekçeli):
+#  0. CDP açık ama ayrı ev YOK (KABUL_AYRI_EV=0) → ÖLÇÜLEMEDİ, ASLA GEÇTİ. Canlı ölçüm 26.09 (45482,
+#     aynı paket): gerçek HOME'daki K örtüsü (~/.config/<ad>/work, 25.09 indirmesi) motora
+#     versiyon=36 sordurdu → E7 BOS → yanlış GEÇTİ; ayrı evde versiyon=33 → Data dolu → GÜNCEL-DEĞİL.
+#     Örtü E6'yı da değiştirebilir (motor güncellemeyi indirirken okuyucu açılmaz) → RED de güvenilmez.
 #  1. E7 DOLU → GÜNCEL-DEĞİL. E6 RED'den önce gelir: `Data` doluysa motor kitabı açmadan önce
 #     güncellemeyi indirmeye kalkar ("Kitap Güncelleniyor %x"), okuyucu 60 sn'de çizilmeyebilir —
 #     kök neden eskiliktir, kusur değil.
@@ -30,6 +35,12 @@
 #  6. E6 RED → RED-KUSUR.  7. Geri kalan (CDP bağlanamadı, menü tanınmadı) → ÖLÇÜLEMEDİ.
 kabul_karar(){
   KARAR_NOT=""
+  if [ "${CDP:-0}" = "1" ] && [ "${AYRI_EV:-0}" != "1" ]; then
+    KARAR_KOD=4; KARAR="OLCULEMEDI"
+    KARAR_SEBEP="E7 yalniz ayri evde guvenilir: KABUL_AYRI_EV=0 ile gercek HOME'daki K ortusu motorun sordugu surumu degistirir (45482: gercek HOME v36, ayri ev v33) — GECTI verilmez"
+    KARAR_NOT="gercek HOME olcumu: E6=${E6:-?} E7=${E7:-?} ${E7_AYRINTI:-}"
+    return 0
+  fi
   if [ "${E7:-}" = "DOLU" ]; then
     KARAR_KOD=3; KARAR="RED-GUNCEL-DEGIL"
     KARAR_SEBEP="E7 ${E7_AYRINTI:-}"
