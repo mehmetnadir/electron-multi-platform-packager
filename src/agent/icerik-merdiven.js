@@ -499,24 +499,31 @@ function altAgacSayilari(dizin, onek) {
 // ─── S0 ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * S0: zip'teki her kitap kapağı için (kimlik, sürüm) + İmpark cevabı. Salt okuma.
+ * S0 ÇEKİRDEĞİ — kaynaktan bağımsız: build zip'i (s0Olc), kabul kapılarında kurulu uygulama ağacı
+ * (tools/kabul/set-guncellik.js: yerel dizin/asar ya da CDP ile canlı sayfanın fs'i). Alt kitap
+ * listesi `menuKonumlari`, kimlik+sürüm `menuCoz`+`kapaklar`, soru `ucSablonu`+`teklifUrl`, cevap
+ * `teklifYorumla` — TEK KAYNAK (kabul "hangi alt kitap, hangi sürüm" sorusunu merdivenle aynı cevaplar).
+ * Salt okuma.
+ * @param {{adlar: Iterable<string>, oku: (rel: string) => (Buffer|null), getir?: Function,
+ *          zamanAsimiMs?: number}} o  adlar = kök-göreli POSIX yollar; oku yoksa null/fırlatır
  * @returns {Promise<{set: boolean, satirlar: Array<object>}>}
  */
-async function s0Olc({ zip, getir = varsayilanGetir, zamanAsimiMs } = {}) {
-  const dizin = zipDizini(zip);
-  const { set, konumlar } = menuKonumlari(dizin.keys());
+async function s0Kaynaktan({
+  adlar, oku, getir = varsayilanGetir, zamanAsimiMs,
+} = {}) {
+  const { set, konumlar } = menuKonumlari(adlar || []);
   const satirlar = [];
   for (const { kitap, kok } of konumlar) {
     const bos = { kitap, kok, id: null, surum: null, durum: DURUM.OLCULEMEDI };
     let xml = null;
-    try { xml = ig.menuCoz(zipGirdiOku(zip, dizin.get(`${kok}${MENU}`))); } catch (_) { xml = null; }
+    try { xml = ig.menuCoz(oku(`${kok}${MENU}`)); } catch (_) { xml = null; }
     if (!xml) {
       satirlar.push({ ...bos, not: 'menü çözülemedi' });
       continue;
     }
     let sablon = null;
     try {
-      sablon = ucSablonu(zipGirdiOku(zip, dizin.get(`${kok}app.config.js`)).toString('utf8'));
+      sablon = ucSablonu(oku(`${kok}app.config.js`).toString('utf8'));
     } catch (_) { sablon = null; }
     const kapakListesi = ig.kapaklar(xml);
     if (!kapakListesi.length) satirlar.push({ ...bos, not: 'menüde kapak yok' });
@@ -542,6 +549,17 @@ async function s0Olc({ zip, getir = varsayilanGetir, zamanAsimiMs } = {}) {
     }
   }
   return { set, satirlar };
+}
+
+/**
+ * S0: zip'teki her kitap kapağı için (kimlik, sürüm) + İmpark cevabı. Salt okuma.
+ * @returns {Promise<{set: boolean, satirlar: Array<object>}>}
+ */
+async function s0Olc({ zip, getir = varsayilanGetir, zamanAsimiMs } = {}) {
+  const dizin = zipDizini(zip);
+  return s0Kaynaktan({
+    adlar: dizin.keys(), oku: (rel) => zipGirdiOku(zip, dizin.get(rel)), getir, zamanAsimiMs,
+  });
 }
 
 function satirMetni(s) {
@@ -768,7 +786,7 @@ async function icerikMerdiveni(o) {
 }
 
 module.exports = {
-  ISARET, DURUM, merdivenAcik, icerikMerdiveni, s0Olc, s1Uygula,
+  ISARET, DURUM, merdivenAcik, icerikMerdiveni, s0Olc, s0Kaynaktan, s1Uygula,
   menuKonumlari, ucSablonu, teklifUrl, teklifYorumla, imparkKimligiMi, kimlikKarari, ornekAdlari,
   yazmaIzinliMi, kokKorumaIhlalleri, zipDizini, zipGirdiOku, satirMetni, varsayilanGetir,
   icerikOnbellekKoku, kanitKoku,
