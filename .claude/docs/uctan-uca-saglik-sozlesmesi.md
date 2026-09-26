@@ -43,6 +43,22 @@ Demo SET (set bileşimi, index ile kitap ekle/çıkar) 2. aşama — açık kara
 | T4 | KISMEN | Ortak temizlik 4 platformda (f63500c); G mac/Pardus/Android yazılıyor (g-electron cce77c3, g-android); K mac kapalı |
 | T5 | KISMEN | Cron 06:20 requeue (17–22.09 ölçüldü); günde bir; arşiv setlerinde BAYAT kapısı var (17/17 `impark_kaynagi` yazıldı), build zip'i yenileyen adım yok |
 
+## Uygulama durumu
+- **26.09 akşam** (dal `e2e-baglama-20260926`, fd62a4d tabanı): girdi keşfi `tests/e2e/adimlar/kesif.js` —
+  srv21 `pipeline-sql` SALT-OKUNUR (platform satırları + build_agents), r2_object_key → CDN URL; `--url/--paket`
+  gerekmez. 9 bayat gerekçe kaldırıldı; bağlanan ölçümler: runner-is-kaydi (build_method + windows-kanit md5) ·
+  uretim-yeri (build_agents ProBook) · kabul-kapisi K3/K4 (pardus agent.log E6/E7; mac/android/windows başsız
+  karar.json) · g-dogrula (canlı manifest, `uzakDogrula`) · k-icerik (canlı K kapısı + İmpark ZKitapZipH gerçek
+  istemci kodu + bozuk zip mutasyonu) · ortak-temizlik (paket-disi-liste + bookN main.js) · t5-yeniden-kuyruk
+  (ZKitapZipH Last-Modified → 06:20 cron → last_queued_at) · t5-sabah-damga (paket ImWin32.dll kapak sürümü = Vs).
+  Kuru (`E2E_KURU=1`) yalnız t5-tetik + g-uygula'yı atlar; gece sarmalayıcısı `--indir` varsayılan (salt okuma).
+- **İlk bağlı kuru koşu** (`~/.empp-agent/e2e/20260926-2048.md`): 3 GEÇTİ (K kapısı, K uygula, bozuk zip),
+  28 ÖLÇÜLEMEDİ — hepsi gerçek engel: 74390 pipeline satırı yok (book-update tarafı; sürüm kuralı Nadir'de) ·
+  ProBook ajanı build_agents'ta yok (kayıt sırrı) · canlı G manifesti yok (yayın yazan adım, açık karar 4) ·
+  t5-tetik/g-uygula kuru.
+- **Satır gelince beklenen gerçek kırmızı:** başsız kabulde (mac/android/windows) K4 güncellik katmanı yok → K4
+  KALDI; pardus/mac/android iş kaydında üretilen md5 yok → cdn-md5-kiyas tam md5'i yalnız Windows'ta yapar.
+
 ## Onaylar (Nadir)
 74390'ı tüm platformlarla pipeline'a ekleme + CDN yayını + G manifestleri · srv21 işçi düzeltmesi deploy (96860dd) ·
 ProBook kayıt sırrı.
