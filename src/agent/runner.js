@@ -48,7 +48,7 @@ const {
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
-  probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
+  probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
@@ -1500,8 +1500,9 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
   log('pardus: ProBook kabul kapısı başlıyor —', CONFIG.pardusKabulScript,
       aktivasyon ? '(aktivasyon kodlu seri — renk eşiği aranmaz)' : '');
   const kanitDir = path.join(outDir, 'probook-kabul');
+  // KABUL_NODE: E6/E7 CDP istemcisi (tools/pardus/cdp-kitap-ac.js) ajanın KENDİ node'uyla koşar.
   const kabul = await runKabulBetigi([CONFIG.pardusKabulScript, artifactPath, kanitDir],
-    { EMPP_AKTIVASYON_BEKLENIR: aktivasyon ? '1' : '0' });
+    { EMPP_AKTIVASYON_BEKLENIR: aktivasyon ? '1' : '0', KABUL_NODE: process.execPath });
   for (const satir of String(kabul.stdout || '').split('\n').filter(Boolean)) log('  [kabul]', satir);
   if (kabul.code !== 0) {
     const cikti = String(kabul.stdout || kabul.stderr || '');
@@ -1515,6 +1516,15 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
     // 72378 pardus geçti — config/IP hatası değildi. Paketin içeriği/açılışıyla
     // ilgili RED (pencere açılmadı, içerik yok, motor kopyası hatası) bu sınıfa
     // GİRMEZ — K18 gerçek paket kusurudur, `failed` doğru sınıflandırmadır.
+    // rc 3/4 (canlı yarı, 26.09): GÜNCEL-DEĞİL → failed + yeniden kuyruk önerisi (yüklenmez);
+    // ÖLÇÜLEMEDİ → paket kusuru değil, failed YAZILMAZ (ProBook erişilemezliğiyle aynı yol).
+    const sinif = pardusKabulSinifi(kabul);
+    if (sinif && sinif.durum === 'GUNCEL_DEGIL') {
+      throw new Error(`güncel değil: ${sinif.sebep} — yeniden üretilmeli; yeniden kuyruk önerisi: ${sinif.oneri || '-'}`);
+    }
+    if (sinif && sinif.durum === 'OLCULEMEDI') {
+      throw new Error(`${PROBOOK_KAPISI_ISARETI} ProBook kabulü ÖLÇÜLEMEDİ (rc=4): ${sinif.sebep} — paket kusuru DEĞİL, iş ertelenmeli`);
+    }
     if (probookErisilemezHatasi(cikti, kabul.timedOut)) {
       throw new Error(
         `${PROBOOK_KAPISI_ISARETI} ProBook'a erişilemedi (rc=${kabul.code}): ${sebep} `

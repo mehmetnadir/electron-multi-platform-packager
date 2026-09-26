@@ -63,7 +63,8 @@ fi
 
 # (d) Bu koşunun kendi artıkları.
 rm -f "/tmp/kabul-onceki-$DAMGA.txt" /tmp/kabul-baslatan.pid /tmp/kabul-calisma.log \
-      /tmp/kabul-ekran.png /tmp/kabul-masaustu.png
+      /tmp/kabul-ekran.png /tmp/kabul-masaustu.png \
+      /tmp/kabul-ekran-kitap.png /tmp/kabul-masaustu-kitap.png   # E6 kitap ekrani olcumu
 [ "$KOPYALA" = "1" ] && [ -n "$UZAK" ] && rm -f "$UZAK"
 
 # (e) ESKİ koşulardan kalan artıklar (1 günden yaşlı, yalnız kendi ad kalıbımız).

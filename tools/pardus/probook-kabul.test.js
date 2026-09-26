@@ -193,3 +193,141 @@ test('kanıt arşivi (B.1): EMPP_KANIT_ARSIV verilirse kanıt kopyalanır, 14 g�
 test('kanıt arşivi verilmezse davranış aynı (arşiv yazılmaz)', () => {
   assert.match(kaynak(), /\[ -n "\$\{EMPP_KANIT_ARSIV:-\}" \] \|\| return 0/);
 });
+
+// ---------------------------------------------------------------------------
+// CANLI YARI (2026-09-26): E8 ayrı ev dizini + E6/E7 CDP portu + ÖLÇÜLEMEDİ.
+// Mac'te /proc yok → pencere aşamasına varılmaz (RED "pencere acilmadi"); testler
+// uygulamanın NE İLE başlatıldığını (HOME/XDG/port) sahte paketin iz dosyasından okur.
+// ---------------------------------------------------------------------------
+const net = require('node:net');
+
+/** Başlatıldığı ortamı ve argümanları iz dosyasına yazan sahte paket. */
+function izliPaket(o) {
+  const iz = path.join(o.kok, 'paket-ortam.iz');
+  fs.writeFileSync(o.paket, [
+    '#!/bin/bash',
+    `{ echo "HOME=$HOME"; echo "XDG_CONFIG_HOME=\${XDG_CONFIG_HOME:-}"; echo "XDG_CACHE_HOME=\${XDG_CACHE_HOME:-}";`
+      + ` echo "XDG_DATA_HOME=\${XDG_DATA_HOME:-}"; echo "ARGS=$*"; } > "${iz}"`,
+    'sleep 1', '',
+  ].join('\n'), { mode: 0o755 });
+  return iz;
+}
+function izOku(iz) {
+  const v = {};
+  for (const s of fs.readFileSync(iz, 'utf8').split('\n')) { const i = s.indexOf('='); if (i > 0) v[s.slice(0, i)] = s.slice(i + 1); }
+  return v;
+}
+function temizEnv(env) {
+  const e = { ...env };
+  for (const k of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'KABUL_CDP', 'KABUL_AYRI_EV', 'KABUL_EV',
+    'KABUL_EV_KOK', 'KABUL_AKTIVASYON_OLCULEMEDI']) delete e[k];
+  return e;
+}
+async function bosPortTut(taban) {
+  for (let p = taban; p < taban + 50; p += 1) {
+    const s = net.createServer();
+    const ok = await new Promise((r) => { s.once('error', () => r(false)); s.listen(p, '127.0.0.1', () => r(true)); });
+    if (ok) return { port: p, s };
+  }
+  throw new Error('boş port yok');
+}
+
+test('bayraklar varsayilan KAPALI: CDP/E8/aktivasyon-olculemedi yalniz acikca 1 ile', () => {
+  const s = kaynak();
+  assert.match(s, /CDP="\$\{KABUL_CDP:-0\}"/);
+  assert.match(s, /AYRI_EV="\$\{KABUL_AYRI_EV:-0\}"/);
+  assert.match(s, /AKT_OLC="\$\{KABUL_AKTIVASYON_OLCULEMEDI:-0\}"/);
+});
+
+test('bayraklar kapaliyken paket ESKISI GIBI baslar: gercek HOME, XDG yok, --remote-debugging-port yok', () => {
+  const o = yerelOrtam();
+  const iz = izliPaket(o);
+  const kanit = path.join(o.kok, 'kanit');
+  const r = spawnSync('bash', [BETIK, o.paket, kanit], { encoding: 'utf8', env: temizEnv(o.env), timeout: 60000 });
+  assert.equal(r.status, 1, r.stdout);
+  const v = izOku(iz);
+  assert.equal(v.HOME, o.home);
+  assert.equal(v.XDG_CONFIG_HOME, '');
+  assert.doesNotMatch(v.ARGS, /remote-debugging/);
+  assert.match(fs.readFileSync(path.join(kanit, 'ortam.txt'), 'utf8'), /KABUL_EV=yok \(gercek HOME; E8 kapali\)/);
+  assert.match(r.stdout, /eski kurulumlar gizleniyor \+ paket baslatiliyor/);
+});
+
+test('E8 + CDP: ayri ev (HOME+XDG), bos CDP portu (3000 degil, dolu port atlanir), ogretmen kurulumu GIZLENMEZ, eski ev budanir', async () => {
+  const o = yerelOrtam();
+  const iz = izliPaket(o);
+  const ogretmen = path.join(o.home, 'DijiTap', 'DijiTap', 'Eski Set');
+  fs.mkdirSync(ogretmen, { recursive: true });
+  fs.writeFileSync(path.join(ogretmen, 'isaret.txt'), 'ogretmen kurulumu');
+  fs.mkdirSync(path.join(o.home, '.config', 'shall-we-8-set', 'work'), { recursive: true });
+  const evKok = path.join(o.home, 'empp-serit', 'kabul-ev');
+  const eskiEv = path.join(evKok, 'ev-1-1');
+  const baska = path.join(evKok, 'baska');
+  for (const d of [eskiEv, baska]) {
+    fs.mkdirSync(d, { recursive: true });
+    const on = (Date.now() - 10 * 86400 * 1000) / 1000;
+    fs.utimesSync(d, on, on);
+  }
+  const tut = await bosPortTut(9337);
+  try {
+    const kanit = path.join(o.kok, 'kanit');
+    const r = await new Promise((coz) => {
+      const p = spawn('bash', [BETIK, o.paket, kanit], {
+        env: { ...temizEnv(o.env), KABUL_CDP: '1', KABUL_AYRI_EV: '1', KABUL_CDP_PORT_TABAN: String(tut.port) },
+      });
+      let out = '';
+      p.stdout.on('data', (d) => { out += d; });
+      p.stderr.on('data', (d) => { out += d; });
+      p.on('exit', (status) => coz({ status, stdout: out }));
+    });
+    assert.equal(r.status, 1, r.stdout); // Mac'te pencere ölçülemez → RED "pencere acilmadi"
+    const v = izOku(iz);
+    assert.ok(v.HOME.startsWith(`${evKok}/ev-`), `HOME ayri ev olmali: ${v.HOME}`);
+    assert.equal(v.XDG_CONFIG_HOME, `${v.HOME}/.config`);
+    assert.equal(v.XDG_CACHE_HOME, `${v.HOME}/.cache`);
+    assert.equal(v.XDG_DATA_HOME, `${v.HOME}/.local/share`);
+    const port = Number((/--remote-debugging-port=(\d+)/.exec(v.ARGS) || [])[1]);
+    assert.ok(port > tut.port && port !== 3000, `bos port secilmeli (dolu ${tut.port} atlanir): ${v.ARGS}`);
+    // Kanıt: ev dizini yazılı; stdout'ta da.
+    const ortam = fs.readFileSync(path.join(kanit, 'ortam.txt'), 'utf8');
+    assert.match(ortam, new RegExp(`KABUL_EV=${v.HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`));
+    assert.match(ortam, /E8_ENVANTER=ayni/);
+    assert.match(r.stdout, /E8: ayri ev dizini: .*\/empp-serit\/kabul-ev\/ev-/);
+    // Öğretmen kurulumu hiç gizlenmedi / geri konmadı (ayrı evde koşuldu).
+    assert.equal(fs.readFileSync(path.join(ogretmen, 'isaret.txt'), 'utf8'), 'ogretmen kurulumu');
+    assert.doesNotMatch(fs.readFileSync(path.join(kanit, 'baslat.log'), 'utf8'), /gizlendi/);
+    assert.doesNotMatch(fs.readFileSync(path.join(kanit, 'temizlik.log'), 'utf8'), /geri konuldu/);
+    // Manifest ayrı evde yazıldı ve temizlendi; gerçek HOME'da manifest/kilit kalmadı.
+    assert.deepEqual(fs.readdirSync(v.HOME).filter((f) => f.startsWith('.kabul-')), []);
+    assert.deepEqual(fs.readdirSync(o.home).filter((f) => f.startsWith('.kabul-') || f === '.kabul.lock'), []);
+    // Bu koşunun evi kanıt olarak kalır; 3 günden eski ev-* budanır, başka dizine dokunulmaz.
+    assert.ok(fs.existsSync(v.HOME), 'kabul evi kanıt olarak kalmalı');
+    assert.equal(fs.existsSync(eskiEv), false, 'eski ev-* budanmalı');
+    assert.ok(fs.existsSync(baska), 'ev-* dışı dizine dokunulmaz');
+  } finally {
+    tut.s.close();
+  }
+});
+
+test('E8: KABUL_EV bos degilse ONCEDEN OLCULEMEDI (cikis 4), paket hic baslatilmaz, kilit birakilir', () => {
+  const o = yerelOrtam();
+  const iz = izliPaket(o);
+  const ev = path.join(o.kok, 'dolu-ev');
+  fs.mkdirSync(path.join(ev, '.config', 'x', 'work'), { recursive: true });
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...temizEnv(o.env), KABUL_AYRI_EV: '1', KABUL_EV: ev }, timeout: 30000,
+  });
+  assert.equal(r.status, 4, r.stdout);
+  assert.match(r.stdout, /OLCULEMEDI: E8 kabul evi bos degil: .*dolu-ev/);
+  assert.equal(fs.existsSync(iz), false, 'paket başlatılmamalı');
+  assert.equal(fs.existsSync(path.join(o.home, '.kabul.lock')), false);
+});
+
+test('E8: kabul evi yolunda kabuk metakarakteri → OLCULEMEDI, hicbir sey calismaz', () => {
+  const o = yerelOrtam();
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...temizEnv(o.env), KABUL_AYRI_EV: '1', KABUL_EV: '/tmp/x"; touch /tmp/pwn; "' }, timeout: 30000,
+  });
+  assert.equal(r.status, 4, r.stdout);
+  assert.match(r.stdout, /gecersiz kabul evi yolu/);
+});

@@ -960,3 +960,63 @@ test('GERİLEME: gerçek paket kusuru (pencere içerik taşımıyor) ERTELENEBİ
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// KABUL KAPISI CANLI YARISI (2026-09-26): rc 3 RED-GÜNCEL-DEĞİL · rc 4 ÖLÇÜLEMEDİ.
+// ---------------------------------------------------------------------------
+
+test('kabul kapısı rc=3 GÜNCEL-DEĞİL: last_error "güncel değil:" ile başlar + yeniden kuyruk önerisi; ertelenmez (failed)', async () => {
+  await withFakeKabul([
+    '#!/bin/bash',
+    'echo "[kabul] E7: DOLU — 44187 v33 < İmpark v36"',
+    'echo "[kabul] GUNCEL-DEGIL: E7 44187 v33 < İmpark v36 (Data=https://x/ZKitapZipH/44187-36.zip)"',
+    'echo "[kabul] yeniden kuyruk onerisi: kaynak S1 ile yenilenmeli (ZKitapZipH/44187-36.zip)"',
+    'exit 3', '',
+  ].join('\n'), async () => {
+    const out = await fsp.mkdtemp(path.join(os.tmpdir(), 'kabul-out-'));
+    try {
+      let hata = null;
+      try { await pardusKabulKapisi('/tmp/x.impark', out, 'Shall We 8'); } catch (e) { hata = e; }
+      assert.ok(hata, 'rc=3 fırlatmalı (paket yüklenmez)');
+      assert.match(hata.message, /^güncel değil: E7 44187 v33 < İmpark v36/);
+      assert.match(hata.message, /yeniden üretilmeli; yeniden kuyruk önerisi: kaynak S1 ile yenilenmeli \(ZKitapZipH\/44187-36\.zip\)/);
+      assert.equal(ertelenebilirKaynakHatasi(hata), false, 'güncel değil → failed yazılmalı (ertelenmez)');
+    } finally { await fsp.rm(out, { recursive: true, force: true }); }
+  });
+});
+
+test('kabul kapısı rc=4 ÖLÇÜLEMEDİ: ertelenebilir (failed YAZILMAZ), sebep mesajda', async () => {
+  await withFakeKabul('#!/bin/bash\necho "[kabul] OLCULEMEDI: E6 OLCULEMEDI: CDP bağlanamadı (20 sn, port 9337)"\nexit 4\n', async () => {
+    const out = await fsp.mkdtemp(path.join(os.tmpdir(), 'kabul-out-'));
+    try {
+      let hata = null;
+      try { await pardusKabulKapisi('/tmp/x.impark', out, 'Kitap'); } catch (e) { hata = e; }
+      assert.ok(hata, 'rc=4 fırlatmalı (yükleme YOK)');
+      assert.equal(ertelenebilirKaynakHatasi(hata), true, 'ÖLÇÜLEMEDİ paket kusuru değil → ertelenebilir');
+      assert.ok(hata.message.includes(PROBOOK_KAPISI_ISARETI));
+      assert.match(hata.message, /ÖLÇÜLEMEDİ \(rc=4\): E6 OLCULEMEDI: CDP bağlanamadı/);
+    } finally { await fsp.rm(out, { recursive: true, force: true }); }
+  });
+});
+
+test('kabul kapısı: rc=1 RED eskisi gibi failed (yeni sınıflar RED\'i yutmaz); KABUL_NODE = ajanın node\'u', async () => {
+  await withFakeKabul('#!/bin/bash\necho "$KABUL_NODE" > "$(dirname "$0")/NODE"\necho "[kabul] RED: E6 URL değişmedi"\nexit 1\n', async (kdir) => {
+    const out = await fsp.mkdtemp(path.join(os.tmpdir(), 'kabul-out-'));
+    try {
+      let hata = null;
+      try { await pardusKabulKapisi('/tmp/x.impark', out, 'Kitap'); } catch (e) { hata = e; }
+      assert.match(hata.message, /kabul kapısından geçemedi \(rc=1\)/);
+      assert.equal(ertelenebilirKaynakHatasi(hata), false);
+      assert.equal((await fsp.readFile(path.join(kdir, 'NODE'), 'utf8')).trim(), process.execPath);
+    } finally { await fsp.rm(out, { recursive: true, force: true }); }
+  });
+});
+
+test('pardusKabulSinifi: saf — 3/4 dışında null, zaman aşımında null', () => {
+  const { pardusKabulSinifi } = require('./runner-helpers');
+  assert.equal(pardusKabulSinifi({ code: 1, stdout: 'GUNCEL-DEGIL: x' }), null);
+  assert.equal(pardusKabulSinifi({ code: 3, timedOut: true }), null);
+  assert.deepEqual(pardusKabulSinifi({ code: 3, stdout: '[kabul] GUNCEL-DEGIL: a\n[kabul] yeniden kuyruk onerisi: b' }),
+    { durum: 'GUNCEL_DEGIL', sebep: 'a', oneri: 'b' });
+  assert.equal(pardusKabulSinifi({ code: 4, stdout: '' }).sebep, 'kapı ölçemedi (ayrıntı yok)');
+});
