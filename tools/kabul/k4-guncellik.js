@@ -19,6 +19,13 @@
  *   `adb forward tcp:<p> localabstract:webview_devtools_remote_<pid>`. CapacitorHttp fetch'i
  *   yerel köprüden geçirdiği için Network olayı doğmayabilir → belge-başı kaydedici
  *   (cdp-kitap-ac `--kaydedici 1`). Soket yoksa ÖLÇÜLEMEDİ + gerekçe (kırmızı değil).
+ *   Motor açılışta `window.isOnline`ı bir HEAD yoklamasıyla BİR KEZ hesaplar; kök (besegitim.com)
+ *   WebView başlıklı isteğe HTTP ≥400 döner, CapacitorHttp köprüsü gövdesiz HEAD hatasını ağ hatasına
+ *   çevirir → cihazda isOnline=false, soru "Network is offline" ile kesilir (ölçüldü 26.09, 74451 —
+ *   ağ VALIDATED, netpolicy kısıtsız, navigator.onLine=true; sıra/yeniden açma çözmez). Bu
+ *   yüzden cihaz yolu `--cevrimici-sabitle 1` geçer: motorun kendi değeri `olcum.cevrimici.uygulama`ya
+ *   yazılır, false ise karar notuna APK kusuru olarak düşer; soru cihazın gerçek ağından gider.
+ *   Çevrimiçi motor güncelleme zip'ini indirmeye kalkar → Electron K4 gibi kesilir (`indirmeKesildi`).
  *
  * KARAR SÖZLÜĞÜ — tools/pardus/kabul-karar.sh ile AYNI: GEÇTİ 0 · GÜNCEL-DEĞİL 3 · ÖLÇÜLEMEDİ 4.
  *   GEÇTİ         motor sordu, cevap `Data=""` ve İmpark sürümü (Vs) paketteki sürümün ÜSTÜNDE değil.
@@ -110,6 +117,18 @@ function sayiMi(x) { return x !== '' && x !== null && x !== undefined && Number.
 function varMi(o, k) { return Boolean(o) && Object.prototype.hasOwnProperty.call(o, k); }
 
 /**
+ * `--cevrimici-sabitle` tanısını tek satıra çevirir. Saf.
+ * @param {{url?:string, kopru?:object, webviewUA?:object, yalin?:object}|null} y
+ */
+function yoklamaTanisi(y) {
+  if (!y || typeof y !== 'object') return '';
+  if (y.hata && !y.kopru && !y.webviewUA && !y.yalin) return ` (tanı: ${y.hata})`;
+  const bir = (o) => (!o ? '—' : o.http ? `HTTP ${o.http}${o.cf ? ` cf-mitigated: ${o.cf}` : ''}` : (o.hata || '?'));
+  return ` (HEAD ${y.url || '?'}: Capacitor fetch köprüsü → ${bir(y.kopru)}; eklenti WebView UA → ${bir(y.webviewUA)}; `
+    + `eklenti yalın → ${bir(y.yalin)})`;
+}
+
+/**
  * K4 kararı. Saf.
  * @param {{olcum?: {e6?:object, e7?:object, cevaplar?:object[]}, paketSurumleri?: Object<string,number>,
  *          aktivasyon?: boolean, aktivasyonOlculemedi?: boolean, profilBos?: boolean, kaynak?: string}} p
@@ -130,6 +149,13 @@ function k4Karari({
   const cevaplar = Array.isArray(olcum.cevaplar) ? olcum.cevaplar.filter(Boolean) : [];
   const e6 = olcum.e6 || {};
   const e7 = olcum.e7 || {};
+  const cv = olcum.cevrimici;
+  if (cv && cv.sabitlendi && Array.isArray(cv.uygulama) && cv.uygulama.includes(false)) {
+    const tani = yoklamaTanisi(cv.yoklama);
+    notlar.push(`APK KUSURU: uygulamanın açılış canlılık yoklaması isOnline=false dedi${tani} — kök HEAD'e `
+      + 'HTTP ≥400 döndükçe motor güncelleme sorusunu (ve çevrimiçi aktivasyonu) "Network is offline" ile keser; '
+      + 'K4 ölçümü için isOnline kabul aracınca true\'ya sabitlendi');
+  }
 
   // Soru ↔ paket kıyası (motor örtüyle farklı sürüm sorarsa Data boş gelir ama paket eskidir).
   const eski = [];
@@ -183,9 +209,13 @@ function k4Birlestir(...kararlar) {
   if (!l.length) return null;
   const kaynaklar = l.map((k) => ({ kaynak: k.kaynak, durum: k.durum, sebep: k.sebep }));
   if (l.length === 1) return { ...l[0], kaynaklar };
+  // Diğer kaynakların sebebi + kendi notları (ör. cihazın "APK KUSURU" notu) kaybolmasın.
   const digerleri = (sec) => l.filter((k) => k !== sec)
-    .map((k) => `${k.kaynak}: ${K4_TR[k.durum] || k.durum} — ${k.sebep}`);
-  const baskin = l.find((k) => k.durum === K4_DURUM.GUNCEL_DEGIL) || l.find((k) => k.durum === K4_DURUM.GECTI);
+    .flatMap((k) => [`${k.kaynak}: ${K4_TR[k.durum] || k.durum} — ${k.sebep}`,
+      ...(k.notlar || []).map((n) => `${k.kaynak}: ${n}`)]);
+  // Aynı durumda cihaz ölçümü öne geçer: APK'nın gerçek çalışma ortamı odur, Electron yedektir.
+  const sec = (durum) => l.find((k) => k.durum === durum && k.kaynak === 'cihaz') || l.find((k) => k.durum === durum);
+  const baskin = sec(K4_DURUM.GUNCEL_DEGIL) || sec(K4_DURUM.GECTI);
   if (baskin) return { ...baskin, notlar: [...baskin.notlar, ...digerleri(baskin)], kaynaklar };
   return {
     durum: K4_DURUM.OLCULEMEDI,
@@ -334,6 +364,7 @@ async function cdpOlc(argv, kanit, cdpAna) {
     hedef: (j && j.hedef) || null,
     adim: (j && j.adim) || null,
     kaydedici: (j && j.kaydedici) || null,
+    cevrimici: (j && j.cevrimici) || null,
   };
 }
 
@@ -416,6 +447,9 @@ async function electronK4Olc(p) {
   return bitir('CDP sonucu yok');
 }
 
+/** Cihaz K4'te menü bekleme tavanı (sn): menü görünür görünmez erken döner. */
+const CIHAZ_MENU_SN = 120;
+
 /**
  * Android cihaz K4 ölçümü — android-cihaz.js `cihazKabulu`nun `k4Olc` kancası (uygulama açık,
  * kaldırılmadan önce). Pencere açmaz; yalnız adb forward + CDP.
@@ -448,16 +482,19 @@ async function cihazK4Olc(p) {
   const f = p.adbKos(['forward', `tcp:${port}`, `localabstract:${soket}`]) || {};
   if (f.status !== 0) return bitir(`adb forward düştü: ${String(f.stderr || f.stdout || '').trim().slice(0, 160)}`);
   olcum.cdpPort = port;
-  log(`cihaz K4: WebView CDP ${soket} → 127.0.0.1:${port} (kaydedici + ilk kitap)`);
-  const sure = sureArgumanlari({ ...p, baglanSn: p.baglanSn || 15 });
+  log(`cihaz K4: WebView CDP ${soket} → 127.0.0.1:${port} (kaydedici + isOnline kancası + ilk kitap)`);
+  // Çevrimiçi (kancalı) motor menüyü ağ zincirinden SONRA çizer ve soruları o an sorar: yeniden
+  // yüklemeden menüye 46 sn ölçüldü (26.09, 74451, emülatör); 30 sn varsayılan soruyu kaçırıyordu.
+  const sure = sureArgumanlari({ ...p, baglanSn: p.baglanSn || 15, menuSn: p.menuSn || CIHAZ_MENU_SN });
   try {
     Object.assign(olcum, await cdpOlc(['--port', String(port), '--kanit', kanit, '--hedef-deseni', ANDROID_HEDEF_DESENI,
-      '--kaydedici', '1', ...sure.argv], kanit, p.cdpAna));
+      '--kaydedici', '1', '--cevrimici-sabitle', '1', ...sure.argv], kanit, p.cdpAna));
   } catch (e) {
     olcum.e6 = { durum: 'OLCULEMEDI', sebep: `CDP istemcisi hatası: ${e.message}` };
   } finally {
     p.adbKos(['forward', '--remove', `tcp:${port}`]);
   }
+  olcum.indirmeKesildi = ((olcum.cevrimici && olcum.cevrimici.indirmeKesildi) || []).slice(0, 5);
   return bitir('CDP sonucu yok');
 }
 
@@ -468,9 +505,11 @@ module.exports = {
   K4_TR,
   CDP_PORT_TABANI,
   ANDROID_HEDEF_DESENI,
+  CIHAZ_MENU_SN,
   k4Etkin,
   paketSurumleriOku,
   k4Karari,
+  yoklamaTanisi,
   k4Birlestir,
   genelKararK4,
   k4CikisKodu,
