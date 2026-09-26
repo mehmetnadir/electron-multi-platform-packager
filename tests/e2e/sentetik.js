@@ -218,6 +218,40 @@ function uygulamaAgaci({
   return a;
 }
 
+/**
+ * Android www kökü (assets/public) — g-katmani.js düzeni: empp-g-{istemci,kabuk,nacl}.js,
+ * empp-g-paket.json {surum}, empp-set.json {setKimligi, taban, imza}.
+ */
+function androidAgaci({
+  anahtar,
+  gIstemci = true,
+  paketJson = '{"surum":"1.4.2"}\n',
+  taban = 'https://cdn.ydspublishing.com/guncelleme',
+  setJson = true,
+} = {}) {
+  const a = {
+    'index.html': '<html>android kok</html>',
+    [`book1/${MOTOR}`]: KANONIK,
+    [`book2/${MOTOR}`]: KANONIK,
+  };
+  if (gIstemci) {
+    a['empp-g-istemci.js'] = '/* EMPP G istemci */';
+    a['empp-g-kabuk.js'] = '/* EMPP G kabuk */';
+    a['empp-g-nacl.js'] = '/* tweetnacl */';
+  }
+  if (paketJson !== null) a['empp-g-paket.json'] = paketJson;
+  if (setJson) {
+    a['empp-set.json'] = JSON.stringify({
+      setKimligi: 'yds-74390',
+      taban,
+      imza: anahtar ? { alg: 'ed25519', acikAnahtar: anahtar.acikB64 } : undefined,
+      kabukDosyalari: ['index.html'],
+      kitapDizinleri: ['book1', 'book2'],
+    });
+  }
+  return a;
+}
+
 /** Sentetik APK (gerçek zip): AndroidManifest.xml + classes.dex + assets/public/<ağaç>. */
 function apkYap(yol, agac) {
   const d = { 'AndroidManifest.xml': Buffer.from([3, 0, 8, 0]), 'classes.dex': 'dex\n035' };
@@ -270,6 +304,7 @@ function betikYaz(yol, govde) {
 module.exports = {
   KOK,
   geciciDizin,
+  androidAgaci,
   nsisYap,
   sfxYap,
   appimageYap,

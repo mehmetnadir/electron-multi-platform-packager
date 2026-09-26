@@ -8,6 +8,7 @@
  *   kos    --test T1,T3 --kitap 74390 [--kuru] [--bildir]
  *          [--paket <yol>]... [--url <cdn>]... [--indir]
  *          [--beklenen-43e23 md5] [--beklenen-index md5] [--beklenen-taban url] [--uretilen-md5 md5]
+ *          [--uretilen-sha256 hex] [--uretilen-boyut bayt]
  *   rapor  [--dosya <json>] [--liste]                son (ya da verilen) raporun özeti
  *
  * Rapor: ~/.empp-agent/e2e/<YYYYMMDD-HHMM>.json + aynı adla .md (EMPP_E2E_DIZIN ile değişir).
@@ -85,6 +86,8 @@ function argumanlar(argv) {
     else if (k === '--beklenen-index') a.beklenen.md5_index = v();
     else if (k === '--beklenen-taban') a.beklenen.taban = v();
     else if (k === '--uretilen-md5') a.beklenen.uretilen_md5 = v();
+    else if (k === '--uretilen-sha256') a.beklenen.uretilen_sha256 = v();
+    else if (k === '--uretilen-boyut') a.beklenen.uretilen_boyut = Number(v());
     else throw new Error(`bilinmeyen argüman: ${k}`);
   }
   return a;
@@ -276,6 +279,8 @@ async function kos(a) {
       aile: s.ozet.aile || null,
       boyut: s.ozet.boyut || null,
       etag: s.ozet.etag || null,
+      aralik: s.ozet.aralik || null,
+      meta: s.ozet.meta || null,
       indirilen: s.ozet.indirilen || 0,
       agir: s.agir,
       sure_ms: s.sure_ms,
@@ -287,6 +292,8 @@ async function kos(a) {
       parmak_izi: beklenen.parmak_izi,
       taban: beklenen.taban,
       uretilen_md5: beklenen.uretilen_md5 || null,
+      uretilen_sha256: beklenen.uretilen_sha256 || null,
+      uretilen_boyut: beklenen.uretilen_boyut != null ? beklenen.uretilen_boyut : null,
     },
     test_ozet: testOzet,
     sayac: O.sayac(satirlar),

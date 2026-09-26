@@ -109,8 +109,13 @@ function merkezDiziniCoz(cd) {
  * @returns {Promise<{aile:string, ayrinti:Object, butunluk:null|{durum:string}, pe:null|Object}>}
  */
 async function aileTespit(okuyucu) {
+  const bas = await okuyucu.oku(0, Math.min(okuyucu.boyut, BAS_PENCERE));
+  // baş penceresi geri verilir: aralık md5'i (kısmi eşlik) aynı baytları yeniden indirmesin
+  return { ...(await aileCoz(okuyucu, bas)), basTampon: bas };
+}
+
+async function aileCoz(okuyucu, bas) {
   const boyut = okuyucu.boyut;
-  const bas = await okuyucu.oku(0, Math.min(boyut, BAS_PENCERE));
 
   if (bas.length >= 2 && bas[0] === 0x4d && bas[1] === 0x5a) {
     const pe = peCoz(bas);
