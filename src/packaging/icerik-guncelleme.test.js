@@ -339,6 +339,20 @@ test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME=windows — windows açık, macos
   assert.deepStrictEqual(uyarilar, []);
 });
 
+// mac-k (2026-09-26, karar defteri C4): "mac imzalı derlemede ölçülünce" açılacak dendi.
+// Kodda mac için AYRI bir dal YOK — açmak için tek gereken canlı env'i genişletmek:
+// `EMPP_ICERIK_GUNCELLEME=windows` → `windows,macos` (ya da yalnız `macos`, ya da tanımsız
+// bırakıp varsayılan AÇIK'a dönmek). Bu test o TEK satırlık reçeteyi kilitler.
+test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME=macos — yalnız macos açık, windows kapalı (mac-k açılış reçetesi)', () => {
+  const uyarilar = [];
+  const s = { uyar: (x) => uyarilar.push(x) };
+  const env = { EMPP_ICERIK_GUNCELLEME: 'macos' };
+  assert.strictEqual(m.acikMi(env, ['macos'], s), true, 'yalnız macos işi açık olmalı');
+  assert.strictEqual(m.acikMi(env, ['windows'], s), false, 'windows işi kapalı kalmalı');
+  assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: 'windows,macos' }, ['macos'], s), true, 'macos, windows,macos listesinde de açık');
+  assert.deepStrictEqual(uyarilar, []);
+});
+
 test('PLATFORM KAPSAMI: EMPP_ICERIK_GUNCELLEME eski değerler — 0 kapalı, 1 açık, tanımsız → varsayılan AÇIK', () => {
   for (const is of [['windows'], ['macos'], ['windows', 'macos'], undefined]) {
     assert.strictEqual(m.acikMi({ EMPP_ICERIK_GUNCELLEME: '0' }, is), false);
