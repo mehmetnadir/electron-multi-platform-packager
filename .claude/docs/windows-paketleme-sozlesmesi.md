@@ -14,7 +14,7 @@ Kitap türü üretimi belirler: tek kitap · çoklu set · **aktivasyon kodlu** 
 ## Girdi → Çıktı
 | Girdi | Çıktı |
 |---|---|
-| build zip (Üretim Masası; geçişte İmpark exe'si), `book_id`, türetilen tür, `guncellemeTabani`, logo | `<Ad>-<sürüm>-Setup.exe` (ia32 NSIS, oneClick, kullanıcı-başına, tr/en-US) + `guncelleme.tar.gz` |
+| build zip (Üretim Masası; geçişte İmpark exe'si), `book_id`, türetilen tür, `guncellemeTabani`, logo | `<Ad>-<sürüm>-Setup.exe` (ia32 NSIS, oneClick, kullanıcı-başına, tr/en-US); G tar'ı YOK (D-2, 26.09 — tek yazar `tools/g-yayin`) |
 
 ## Paket kuralları (kapı `scripts/windows-paket-kapisi.js`, 15 madde)
 1. Kuruluysa sormadan aç; **sürüm farklıysa güncelle**. Sürüm = `2.<panel kodu>.<paket sayacı>` (G3). Panelde ayrı
@@ -37,7 +37,7 @@ Kitap türü üretimi belirler: tek kitap · çoklu set · **aktivasyon kodlu** 
 
 ## Güncelleme kanalı (detay: `kitap-guncelleme-sozlesmesi.md`)
 Uçlar yayıncının R2 kovasında **statik**: `<r2Config.publicUrl>/guncelleme/set/<id>/{surum.json, manifest.json, dosya/…}`.
-Üç parça: paketleyici üretir → API presign verir (R2 anahtarı srv21'de) → runner sırayla yükler ve canlı `surum.json`'u doğrular.
+Tek yazar `tools/g-yayin` (D-2, 26.09); eski paketleyici→runner yolu karantinada (`_graveyard/2026-09-26-g-eski-uretici/`).
 Güncellenen dosyalar SET kabuk beyaz listesiyle sınırlı (`src/packaging/set-kabuk.js`): kök kabuk + sf425 dizinleri
 `config, features, images, languages, scripts, styles`; `_` ile başlayan kök dizinler (ör. `_eski`) yedektir, asla güncellenmez.
 

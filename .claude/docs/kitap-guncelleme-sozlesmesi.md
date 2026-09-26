@@ -163,13 +163,13 @@ tanımlanırsa bu bir fan-out sapmasıdır; tek kaynağa bağlanıp sözleşme t
 
 ## Üretici (sunucu tarafı, 2026-09-22)
 
-> **YAYINA GİTMEYEN YOL (D-2, 26.09):** bu üretici ve onu çağıran `src/packaging/guncelleme-paketi.js`
-> (paketleyicinin `guncelleme.tar.gz`'si) artık yayına gitmez — runner tar'ı yüklemez, G'nin tek yazarı
-> `tools/g-yayin`. Çıktısı `kanal:"G"`/G3 sürüm taşımadığı için G istemcisi (e07bc37) onu
-> `manifest-reddedildi:kanal-g-degil` ile reddeder (testi buna çevrildi). Ölü kod karantinası canlıya
-> almadan SONRA ayrı iş.
+> **KARANTİNADA (D-2, 26.09):** bu üretici + çağıranı `guncelleme-paketi.js` (paketleyicinin
+> `guncelleme.tar.gz`'si) `_graveyard/2026-09-26-g-eski-uretici/` altında; tar üretilmez.
+> Runner tar'ı yüklemiyordu (d825123), G'nin tek yazarı `tools/g-yayin`; çıktısı `kanal:"G"`
+> taşımaz, G istemcisi `manifest-reddedildi:kanal-g-degil` ile reddeder. Sentinel: D-2 testi
+> (`windows-sozlesme-baglanti.test.js`) + `olu-yol-kapisi.js` `KARANTINA`; kanıt mezarda `OKU.md`.
 
-`scripts/guncelleme-manifesti-uret.js` — SET kökünden 3 uç noktayı düz dosya
+(Tarihçe) `scripts/guncelleme-manifesti-uret.js` — SET kökünden 3 uç noktayı düz dosya
 üretir; kabuk ayrımı `set-kabuk.js`'ten ölçülür (tahmin yok), `book\d+/` ve
 artefakt dizinlerine hiç girilmez. `surum` = kabuk sha256 listesinin
 deterministik hash'i (yalnız kabuktan — üyelik-yalnız değişiklik bump'lamaz).
@@ -188,7 +188,7 @@ rota eklenmez. Taban = `<r2Config.publicUrl>/guncelleme` (YDS örneği:
 Yayınevi × kova ilkesi: taban yayıncının R2 config'inden çözülür, env varsayılanına düşülmez.
 
 Üç parça, üç sorumluluk (R2 kimlik bilgileri YALNIZ srv21'de — Decision B):
-1. **Paketleyici (Mac, `packagingService`)** — `setKimligi` verilen Windows işinde, TÜM
+1. **Paketleyici (Mac)** — [KALDIRILDI 26.09, D-2] `setKimligi` verilen Windows işinde, TÜM
    yamalardan sonra (empp-set.json ile aynı anda) `scripts/guncelleme-manifesti-uret.js`
    çekirdeğini `workingPath` üzerinde koşturur → `temp/<jobId>/windows/guncelleme/set/<id>/
    {surum.json, manifest.json, dosya/…}`; `GET /api/download/:jobId/guncelleme` bunu tek
@@ -198,7 +198,7 @@ Yayınevi × kova ilkesi: taban yayıncının R2 config'inden çözülür, env v
    `POST /api/v1/agents/:agentId/result/presign-guncelleme` `{bookId, platform, setKimligi,
    dosyalar:[{yol, boyut, contentType}]}` → her dosya için presigned PUT
    (`guncelleme/set/<setKimligi>/<yol>` anahtarı, kitabın yayıncısının kovası, lease şartı).
-3. **Runner (Mac, `src/agent/runner.js`)** — Windows SET işi başarıyla bitince
+3. **Runner (Mac)** — [KALDIRILDI d825123, tek yazar g-yayin] Windows SET işi başarıyla bitince
    `guncelleme` paketini indirir, SIRAYLA yükler: önce `dosya/*`, sonra `manifest.json`,
    EN SON `surum.json` (tüketici tutarlı durum görsün); ardından `GET <taban>/set/<id>/surum.json`
    ile üretilen sürümü doğrular; eşleşmezse iş "yüklendi" sayılmaz.

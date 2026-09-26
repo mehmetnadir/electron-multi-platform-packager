@@ -162,3 +162,36 @@ test('9 · CANLI YOL SAĞLAM: giriş → packagingService → platform yardımc�
       g + ' artık pakete kopyalanmıyor — shim enjeksiyonu kopmuş olabilir');
   }
 });
+
+// ─── KARANTİNA (2026-09-26): _graveyard/'e taşınan yol geri gelmez, require edilmez ───
+test('10 · KARANTİNA: yollar geri gelmemiş, src/scripts/tools içinde require eden yok', () => {
+  const d2 = ['src/packaging/guncelleme-paketi.js', 'scripts/guncelleme-manifesti-uret.js'];
+  for (const yol of d2) {
+    assert.ok(kapi.KARANTINA.includes(yol), yol + ': D-2 karantinası listeden düşmüş');
+  }
+  assert.deepStrictEqual(kapi.karantinaIhlalleri(), []);
+});
+
+test('11 · SENTETİK İHLAL: karantina dedektörü require\'ı ve geri gelişi yakalar', () => {
+  const d = gecici();
+  fs.mkdirSync(path.join(d, 'src', 'a'), { recursive: true });
+  fs.mkdirSync(path.join(d, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'src', 'a', 'cagiran.js'),
+    "const e = require('../../scripts/eski');\n");
+  // Yorumdaki ve düz dizedeki anma ihlal DEĞİL:
+  fs.writeFileSync(path.join(d, 'src', 'a', 'temiz.js'),
+    "// require('../../scripts/eski')\nconst s = \"require('../../scripts/eski')\";\n");
+  const secenek = { depo: d, karantina: ['scripts/eski.js'], kokler: ['src', 'scripts'] };
+
+  assert.deepStrictEqual(kapi.karantinaIhlalleri(secenek), [
+    {
+      tur: 'require', yol: 'scripts/eski.js',
+      dosya: path.join('src', 'a', 'cagiran.js'), istek: '../../scripts/eski',
+    },
+  ]);
+  fs.writeFileSync(path.join(d, 'scripts', 'eski.js'), 'module.exports = 1;\n');
+  const sonra = kapi.karantinaIhlalleri(secenek);
+  assert.ok(sonra.some((i) => i.tur === 'geri-geldi' && i.yol === 'scripts/eski.js'),
+    'geri geliş kaçtı');
+  fs.rmSync(d, { recursive: true, force: true });
+});
