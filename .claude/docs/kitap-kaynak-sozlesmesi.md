@@ -98,5 +98,9 @@ build zip'i arşive koymak.
    işçisinde de koşar.
 
 ## Uygulama durumu (26.09)
-Kod YOK. Bugünkü yol: Üretim Masası build zip'i İmpark exe'sinden kuruyor ya da İmpark exe'si doğrudan kaynak.
-Sözleşme onaylanınca yazılır. İlk kabul: 58336 (kesintisiz) + 58237 (kesintili) + bir aktivasyonlu set (45480).
+Merdiven (S0-S3) kodu YOK. İlk yazılan: **runner yerel arşivi** (fd3a5ba, Nadir 26.09 "yeni arayüzle üret, tüm YDS
+kuyruğa"). `~/.empp-agent/kaynak-arsivi/<id>/kaynak.json` (`dosya`, `md5`, `boyut`, `etiket`) + `build.zip` varsa
+kuyruk İmpark exe'sini indirmez, yayıncı güncellemesi uygulamaz, şerit hazır paketini devralmaz. Kayıt bozuksa iş
+düşer (eski kaynağa sessiz iniş yok). Dolu: 25.09 Üretim Masası zip'leri, 13 set (md5 doğrulandı). R2 `kaynak/`
+yansısı ve Windows işçisinin (srv21) aynı arşivi okuması açık. İlk kabul: 58336 (kesintisiz) + 58237 (kesintili) +
+bir aktivasyonlu set (45480).
