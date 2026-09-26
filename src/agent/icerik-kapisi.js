@@ -20,10 +20,23 @@
  * `degerlendir` SAF fonksiyondur (dosya sistemine dokunmaz) — testte sentetik bayraklarla
  * çağrılır. `dizinTara`/`icerikKapisiDenetle` gerçek dizini okuyan ince sarmalayıcıdır.
  *
- * BAĞIMLILIK KURALI: yalnız Node stdlib.
+ * ZIP YOLU (2026-09-26, entegrasyon bulgusu): yukarıdaki dizin denetimi yalnız TAZE İNDİRME
+ * yolunda (extractSfx/findBuildDir) çalışır. Kaynak arşivi (`arsivKaynagi`) ve kaynak önbelleği
+ * HIT'i (`cachedZip`) zip'i HİÇ AÇMADAN doğrudan paketleyiciye taşır — bu iki yolda kapı hiç
+ * devreye girmiyordu. 45550/45551/11845'in içeriksiz `build.zip`'leri tam bu iki yoldan (arşiv
+ * ya da önbellek) HIT olsaydı kapı atlanır, içeriksiz paket yine üretilirdi. `girisListesindenDegerlendir`/
+ * `icerikKapisiDenetleZip` aynı [kaynak-iceriksiz] kuralını zip'in MERKEZ DİZİNİNDEN (adm-zip,
+ * sıkıştırılmış içeriği açmadan) uygular — `extractSfx`'in "çıkarma bir sarmalayıcı dizin
+ * ekleyebilir" toleransını (`findBuildDir`) taklit eder: kökte assets/bookN yoksa VE tüm
+ * girdiler TEK bir üst klasör altındaysa bir seviye iner.
+ *
+ * BAĞIMLILIK KURALI: dizin yolu yalnız Node stdlib; zip yolu `adm-zip` (depoda zaten
+ * bağımlılık — `src/services/uploadService.js` aynı `getEntries()`/`entryName` desenini
+ * kullanır, kopya tanım değil aynı kütüphane).
  */
 
 const fsp = require('fs/promises');
+const AdmZip = require('adm-zip');
 
 const KAPI_ISARETI = '[kaynak-iceriksiz]';
 
@@ -99,6 +112,88 @@ async function icerikKapisiDenetle(kok, { kaynakAdi = '', env = process.env, log
   return degerlendir({ ...tarama, kaynakAdi });
 }
 
+/** Bir yol listesindeki kök seviyeyi (ilk `/` öncesi segment) tarar. Saf. */
+function yolListesiTara(yollar) {
+  let hasAssets = false;
+  let hasBookN = false;
+  for (const y of yollar) {
+    const ilkSegment = String(y || '').split('/')[0];
+    if (!ilkSegment) continue;
+    if (ilkSegment === 'assets') hasAssets = true;
+    if (bookNMi(ilkSegment)) hasBookN = true;
+  }
+  return { hasAssets, hasBookN };
+}
+
+/**
+ * Zip GİRİŞ ADLARI listesinden (dizin/dosya farksız — `entryName` düz yol dizisi) içerik
+ * kapısını SAF olarak değerlendirir. Kökte assets/bookN yoksa VE bütün girdiler TEK bir üst
+ * klasör altındaysa (extractSfx'in ekleyebileceği sarmalayıcı — `findBuildDir`'in tolere
+ * ettiği aynı durum) bir seviye inip yeniden dener. I/O yok — testte sentetik dizilerle çağrılır.
+ *
+ * @param {string[]} girisler zip'teki TÜM giriş adları (`entryName`, `\` de kabul edilir)
+ * @param {{ kaynakAdi?: string }} [secenekler]
+ * @returns {{ gecti: boolean, sebep: string|null }}
+ */
+function girisListesindenDegerlendir(girisler, { kaynakAdi = '' } = {}) {
+  const yollar = (girisler || [])
+    .map((g) => String(g || '').replace(/\\/g, '/').replace(/^\/+/, ''))
+    .filter(Boolean);
+
+  let sonuc = yolListesiTara(yollar);
+  if (!sonuc.hasAssets && !sonuc.hasBookN) {
+    // Sarmalayıcı ihtimali: TEK bir kök segment altında mı hepsi?
+    const kokSegmentler = new Set(yollar.map((y) => y.split('/')[0]).filter(Boolean));
+    if (kokSegmentler.size === 1) {
+      const [tekKok] = kokSegmentler;
+      const onEk = `${tekKok}/`;
+      const icYollar = yollar
+        .filter((y) => y.startsWith(onEk))
+        .map((y) => y.slice(onEk.length))
+        .filter(Boolean);
+      if (icYollar.length) sonuc = yolListesiTara(icYollar);
+    }
+  }
+  return degerlendir({ ...sonuc, kaynakAdi });
+}
+
+/**
+ * Zip dosyasının giriş adlarını (`entryName`) okur — `adm-zip` yalnız MERKEZ DİZİNİ okur,
+ * hiçbir girişi açmaz/çıkarmaz (büyük zip'te de hızlı). Saf değil (I/O) ama senkron ve yerel —
+ * dış süreç/zaman aşımı gerekmez.
+ *
+ * @param {string} zipYolu
+ * @returns {string[]}
+ */
+function zipGirisAdlariniOku(zipYolu) {
+  const zip = new AdmZip(zipYolu);
+  return zip.getEntries().map((e) => e.entryName);
+}
+
+/**
+ * Çağrı noktası (arşiv/önbellek HIT yolu): zip'i AÇMADAN `girisListesindenDegerlendir`i
+ * uygular. Zip okunamazsa (bozuk/yok/erişilemez) içeriksiz SAYILIR — paketlenecek
+ * doğrulanabilir bir şey yoksa sessizce geçmek `dizinTara`'nın aynı ilkesini ihlal eder.
+ * Kapatma anahtarı KAPALI ise (bkz. `acikMi`) zip hiç açılmaz, iş her zaman GEÇER.
+ *
+ * @param {string} zipYolu
+ * @param {{ kaynakAdi?: string, env?: object, log?: (s: string) => void }} [secenekler]
+ * @returns {Promise<{ gecti: boolean, sebep: string|null }>}
+ */
+async function icerikKapisiDenetleZip(zipYolu, { kaynakAdi = '', env = process.env, log = () => {} } = {}) {
+  if (!acikMi(env)) {
+    log('icerik-kapisi KAPALI (env) — zip denetlenmedi, geçti sayıldı');
+    return { gecti: true, sebep: null };
+  }
+  let girisler;
+  try {
+    girisler = zipGirisAdlariniOku(zipYolu);
+  } catch (e) {
+    return degerlendir({ hasAssets: false, hasBookN: false, kaynakAdi });
+  }
+  return girisListesindenDegerlendir(girisler, { kaynakAdi });
+}
+
 module.exports = {
   KAPI_ISARETI,
   acikMi,
@@ -106,4 +201,8 @@ module.exports = {
   degerlendir,
   dizinTara,
   icerikKapisiDenetle,
+  yolListesiTara,
+  girisListesindenDegerlendir,
+  zipGirisAdlariniOku,
+  icerikKapisiDenetleZip,
 };

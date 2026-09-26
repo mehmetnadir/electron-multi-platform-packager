@@ -20,6 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const AdmZip = require('adm-zip');
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const { CONFIG, processJob } = require('./runner.js');
@@ -40,12 +41,19 @@ function kopruUrl(bookId, ad) {
     + `?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${crypto.randomBytes(8).toString('hex')}`;
 }
 
-/** Arşiv kökü + tek kitap kaydı kurar. */
+/**
+ * Arşiv kökü + tek kitap kaydı kurar. build.zip GERÇEK bir zip'tir (assets/ içerir) —
+ * 2026-09-26 içeriksiz-kaynak-kapısı (ZIP yolu) bu içeriği okuyup GEÇER demek zorunda;
+ * düz bir metin dosyası artık (haklı olarak) [kaynak-iceriksiz] ile RED verir.
+ */
 function arsivKur(bookId, kayitEk = {}) {
   const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'arsiv-bayat-'));
   const dizin = path.join(kok, String(bookId));
   fs.mkdirSync(dizin);
-  const icerik = 'arsiv-build-zip';
+  const zip = new AdmZip();
+  zip.addFile('index.html', Buffer.from('<html></html>'));
+  zip.addFile(`assets/${bookId}/thumbs/1.jpg`, Buffer.from('arsiv-build-zip'));
+  const icerik = zip.toBuffer();
   fs.writeFileSync(path.join(dizin, 'build.zip'), icerik);
   const md5 = crypto.createHash('md5').update(icerik).digest('hex');
   fs.writeFileSync(path.join(dizin, 'kaynak.json'), JSON.stringify({
