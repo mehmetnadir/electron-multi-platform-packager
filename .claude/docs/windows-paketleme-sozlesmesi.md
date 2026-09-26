@@ -100,7 +100,10 @@ Aktivasyon: çevrimdışı pakette `imKeys.dll` / İmpark DB anahtar kanalı old
 6. Ölçülecek: aktivasyonlu kitapta aktivasyon akışı (26.09 test sürüyor; imKeys.dll uygulama çalışınca
    İmpark'tan iner); G6 gerçek Windows'ta; B'nin A üstüne VM'de kurulumu (kapı madde 3);
    Defender/SmartScreen tarama süresi (bizim dışımızda).
-7. İmza: İmpark imza yuvası gerçek koşu (26.09 sürüyor, A paketi 715 MB, hazırlık 7 dk 42 sn).
+7. ✅ İmza: İmpark imza yuvası (66902) gerçek koşu 26.09 — SM2 A 715 MB imzalandı; imzacı İm Park Bilişim
+   (DigiCert Trusted G4 Code Signing), `osslsigncode verify` Succeeded (zincir + CRL), imzalı exe Wine'da sessiz
+   kuruldu (0, bütünlük hatası yok). Bu koşuda: hazırlık 462 sn, tetikten imzaya ~6 dk, toplam 13 dk 49 sn.
+   Bekleme kuralı yukarıda; betiğe işlenmesi sürüyor. Rapor: `arastirma/imza-yuvasi-gercek-kosu-2026-09-26.md`.
    Yayımcı adı / Certum başvurusu ertelendi.
 8. Başsız kabul kapısı (`tools/kabul`, `b12d2ff`): SM2 Windows A GEÇTİ; runner'da mac+android açık,
    Windows paketleri srv21'de üretildiği için henüz runner kapısında değil.
