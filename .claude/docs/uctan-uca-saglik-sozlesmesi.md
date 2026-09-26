@@ -43,6 +43,8 @@ Demo SET (set bileşimi, index ile kitap ekle/çıkar) 2. aşama — açık kara
 | T4 | KISMEN | Ortak temizlik 4 platformda (f63500c); G mac/Pardus/Android yazılıyor (g-electron cce77c3, g-android); K mac kapalı |
 | T5 | KISMEN | Cron 06:20 requeue (17–22.09 ölçüldü); günde bir; arşiv setlerinde BAYAT kapısı var (17/17 `impark_kaynagi` yazıldı), build zip'i yenileyen adım yok |
 
+**K4 başsız kabulde (26.09, dal `kabul-k4-basliksiz`, `KABUL_K4=1`, varsayılan KAPALI):** `tools/kabul/k4-guncellik.js` — ayrı boş profil + `--remote-debugging-port` ile ilk kitaba girilir, motorun `GetKitapGuncellemeBilgi` cevabı ProBook E6/E7'nin kodu (`cdp-kitap-ac.js`) ile yakalanır; Android'de ek olarak emülatör WebView'ı (adb forward + belge-başı kaydedici). Sözlük `kabul-karar.sh` ile aynı (0 GEÇTİ · 3 GÜNCEL-DEĞİL · 4 ÖLÇÜLEMEDİ), karar.json `k4` alanı (`durum/kod/engeller/olcumler`). Runner: GÜNCEL-DEĞİL → yükleme yok + `failed` "güncel değil:" (Pardus K18 rc 3 ile aynı); ÖLÇÜLEMEDİ yalnız CDP kurulamadıysa/E8'de ertelenebilir engel, soru görülmediyse engellemez (Pardus E7 YOK kuralı). Ölçüm: Lingoland 3 DMG 72379 v12 < İmpark v19 → GÜNCEL-DEĞİL (74 sn); SM2 Set DMG 58336 v17 = v17 → GEÇTİ (67 sn); BES 74451 APK Electron'da 4 kapak v1 < İmpark v2/v3 → GÜNCEL-DEĞİL, cihaz WebView kaydedicisi 8 soruyu yakaladı ama emülatörde ağ yok ("Network is offline") → cihaz ÖLÇÜLEMEDİ (engellemez); üçünde odak korundu. karar.json `katmanlar.guncellik` (GÜNCEL-DEĞİL → RED) uçtan uca okuyucusu içindir, genel karara girmez.
+
 ## Onaylar (Nadir)
 74390'ı tüm platformlarla pipeline'a ekleme + CDN yayını + G manifestleri · srv21 işçi düzeltmesi deploy (96860dd) ·
 ProBook kayıt sırrı.
