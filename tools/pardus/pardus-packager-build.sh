@@ -109,6 +109,9 @@ JOB="j$(date +%y%m%d-%H%M%S)"
 mkdir -p "$OUT/raw"
 log "konteyner basliyor (job $JOB) — log: $OUT/raw/packager.log"
 set +e
+# İçerik güncellemesi (K, İmpark ZKitapZipH) pardus paketinde AÇIK (Nadir 26.09: "impark güncellemelerini
+# alıyorlar"). Eskiden host'un EMPP_ICERIK_GUNCELLEME=windows değeri konteynere geçiyor, linux eşleşmiyordu →
+# güncelleme iniyor ama açılmıyor, "güncellendi" yalan. Kanıt: ProBook 57806 book2 v2→v4. Kapatmak: PARDUS_ICERIK_GUNCELLEME=0.
 nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -v "$REPO":/src:ro \
   -v packager-linux-nm:/app/node_modules -v packager-linux-cache:/cache \
@@ -117,7 +120,7 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_SAYFA_WEBP="${EMPP_SAYFA_WEBP:-0}" \
   -e EMPP_OLU_TEMIZLIK="${EMPP_OLU_TEMIZLIK:-1}" \
   -e EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" \
-  -e EMPP_ICERIK_GUNCELLEME="${EMPP_ICERIK_GUNCELLEME:-0}" \
+  -e EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
