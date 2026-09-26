@@ -26,6 +26,9 @@
 | Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js`, `local-build.js` |
 
 ## Dikkat Edilecekler (Gotchas)
+> Tam tuzak defteri (K17/K18, başsız kabul, Pardus disk kapısı, kurulum bilgilendirme,
+> Windows kapanmama diyaloğu, Electron verimliliği, 2026-09-26 kapı bayrakları) →
+> `.claude/docs/gotchas.md`. SET paketi K1-K16 tablosu → `.claude/docs/set-paketi-know-how.md`.
 - **sharp arm64:** Apple Silicon'da `npm i --ignore-scripts --include=optional --os=darwin --cpu=arm64 sharp@<v>` (yanlış mimari kurulursa "Could not load sharp").
 - **Android JDK 21:** Capacitor 7 (AGP 8.7.2) JDK 21 ister. `getJavaHome()` env→Homebrew openjdk@21→java_home sırasıyla 21+ seçer. JAVA_HOME'u hardcode ETME.
 - **İki paketleme yolu var — ikisini de düzelt:** canlı `/api/package` → `packaging/packagingService.js` (monolith). `src/platforms/*` servisleri ayrı config yazar (mac: `MacOSPackagingService`, android: `AndroidPackagingService` .ts config). 27 Ağu'da mac imzası ve android CapacitorHttp yalnız birine konup boşa build alındı. Sentinel testler ikisini de zorlar.
@@ -43,138 +46,32 @@
 - **Sunucu (S21) servisleri:** gerçek Android paketleyici = systemd `empp-packager` (`/opt/empp-packager`, :3091) + systemd `empp-agent`. pm2 `packager-service` (`/opt/electron-packager`) AYRI kopya — güncellemede `/opt/empp-packager`'ı reset'le, `systemctl restart empp-packager empp-agent`. Log: `/var/log/empp-packager.log`, `/var/log/empp-agent.log`.
 - **NAZİK BUILD — GENEL KURAL (2026-09-07, Nadir):** srv21 PAYLAŞILAN üretim sunucusu (yayıncı panelleri, API'ler, video/php işleri orada). Ağır build (electron-builder → mksquashfs/fpm, 2GB+ app'te ~35dk ve 12GB temp I/O) canlı siteleri yavaşlatır. Kural koda gömüldü: `resolveElectronBuilderBinary()` Linux'ta komutu `nice -n 19 ionice -c 3` ile sarar (çocuk süreçlere miras kalır) → canlı trafik CPU/I/O'da HER ZAMAN önce. Acil kapatma: `EMPP_GENTLE=0`. Sentinel: `src/packaging/gentle-build.test.js`. Ek disiplin (toplu işlerde): **tek build**, paralel YASAK; yoğun saatte kaçın. İhlal kanıtı: 2 paralel build load'u 7→9.6'ya çıkardı, siteler yavaşladı (2026-09-07).
 - **Browser modu ≠ Electron:** "Klasörde Göster" tarayıcıda /api/open-folder ile çalışır; electronAPI sadece Electron'da.
-- **SET paketi (alt-kitap dizinli) know-how (K1-K16, 2026-09-09):** SET'e dokunan
-  HERHANGİ bir değişiklikten önce `.claude/docs/set-paketi-know-how.md`'yi oku —
-  on altı kusurun/dersin (eksik app.config.js, node_modules sızıntısı, alt-kitaba
-  shim/manifest eksikliği, origin-farkında olmayan path.join, setBook.enable, VFS
-  anahtar çarpışması ×2, ad-desenden bağımsız SET tespiti/Tudem, Electron fs-shim
-  alt-kitap eksikliği, bir alt-kitabın EACCES'inin diğerlerini domino ile
-  durdurması, sessiz kısmi-hata sayımı, Gradle heap ön-kontrolü, root/uid test
-  sertleştirme) tablosu, "SET nasıl tanınır" (motor imzası: `index.html`+
-  `app.config.js`, AD DESENİ DEĞİL), yeni platform/adım checklist'i, telefon +
-  Electron test tarifi ("Doğrulama"), "Tek örnek kuralı" ve "Üretim sonrası
-  doğrulama" bölümleri orada. Testte `GERİLEME:` önekli olanlar regresyon
-  kapılarıdır — kırılırsa DUR, körü körüne geri alma.
 - **İndirme dosya adında Türkçe karakter (K11/K11b, 2026-09-09):** `/api/download`, logo serve route'u VE `localPackagingRoutes.js`'in (gölgede kalan) `/download` route'u dosya adını ham UTF-8 ile `Content-Disposition` header'ına koyarsa Node `ERR_INVALID_CHAR` fırlatıp 500 verir (ı/İ/ğ/Ğ/ş/Ş Latin-1 dışında). `src/server/content-disposition.js` (`buildContentDisposition`) RFC 5987 ile ASCII fallback + `filename*=UTF-8''` üretir — YENİ bir dosya-adı/header noktası eklenirse bunu kullan, ham `filename="${...}"`/ham `res.download(...)` YAZMA.
 - **Canlı süreç hangi kodu koşuyor (K13, 2026-09-09):** `packagingService.js` singleton require-cache'te — restart olmadan yeni kod devreye girmez. `curl /api/health` artık `commit` (kısa git hash, `src/server/git-commit.js`) + `startedAt` döner; deploy sonrası bunu doğrula, "restart ettim" yeterli KANIT DEĞİLDİR.
 - **Android Gradle heap ön-kontrolü (K14, 2026-09-09):** `runGradleBuild` başlamadan `src/packaging/android-preflight.js` `~/.gradle/gradle.properties`'teki `org.gradle.jvmargs` Xmx'i kontrol eder (<6g veya dosya yoksa `console.warn`) — dosyaya DOKUNMAZ. Büyük kitap build'i OOM veriyorsa ÖNCE bu uyarıya bak.
 - **Testler:** `node --test 'src/**/*.test.js'` (223; `node --test src/` Node 24'te çalışmaz). Sentinel testler canlı yolları kilitler. SET-özel hızlı kapı: `npm run test:set` (122). 4 test (3 chmod-domino + 1 graveyard) root/uid=0 veya `_graveyard/` eksikse KENDİNİ `t.skip` eder (K15) — Mac'te normal kullanıcı olarak 0 skip beklenir.
-
-- **SET kökünde menü yoksa paket BEYAZ EKRAN (K17, 2026-09-17, Pardus'ta ölçüldü):** yayıncının
-  otomatik exe'sinden çıkan SET build'inin kökü motorun tek-kitap `index.html` kopyasıdır;
-  kökte `assets/`+`classlibraries/` yoktur → `assets not found in app.asar` +
-  `ImWin32.dll okunamadı` → sonsuz "…". Kurulumdaki **boş `resources/app/build` klasörü
-  SAHTE izdir** (AppRun her kurulumda `mkdir -p` yapar, doldurmaz; içerik `app.asar`'da —
-  çalışan kurulumlarda da boştur). Çözüm `src/packaging/set-menu.js` `ensureSetMenu()`;
-  kapı `EMPP_SET_MENU=1` (pardus yolunda varsayılan AÇIK, android/macOS için Nadir kararı +
-  3001 restart'ı gerekir). Özel menüsü olan SET'e (Flashy 59480) DOKUNMAZ. 14 set etkilendi
-  (bkz. `.claude/docs/set-paketi-know-how.md` K17).
-
-- **Paket AÇILMADAN yüklenmez (K18, 2026-09-17 — Nadir kuralı):** pardus işinde ajan,
-  `.impark`'ı R2'ye yüklemeden ÖNCE `tools/pardus/probook-kabul.sh` ile gerçek ProBook'ta
-  (etapadmin@192.168.1.55) kurup açar; düşerse iş hata verir, yükleme olmaz
-  (`EMPP_PARDUS_KABUL=1`, `src/agent/runner.js` → `buildPardusArtifact` sonu).
-  **"Süreç var" açılma kanıtı DEĞİLDİR:** `pgrep -f DijiTap/DijiTap` AppRun'ın kurulum
-  çocuklarını (cp/rsync) sayar — ilk sürüm surec=6 görüp kabul verdi, ekranda Chrome vardı.
-  Geçerli kanıt: `/proc/<pid>/exe` kurulum dizininde + görünür X penceresi + içerik ölçümü
-  (sapma ≥ 0.05, koyu piksel ≥ 0.005, renk ≥ 500 — kırık paket: 0.020/0.00047/10,
-  sağlam: 0.198/0.51/93750). Motor hataları stdout'a DÜŞMEZ (renderer devtools) — konsol
-  denetimine güvenme. AppRun `.empp-version` önbelleği için kapı eski kurulumları geçici
-  yeniden adlandırır, sonunda geri koyar.
-
-- **Başsız kabul kapısı — mac/Android/Windows (K18'in Mac'teki eşi, 2026-09-26):**
-  `node tools/kabul/basliksiz-kabul.js <paket>` paketi BU Mac'te odak çalmadan açıp ölçer
-  (Electron offscreen + LSUIElement çalışma zamanı kopyası `~/.empp-agent/kabul-kanit/_calisma-zamani/`;
-  Android'de ek pencerisiz emülatör). Runner'da `EMPP_BASLIKSIZ_KABUL=1` (varsayılan KAPALI).
-  Tuzaklar: Claude Code/VS Code ortamı `ELECTRON_RUN_AS_NODE=1` verir → Electron Node gibi koşar,
-  koşum bunu siler; paketlenmiş `.app`/`open` ASLA kullanılmaz; `Pixel_8_Pro_API_35`'te 9 Eylül'den
-  bayat snapshot kilidi var (emülatör "snapshot operation pending" ile çıkar) → varsayılan AVD Fold.
-  Electron 39 (node_modules) `show:false`+LSUIElement'e rağmen ~3 sn odak çaldı → yalnız kanıtlı
-  27.3.11 koşar. Tek kitap paketinde kök motor rafı olabilir (MEÇ 73714, BES 74451) → kapağa tıklanır.
-
-## İlgili Dosyalar
-| Dosya | Amaç |
-|---|---|
-| `.claude/docs/changelog.md` | Değişiklik geçmişi |
-| `.claude/docs/set-paketi-know-how.md` | SET paketi K1-K16 bilgi tablosu + doğrulama/deploy operasyon kuralları |
-| `.claude/docs/deploy.md` | srv21 dağıtım kuralları (ff-only, restart-yalnız-kuyruk-boşken, iki ayrı kopya uyarısı) |
-| `project-switch.md` | Librarian pointer |
-
-Son Güncelleme: 2026-09-26 — akşam canlıya alma: G kanalı (mac/Pardus/Windows/Android istemci; Android EKLEME g-yayin kapısında RED), Windows şeridi (imza yuvası+Authenticode+R2), içerik kapısı, İmpark içerik merdiveni S0/S1, kabul E6/E7/E8 (KABUL_CDP), motor kanonik, WebP içerik önbelleği, D-2 eski G üreticisi karantinası, yükleme kanıtı (sha256+boyut) — önceki: 2026-09-09 (K11b-K16)
-
 - **Ajan logo/ikon (2026-09-12):** `pickLogoId` yayıncı ADINI `/api/logos` kayıtlarıyla eşler — kayıt yoksa/ad farklıysa sessizce varsayılan ikon. Pardus için zip kökünde `ico.png` şart → `injectPardusIcon` (runner.js) kayıtlı logoyu ekler. Yeniden başlatma: `touch ~/.empp-agent/yeniden-baslat.istek` (işler arasında temiz çıkış).
 - **Ajan duraklatma bayrağı (2026-09-12):** `~/.empp-agent/duraklat.istek` durdukça ajan yeni iş almaz (süren iş biter); kaldıran çağırandır. Bu Mac'te elle üretim koşarken (paketleyici 4 paralel iş kabul ediyor, iki Gradle aynı `@capacitor/android` build dizinini paylaşıp R.jar yarışıyla düşüyor) bayrağı koy, paketleyici boşalınca üret, sonra kaldır. `yeniden-baslat.istek` ise tek kullanımlık restart.
 - **macOS yalnız ofiste (2026-09-12, Nadir kararı):** noter yüklemesi (300-500 MB) ev hattını boğuyor. Ajan heartbeat'te `guncelYetenekler()` bildirir: geçit 192.168.1.254 değilse `macos` düşer (`android,pardus` kalır), sunucu next-job'u buna göre kiralar. Bayraklar `~/.empp-agent/macos-serbest.istek` (evde de aç) / `macos-durdur.istek` (ofiste de kes), kalıcı. Aynı gece: pardus aracı Electron ikilisini her derlemede GitHub'dan indiriyordu → `electron_config_cache=/cache/electron` (volume) eklendi.
 - **TUZAK — açık .dmg mac üretimini düşürür (2026-09-16, ölçüldü):** electron-builder dmg'yi `/Volumes/<dmg.title>` (= `"<appName> <version>"`) altına bağlar. Daha önce üretilmiş aynı adlı bir `.dmg` Finder'da açıksa `hdiutil detach -quiet` rc=2 verir, electron-builder 5 kez dener ve build `exit code 1` ile düşer — mesaj imzayı/derlemeyi suçlar, **yalan söyler**. Kanıt: 72378 mac, Downloads'taki `…(1).dmg` bağlıyken. Kalıcı çare kodda: `src/packaging/dmg-birim-kapisi.js` build'den ÖNCE çakışan birimi `hdiutil detach` (+ gerekirse `-force`) ile bırakır, bırakamazsa build'i başlatmadan anlaşılır hata verir. Sentinel: `dmg-birim-kapisi.test.js` (10 test, mutasyonla doğrulandı).
 - **TUZAK — `yeniden-baslat.istek` paketleyiciyi de öldürür (2026-09-12 17:54, ölçüldü):** paketleyici (3001) `run-agent.sh` içinden nohup çocuk olarak açılıyor; runner bayrakla çıkınca launchd süreç grubunu (AbandonProcessGroup yok) kapatıyor → paketleyici yeniden başlıyor, süren TÜM işler kayboluyor (Vitanova 7. sınıf job'u yok oldu, `packager.log` sıfırlandı). Bayrağı yalnız `/api/queue-status` boşken ve ajan işsizken koy; kalıcı çare plist'e `AbandonProcessGroup=true`.
 
-- **Electron verimliliği (2026-09-18, ölçüldü):** `.claude/docs/yukleyici-arastirma-2026-09-18.md`
-  §E-F. Paketin **%91'i app.asar**, onun %97'si `assets/` — motor ve içerik TEK blokta, yani
-  tek sayfa düzeltmesi 1 GB yeniden indirme. Üç değişiklik yapıldı: (a) `electronLanguages:
-  ["tr","en-US"]` win/mac/linux (−9 MB); (b) `src/packaging/acilis-yamasi.js` — üretilen
-  kitaba `show:false`+`ready-to-show`+8 sn emniyet, **atomik** (pencere değişkeni ya da
-  `loadFile/loadURL` yoksa `show:false` DA konmaz; yalnız başına konursa pencere HİÇ açılmaz);
-  (c) `src/packaging/sayfa-webp.js` — sayfa PNG'leri WebP'ye, **dosya adı `.png` kalır**
-  (motor uzantıyı sabitliyor ama Chromium içeriğe bakıyor — ölçüldü). mod1 = ilk 100 bayt
-  `256−x`, involutif. Kapı **VARSAYILAN KAPALI** `EMPP_SAYFA_WEBP=1`; ProBook kabul kapısından
-  (sayfa+büyüteç+canvas) geçmeden üretimde AÇILMAZ. Ölçülen: 14 MB → 7 MB (%50), 20 sayfa/sn.
+## Aktif Çalışma (2026-09-26 akşam canlıya alma — özet, detay `.claude/docs/gotchas.md` + `.claude/docs/karar-defteri-2026-09-26.md`)
+- G kanalı canlıya alındı: mac/Pardus/Windows/Android istemci; Android EKLEME g-yayin kapısında bilinçli RED.
+- Windows şeridi: imza yuvası + Authenticode + R2; kapı bayrağı `EMPP_RUNNER_WINDOWS` (`~/.empp-agent/run-agent.sh`).
+- İmpark içerik merdiveni S0/S1 → `EMPP_ARSIV_MERDIVEN`; kabul E6/E7/E8 (`KABUL_CDP`) — ayrı HOME şart, gerçek ev eski paketi de GEÇTİ sayıyor (bilinen sınırlama).
+- Motor kanonik + WebP içerik önbelleği: kod varsayılanı AÇIK, run-agent.sh'ta bilerek YOK.
+- D-2: eski G üreticisi karantinaya alındı (`_graveyard/2026-09-26-g-eski-uretici/`); yeni G yolu manifesti runner/build tarafında YAZMAZ.
+- Açık karar bekliyor: Android G ekleme kalıcı donma riski — Nadir A/B seçimi, dal `g-yayin-android-kapi` (`233854f`) agent-mode'a merge bekliyor.
 
-- **Pardus disk kapısı BOYUT ORANTILI (2026-09-19, ölçümle):** eşik artık sabit DEĞİL.
-  `runner-helpers.pardusGerekliDiskGb` = `max(kaynakGb × PARDUS_DISK_KAT, PARDUS_DISK_TABAN_GB)`
-  (varsayılan 5 ve 15). Kaynak boyutu **indirmeden** ölçülür (`kaynakBoyutuTahmin`: önce
-  ajan önbelleği, olmazsa `HEAD`; ölçülemezse tahmin ÜRETİLMEZ, taban uygulanır).
-  Ölçüm: zip → açılmış build **1,17-1,20×**; eşzamanlı tepe ≈ kaynak × 5 (zip + açılmış +
-  app.asar + Electron runtime + .impark). Eski düz sabit `PARDUS_MIN_FREE_GB=45` 1,1 GB'lık
-  en büyük kitapta bile **10 kat** fazlaydı. Sabit hâlâ **açık override** olarak çalışır ama
-  `~/.empp-agent/run-agent.sh`'tan kaldırıldı — geri koymak kapıyı yine düz sabite çevirir.
-  **Taban 15 neden:** kapı tek anlıktır, paketleyici 4 paralel iş kabul eder ve ~35 dk'lık
-  derleme boyunca başka işler aynı diski yer (20 GB'ı kıl payı geçen 59834 derlemesi
-  2026-09-17'de sessizce bozuk paket üretmişti). Asıl emniyet ağı K18 ProBook kabul kapısı.
-- **Disk darlığı PAKET KUSURU DEĞİLDİR (2026-09-19):** kapı hatası `DISK_KAPISI_ISARETI`
-  ile işaretlenir; `ertelenebilirKaynakHatasi` dalı satıra `failed` **YAZMAZ**, 15 sn
-  bekleyip sıradaki işe geçer (kira dolunca satır kuyruğa döner). Eskiden `failed`
-  yazılıyordu — panelde "PARDUS HATALI" görünen 8 iş (19 Eylül) bozuk paket değil, dolu
-  diskti. Yeni bir kaynak kapısı eklerken aynı ayrımı kur: *eşik* ve *reddetme biçimi*
-  iki ayrı karardır.
+## İlgili Dosyalar
+| Dosya | Amaç |
+|---|---|
+| `.claude/docs/changelog.md` | Değişiklik geçmişi |
+| `.claude/docs/set-paketi-know-how.md` | SET paketi K1-K18 bilgi tablosu + doğrulama/deploy operasyon kuralları |
+| `.claude/docs/gotchas.md` | Detaylı tuzak defteri (K17/K18, başsız kabul, Pardus disk kapısı, kurulum bilgilendirme, Windows diyaloğu, Electron verimliliği, 2026-09-26 kapı bayrakları) |
+| `.claude/docs/deploy.md` | srv21 dağıtım kuralları (ff-only, restart-yalnız-kuyruk-boşken, iki ayrı kopya uyarısı) |
+| `.claude/docs/INDEX.md` | Arşiv/detay dosya rehberi |
+| `project-switch.md` | Librarian pointer |
 
-- **Kurulum bilgilendirmesi — ASCII kırpması KODLAMA SORUNU DEĞİL (2026-09-19, ölçüldü):**
-  "Dosyalar isleniye basliyor" gibi metinler `createCustomInstallationFiles` içinde
-  düpedüz ASCII yazılmıştı. makensis (NSIS 3 Unicode, `~/Library/Caches/electron-builder/
-  nsis/nsis-3.0.4.1/mac/makensis`, `NSISDIR` verilerek Mac'te koşar) UTF-8 kaynağı
-  **BOM'suz doğru okuyor**; Türkçe karakterler derlenmiş exe'ye UTF-16 olarak birebir
-  giriyor (bayt düzeyinde doğrulandı). Yani çözüm kodlama değil, metni düzgün yazmak.
-  Ayrıca kaldırıldı: sahte "[10%]…[95%]" satırları ve aralarındaki `Sleep` (kurulumu
-  boşuna 3,6-5,6 sn uzatıyordu). Bağlanma noktası `Section` DEĞİL **`customInstall`**
-  makrosudur (`app-builder-lib/templates/nsis/installSection.nsh` onu insert eder);
-  `customFinishPageAction` şablonda **hiç referansı olmayan ölü makroydu**. Sentinel:
-  `src/packaging/installer-bilgilendirme.test.js` (6 test, 4 mutantla doğrulandı).
-- **"<Uygulama> kapatılamaz" diyaloğu nereden gelir (2026-09-19, kaynak okundu):**
-  electron-builder'ın `allowOnlyOneInstallerInstance.nsh` makrosu. Per-user kurulumda
-  (`perMachine:false`) süreç `tasklist /FI "USERNAME eq %USERNAME%" /FI "IMAGENAME eq
-  <exe>"` ile aranır, `taskkill` (önce normal, sonra `/f`) ile kapatılmaya çalışılır;
-  **ikinci turda hâlâ ayaktaysa** `appCannotBeClosed` kutusu çıkar. Yani diyalog bir
-  paketleme kusuru değil, "süreç iki zorlamalı taskkill'e rağmen ölmedi" demektir.
-  Override noktası **`customCheckAppRunning`** makrosudur (aynı dosyada `!ifmacrodef`
-  ile aranır). Teşhis için Windows'ta üreme şart — Mac'ten ölçülemez.
-
-- **Kapı bayraklarının kaynağı `~/.empp-agent/run-agent.sh` (2026-09-26 akşam canlıya alma):**
-  yeni anahtarlar — `EMPP_RUNNER_WINDOWS` (kapalı→1: Windows şeridi + imza yuvası + `AGENT_CAPS`'a
-  `windows`), `EMPP_ARSIV_MERDIVEN` (kapalı→1: İmpark içerik merdiveni S0/S1), `KABUL_CDP`
-  (kapalı→1: ProBook CDP kabul, ayrı ev varsayılan açık). `EMPP_ICERIK_KAPISI` ve
-  `EMPP_WEBP_ONBELLEK` run-agent.sh'ta YOK — kod varsayılanları zaten AÇIK (dokunmadan çalışır).
-  `EMPP_PROBOOK_SERIT` kod varsayılanı kapalı VE run-agent.sh'ta da bilerek KONMADI (kayıt sırrı
-  + LAN arşiv eşlemesi doğrulanana kadar).
-- **Kabul gerçek HOME'da eski paketi de GEÇTİ sayar (2026-09-26, canlı ölçüm):** ProBook'ta
-  gerçek ev v36 (öğretmen profilindeki eski indirme) görüp rc=0 verdi; ayrı HOME v33 görüp
-  doğru rc=3 verdi. `KABUL_CDP=1` iken E7 SADECE ayrı ev'de güvenilir — eski ev asla GEÇTİ.
-- **G manifestinin TEK yazarı g-yayin — runner tar yüklemez (D-2, 2026-09-26):** eski G
-  paketleme çağrısı `packagingService.js`'ten kaldırıldı (`_graveyard/2026-09-26-g-eski-uretici/`).
-  Yeni bir G üretim/yayın yolu eklerken manifesti ASLA runner/build tarafında yazma — istemci
-  `kanal-g-degil` ile RED eder, bu bilinçli bir kapı.
-- **Android G EKLEME kalıcı donma riski (2026-09-26, karar bekliyor):** G manifesti her
-  eklemeyi sonraki yayınlara taşıdığından bir kitap eklendikten sonra o setin Android'i
-  hiçbir G güncellemesini (motor dahil) alamıyor. Android G istemcisi paketlerde AÇIK
-  (`EMPP_SET_GUNCELLEME=windows,macos,linux,android`); koruma g-yayin `--ekle` KAPISINDA:
-  anahtarsız `--ekle` RED, bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` (rapor +
-  manifest yanında `ANDROID-DONUK.txt`), dal `g-yayin-android-kapi` (`233854f`, agent-mode'a
-  merge bekliyor). Kalıcı çözüm Nadir A/B seçimi — bkz. changelog (7), `g-android-kitap-ekleme-onerisi-20260926.md`.
+Son Güncelleme: 2026-09-26 — CLAUDE.md slim geçişi (180→~90 satır); ayrıntı `.claude/docs/gotchas.md`'ye taşındı. Önceki: 2026-09-26 akşam canlıya alma (bkz. Aktif Çalışma).
