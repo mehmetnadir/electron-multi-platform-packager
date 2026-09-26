@@ -164,6 +164,7 @@ function altSurecteDenetle(girdi, a, calisma) {
       calisma,
     ];
     if (girdi.tur === 'url' && a.indir) arg.push('--indir');
+    if (girdi.kitapId && girdi.platform) arg.push('--kitap-id', girdi.kitapId, '--platform', girdi.platform);
     const b = a.beklenen;
     if (b.md5_43e23) arg.push('--beklenen-43e23', b.md5_43e23);
     if (b.md5_index) arg.push('--beklenen-index', b.md5_index);
@@ -222,10 +223,13 @@ function girdileriKur(a, kesif) {
     ...a.urller.map((d) => ({ tur: 'url', deger: d, kaynak: 'arguman' })),
   ];
   if (arguman.length || !kesif) return arguman;
+  // Keşfin kitabı + platformu girdiyle taşınır → paket-denetle 'db-kanit' adımı (CDN nesnesi ↔
+  // book-update DB file_sha256/file_size_bytes) keşfedilen her paket için de koşar.
   return kesif.urller.map((u) => ({
     tur: 'url',
     deger: u.url,
     platform: u.platform,
+    kitapId: kesif.kitap,
     kaynak: 'kesif',
   }));
 }
@@ -242,7 +246,14 @@ async function paketleriDenetle(a, testler, girdiler) {
     else
       r = {
         girdi: g,
-        ...(await PD.paketDenetle({ url: g.deger, beklenen: a.beklenen, calisma })),
+        ...(await PD.paketDenetle({
+          url: g.deger,
+          beklenen: a.beklenen,
+          calisma,
+          ...(g.kitapId && g.platform
+            ? { kitapId: g.kitapId, platform: g.platform, dbCalistirSsh: a.dbCalistirSsh }
+            : {}),
+        })),
         agir: false,
       };
     r.sure_ms = Date.now() - t0;

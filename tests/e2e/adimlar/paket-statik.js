@@ -34,9 +34,11 @@ const T_AILE = {
     platformlar: ['mac', 'android'],
   },
 };
+// 'db-kanit' (CDN nesnesi ↔ book-update DB file_sha256/boyut — "CDN'deki paket bizim ürettiğimiz
+// mi?"): yalnız girdi kitap+platform taşıdığında (keşif) üretilir; T2 ve T4 raporuna da girer.
 const T_ALTLAR = {
   T1: null, // hepsi
-  T2: new Set(['kaynak', 'aile', 'butunluk', 'indir']),
+  T2: new Set(['kaynak', 'aile', 'butunluk', 'indir', 'db-kanit']),
   T4: new Set([
     'kaynak',
     'aile',
@@ -46,6 +48,7 @@ const T_ALTLAR = {
     'g-istemci',
     'g-anahtar',
     'g-taban',
+    'db-kanit',
   ]),
 };
 

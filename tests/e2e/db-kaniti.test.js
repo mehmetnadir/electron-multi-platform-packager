@@ -124,3 +124,26 @@ test('dbDosyaKanitiOku: kitapId/platform geçersizse ssh HİÇ ÇAĞRILMAZ (enje
   await assert.rejects(() => dbDosyaKanitiOku("45482'; DROP TABLE x; --", 'android', { calistirSsh: sahteSsh }));
   assert.equal(cagrildi, false);
 });
+
+test('varsayılan çağrı keşifle aynı yoldan: EMPP_E2E_PIPELINE_SQL verilmişse SQL o komuta gider (ssh yok)', async () => {
+  const path = require('node:path');
+  const fs = require('node:fs');
+  const S = require('./sentetik');
+  const d = S.geciciDizin('db-kaniti-env');
+  const kayit = path.join(d, 'sql.txt');
+  const betik = S.betikYaz(path.join(d, 'pipeline-sql-sahte'), [
+    `printf '%s\\n' "$1" >> "${kayit}"`,
+    `printf 'file_sha256\\tfile_size_bytes\\n${SHA}\\t4242\\n'`,
+  ].join('\n'));
+  const eski = process.env.EMPP_E2E_PIPELINE_SQL;
+  process.env.EMPP_E2E_PIPELINE_SQL = betik;
+  try {
+    const r = await dbDosyaKanitiOku('74390', 'android');
+    assert.deepEqual(r, { sha256: SHA, boyut: 4242 });
+  } finally {
+    if (eski === undefined) delete process.env.EMPP_E2E_PIPELINE_SQL;
+    else process.env.EMPP_E2E_PIPELINE_SQL = eski;
+  }
+  const sql = fs.readFileSync(kayit, 'utf8').trim().split('\n').pop();
+  assert.equal(sql, pipelineSqlKomutu('74390', 'android').sql, 'komut değil, çıplak SQL gitmeli');
+});

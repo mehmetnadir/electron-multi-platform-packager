@@ -54,9 +54,23 @@ function dbSonucuAyristir(stdout) {
   return { sha256: shaHam.toLowerCase(), boyut };
 }
 
-/** Gerçek ssh çağrısı (varsayılan) — `O.calistir` (spawnSync sarmalı, ≤120sn). */
-function varsayilanSshCalistir(komut, { zamanAsimiMs = 20000 } = {}) {
-  return O.calistir('ssh', ['-p', SSH_PORT, SSH_HEDEF, komut], { timeout: zamanAsimiMs });
+/**
+ * Gerçek çağrı (varsayılan) — `O.calistir` (spawnSync sarmalı, ≤120sn). Girdi keşfiyle
+ * (`kesif.js` `varsayilanCalistir`) AYNI ortam anahtarları: `EMPP_E2E_PIPELINE_SQL` verilmişse
+ * o komut SQL'le çağrılır (testlerin sahte pipeline-sql'i — ağ yok), `EMPP_E2E_SRV21` /
+ * `EMPP_E2E_SRV21_PORT` ssh hedefini değiştirir. Keşfin bulduğu kitap/platform db-kanit'e
+ * gittiğinde iki okuma aynı yoldan geçer (2026-09-26, e2e-baglama × yukleme-kaniti).
+ */
+function varsayilanSshCalistir(komut, { zamanAsimiMs = 20000, sql = null, env = process.env } = {}) {
+  if (env.EMPP_E2E_PIPELINE_SQL && sql) {
+    return O.calistir(env.EMPP_E2E_PIPELINE_SQL, [sql], { timeout: zamanAsimiMs });
+  }
+  return O.calistir(
+    'ssh',
+    ['-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes', '-p', env.EMPP_E2E_SRV21_PORT || SSH_PORT,
+      env.EMPP_E2E_SRV21 || SSH_HEDEF, komut],
+    { timeout: zamanAsimiMs },
+  );
 }
 
 /**
@@ -68,8 +82,8 @@ function varsayilanSshCalistir(komut, { zamanAsimiMs = 20000 } = {}) {
  */
 async function dbDosyaKanitiOku(kitapId, platform, secenek = {}) {
   const calistirSsh = secenek.calistirSsh || varsayilanSshCalistir;
-  const { komut } = pipelineSqlKomutu(kitapId, platform);
-  const r = await calistirSsh(komut);
+  const { komut, sql } = pipelineSqlKomutu(kitapId, platform);
+  const r = await calistirSsh(komut, { sql });
   if (r && r.error) throw r.error;
   if (r && r.status !== 0) {
     // stderr parola İÇERMEZ (pipeline-sql --defaults-extra-file ile) — olduğu gibi loglanabilir.

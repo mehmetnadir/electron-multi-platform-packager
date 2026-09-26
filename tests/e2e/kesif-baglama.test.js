@@ -765,7 +765,7 @@ test('bayat 9: argüman yoksa girdiler keşiften (CDN URL) — kuru + --indir bi
     probook: { durum: 'kayitsiz', sebep: 'ProBook ajanı yok — kayıt sırrı bekliyor' },
   };
   assert.deepEqual(U.girdileriKur({ paketler: [], urller: [] }, kesif), [
-    { tur: 'url', deger: url, platform: 'android', kaynak: 'kesif' },
+    { tur: 'url', deger: url, platform: 'android', kitapId: '74390', kaynak: 'kesif' },
   ]);
   assert.deepEqual(
     U.girdileriKur({ paketler: [], urller: ['https://x/y.exe'] }, kesif).map((g) => g.kaynak),
@@ -842,4 +842,65 @@ test('kuru koşu (keşif 0 satır): hiçbir ÖLÇÜLEMEDİ satırı bayat gerek�
   }
   // K kapısı ağ gerektirmez: sahte run-agent'ta windows,macos → GEÇTİ
   assert.equal(r.sonuclar.find((s) => s.adim === 'k-icerik/kapi').durum, 'GECTI');
+});
+
+test('keşif → db-kanit: keşfedilen kitap/platform paket-denetle db-kanit adımına gider (CDN boyutu ↔ DB)', async () => {
+  const agac = S.uygulamaAgaci({ setJson: false, modul: false });
+  const apk = S.apkYap(path.join(D, 'kesif-db-kanit.apk'), agac);
+  const veri = fs.readFileSync(apk);
+  const srv = http.createServer((req, res) => {
+    const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range || '');
+    if (m && req.method === 'GET') {
+      const p = veri.subarray(Number(m[1]), Math.min(Number(m[2]), veri.length - 1) + 1);
+      res.writeHead(206, {
+        'Content-Length': p.length,
+        'Content-Range': `bytes ${m[1]}-${Number(m[1]) + p.length - 1}/${veri.length}`,
+        'Accept-Ranges': 'bytes',
+      });
+      res.end(p);
+      return;
+    }
+    res.writeHead(200, { 'Content-Length': veri.length, 'Accept-Ranges': 'bytes' });
+    res.end(req.method === 'HEAD' ? undefined : veri);
+  });
+  await new Promise((c) => srv.listen(0, '127.0.0.1', c));
+  const url = `http://127.0.0.1:${srv.address().port}/softwares/74390/b.apk`;
+  const kesif = {
+    durum: 'tamam',
+    sebep: null,
+    kitap: '74390',
+    satirlar: [{ platform: 'android', status: 'completed', r2_object_key: 'softwares/74390/b.apk' }],
+    urller: [{ platform: 'android', url }],
+    probook: { durum: 'kayitsiz', sebep: 'ProBook ajanı yok — kayıt sırrı bekliyor' },
+  };
+  const komutlar = [];
+  let r;
+  try {
+    r = await sessiz(() =>
+      U.kos({
+        test: 'T4,T5',
+        kitap: '74390',
+        kuru: true,
+        paketler: [],
+        urller: [],
+        beklenen: {},
+        kesif,
+        istek: istekSahte(15, 10),
+        dbCalistirSsh: (komut) => {
+          komutlar.push(komut);
+          return { status: 0, stdout: `file_sha256\tfile_size_bytes\n${'d'.repeat(64)}\t${veri.length}\n` };
+        },
+      }),
+    );
+  } finally {
+    srv.close();
+  }
+  assert.equal(r.girdi_kaynagi, 'kesif');
+  assert.equal(komutlar.length, 1, 'keşfedilen tek paket için tek DB sorgusu');
+  assert.match(komutlar[0], /book_id='74390' AND platform='android'/);
+  const db = r.sonuclar.find((s) => s.adim === 'paket-denetle/db-kanit');
+  assert.ok(db, 'db-kanit satırı rapora girmeli');
+  assert.equal(db.durum, 'GECTI', JSON.stringify(db.kanit));
+  assert.equal(db.kanit.olcum.db_boyut, veri.length);
+  assert.equal(db.kanit.olcum.cdn_boyut, veri.length);
 });
