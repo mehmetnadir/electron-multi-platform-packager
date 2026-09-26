@@ -48,6 +48,7 @@ const {
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
   guncellemeDosyalariniSirala, guncellemeIcerikTipi, tarListesiniAyristir,
+  pardusBetikEnv,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
@@ -1407,7 +1408,10 @@ async function injectPardusIcon(zipPath, publisherName, work) {
  */
 function runPardusScript(args) {
   return new Promise((resolve) => {
-    const p = spawn('nice', ['-n', '10', CONFIG.pardusBuildScript, ...args]);
+    // G açık anahtarı betiğe (oradan -e ile konteynere) doğrulanmış olarak geçer (2026-09-26).
+    const pe = pardusBetikEnv(process.env);
+    if (pe.sebep) log(`pardus: G açık anahtarı ${pe.sebep} — pakette G kanalı kapalı kalır`);
+    const p = spawn('nice', ['-n', '10', CONFIG.pardusBuildScript, ...args], { env: pe.env });
     let stdout = '';
     let stderr = '';
     let timedOut = false;

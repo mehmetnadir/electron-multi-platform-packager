@@ -938,7 +938,34 @@ function tarListesiniAyristir(cikisMetni, setKimligi) {
   return sonuc;
 }
 
+/**
+ * PARDUS (Docker) BETİĞİNE GİDEN ORTAM (2026-09-26): G kanalının manifest doğrulama AÇIK anahtarı
+ * (`EMPP_GUNCELLEME_ACIK_ANAHTAR`, SPKI DER base64 ed25519) pakete gömülsün diye betiğe — oradan
+ * `-e` ile konteynere — geçer. Açık anahtar sır DEĞİLDİR. Geçerli bir ed25519 AÇIK anahtar değilse
+ * (boş, bozuk, RSA, özel anahtar DER/PEM) DÜŞÜRÜLÜR: pakette G kapalı kalır, sebep döner.
+ * Özel anahtar bu yoldan ASLA geçmez. Saf: yalnız `crypto` ile ayrıştırır.
+ * @returns {{env: object, gAnahtari: string|null, sebep: string}}
+ */
+function pardusBetikEnv(env) {
+  const cikti = { ...(env || {}) };
+  const ham = typeof cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR === 'string'
+    ? cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR.trim() : '';
+  let sebep = '';
+  if (!ham) sebep = 'yok';
+  else if (/PRIVATE|BEGIN /i.test(ham)) sebep = 'ozel-anahtar-ya-da-pem';
+  else {
+    try {
+      const k = require('crypto').createPublicKey({ key: Buffer.from(ham, 'base64'), format: 'der', type: 'spki' });
+      if (k.asymmetricKeyType !== 'ed25519') sebep = 'ed25519-degil';
+    } catch (e) { sebep = 'gecersiz'; }
+  }
+  if (sebep) delete cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR;
+  else cikti.EMPP_GUNCELLEME_ACIK_ANAHTAR = ham;
+  return { env: cikti, gAnahtari: sebep ? null : ham, sebep };
+}
+
 module.exports = {
+  pardusBetikEnv,
   pauseRequested,
   etkinYetenekler,
   srcVersionTuret,

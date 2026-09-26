@@ -115,6 +115,9 @@ set +e
 # İçerik güncellemesi (K, İmpark ZKitapZipH) pardus paketinde AÇIK (Nadir 26.09: "impark güncellemelerini
 # alıyorlar"). Eskiden host'un EMPP_ICERIK_GUNCELLEME=windows değeri konteynere geçiyor, linux eşleşmiyordu →
 # güncelleme iniyor ama açılmıyor, "güncellendi" yalan. Kanıt: ProBook 57806 book2 v2→v4. Kapatmak: PARDUS_ICERIK_GUNCELLEME=0.
+# G AÇIK ANAHTARI (2026-09-26): EMPP_GUNCELLEME_ACIK_ANAHTAR konteynere geçmiyordu → pakete imza anahtarı
+# gömülmüyor, Pardus'ta G kanalı sessizce kapalıydı. Açık anahtar (SPKI base64) SIR DEĞİL; runner onu
+# doğrulayıp (pardusBetikEnv) verir. Özel anahtar / .pem / anahtar dosyası bu komuta ASLA girmez.
 nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -v "$REPO":/src:ro \
   -v packager-linux-nm:/app/node_modules -v packager-linux-cache:/cache \
@@ -125,6 +128,7 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" \
   -e EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
+  -e EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-}" \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?
