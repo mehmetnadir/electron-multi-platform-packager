@@ -302,14 +302,21 @@ async function calis(argv, yazici) {
       const beklenenKart = O.beklenenKartSayisi({
         kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu, elle: s.kitapSayisi,
       });
+      const menuDisi = O.menudeOlmayanKitapDizinleri({
+        kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu,
+      });
       rapor.envanter = {
-        setMi: envanter.setMi, kitapDizinleri: envanter.kitapDizinleri, beklenenKart,
+        setMi: envanter.setMi, kitapDizinleri: envanter.kitapDizinleri, beklenenKart, menuDisi,
         kokAppConfig: envanter.kokAppConfig, kokMotorKopyasi: motorKopyasiMi(envanter.indexHtml),
         kitapAdlari: ((envanter.setMenu && envanter.setMenu.kitaplar) || []).map((k) => k && k.ad).filter(Boolean),
         kokBaslik: (/<title>([^<]*)<\/title>/i.exec(envanter.indexHtml) || [])[1] || null,
       };
       say(`envanter: ${envanter.setMi ? `SET, app.config.js taşıyan ${envanter.kitapDizinleri.join(',')}` : 'tek kitap'}`
         + ` · beklenen kart ${beklenenKart} · kök <title> "${rapor.envanter.kokBaslik}"`);
+      if (menuDisi.length) {
+        say(`envanter notu: menü tanımında olmayan motor dizini ${menuDisi.join(',')}`
+          + ' — set-menu.json listelemiyor, kart beklenmez (kaynak kararı; RED değil)');
+      }
 
       let zaman = null;
       try {

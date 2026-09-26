@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const P = require('./paket-cikar');
+const O = require('./olcutler');
 const Z = require('./calisma-zamani');
 const { imzaKarari } = require('./imza-denetimi');
 const A = require('./android-cihaz');
@@ -74,6 +75,24 @@ test('kokEnvanteri: dizin ve asar ağacında AYNI sonuç (SET tanıma = motor im
     assert.deepEqual(e2.kitapDizinleri, e1.kitapDizinleri);
     assert.equal(e2.indexHtml, e1.indexHtml);
     fs.rmSync(path.dirname(hedef), { recursive: true, force: true });
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('kokEnvanteri → beklenen kart (45549): menü tanımında olmayan motorlu book5 kart beklemez', () => {
+  const d = gecici('menu-disi');
+  try {
+    fs.writeFileSync(path.join(d, 'index.html'), '<title>Shall We?! 7 Set</title>');
+    const kitaplar = ['book1', 'book2', 'book3', 'book4'].map((k, i) => ({ ad: `K${i + 1}`, grup: '', klasor: k }));
+    fs.writeFileSync(path.join(d, 'set-menu.json'), JSON.stringify({ setAdi: 'Shall We?! 7 Set', kitaplar }));
+    for (const b of ['book1', 'book2', 'book3', 'book4', 'book5']) {
+      fs.mkdirSync(path.join(d, b));
+      fs.writeFileSync(path.join(d, b, 'index.html'), '<html></html>');
+      fs.writeFileSync(path.join(d, b, 'app.config.js'), '');
+    }
+    const e = P.kokEnvanteri(d, false);
+    assert.equal(e.kitapDizinleri.length, 5);
+    assert.equal(O.beklenenKartSayisi({ kitapDizinleri: e.kitapDizinleri, setMenu: e.setMenu }), 4);
+    assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: e.kitapDizinleri, setMenu: e.setMenu }), ['book5']);
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 

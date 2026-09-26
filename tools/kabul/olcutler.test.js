@@ -99,6 +99,59 @@ test('beklenenKartSayisi: bookN sayısı; grup varsa grup+grupsuz; elle sayı he
   assert.equal(O.beklenenKartSayisi({}), 0);
 });
 
+// Gerçek kaynak menü tanımlarından (kaynak-arsivi/<id>/build.zip → set-menu.json) kısaltılmış fikstürler.
+const IYI_PIKSEL_MENU = { sapma: 0.2, koyu: 0.9, renk: 50000 };
+const menuKitap = (ad, assetId, klasor) => ({ ad, assetId, grup: '', kapakVarMi: true, klasor });
+// 45549 Shall We?! 7 Set: book5 = Grade-7-Games motor imzalı ama menü tanımında YOK (KV page:77u69 4 kitap).
+const SW7 = {
+  dizinler: ['book1', 'book2', 'book3', 'book4', 'book5'],
+  setMenu: { setAdi: 'Shall We?! 7 Set', tema: 'webZSf425', kitaplar: [
+    menuKitap('Reference Book', '25775', 'book1'), menuKitap('Workbook', '25777', 'book2'),
+    menuKitap('Key Words', '25830', 'book3'), menuKitap('Test Book', '16031', 'book4'),
+  ] },
+};
+// 45482 Shall We 8 Set: kimliği "0" olan Games kitabı (book4) menü tanımında VAR → kartı çizilir.
+const SW8 = {
+  dizinler: ['book1', 'book2', 'book3', 'book4'],
+  setMenu: { setAdi: 'Shall We 8 Set', tema: 'webZSf425', kitaplar: [
+    menuKitap('Reference Book', '44187', 'book1'), menuKitap('Workbook', '25772', 'book2'),
+    menuKitap('Key Words', '44579', 'book3'), menuKitap('Games', 'Grade-8-Games', 'book4'),
+  ] },
+};
+
+test('beklenenKartSayisi 45549: menü tanımı varsa beklenen = tanım (4), dizin sayısı (5) değil', () => {
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SW7.dizinler, setMenu: SW7.setMenu }), 4);
+  assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: SW7.dizinler, setMenu: SW7.setMenu }), ['book5']);
+  // Canlı ölçüm (kabul-kanit/45549-android-20260926-234443): 4 webz kartı → artık GEÇTİ.
+  const k = O.asamaKarari(
+    { baslik: 'Shall We?! 7 Set', kartSayisi: 4, yukleniyor: [], piksel: { sapma: 0.237, koyu: 0.963, renk: 261617 } },
+    { asama: 'menu', setMi: true,
+      beklenenKart: O.beklenenKartSayisi({ kitapDizinleri: SW7.dizinler, setMenu: SW7.setMenu }) },
+  );
+  assert.equal(k.durum, O.DURUM.GECTI, k.sebepler.join('; '));
+});
+
+test('beklenenKartSayisi 45482: kimliği "0" olan kitap menüdeyse kartı beklenir (4/4)', () => {
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SW8.dizinler, setMenu: SW8.setMenu }), 4);
+  assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: SW8.dizinler, setMenu: SW8.setMenu }), []);
+  // Menü tanımı 4 derken 3 kart çizilirse hâlâ RED (kart kaybı yakalanır).
+  const k = O.asamaKarari(
+    { baslik: 'Shall We 8 Set', kartSayisi: 3, yukleniyor: [], piksel: IYI_PIKSEL_MENU },
+    { asama: 'menu', setMi: true, beklenenKart: 4 },
+  );
+  assert.equal(k.durum, O.DURUM.RED);
+  assert.ok(k.sebepler.some((x) => /menü kartı 3 ≠ beklenen 4/.test(x)));
+});
+
+test('beklenenKartSayisi: boş menü tanımı dizin sayısına düşer; klasörsüz tanımda menü dışı yok', () => {
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SW7.dizinler, setMenu: { kitaplar: [] } }), 5);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SW7.dizinler, setMenu: {} }), 5);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SW7.dizinler, setMenu: SW7.setMenu, elle: 5 }), 5);
+  const klasorsuz = { kitaplar: [{ ad: 'A' }] };
+  assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: SW7.dizinler, setMenu: klasorsuz }), []);
+  assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: SW7.dizinler }), []);
+});
+
 test('konsolSiniflandir: ERR_FILE_NOT_FOUND URL başına bir kez, JS hatası ayrı, K17 imzaları RED', () => {
   const k = O.konsolSiniflandir([
     { seviye: 'error', mesaj: '[kabul] net::ERR_FILE_NOT_FOUND: <script> file:///x/app.config.js' },
