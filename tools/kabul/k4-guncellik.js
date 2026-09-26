@@ -35,6 +35,11 @@
  *
  * Bayrak: `KABUL_K4=1` (ya da CLI `--k4`) — varsayılan KAPALI; kapalıyken başsız kabul birebir
  * eski (çıkış 0/1/3, karar.json `k4.durum = ATLANDI`).
+ *
+ * SET TÜM ALT KİTAPLAR (`KABUL_SET_TUM=1` / `--set-tum`, K4 açıkken; varsayılan KAPALI): motor
+ * yalnız açılan kitabı sorar → Electron ölçümü `cdp-kitap-ac --set-tum 1` ile her alt kitabın menü
+ * sürümünü İmpark'a doğrudan sorar (tools/kabul/set-guncellik.js); `olcum.setTum.karar` K4 kararına
+ * `setTumBirlestir` ile (en kötüsü) katılır. Android cihaz WebView'ında Node yok → yalnız Electron.
  * BOZARSAN: tools/kabul/k4-guncellik.test.js kırılır.
  */
 const fs = require('fs');
@@ -326,6 +331,7 @@ async function cdpOlc(argv, kanit, cdpAna) {
     e6: { durum: v.E6 || 'OLCULEMEDI', sebep: v.E6_SEBEP || '', tur: v.E6_TUR || '', url: v.E6_URL || '' },
     e7: { durum: v.E7 || 'OLCULEMEDI', ayrinti: v.E7_AYRINTI || '', oneri: v.E7_ONERI || '' },
     cevaplar: (j && j.e7 && Array.isArray(j.e7.cevaplar)) ? j.e7.cevaplar : [],
+    setTum: (j && j.setTum) || null,
     hedef: (j && j.hedef) || null,
     adim: (j && j.adim) || null,
     kaydedici: (j && j.kaydedici) || null,
@@ -349,7 +355,8 @@ function sureArgumanlari(p) {
  * Electron K4 ölçümü (mac/windows/pardus içeriği ve APK'nın web ağacı).
  * @param {{ikili?:string, girisYolu:string, kurulumKoku:string, kanit:string, calisma:string,
  *          log?:Function, kitapSn?:number, e7Sn?:number, cdpPort?:number, baslat?:Function,
- *          cdpAna?:Function, cdpEkArg?:string[], profil?:string}} p
+ *          cdpAna?:Function, cdpEkArg?:string[], profil?:string, setTum?:boolean}} p
+ *   setTum: cdp-kitap-ac `--set-tum 1` (her alt kitap; sonuç `olcum.setTum`)
  */
 async function electronK4Olc(p) {
   const log = p.log || (() => {});
@@ -385,7 +392,7 @@ async function electronK4Olc(p) {
     profilDizin: profil,
     sonucYolu: path.join(kanit, 'kosum.json'),
     agKapali: false,
-    toplamSn: sure.toplamSn + 30,
+    toplamSn: sure.toplamSn + 30 + (p.setTum ? 90 : 0), // set-tum: cdp-kitap-ac --set-tum-sn varsayılanı
     durDosyasi,
   };
   const girdiYolu = path.join(p.calisma, `k4-girdi-${port}.json`);
@@ -395,7 +402,8 @@ async function electronK4Olc(p) {
   olcum.pid = surec.pid;
   try {
     Object.assign(olcum, await cdpOlc(
-      ['--port', String(port), '--kanit', kanit, '--kurulum-koku', p.kurulumKoku || '', ...sure.argv], kanit, p.cdpAna,
+      ['--port', String(port), '--kanit', kanit, '--kurulum-koku', p.kurulumKoku || '',
+        ...(p.setTum ? ['--set-tum', '1'] : []), ...sure.argv], kanit, p.cdpAna,
     ));
   } catch (e) {
     olcum.e6 = { durum: 'OLCULEMEDI', sebep: `CDP istemcisi hatası: ${e.message}` };

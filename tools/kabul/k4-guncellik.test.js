@@ -20,6 +20,7 @@ const I = require('./cdp-istemci');
 const C = require('../pardus/cdp-kitap-ac');
 const O = require('./olcutler');
 const ig = require('../../src/runtime/icerik-guncelleme');
+const ST = require('./set-guncellik');
 
 const GURL = (v) => `https://akillitahta.ydspublishing.com/TestlerMobil/GetKitapGuncellemeBilgi?id=44187&setMi=0&versiyon=${v}`;
 const DOLU = JSON.stringify({ Success: true, Data: 'https://cdn.x/ZKitapZipH/44187-36.zip', Vs: 36 });
@@ -207,7 +208,7 @@ test('kaydedici: sonradan atanan fetch (CapacitorHttp) de sarılır; güncelleme
  *   guncelleme 'yenilemede': Page.reload sonrası Network olayları + gövde. kayit: kaydedici içeriği.
  */
 async function sahteCdp(o) {
-  const k = { alinan: [], betikler: [], yenileme: 0, soketler: new Set() };
+  const k = { alinan: [], betikler: [], yenileme: 0, soketler: new Set(), agacOkuma: 0 };
   const yoklama = () => ({
     url: o.url, baslik: 'Akıllı Tahta Uygulaması', kartlar: [], kapaklar: [], yukleniyor: [],
     sayfaGorseli: 2, tuval: 1, arkaPlanSayfa: 0, kartSayisi: 0,
@@ -222,6 +223,11 @@ async function sahteCdp(o) {
         if (e === 'location.href') return { result: { type: 'string', value: o.url } };
         if (e.includes('sessionStorage.getItem')) return { result: { type: 'string', value: JSON.stringify(o.kayit || []) } };
         if (e.includes('outerHTML')) return { result: { type: 'string', value: '<html></html>' } };
+        // --set-tum: sayfanın Node fs'i (nodeIntegration) — gerçek fs ile sahte SET ağacını okur.
+        if (e.includes('function agacTopla')) {
+          k.agacOkuma += 1;
+          return { result: { type: 'string', value: vm.runInNewContext(e, { require }) } };
+        }
         return { result: { type: 'undefined' } };
       }
       case 'Page.addScriptToEvaluateOnNewDocument':
@@ -441,4 +447,126 @@ test('guncellikKatmani: uçtan uca okuyucusu için katman sözlüğü — GÜNCE
   const genelYeri = cli.indexOf('const genel = k4Acik ? K4.genelKararK4(O.genelKarar(katmanListesi), rapor.k4)');
   assert.ok(genelYeri > 0 && genelYeri < cli.indexOf('rapor.katmanlar.guncellik = guncellik'),
     'guncellik katmanı genel karardan SONRA eklenmeli (listeye girmez)');
+});
+
+// --- SET tüm alt kitaplar (KABUL_SET_TUM=1) — SM2 Set DMG senaryosu, ağ yok ----------------------
+
+const SM2_GURL = 'https://www.sorucoz.tv/TestlerMobil/GetKitapGuncellemeBilgi?id=58336&setMi=0&versiyon=17';
+
+/** SM2 Set ağacı: kök menü (kabuk), book1 58336 v17, book2 58237 v7 — motorun menü kodlamasıyla. */
+function sm2Agaci() {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'k4-sm2-'));
+  const cfg = 'window.AppConfig = { updateBookEndPoint: "https://www.sorucoz.tv/TestlerMobil/GetKitapGuncellemeBilgi'
+    + '?id={bookId}&setMi={isSet}&versiyon={version}" };';
+  const yaz = (rel, veri) => {
+    fs.mkdirSync(path.dirname(path.join(kok, rel)), { recursive: true });
+    fs.writeFileSync(path.join(kok, rel), veri);
+  };
+  yaz('index.html', '<html></html>');
+  for (const [d, id, v] of [['book1', '58336', 17], ['book2', '58237', 7]]) {
+    yaz(`${d}/index.html`, '<html></html>');
+    yaz(`${d}/app.config.js`, cfg);
+    yaz(`${d}/classlibraries/ImWin32.dll`, ig.menuKodla(`<main><cover ID="${id}" version="${v}" URL=""/></main>`, () => 0.5));
+  }
+  return kok;
+}
+
+/** Sahte İmpark (canlı 26.09 cevapları): 58336 Vs 17, 58237 Vs 14. */
+function sm2Impark() {
+  const sorulan = [];
+  const tablo = { 58336: 17, 58237: 14 };
+  const getir = async (url) => {
+    const q = new URL(url).searchParams;
+    const v = Number(q.get('versiyon'));
+    sorulan.push(`${q.get('id')}@${v}`);
+    const vs = tablo[q.get('id')];
+    const data = v < vs ? `https://akillitahta.ydspublishing.com/Uploads/ZKitapZipH/${q.get('id')}-${vs}.zip` : '';
+    return { status: 200, govde: JSON.stringify({ Success: true, Data: data, Vs: data ? vs : v }) };
+  };
+  return { getir, sorulan };
+}
+
+test('SET_TUM (sahte CDP + sahte İmpark, SM2): motor yalnız 58336 sordu → eski K4 GEÇTİ; tüm alt kitaplar → '
+  + 'book2 58237 v7 < v14 → GÜNCEL-DEĞİL rc 3', async () => {
+  const kok = sm2Agaci();
+  const imp = sm2Impark();
+  const t = await sahteCdp({ url: `file://${kok}/index.html`, gurl: SM2_GURL, guncelleme: 'yenilemede', govde: BOS(17) });
+  const argvler = [];
+  const cdpAna = (argv, yaz) => { argvler.push(argv); return C.ana(argv, yaz, { getir: imp.getir }); };
+  try {
+    const kanit = kanitDizini();
+    const olcum = await K.electronK4Olc({
+      ...kisaSure, girisYolu: `${kok}/index.html`, kurulumKoku: kok, kanit, calisma: kanit, cdpPort: t.port,
+      baslat: sahteBaslat([]), cdpAna, setTum: true,
+    });
+    assert.ok(argvler[0].join(' ').includes('--set-tum 1'), argvler[0].join(' '));
+    assert.deepEqual(olcum.cevaplar.map((c) => `${c.id}@${c.versiyon}`), ['58336@17'], 'motor yalnız açılan kitabı sorar');
+    const motor = K.k4Karari({ olcum, paketSurumleri: { 58336: 17, 58237: 7 } });
+    assert.equal(motor.durum, 'GECTI', 'eski davranış (yalnız motorun sorusu) SM2\'de GEÇTİ veriyordu');
+    assert.equal(t.agacOkuma, 1, 'ağaç CDP oturumunda sayfanın fs\'iyle bir kez okunur');
+    assert.deepEqual(imp.sorulan, ['58336@17', '58237@7']);
+    assert.equal(olcum.setTum.karar.durum, 'GUNCEL_DEGIL');
+    assert.equal(olcum.setTum.kok, kok);
+    const k = ST.setTumBirlestir(K.k4Birlestir(motor), olcum.setTum.karar);
+    assert.equal(k.durum, 'GUNCEL_DEGIL');
+    assert.match(k.sebep, /book2 58237 paket v7 < İmpark v14/);
+    const genel = K.genelKararK4('GECTI', k);
+    assert.equal(genel, 'GUNCEL_DEGIL');
+    assert.equal(K.k4CikisKodu(genel, true, O.cikisKodu), 3);
+    const j = JSON.parse(fs.readFileSync(path.join(kanit, 'k4', 'cdp-sonuc.json'), 'utf8'));
+    assert.deepEqual(j.setTum.karar.satirlar.map((x) => `${x.kitap}:${x.id}:${x.durum}`),
+      ['book1:58336:GUNCEL', 'book2:58237:GERIDE']);
+  } finally { await t.kapat(); }
+});
+
+test('SET_TUM: cdp-kitap-ac SET_TUM* satırlarını basar (probook-kabul.sh okur); E6 çıkış kodu değişmez', async () => {
+  const kok = sm2Agaci();
+  const imp = sm2Impark();
+  const t = await sahteCdp({ url: `file://${kok}/index.html`, gurl: SM2_GURL, guncelleme: 'yenilemede', govde: BOS(17) });
+  try {
+    const satirlar = [];
+    const kod = await C.ana(['--port', String(t.port), '--kanit', kanitDizini(), '--set-tum', '1', '--kitap-sn', '2',
+      '--e7-sn', '1', '--baglan-sn', '2', '--menu-sn', '2', '--toplam-sn', '25', '--aralik-ms', '40'], (x) => satirlar.push(x),
+    { getir: imp.getir });
+    assert.equal(kod, 0);
+    const v = K.cdpSatirlariCoz(satirlar);
+    assert.equal(v.E7, 'BOS');
+    assert.equal(v.SET_TUM, 'GUNCEL_DEGIL');
+    assert.equal(v.SET_TUM_AYRINTI, 'SET alt kitap geride: book2 58237 paket v7 < İmpark v14');
+    assert.match(v.SET_TUM_ONERI, /ZKitapZipH\/58237-14\.zip/);
+  } finally { await t.kapat(); }
+});
+
+test('SET_TUM KAPALI (varsayılan): --set-tum verilmez, ağaç okunmaz, SET_TUM satırı yok — eski yol birebir', async () => {
+  const kok = sm2Agaci();
+  const t = await sahteCdp({ url: `file://${kok}/index.html`, gurl: SM2_GURL, guncelleme: 'yenilemede', govde: BOS(17) });
+  const satirlar = [];
+  const argvler = [];
+  const cdpAna = (argv, yaz) => { argvler.push(argv); return C.ana(argv, (x) => { satirlar.push(x); yaz(x); }); };
+  try {
+    const kanit = kanitDizini();
+    const olcum = await K.electronK4Olc({
+      ...kisaSure, girisYolu: `${kok}/index.html`, kurulumKoku: kok, kanit, calisma: kanit, cdpPort: t.port,
+      baslat: sahteBaslat([]), cdpAna,
+    });
+    assert.ok(!argvler[0].includes('--set-tum'));
+    assert.equal(t.agacOkuma, 0);
+    assert.equal(olcum.setTum, null);
+    assert.ok(!satirlar.some((x) => x.startsWith('SET_TUM')), satirlar.join('|'));
+    assert.equal(ST.setTumBirlestir(K.k4Karari({ olcum, paketSurumleri: { 58336: 17 } }), null).durum, 'GECTI');
+  } finally { await t.kapat(); }
+});
+
+test('nöbetçi: başsız kabul SET_TUM\'u K4 ölçümüne bağlar, raporda motor birleşiminden SONRA en kötüsüyle katar', () => {
+  const cli = fs.readFileSync(path.join(__dirname, 'basliksiz-kabul.js'), 'utf8');
+  assert.match(cli, /const setTumAcik = k4Acik && ST\.setTumEtkin\(\{ bayrak: s\.setTum \}\);/);
+  assert.match(cli, /kitapSn: s\.kitapBekle,\n\s+setTum: setTumAcik,/);
+  assert.match(cli, /const motor = K4\.k4Birlestir\(\.\.\.kararlar\);\n\s+const k = \(motor \|\| setTumKarar \? ST\.setTumBirlestir\(motor, setTumKarar\)/);
+  assert.match(cli, /k4Raporu\(k4Kararlar, k4Olcumleri, paketSurum, setTumKarar\)/);
+  const pb = fs.readFileSync(path.join(__dirname, '..', 'pardus', 'probook-kabul.sh'), 'utf8');
+  assert.match(pb, /SET_TUM_ACIK="\$\{KABUL_SET_TUM:-0\}"/);
+  assert.match(pb, /--set-tum "\$SET_TUM_ACIK"/);
+  assert.match(pb, /SET_TUM=\$\(sed -n 's\/\^SET_TUM=\/\/p' "\$KANIT\/cdp\.txt" \| tail -1\)/);
+  assert.ok(pb.indexOf('SET_TUM=OLCULEMEDI') < pb.indexOf('\nkabul_karar\n'), 'SET_TUM kabul_karar\'dan ÖNCE hazır');
+  assert.match(pb, /yeniden kuyruk onerisi: \$\{KARAR_ONERI:-\$\{E7_ONERI:-/);
 });
