@@ -176,7 +176,9 @@ function filesDizileri(src) {
   const dizi = (bas, son) => {
     const m2 = kod.slice(bas, son).match(/files:\s*\[([\s\S]*?)\]/);
     assert.ok(m2, 'files dizisi bulunamadı');
-    return [...m2[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+    // 2026-09-26: dışlamalar `...paketDisiListe.elektronBuilderDesenleri('<p>')` yayılımıyla
+    // geliyor — yalnız literal okumak `!node_modules`'u görmez; tek okuyucuyla çözülür.
+    return require('./paket-disi-liste-sentinel').filesDesenleriniCoz(m2[1]);
   };
   return { kod, windows: dizi(ofs.windows, ofs.macos), macos: dizi(ofs.macos, ofs.linux), linux: dizi(ofs.linux, ofs.android) };
 }

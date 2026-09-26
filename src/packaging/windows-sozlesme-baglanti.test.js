@@ -24,10 +24,10 @@ function govde(ad) {
 }
 
 test('G2: Windows files listesi kaynaktaki bookN/temp/data/storage.im\'i dışlar', () => {
-  const g = govde('packageWindows');
-  const blok = g.match(/files:\s*\[([\s\S]*?)\n\s*\]/);
-  assert.ok(blok);
-  assert.ok(blok[1].includes('"!**/temp/data/storage.im"'));
+  // 2026-09-26: liste `paket-disi-liste.js`'e taşındı (dört platform aynı liste);
+  // canlı dizi yayılımlar çözülerek okunur.
+  const { canliFilesDesenleri } = require('./paket-disi-liste-sentinel');
+  assert.ok(canliFilesDesenleri('windows').includes('!**/temp/data/storage.im'));
 });
 
 test('G5: K kapısı kapalıyken bile Windows hedefinde kanal Ş kapatılır', () => {

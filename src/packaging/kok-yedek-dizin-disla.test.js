@@ -9,9 +9,10 @@
  *   (2) electron-builder desenlerinin GERÇEK `FileMatcher` ile davranışı
  *       (windows-asarsiz.test.js B3d ile AYNI teknik — model değil, canlı sınıf).
  *   (3) Kaynak-sentinel: packagingService.js'teki BEŞ çağrı noktasının (win/mac/
- *       linux `files` dizisi + android'in iki `fs.copy` filtresi) GERÇEKTEN bu
- *       modülü çağırdığı — fan-out sapması (her platform kendi listesini kurarsa
- *       sessizce ayrışır) burada yakalanır.
+ *       linux `files` dizisi + android'in iki `fs.copy` filtresi) bu modülün
+ *       desenini GERÇEKTEN taşıdığı — 2026-09-26'dan beri `paket-disi-liste.js`
+ *       üzerinden. Fan-out sapması (her platform kendi listesini kurarsa sessizce
+ *       ayrışır) burada yakalanır.
  */
 
 const test = require('node:test');
@@ -101,27 +102,43 @@ function govde(ad) {
   return src.slice(i, j > -1 ? j : undefined);
 }
 
-test('BAĞLANTI: packageWindows/packageMacOS/packageLinux files dizileri kokYedekDizinDisla.elektronBuilderDesenleri() çağırıyor', () => {
+// 2026-09-26 (Nadir — pakete girmeyecekler dört platformda TEK liste): packagingService
+// bu modülü artık DOĞRUDAN çağırmıyor; `paket-disi-liste.js` onu kendi `kok-yedek`
+// maddesi olarak taşıyor. Bağlantı zinciri: packagingService → paket-disi-liste →
+// kok-yedek-dizin-disla. Zincirin iki halkası da burada çivilenir; packagingService
+// tarafının sözleşmesi `paket-disi-liste.test.js`'te.
+
+test('BAĞLANTI: win/mac/linux files dizileri paket-disi-liste üzerinden kök "_" desenlerini taşır', () => {
+  const { canliFilesDesenleri } = require('./paket-disi-liste-sentinel');
+  const [kokDesen, icerikDeseni] = mod.elektronBuilderDesenleri();
+  for (const p of ['windows', 'macos', 'linux']) {
+    const d = canliFilesDesenleri(p);
+    assert.ok(d.includes(kokDesen) && d.includes(icerikDeseni), `${p} kök yedek dışlamasını taşımıyor`);
+  }
   for (const fn of ['packageWindows', 'packageMacOS', 'packageLinux']) {
-    const g = govde(fn);
-    assert.match(g, /\.\.\.kokYedekDizinDisla\.elektronBuilderDesenleri\(\)/, `${fn} kök yedek dışlamasını çağırmıyor`);
+    assert.match(govde(fn), /\.\.\.paketDisiListe\.elektronBuilderDesenleri\(/, `${fn} tek listeyi çağırmıyor`);
   }
 });
 
-test('BAĞLANTI: packageAndroid + initializeCapacitorProject fs.copy filtreleri kokYedekDizinDisla.fsCopyFiltresi() çağırıyor', () => {
+test('BAĞLANTI: packageAndroid + initializeCapacitorProject süzgeci kök "_" DİZİNİNİ dışlar, kök "_" DOSYASINI değil', async () => {
   for (const fn of ['packageAndroid', 'initializeCapacitorProject']) {
-    const g = govde(fn);
-    assert.match(g, /kokYedekDizinDisla\.fsCopyFiltresi\(workingPath\)/, `${fn} kök yedek dışlamasını çağırmıyor`);
-    assert.match(g, /kokYedekDizinDisla\.birlesikFiltre\(/, `${fn} birleşik filtre kullanmıyor (createWwwCopyFilter sessizce EZİLMİŞ olabilir)`);
-    assert.match(g, /createWwwCopyFilter\(workingPath\)/, `${fn} eski node_modules dışlamasını KAYBETMİŞ`);
+    assert.match(govde(fn), /createWwwCopyFilter\(workingPath\)/, `${fn} tek süzgeci kullanmıyor`);
   }
+  const { createWwwCopyFilter } = require('./www-copy-exclude');
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'empp-kyd-bag-'));
+  await fs.outputFile(path.join(kok, '_eski', 'a.html'), 'x');
+  await fs.outputFile(path.join(kok, '_kok.js'), 'x');
+  const f = createWwwCopyFilter(kok);
+  assert.strictEqual(f(path.join(kok, '_eski')), false);
+  assert.strictEqual(f(path.join(kok, '_eski', 'a.html')), false);
+  assert.strictEqual(f(path.join(kok, '_kok.js')), true, 'kök "_" DOSYASI dışlanmamalı (yalnız dizinler)');
 });
 
-test('FAN-OUT SAPMASI FRENİ: dört platform da AYNI modülü çağırıyor — kopya "_" regex\'i YOK', () => {
+test('FAN-OUT SAPMASI FRENİ: "_" deseni TEK yerden — paket-disi-liste bu modülü bir kez alır, packagingService hiç', () => {
+  const pdl = fs.readFileSync(path.join(__dirname, 'paket-disi-liste.js'), 'utf8');
+  assert.strictEqual((pdl.match(/require\(['"]\.\/kok-yedek-dizin-disla['"]\)/g) || []).length, 1);
+  assert.ok(!/\/\^_\//.test(pdl), 'paket-disi-liste kendi "_" regex\'ini yazmış (kopya desen)');
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  const kacTane = (src.match(/require\(['"]\.\/kok-yedek-dizin-disla['"]\)/g) || []).length;
-  assert.strictEqual(kacTane, 1, 'kok-yedek-dizin-disla TEK yerden import edilmeli (kopya import ayrışma riski taşır)');
-  // Kullanım sayısı: win/mac/linux files dizisi (3) + android iki fs.copy (2) = en az 5.
-  const kullanim = (src.match(/kokYedekDizinDisla\./g) || []).length;
-  assert.ok(kullanim >= 5, `dört platformun hepsi çağırmıyor olabilir (${kullanim} kullanım bulundu, ≥5 bekleniyor)`);
+  assert.strictEqual((src.match(/require\(['"]\.\/kok-yedek-dizin-disla['"]\)/g) || []).length, 0,
+    'packagingService kök "_" modülünü doğrudan çağırıyor — iki bağlantı yolu ayrışabilir');
 });

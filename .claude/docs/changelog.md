@@ -1,3 +1,14 @@
+## 2026-09-26 (6) — Pakete girmeyecekler: Windows politikası dört platformda, tek liste
+
+**Nadir:** "diğer os'ların paketlerini üretirken windows paketinde uyguladığımız gereksizleri atma
+politikasını onlarda da uygulamalıyız." Liste `src/packaging/paket-disi-liste.js`'e taşındı;
+win/mac/linux `files` dizileri `...paketDisiListe.elektronBuilderDesenleri('<platform>')` yayar,
+Android `www` kopyası `www-copy-exclude.js` → aynı modül. Yeni: mac/linux'ta `build/` ve
+`**/temp/data/storage.im`; Android'de kök `temp/`, `uploads/`, `build/`, `storage.im`. Windows dizisi
+birebir aynı. Muafiyet yok — madde başına kanıt modülde ve `platform-kanallari-sozlesmesi.md`'de.
+Ölçüm (45549, 4 storage.im): gerçek APK 5533→5529 girdi, 981 554 294→981 550 793 B; 73581 kaynak
+arşivi temiz (3796 dosya, dört platformda önce=sonra). Sentinel okuyucu: `paket-disi-liste-sentinel.js`.
+
 ## 2026-09-26 (5) — Windows sözleşmesi açık iş 2 + 5: sessiz derleme başarısı + kök `_` dizin sızıntısı
 
 **Yetki:** Nadir onayıyla Şef (nadir-b8), ayrı çalışma ağacı (`_worktrees/win-acik-isler`,

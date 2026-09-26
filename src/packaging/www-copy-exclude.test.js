@@ -12,7 +12,7 @@ const assert = require('node:assert');
 const fs = require('fs-extra');
 const os = require('node:os');
 const path = require('node:path');
-const { createWwwCopyFilter, EXCLUDED_SEGMENTS } = require('./www-copy-exclude');
+const { createWwwCopyFilter } = require('./www-copy-exclude');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'www-copy-exclude-test-'));
@@ -93,18 +93,61 @@ test('GERİLEME: filtre kaldırılırsa node_modules/electron APK\'ya sızar (as
   );
 });
 
-test('EXCLUDED_SEGMENTS node_modules ve .git icerir', () => {
-  assert.ok(EXCLUDED_SEGMENTS.has('node_modules'));
-  assert.ok(EXCLUDED_SEGMENTS.has('.git'));
+// --- Windows politikası Android'de (Nadir, 2026-09-26): liste `paket-disi-liste.js` ---
+// Gerçek fs.copy ile: Windows `files` dizisinin dışladığı her şey APK'nın `www`'sine de
+// GİRMEZ; kitap içeriği (assets, bookN/index.html, bookN içindeki build/ ve temp/'in
+// storage.im DIŞI dosyaları) GİRER.
+async function windowsPolitikasiAgaci() {
+  const src = tempDir();
+  const dosyalar = {
+    'index.html': '<html></html>',
+    'assets/56385/pages/1.png': 'PNG',
+    'book1/index.html': '<html></html>',
+    'book1/temp/data/storage.im': 'YAYINCI-KULLANICI-VERISI',
+    'book2/temp/data/storage.im': 'YAYINCI-KULLANICI-VERISI',
+    'book1/temp/data/diger.json': '{}',
+    'book1/build/motor.js': 'x',
+    'temp/data/storage.im': 'KOK-KULLANICI-VERISI',
+    'temp/job1/windows/win-ia32-unpacked/x.dll': 'BIN',
+    'uploads/s1/build.zip': 'ZIP',
+    'build/installer.nsh': 'NSIS',
+    'build/icon.ico': 'ICO',
+    '_eski/index-2026-09-25.html': '<html></html>',
+    '_kok.js': 'x',
+  };
+  for (const [f, v] of Object.entries(dosyalar)) await fs.outputFile(path.join(src, f), v);
+  return src;
+}
+
+test('GERİLEME: Android süzgeci storage.im, kök temp/uploads/build ve _eski/\'yi dışlar; içerik geçer', async () => {
+  const src = await windowsPolitikasiAgaci();
+  const wwwPath = path.join(tempDir(), 'www');
+  await fs.copy(src, wwwPath, { filter: createWwwCopyFilter(src) });
+  const var_ = (f) => fs.existsSync(path.join(wwwPath, f));
+
+  for (const f of ['book1/temp/data/storage.im', 'book2/temp/data/storage.im', 'temp', 'uploads',
+    'build', '_eski']) {
+    assert.ok(!var_(f), `${f} APK www'sine sızdı (Windows politikası Android'de uygulanmıyor)`);
+  }
+  for (const f of ['index.html', 'assets/56385/pages/1.png', 'book1/index.html',
+    'book1/temp/data/diger.json', 'book1/build/motor.js', '_kok.js']) {
+    assert.ok(var_(f), `${f} yanlışlıkla dışlandı (dışlama fazla geniş)`);
+  }
+});
+
+test('GERİLEME (testin gücü): süzgeçsiz kopyada aynı ağaç storage.im/temp/build\'i TAŞIR', async () => {
+  const src = await windowsPolitikasiAgaci();
+  const wwwPath = path.join(tempDir(), 'www');
+  await fs.copy(src, wwwPath);
+  for (const f of ['book1/temp/data/storage.im', 'temp', 'uploads', 'build', '_eski']) {
+    assert.ok(fs.existsSync(path.join(wwwPath, f)), `${f}: sahte ağaç kurulamadı`);
+  }
 });
 
 // --- Kaynak-sentinel: iki gercek cagri noktasinda filtre fiilen kullaniliyor mu? ---
-// NOT (2026-09-26, açık iş 5): iki çağrı noktası da artık `createWwwCopyFilter`'ı
-// `kok-yedek-dizin-disla.js`'in kök "_" dışlamasıyla `birlesikFiltre` ile VE'liyor
-// (bkz. kok-yedek-dizin-disla.test.js "BAĞLANTI" testleri) — bu yüzden desen
-// artık tek satırlık literal çağrı yerine, `createWwwCopyFilter(workingPath)`in
-// `fs.copy(workingPath, X, {...})` bloğu İÇİNDE hâlâ var olduğunu (birleşik
-// filtrenin İÇİNDE, EZİLMEMİŞ) doğrular.
+// NOT (2026-09-26): liste `paket-disi-liste.js`'e taşındı; `createWwwCopyFilter` kök "_"
+// dışlamasını da içerir, iki çağrı noktası başka süzgeçle VE'lemez. Sözleşme testi:
+// `paket-disi-liste.test.js`.
 test('kaynak-sentinel: packageAndroid webapp kopyasi filtre kullanir', () => {
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
   const i = src.indexOf('await fs.copy(workingPath, webAppPath,');

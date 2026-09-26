@@ -7,7 +7,9 @@ const pwaConfigManager = require('../server/pwa-config-manager');
 const { macSigningConfig } = require('../platforms/macos/mac-signing');
 const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-layout');
 const { createWwwCopyFilter } = require('./www-copy-exclude');
-const kokYedekDizinDisla = require('./kok-yedek-dizin-disla');
+// PAKETE GİRMEYECEKLER (Nadir, 2026-09-26): win/mac/linux `files` ve Android `www`
+// kopyası AYNI listeden — tanım tek yerde `paket-disi-liste.js`.
+const paketDisiListe = require('./paket-disi-liste');
 const windowsSetupDogrulama = require('./windows-setup-dogrulama');
 const { ensureSetBookHomeButton } = require('./set-book-home-button');
 const { findSubBookDirs } = require('./sub-book-dirs');
@@ -2232,20 +2234,17 @@ function closeSplashScreen() {
       // KENDİ makinesindeki kullanıcı verisi (bookN/temp/data/storage.im) kaynak build'de
       // duruyordu ve her kuruluma taşınıyordu. Motor dosya yoksa `saveStorage({})` ile
       // kendisi oluşturuyor (kaynakta okundu) — fs-shim bunu userData/work'e yazar.
-      // BU DİZİ MAKİNE-OKUNUR KALMALI: `windows-asarsiz.test.js` B3d desenleri buradan
-      // okuyup electron-builder'ın KENDİ eleyicisine veriyor. Araya yorum satırı koyma.
+      //
+      // TEK KAYNAK (Nadir, 2026-09-26 — "windows paketinde uyguladığımız gereksizleri
+      // atma politikasını onlarda da uygulamalıyız"): yukarıdaki `build/` ve `storage.im`
+      // ile `node_modules`, `temp`, `uploads`, `_` önekli kök dizinler artık
+      // `paket-disi-liste.js`'te; mac/linux config'leri ve Android `www` kopyası AYNI
+      // listeyi çağırır. Madde başına platform kanıtı o dosyada.
+      // BU DİZİ MAKİNE-OKUNUR KALMALI: sentinel testleri (`paket-disi-liste-sentinel.js`)
+      // bu bloğu okuyup electron-builder'ın KENDİ eleyicisine veriyor.
       files: [
         "**/*",
-        "!node_modules",
-        "!temp",
-        "!uploads",
-        "!build",
-        "!**/temp/data/storage.im",
-        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): `_` ile başlayan
-        // KÖK dizinler (ör. `_eski/`) pakete girmez. Tanım TEK yerde:
-        // `kok-yedek-dizin-disla.js` (`set-kabuk.js` `YEDEK_DIZIN_DESENI` ile
-        // BİREBİR aynı desen) — mac/linux config'leri de AYNI diziyi çağırır.
-        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
+        ...paketDisiListe.elektronBuilderDesenleri('windows'),
       ],
       // asar KAPALI — YALNIZ WINDOWS (2026-09-21, ölçümle). Gerekçe + geri dönüş
       // kapısı (EMPP_WINDOWS_ASARSIZ=0) tek yerde: src/packaging/windows-asarsiz.js.
@@ -2436,15 +2435,15 @@ function closeSplashScreen() {
         app: path.resolve(workingPath),
         output: outputPath
       },
+      // PAKETE GİRMEYECEKLER (Nadir, 2026-09-26) — Windows ile AYNI liste, tanım
+      // `paket-disi-liste.js`. `build/` güvenli: electron-builder buildResources'ı
+      // diskten okur; entitlements/ikon/dmg arka planı `build/` dışından mutlak yolla.
+      // `storage.im` güvenli: asar salt-okunur, motorun yazması fs-shim ile WORK'e gider.
+      // `node_modules/adm-zip` geri-alması dışlamalardan SONRA gelir (son eşleşen kazanır).
       files: [
         "**/*",
-        "!node_modules",
+        ...paketDisiListe.elektronBuilderDesenleri('macos'),
         "node_modules/adm-zip",
-        "!temp",
-        "!uploads",
-        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26) — bkz. `packageWindows`
-        // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`.
-        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
       ],
       mac: {
         target: {
@@ -2615,17 +2614,15 @@ function closeSplashScreen() {
         app: path.resolve(workingPath),
         output: path.resolve(outputPath)
       },
+      // PAKETE GİRMEYECEKLER (Nadir, 2026-09-26) — Windows ile AYNI liste, tanım
+      // `paket-disi-liste.js` (gerekçe ve platform kanıtı orada). Pardus (.impark)
+      // `pardus-packager-build.sh` bu FONKSİYONUN BİREBİR kopyasını konteynerde
+      // çalıştırır — ayrı bir kod yolu YOK. `node_modules/adm-zip` geri-alması
+      // dışlamalardan SONRA gelir (son eşleşen kazanır).
       files: [
         "**/*",
-        "!node_modules",
+        ...paketDisiListe.elektronBuilderDesenleri('linux'),
         "node_modules/adm-zip",
-        "!temp",
-        "!uploads",
-        // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26) — bkz. `packageWindows`
-        // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`. Pardus (.impark)
-        // `pardus-packager-build.sh` bu FONKSİYONUN BİREBİR kopyasını konteynerde
-        // çalıştırır — ayrı bir kod yolu YOK.
-        ...kokYedekDizinDisla.elektronBuilderDesenleri(),
       ],
       linux: {
         // .impark yalnız AppImage'dan türetilir; deb 1,5 GB gövdede tek çekirdekli
@@ -2977,13 +2974,11 @@ StartupWMClass=${appName}
       // node_modules (prepareElectronFiles'ın workingPath köküne kurduğu Electron
       // devDependency'si) dışlanır — yoksa APK'ya Electron.app sızar (bkz. www-copy-exclude.js).
       const webAppPath = path.join(androidPath, 'webapp');
-      // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): `_` ile başlayan KÖK
-      // dizinler (ör. `_eski/`) APK'ya da sızmasın — bkz. `kok-yedek-dizin-disla.js`.
+      // PAKETE GİRMEYECEKLER (Nadir, 2026-09-26): süzgeç Windows ile AYNI listeden
+      // (`paket-disi-liste.js`) — node_modules/.git, kök temp/uploads/build,
+      // `**/temp/data/storage.im`, `_` önekli kök dizinler APK'ya girmez.
       await fs.copy(workingPath, webAppPath, {
-        filter: kokYedekDizinDisla.birlesikFiltre(
-          createWwwCopyFilter(workingPath),
-          kokYedekDizinDisla.fsCopyFiltresi(workingPath)
-        ),
+        filter: createWwwCopyFilter(workingPath),
       });
       
       // Android için gerekli dosyaları oluştur
@@ -4506,13 +4501,10 @@ if (!window.cordova) {
     // 250 MB). www, Capacitor webDir'i ve doğrudan APK assets'ine gidiyor — dışlama şart.
     const wwwPath = path.join(webAppPath, 'www');
     await fs.ensureDir(wwwPath);
-    // KÖK YEDEK DİZİN DIŞLAMASI (açık iş 5, 2026-09-26): bkz. `packageAndroid`
-    // yorumu; tanım TEK yerde `kok-yedek-dizin-disla.js`.
+    // PAKETE GİRMEYECEKLER (Nadir, 2026-09-26): bkz. `packageAndroid` yorumu; tanım
+    // tek yerde `paket-disi-liste.js`.
     await fs.copy(workingPath, wwwPath, {
-      filter: kokYedekDizinDisla.birlesikFiltre(
-        createWwwCopyFilter(workingPath),
-        kokYedekDizinDisla.fsCopyFiltresi(workingPath)
-      ),
+      filter: createWwwCopyFilter(workingPath),
     });
 
     // KRİTİK (2026-08-04): Capacitor `www/index.html`i KÖKTE ister; yoksa

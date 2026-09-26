@@ -88,12 +88,25 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 ## Pakete girmeyecekler — Windows politikası dört platformda (KARARLANDI, Nadir 2026-09-26)
 > *"diğer os'ların paketlerini üretirken windows paketinde uyguladığımız gereksizleri atma politikasını onlarda da
 > uygulamalıyız."*
-- Liste TEK kaynaktan gelir (`src/packaging/paket-disi-liste.js`, yazılıyor); windows/macos/linux electron-builder
-  `files` dizileri ve Android `www` kopya filtresi aynı modülü çağırır; kopya liste yasak.
-- Kapsam (Windows'ta bugün): `node_modules`, kök `temp/`, `uploads/`, `build/`, `**/temp/data/storage.im`
-  (yayıncının kendi kullanıcı verisi, G2), `_` önekli kök dizinler. Bir madde bir platformda kırılma riski
-  taşıyorsa o platformda uygulanmaz ve gerekçesi burada yazılır (ölçüm sonrası).
-- 26.09 ölçümü: mac/linux'ta `build/` ve `storage.im` dışlanmıyor; Android yalnız `node_modules` + `.git`.
+- Liste TEK kaynaktan gelir (`src/packaging/paket-disi-liste.js`); windows/macos/linux electron-builder
+  `files` dizileri `...paketDisiListe.elektronBuilderDesenleri('<platform>')` yayar, Android `www` kopyası
+  `www-copy-exclude.js` → `fsKopyaFiltresi(…, 'android')`; kopya liste yasak (`paket-disi-liste.test.js`).
+- Kapsam: `node_modules`, kök `temp/`, `uploads/`, `build/`, `**/temp/data/storage.im` (yayıncının kendi
+  kullanıcı verisi, G2), `_` önekli kök dizinler. Bir madde bir platformda kırılma riski taşırsa modülde o
+  platform `platformlar`dan çıkar ve `muafiyet` gerekçesi yazılır.
+- 26.09 öncesi: mac/linux'ta `build/` ve `storage.im` dışlanmıyordu; Android yalnız `node_modules` + `.git`.
+- 26.09 denetimi — MUAFİYET YOK, dört madde dört platformda:
+  - `build/` mac/linux: electron-builder buildResources'ı DİSKTEN okur (`readdir`/`path.join(buildResourcesDir)`),
+    `files`'tan bağımsız; mac entitlements/ikon/dmg arka planı `build/` dışından mutlak yol. `workingPath/build/`e
+    yalnız Windows yazar (NSIS, `icon.ico`). Android: web kökü sarmal `build/` olamaz (yükleme açılırken tek
+    sarmal dizin köke alınır, `queueService`).
+  - `storage.im`: motor `existsSync||saveStorage({})`; mac/linux/windows yazma fs-shim ile WORK'e, Android
+    empp-android-shim VFS'ine. storage.im'siz kaynaklar (45538, 45482, 73581) dört platformda zaten çıkıyor.
+    Davranış farkı (G2'nin amacı): yayıncının ayarları/son sayfası/"tur tamamlandı"sı yeni kullanıcıya taşınmaz.
+  - Android kök `temp/`: göreli çıktı yolunda electron-builder çıktısı + tek kitapta kullanıcı verisi;
+    `uploads/`: motor yerel `uploads/` okumaz.
+  - Bilinen biçim farkı (davranışı değiştirilmedi): kökteki `_x.js` DOSYASI electron-builder'da `!_*` ile
+    dışlanır, Android'de kalır (kaynaklarda örneği sıfır).
 - Ayrı karar (bu maddeye dahil DEĞİL): kayıpsız sayfa WebP bugün yalnız Windows'ta; diğer platformlar ProBook /
   cihaz ölçümünden sonra.
 

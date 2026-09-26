@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const kapi = require('./windows-asarsiz');
+const sentinel = require('./paket-disi-liste-sentinel');
 
 const CANLI = path.join(__dirname, 'packagingService.js');
 
@@ -136,9 +137,8 @@ test('B3b · `build/` PAKETE GİRMEZ: Windows files listesi "!build" taşır', (
   // yalnız tanım, çağıran sıfır; Electron 27.3.11 + @electron/remote yok → "" dönerdi)
   // ama bu düzen o yolu "yok"tan "VAR AMA YANLIŞ İÇERİK"e çeviriyordu. Dışlama o
   // sessiz-yanlış-dal yüzeyini kapatır.
-  const files = windows.match(/files:\s*\[([\s\S]*?)\n\s*\]/);
-  assert.ok(files, 'Windows config\'inde files listesi bulunamadı (sentinel köreldi)');
-  assert.match(files[1], /"!build"/,
+  // 2026-09-26: liste `paket-disi-liste.js`'e taşındı; canlı dizi tek okuyucuyla çözülür.
+  assert.ok(sentinel.canliFilesDesenleri('windows').includes('!build'),
     'build/ dışlanmamış — NSIS artefaktları resources/app/build olarak paketlenir');
   // Kayıp olmadığının kanıtı: NSIS bu dosyaları workingPath'ten okur, paketten değil.
   assert.match(windows, /include:\s*path\.resolve\(workingPath,\s*["']build\/installer\.nsh["']\)/,
@@ -147,24 +147,25 @@ test('B3b · `build/` PAKETE GİRMEZ: Windows files listesi "!build" taşır', (
   assert.match(windows, /installerSidebar:\s*path\.resolve\(workingPath,/);
 });
 
-test('B3c · DIŞLAMA YALNIZ WINDOWS: mac/Linux/Android files listesi DEĞİŞMEDİ', () => {
-  const { macos, linux, android } = platformBloklari();
-  for (const [ad, blok] of [['macOS', macos], ['Linux', linux], ['Android', android]]) {
-    const m = blok.match(/files:\s*\[([\s\S]*?)\n\s*\]/);
-    if (!m) continue; // her platform files listesi taşımak zorunda değil
-    assert.ok(!/"!build"/.test(m[1]),
-      `${ad} files listesine "!build" sızmış — bu karar YALNIZ Windows içindi`);
+test('B3c · `build/` DIŞLAMASI DÖRT PLATFORMDA (Nadir 2026-09-26; eskiden "yalnız Windows")', () => {
+  // KARAR DEĞİŞTİ (2026-09-26, Nadir: "windows paketinde uyguladığımız gereksizleri atma
+  // politikasını onlarda da uygulamalıyız"). mac/Linux'ta güvenli olduğu ölçüldü:
+  // electron-builder buildResources'ı diskten okur (`platformPackager.getResource`,
+  // `macPackager` entitlements → `path.join(buildResourcesDir, …)`), `files` deseninden
+  // bağımsız; mac entitlements/ikon/dmg arka planı `build/` dışından mutlak yolla gelir.
+  // Android kopyası da aynı listeden (bkz. paket-disi-liste.test.js).
+  for (const p of ['macos', 'linux']) {
+    assert.ok(sentinel.canliFilesDesenleri(p).includes('!build'),
+      `${p} files listesinde "!build" yok — Windows politikası uygulanmıyor`);
   }
 });
 
 test('B3d · DAVRANIŞ: canlı files listesi electron-builder\'ın KENDİ eleyicisinde build/ ağacını dışlar', () => {
   // Bu test bir MODEL değil: `app-builder-lib`in üretimde kullandığı `FileMatcher`
   // sınıfı doğrudan çağrılır. Desenler de elle yazılmaz — CANLI Windows config\'inden
-  // okunur; config değişirse test onunla birlikte değişir.
-  const { windows } = platformBloklari();
-  const blok = windows.match(/files:\s*\[([\s\S]*?)\n\s*\]/);
-  assert.ok(blok, 'Windows files listesi bulunamadı (sentinel köreldi)');
-  const desenler = [...blok[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  // okunur (yayılımlar `paket-disi-liste-sentinel.js` ile çözülür); config değişirse
+  // test onunla birlikte değişir.
+  const desenler = sentinel.canliFilesDesenleri('windows');
   assert.ok(desenler.includes('**/*'), `desenler okunamadı: ${JSON.stringify(desenler)}`);
 
   const { FileMatcher } = require('app-builder-lib/out/fileMatcher');

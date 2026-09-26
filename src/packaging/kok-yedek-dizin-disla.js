@@ -29,6 +29,9 @@
  *     → `elektronBuilderDesenleri()`.
  *   · `fs.copy({filter})` (Android `packageAndroid`/`initializeCapacitorProject`)
  *     → `fsCopyFiltresi(srcRoot)`.
+ * 2026-09-26'dan beri ikisini de `paket-disi-liste.js` (pakete girmeyecekler, dört
+ * platform tek liste) `kok-yedek` maddesi olarak çağırır; packagingService doğrudan
+ * çağırmaz.
  */
 
 const fs = require('fs');
