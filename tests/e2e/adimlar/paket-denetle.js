@@ -39,6 +39,9 @@ const { aileTespit } = require('./aile');
 const { yerelOkuyucu, uzakOkuyucu, indir } = require('./okuyucu');
 const { icerikTopla } = require('./icerik');
 const { dbDosyaKanitiOku } = require('./db-kaniti');
+// Paketleme tarafının TEK kaynakları (stdlib-only): pakete girmeyecekler + motor menü çözücü.
+const paketDisiListe = require('../../../src/packaging/paket-disi-liste');
+const icerikGuncelleme = require('../../../src/runtime/icerik-guncelleme');
 
 const { DURUM } = O;
 const BILINEN_AILELER = new Set(['nsis', 'sfx-rar5', 'sfx-rar4', 'appimage', 'dmg', 'apk']);
@@ -58,6 +61,17 @@ const OLU_TABAN_RE = /(^|\.|\/\/)panel-yok\.invalid(\/|$)/i;
 const G_ISARET = 'EMPP_SET_GUNCELLEME';
 const ARALIK_PENCERE = 4 * 1024 * 1024;
 const ICERIK_ADIMLARI = ['index', '43e23', 'g-istemci', 'g-anahtar', 'g-taban'];
+/** Menü (anahtar deposu): kapak sürümleri kitabın içerik damgasıdır (K kanalı, ImWin32.dll). */
+const MENU = 'classlibraries/ImWin32.dll';
+const AILE_PLATFORM = Object.freeze({
+  nsis: 'windows',
+  'sfx-rar5': 'windows',
+  'sfx-rar4': 'windows',
+  appimage: 'linux',
+  dmg: 'macos',
+  apk: 'android',
+});
+const MAIN_JS_RE = /^(book\d+\/)[0-9a-f]{20}\.main\.js$/;
 
 const ad = (alt) => `paket-denetle/${alt}`;
 
@@ -101,8 +115,50 @@ function secimYap(liste) {
       if (webKok && kume.has(`${webKok}${a}`)) secilen.add(`${webKok}${a}`);
     for (const p of liste)
       if (p.startsWith(webKok) && MOTOR_RE.test(p.slice(webKok.length))) secilen.add(p);
+    if (kume.has(`${webKok}${MENU}`)) secilen.add(`${webKok}${MENU}`);
   }
   return { webKok, secilen };
+}
+
+/**
+ * Ortak temizlik ölçümü (T4) — uygulama köküne göreli dosya listesinden. SAF.
+ *   paket_disi  src/packaging/paket-disi-liste.js maddelerine takılan girdiler (web kökü göreli)
+ *   olu_motor   alt-kitap (bookN/) başına <20-hex>.main.js sayısı (O2 temizliği sonrası 1 beklenir)
+ */
+function temizlikOlc(liste, aile) {
+  const platform = AILE_PLATFORM[aile] || null;
+  if (!platform) return null;
+  const { webKok } = secimYap(liste);
+  const on = webKok || '';
+  const goreli = liste.filter((p) => p.startsWith(on)).map((p) => p.slice(on.length));
+  const maddeler = {};
+  const ornek = [];
+  for (const p of goreli) {
+    const m = paketDisiListe.dislayanMadde(p, platform);
+    if (!m) continue;
+    maddeler[m] = (maddeler[m] || 0) + 1;
+    if (ornek.length < 8) ornek.push(p);
+  }
+  const oluMotor = {};
+  for (const p of goreli) {
+    const m = MAIN_JS_RE.exec(p);
+    if (m) oluMotor[m[1]] = (oluMotor[m[1]] || 0) + 1;
+  }
+  return {
+    platform,
+    web_kok: on,
+    paket_disi: { sayi: Object.values(maddeler).reduce((a, b) => a + b, 0), maddeler, ornek },
+    olu_motor: oluMotor,
+  };
+}
+
+/** Paketteki menüden kapak sürümleri [{ID, version}] (çözülemezse null; menü yoksa undefined). SAF. */
+function menuKapaklari(toplanan, webKok) {
+  const b = toplanan.get(`${webKok || ''}${MENU}`);
+  if (!b) return undefined;
+  const xml = icerikGuncelleme.menuCoz(b);
+  if (!xml) return null;
+  return icerikGuncelleme.kapaklar(xml).map((k) => ({ ID: k.ID, version: k.version }));
 }
 
 function girisBul(toplanan) {
@@ -792,6 +848,8 @@ async function paketDenetle(p) {
               okunan_bayt: r.okunanBayt || null,
               erken_kesildi: r.erkenKesildi || false,
               unpacked_atlanan: r.unpackedAtlanan || [],
+              temizlik: temizlikOlc(r.liste, tespit.aile),
+              menu_kapaklar: menuKapaklari(r.toplanan, secimYap(r.liste).webKok),
             },
           },
           Date.now() - t0,
@@ -870,6 +928,9 @@ module.exports = {
   paketDenetle,
   icerikDegerlendir,
   secimYap,
+  temizlikOlc,
+  menuKapaklari,
+  MENU,
   imzaDenetle,
   osslOzet,
   varsayilanBeklenen,

@@ -13,6 +13,9 @@ const RAPOR = path.join(D, 'rapor');
 process.env.EMPP_E2E_DIZIN = RAPOR;
 process.env.EMPP_E2E_CALISMA = path.join(D, 'calisma');
 process.env.EMPP_E2E_AGIR = '0';
+// Ağsız: pipeline-sql sahte (0 satır), İmpark/G ağ ölçümü kapalı, canlı kayıt yolları geçici dizinde.
+const KO = S.kesifOrtami(path.join(D, 'kesif'));
+Object.assign(process.env, KO.env);
 const U = require('./uctan-uca');
 
 const DURUMLAR = new Set(['GECTI', 'KALDI', 'SARI', 'OLCULEMEDI']);
@@ -60,12 +63,13 @@ test('plan: T1-T5 her adımın modülü var, ölçütü yazılı; yazan adımlar
   );
 });
 
-test('bilinmeyen test ve kuru+indir birlikte reddedilir', async () => {
+test('bilinmeyen test reddedilir; kuru + --indir birlikte verilebilir (indirme salt okumadır)', async () => {
   assert.throws(() => U.testListesi('T9'), /bilinmeyen test/);
-  await assert.rejects(
+  const r = await sessiz(() =>
     U.kos({ test: 'T1', kuru: true, indir: true, paketler: [], urller: [], beklenen: {} }),
-    /kuru/,
   );
+  assert.equal(r.kuru, true);
+  assert.equal(r.kesif.durum, 'satir-yok', 'keşif sahte pipeline-sql ile koştu (ağ yok)');
 });
 
 test('kos --kuru: rapor JSON + MD yazılır, her satır şemaya uyar, paket testlere aileyle dağıtılır', async () => {

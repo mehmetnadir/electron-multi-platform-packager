@@ -4,8 +4,11 @@
 #   aksam (22:00): T1-T5 · sabah (07:30): T5 doğrulaması. Kip verilmezse saatten seçilir (<12 sabah).
 #   Koşu ~/.empp-agent/agir.sh semaforundan geçer; sonuç özeti `bildir e2e "<özet>"` ile gider,
 #   koşu çıkış kodu ≠0 ise öncelik yuksek. bildir gönderilemezse çıkış 2 (sessiz alarm yok).
-# Ortam (hepsi isteğe bağlı): E2E_KITAP (74390) · E2E_KURU (1: yazan adım koşmaz; onaylar gelince 0)
-#   E2E_URL / E2E_PAKET (boşlukla ayrılmış girdiler) · E2E_TESTLER_AKSAM / E2E_TESTLER_SABAH
+# Ortam (hepsi isteğe bağlı): E2E_KITAP (74390) · E2E_KURU (1: yalnız YAZAN/TETİKLEYEN adım koşmaz —
+#   salt-okuma ölçümler kuruda da koşar; onaylar gelince 0)
+#   E2E_URL / E2E_PAKET (boşlukla ayrılmış girdiler; boşsa koşucu pipeline satırlarından CDN URL'lerini
+#   kendisi bulur) · E2E_INDIR (1: CDN paketleri tam indirilip içi ölçülür — salt okuma; 0: HEAD+Range)
+#   E2E_TESTLER_AKSAM / E2E_TESTLER_SABAH
 #   E2E_BILDIRME=0 (ilk elle doğrulama: bildirim atmaz, özeti basar) · E2E_GECE_AGIR=0 (semaforsuz)
 #   E2E_BILDIR / E2E_NODE / E2E_KOSUCU / E2E_AGIR_BETIK (araç yolları; testler sahtesini verir)
 set -u
@@ -30,12 +33,14 @@ BILDIR="${E2E_BILDIR:-$(command -v bildir || true)}"
 
 ARG=(kos --test "$TESTLER" --kitap "$KITAP")
 [ "${E2E_KURU:-1}" = 1 ] && ARG+=(--kuru)
+[ "${E2E_INDIR:-1}" = 1 ] && ARG+=(--indir)
 for u in ${E2E_URL:-}; do ARG+=(--url "$u"); done
 for p in ${E2E_PAKET:-}; do ARG+=(--paket "$p"); done
 
 BAS=$(date +%s)
 if [ "${E2E_GECE_AGIR:-1}" = 1 ] && [ -x "$AGIR" ]; then
-  CIKTI=$("$AGIR" "e2e-gece-$KIP" "$NODE" "$KOSUCU" "${ARG[@]}" 2>&1)
+  # Dış semafor slotu tutulurken iç paket denetimi ikinci slot istemesin (EMPP_E2E_AGIR=0).
+  CIKTI=$(EMPP_E2E_AGIR=0 "$AGIR" "e2e-gece-$KIP" "$NODE" "$KOSUCU" "${ARG[@]}" 2>&1)
 else
   CIKTI=$("$NODE" "$KOSUCU" "${ARG[@]}" 2>&1)
 fi

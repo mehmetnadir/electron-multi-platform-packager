@@ -9,9 +9,12 @@
  *      (N = min(4 MB, boyut/4); CDN tarafı HTTP Range) — tutarsa SARI (tam md5 değil), tutmazsa KALDI
  *   4. Yalnız boyut: `--uretilen-boyut` (yükleme kanıtı / DB `file_size_bytes`) — eşitse SARI, değilse KALDI
  *   5. Hiçbiri yoksa ÖLÇÜLEMEDİ (neden yazılır)
+ * Üretilen md5 kaynağı (girdi başına): --uretilen-* argümanları; Windows girdisinde runner iş kanıtı
+ * (windows-kanit/<id>/<surum>.json → imzali.{md5,sha256,boyut}) varsa o.
  * Çok parçalı ETag (`…-N`) md5 DEĞİLDİR; asla md5 gibi kıyaslanmaz.
  */
 const O = require('./ortak');
+const K = require('./kesif');
 
 const ETAG_MD5 = /^"?([0-9a-f]{32})"?$/i;
 const MB = (n) => `${(n / 1048576).toFixed(n % 1048576 ? 1 : 0)} MB`;
@@ -126,6 +129,28 @@ function kiyasla(uzak, yerel, bek = {}) {
   return { durum: O.DURUM.OLCULEMEDI, olcum: { ...olcum, sebep } };
 }
 
+const AILE_PLATFORM = {
+  nsis: 'windows',
+  'sfx-rar5': 'windows',
+  'sfx-rar4': 'windows',
+  appimage: 'pardus',
+  dmg: 'mac',
+  apk: 'android',
+};
+
+/** Girdiye özgü üretilen özet: Windows'ta runner iş kanıtı (imzalı kopya). Saf. */
+function uretilenOzet(girdiSonucu, windowsKaniti) {
+  const pl = girdiSonucu.girdi.platform || AILE_PLATFORM[(girdiSonucu.ozet || {}).aile] || null;
+  const im = windowsKaniti && windowsKaniti.kanit ? windowsKaniti.kanit.imzali : null;
+  if (pl !== 'windows' || !im || !im.md5) return {};
+  return {
+    uretilen_md5: im.md5,
+    uretilen_sha256: im.sha256 || null,
+    uretilen_boyut: im.boyut != null ? im.boyut : null,
+    uretilen_kaynak: windowsKaniti.yol,
+  };
+}
+
 module.exports = {
   ad: 'cdn-md5-kiyas',
   testler: ['T1', 'T2'],
@@ -138,21 +163,30 @@ module.exports = {
   bekliyor: null,
   cdnMd5,
   kiyasla,
+  uretilenOzet,
   async kos(baglam) {
     const uygun = (baglam.paketSonuclari || []).filter((s) => baglam.testeUygun(s));
     const uzak = uygun.filter((s) => s.girdi.tur === 'url');
     const yerel = uygun.filter((s) => s.girdi.tur === 'paket' && s.ozet && s.ozet.aralik);
     if (!uzak.length) {
-      return [
-        O.sonuc(baglam.test, this.ad, O.DURUM.OLCULEMEDI, {
-          olcum: { sebep: `girdi yok: ${baglam.test} için CDN URL'si verilmedi (--url)` },
-        }),
-      ];
+      const sebep =
+        baglam.girdiArguman || !baglam.kesif
+          ? `girdi yok: ${baglam.test} için CDN URL'si verilmedi (--url)`
+          : K.girdiYokSebebi(
+              baglam.kesif,
+              baglam.test === 'T1' ? ['windows'] : ['pardus'],
+              `${baglam.test} için CDN URL'si`,
+            );
+      return [O.sonuc(baglam.test, this.ad, O.DURUM.OLCULEMEDI, { olcum: { sebep } })];
     }
     return uzak.map((s) => {
       const es = yerel.find((y) => y.ozet.aile === s.ozet.aile) || null;
-      const k = kiyasla(s, es, baglam.beklenen || {});
-      return O.sonuc(baglam.test, this.ad, k.durum, { olcum: k.olcum });
+      const oz = uretilenOzet(s, baglam.windowsKaniti);
+      const k = kiyasla(s, es, { ...(baglam.beklenen || {}), ...oz });
+      const olcum = oz.uretilen_kaynak
+        ? { ...k.olcum, uretilen_kaynak: oz.uretilen_kaynak }
+        : k.olcum;
+      return O.sonuc(baglam.test, this.ad, k.durum, { olcum });
     });
   },
 };

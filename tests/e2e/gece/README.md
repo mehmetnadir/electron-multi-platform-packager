@@ -2,7 +2,9 @@
 
 `e2e-gece.sh` 22:00'de T1-T5, 07:30'da T5 doğrulamasını `agir.sh` semaforundan koşar; özeti
 `bildir e2e "<özet>"` ile yollar (çıkış kodu ≠0 → öncelik yuksek; bildir gönderilemezse çıkış 2).
-Varsayılan `E2E_KURU=1` (yazan adımlar koşmaz) — sözleşmedeki onaylar gelince plist'e `E2E_KURU=0` eklenir.
+Varsayılan `E2E_KURU=1`: yalnız yazan/tetikleyen adımlar (t5-tetik, g-uygula) koşmaz; salt-okuma ölçümler
+(pipeline keşfi, CDN paket denetimi `--indir`, canlı G manifesti, İmpark K içeriği, kabul kanıtı) kuruda da
+koşar. Girdi verilmezse koşucu kitabın pipeline satırlarından CDN URL'lerini kendisi bulur.
 
 Kurulum (depo kökünde, kod birleştikten sonra; ilk koşu bildirim atmadan elle doğrulanır):
 
