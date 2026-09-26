@@ -98,6 +98,10 @@ function kosumCalistir({ ikili, girdiYolu, calisma, kanit, agKapali, toplamSn, l
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE; // Claude Code / VS Code ortamı bunu 1 yapıyor → Electron Node gibi koşar
     delete env.ELECTRON_NO_ATTACH_CONSOLE;
+    // runner ortamı (run-agent.sh) NODE_OPTIONS'a Electron'un REDDETTİĞİ bayraklar koyuyor
+    // (--no-network-family-autoselection → "is not allowed in NODE_OPTIONS", Electron açılmadan çıkar;
+    // 26.09 73768 mac: "koşum ölçüm üretmedi"). Koşumun Node bayrağına ihtiyacı yok.
+    delete env.NODE_OPTIONS;
     const ev = path.join(calisma, 'profil', 'ev');
     fs.mkdirSync(ev, { recursive: true });
     env.HOME = ev; // paket Node ile ev dizinine yazarsa (work/, .empp-work) gerçek ev kirlenmez

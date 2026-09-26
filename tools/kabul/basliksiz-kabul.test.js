@@ -133,6 +133,26 @@ test('tek kitap (SET değil): kök okuyucu doğrudan ölçülür, başlık/kart 
   } finally { r.temizle(); }
 });
 
+// GERİLEME (26.09 73768 mac): runner ortamı NODE_OPTIONS'a Electron'un reddettiği bayrağı koyuyor
+// ("--no-network-family-autoselection is not allowed in NODE_OPTIONS") → koşum açılmadan çıkıyor,
+// her iş ÖLÇÜLEMEDİ ile erteleniyordu. Koşum NODE_OPTIONS'ı ortamdan çıkarmalı.
+test('GERİLEME: runner NODE_OPTIONS (--no-network-family-autoselection) koşumu düşürmez → GEÇTİ', secenek, async () => {
+  const onceki = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = '--dns-result-order=ipv4first --no-network-family-autoselection';
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bk-test-nodeopt-'));
+  fs.writeFileSync(path.join(d, 'index.html'), OKUYUCU_HTML.replace('<title>Kitap</title>', '<title>Akıllı Tahta Uygulaması</title>'));
+  fs.writeFileSync(path.join(d, 'app.config.js'), 'window.AppConfig={};');
+  fs.writeFileSync(path.join(d, 'version'), '27.3.11');
+  try {
+    const r = await kos(d);
+    try {
+      assert.equal(r.kod, 0, r.satirlar.join('\n'));
+    } finally { r.temizle(); }
+  } finally {
+    if (onceki === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = onceki;
+  }
+});
+
 /**
  * Motor kitap rafı: beyaz zemin, dikey kapaklar, sayfa izi yok. `arkaplan` = BES 74451
  * biçimi (kapak <img> değil, `background-image` kutusu; tıklama kapsayıcı kartta).
