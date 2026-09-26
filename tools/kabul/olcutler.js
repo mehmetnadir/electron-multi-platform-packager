@@ -127,10 +127,15 @@ function okuyucuBasligiMi(baslik) {
 /**
  * Beklenen menü kartı sayısı.
  *
- * Varsayılan = pakette `app.config.js` taşıyan bookN dizini sayısı. Web-Z kabuğu
- * `set-menu.json` içinde kitapları GRUPLAYABİLİR (aynı `grup` adı tek kart olur);
- * grup varsa beklenen = grup sayısı + grupsuz kitap sayısı. Elle verilen sayı
- * (`--kitap-sayisi`) her şeyi ezer.
+ * Paket menü tanımı taşıyorsa (`set-menu.json` → `kitaplar`, dolu) beklenen = o tanım:
+ * kitaplar GRUPLANABİLİR (aynı `grup` adı tek kart olur), yani beklenen = grup sayısı +
+ * grupsuz kitap sayısı. Tanım yoksa beklenen = motor imzası (`app.config.js`) taşıyan alt
+ * kitap dizini sayısı. Elle verilen sayı (`--kitap-sayisi`) her şeyi ezer.
+ *
+ * Neden tanım önce: dizin sayısı "pakette hangi kitap var"dır, "menü hangi kartı gösterir"
+ * değil. 45549 (Shall We?! 7 Set, 26.09): book5 = Shall We 7 Games, motor imzalı ama kaynak
+ * menüsü (set-menu.json + config/settings.json) onu bilinçli listelemiyordu; kabul 5 kart
+ * bekleyip 4'ü RED saydı. Menü dışı dizin RED değil, `menudeOlmayanKitapDizinleri` notudur.
  *
  * @param {{kitapDizinleri?: string[], setMenu?: object|null, elle?: number|null}} p
  * @returns {number}
@@ -138,7 +143,7 @@ function okuyucuBasligiMi(baslik) {
 function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null } = {}) {
   if (Number.isInteger(elle) && elle >= 0) return elle;
   const kitaplar = setMenu && Array.isArray(setMenu.kitaplar) ? setMenu.kitaplar : null;
-  if (kitaplar && kitaplar.some((k) => k && String(k.grup || '').trim())) {
+  if (kitaplar && kitaplar.length) {
     const gruplar = new Set();
     let grupsuz = 0;
     for (const k of kitaplar) {
@@ -148,6 +153,23 @@ function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null }
     return gruplar.size + grupsuz;
   }
   return kitapDizinleri.length;
+}
+
+/**
+ * Motor imzalı olup menü tanımında (`set-menu.json` → `kitaplar[].klasor`) yer almayan alt
+ * kitap dizinleri. Tanım yoksa ya da hiçbir kitapta `klasor` yoksa karşılaştırılamaz → [].
+ * Karar değil nottur: kaynak menüsü bir kitabı bilinçli dışarıda bırakabilir (45549 book5).
+ *
+ * @param {{kitapDizinleri?: string[], setMenu?: object|null}} p
+ * @returns {string[]}
+ */
+function menudeOlmayanKitapDizinleri({ kitapDizinleri = [], setMenu = null } = {}) {
+  const kitaplar = setMenu && Array.isArray(setMenu.kitaplar) ? setMenu.kitaplar : [];
+  const klasorler = new Set(kitaplar
+    .map((k) => String((k && k.klasor) || '').trim().replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean));
+  if (!klasorler.size) return [];
+  return kitapDizinleri.filter((d) => !klasorler.has(d));
 }
 
 /**
@@ -301,6 +323,7 @@ module.exports = {
   pikselKarari,
   okuyucuBasligiMi,
   beklenenKartSayisi,
+  menudeOlmayanKitapDizinleri,
   konsolSiniflandir,
   sayfaIzi,
   asamaKarari,
