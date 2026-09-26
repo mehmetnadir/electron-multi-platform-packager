@@ -30,6 +30,10 @@
  * KAPININ İKİ YÖNÜ (bkz. testler):
  *   - Ölü bir dosya canlıya bağlanırsa → sınıfı değişir, beyan tutmaz, test kırılır.
  *   - Yeni bir yetim dosya eklenirse → uyarı imi yoksa test kırılır.
+ *
+ * KARANTİNA (2026-09-26, Librarian §8): `_graveyard/`e taşınmış yollar (`KARANTINA`).
+ *   `karantinaIhlalleri()` yol eski yerinde YENİDEN var mı, ya da src/scripts/tools altında bir
+ *   dosya (test dahil) onu göreli `require` ile istiyor mu — ikisini de ihlal sayar.
  */
 
 const fs = require('node:fs');
@@ -280,6 +284,53 @@ function duzDesktopVarMi(kaynak) {
   return DUZ_DESKTOP.test(kaynak);
 }
 
+/** Depo kökü (`src/`in bir üstü). */
+const DEPO = path.resolve(SRC, '..');
+
+/**
+ * KARANTİNADAKİ YOLLAR — depo köküne göreli, `.js` uzantılı. Her girdinin mezarı/kanıtı
+ * `_graveyard/<tarih>-<ad>/OKU.md`'de. Geri alma `git revert` ile yapılırsa bu listeden de
+ * çıkarılmalıdır (yoksa kapı "geri-geldi" der — bilerek).
+ */
+const KARANTINA = [
+  // 2026-09-26 eski G üreticisi (D-2): _graveyard/2026-09-26-g-eski-uretici/OKU.md
+  'src/packaging/guncelleme-paketi.js',
+  'scripts/guncelleme-manifesti-uret.js',
+];
+
+/** Karantina require taramasının kökleri (depo köküne göreli). */
+const KARANTINA_TARAMA_KOKLERI = ['src', 'scripts', 'tools'];
+
+/**
+ * Karantina ihlallerini ölçer. Dosya artık olmadığı için `coz()` onu ÇÖZEMEZ; eşleşme
+ * `require` isteğinin mutlak hâli (uzantılı ya da uzantısız) ile yapılır. Yorumdaki ve düz
+ * dizedeki anma ihlal DEĞİLDİR (aynı `dizeLiteralleri` kuralı).
+ * @returns {{tur:'geri-geldi'|'require', yol:string, dosya?:string, istek?:string}[]}
+ */
+function karantinaIhlalleri({
+  depo = DEPO, karantina = KARANTINA, kokler = KARANTINA_TARAMA_KOKLERI,
+} = {}) {
+  const hedefler = new Map();
+  for (const k of karantina) {
+    const mutlak = path.join(depo, k);
+    hedefler.set(mutlak, k);
+    hedefler.set(mutlak.replace(/\.js$/, ''), k);
+  }
+  const ihlaller = [];
+  for (const k of karantina) {
+    if (fs.existsSync(path.join(depo, k))) ihlaller.push({ tur: 'geri-geldi', yol: k });
+  }
+  for (const kok of kokler) {
+    for (const dosya of jsDosyalari(path.join(depo, kok))) {
+      for (const istek of _requireIstekleri(dosyaLiteralleri(dosya))) {
+        const k = hedefler.get(path.resolve(path.dirname(dosya), istek));
+        if (k) ihlaller.push({ tur: 'require', yol: k, dosya: path.relative(depo, dosya), istek });
+      }
+    }
+  }
+  return ihlaller;
+}
+
 module.exports = {
   SRC,
   PLATFORMS,
@@ -301,5 +352,9 @@ module.exports = {
   uyariVarMi,
   duzDesktopVarMi,
   oku,
+  DEPO,
+  KARANTINA,
+  KARANTINA_TARAMA_KOKLERI,
+  karantinaIhlalleri,
   _ic: { coz },
 };

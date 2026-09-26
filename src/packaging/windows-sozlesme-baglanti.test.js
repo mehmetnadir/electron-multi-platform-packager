@@ -37,10 +37,21 @@ test('G5: K kapısı kapalıyken bile Windows hedefinde kanal Ş kapatılır', (
   assert.ok(g.indexOf('icerikGuncelleme.kanalSPaketeUygula(workingPath', i) > i);
 });
 
-test('G4: SET kimliği açık anahtarı, güncelleme paketi özel anahtar YOLUNU alır', () => {
+test('G4: SET kimliği açık anahtarı alır', () => {
   const g = govde('startPackaging');
   assert.match(g, /setKimligi\.paketeYaz\(workingPath, \{[\s\S]*?imzaAcikAnahtari: jobInfo\.guncellemeAcikAnahtari/);
-  assert.match(g, /guncellemePaketi\.paketeUret\(workingPath, \{[\s\S]*?imzaAnahtari: jobInfo\.guncellemeImzaAnahtariYolu/);
+});
+
+// D-2 SENTINEL (2026-09-26): eski G üreticisi (guncelleme-paketi.js → guncelleme.tar.gz)
+// karantinada (`_graveyard/2026-09-26-g-eski-uretici/`). Tar'ın tüketicisi yok: runner onu
+// yüklemiyor (d825123, runner-windows.test.js 'tek yazar g-yayin'), G istemcisi manifestini
+// kanal-g-degil ile reddediyor. Çağrı geri gelirse G durumunu silebilecek tar yeniden üretilir.
+test('D-2 SENTINEL: packagingService eski G paketini üretmez (require/çağrı/sonuç yok)', () => {
+  assert.doesNotMatch(KAYNAK, /require\(\s*['"][^'"]*guncelleme-paketi['"]\s*\)/);
+  assert.doesNotMatch(KAYNAK, /guncelleme-manifesti-uret/);
+  assert.doesNotMatch(KAYNAK, /guncellemePaketi\s*\.\s*paketeUret|results\.guncellemePaketi\s*=/);
+  assert.ok(!fs.existsSync(path.join(__dirname, 'guncelleme-paketi.js')),
+    'guncelleme-paketi.js karantinadan geri gelmiş');
 });
 
 test('madde 6 + G6: açılış zamanlama/İmpark devralma yalnız Windows hedefinde, prepareElectronFiles\'tan SONRA', () => {
@@ -118,7 +129,7 @@ test('GERİLEME: yükleyici araması .exe arar — windows/ altında yalnız gun
 // işe yarar; geçirmezse kapı "iş platformu verilmedi" diye KAPALI kalır (sessiz değil, UYARI).
 test('PLATFORM KAPSAMI: webp/SET/içerik kapıları işin platforms dizisini geçirir', () => {
   const g = govde('startPackaging');
-  for (const kapi of ['sayfaWebp', 'setKimligi', 'guncellemePaketi', 'guncelleyiciEnjekte', 'icerikGuncelleme']) {
+  for (const kapi of ['sayfaWebp', 'setKimligi', 'guncelleyiciEnjekte', 'icerikGuncelleme']) {
     const re = new RegExp(`${kapi}\\.acikMi\\(([^)]*)\\)`, 'g');
     const cagrilar = [...g.matchAll(re)].map((x) => x[1].trim());
     assert.ok(cagrilar.length >= 1, `${kapi}.acikMi çağrısı bulunamadı — sentinel köreldi`);

@@ -38,8 +38,8 @@ manifestle yeni `dosya/*` yarışında sha256 tutmaz, sonuç yine "atla".
 
 ## Kurallar
 - **Tek yazar:** `guncelleme/set/<id>/` altına yalnız G yayın aracının çıktısı yüklenir. Paketleyicinin
-  `guncelleme.tar.gz`'si (tam kabuk, sha256 sürüm, `scripts/guncelleme-manifesti-uret.js`) bu öneke
-  YÜKLENMEZ. Yüklenirse G durumunu siler ve sürümü sıralanamaz hâle getirir (açık karar 2).
+  eski `guncelleme.tar.gz`'si artık ÜRETİLMEZ — üreticisi 26.09'da karantinada
+  (`_graveyard/2026-09-26-g-eski-uretici/`); yüklense G durumunu silerdi (açık karar 2).
 - **Geri alma = yeni sürüm:** eski sürüm numarası asla yeniden yayınlanmaz; eski içerik daha büyük
   sayaçla yayınlanır (`surumler/` eski dosyaların sha256'sını verir).
 - **Değişmezler üzerine yazılmaz:** `kitap/` ve `surumler/` için PUT `If-None-Match: *` ile istenir.

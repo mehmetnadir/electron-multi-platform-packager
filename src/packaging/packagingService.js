@@ -32,7 +32,6 @@ const paketManifesti = require('./paket-manifesti');
 const motorSurumu = require('./motor-surumu');
 const okuyucuKabugu = require('./okuyucu-kabugu');
 const setKimligi = require('./set-kimligi');
-const guncellemePaketi = require('./guncelleme-paketi');
 const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
 const icerikGuncelleme = require('./icerik-guncelleme');
 const windowsMimari = require('./windows-mimari');
@@ -808,7 +807,6 @@ MimeType=application/x-electron;
       // "sebep" ile YİNE yazılır (sessizce düşmesi ölçümü imkânsız kılardı).
       // electron-builder ÇAĞRILMADAN ÖNCE, tüm yamalardan sonra koşar ki envanter
       // ağacın son hâlini yansıtsın.
-      let setGuncellemeKimligi = null;
       let setHaritasi = null;
       if (setKimligi.acikMi(process.env, platforms)) {
         try {
@@ -828,7 +826,6 @@ MimeType=application/x-electron;
           });
           const sh = setSonuc.harita;
           setHaritasi = sh;
-          setGuncellemeKimligi = sh.setKimligi || null;
           console.log(`🆔 SET kimliği: ${sh.setKimligi || 'YOK'} (${sh.setKimligiKaynagi}), `
             + `${sh.kabukDosyaSayisi} kabuk dosyası, ${sh.kitapSayisi} kitap üye`);
         } catch (setKimlikError) {
@@ -837,36 +834,11 @@ MimeType=application/x-electron;
         }
       }
 
-      // SET GÜNCELLEME PAKETİ (2026-09-23, sözleşme §Sunucu tarafı — TASARIM) —
-      // KAPI VARSAYILAN AÇIK (`EMPP_SET_GUNCELLEME=0` kapatır, setKimligi.paketeYaz
-      // ile AYNI kapı). `empp-set.json`'la AYNI ANDA koşar (envanterin gördüğü ağaç
-      // ile manifestin gördüğü ağaç birebir aynı olsun) — yani TAM BURADA,
-      // setKimligi.paketeYaz'ın hemen ardından. Hata build'i DÜŞÜRMEZ; sonuca
-      // `guncellemePaketi: {hata}` yazılır (sessiz yutma yok, görünür).
-      // `src/agent/runner.js` (parça 3) bu çıktıyı indirip R2'ye yükler — o dosya
-      // BAŞKA AJANIN İŞİDİR, burada değiştirilmez.
-      let guncellemePaketiSonucu = null;
-      if (guncellemePaketi.acikMi(process.env, platforms) && setGuncellemeKimligi) {
-        try {
-          const gp = await guncellemePaketi.paketeUret(workingPath, {
-            log: (satir) => console.log(satir),
-            setKimligi: setGuncellemeKimligi,
-            jobId,
-            // G4: ÖZEL anahtar dosyasının YOLU (içerik asla istekte taşınmaz);
-            // verilmezse EMPP_GUNCELLEME_IMZA_ANAHTARI.
-            imzaAnahtari: jobInfo.guncellemeImzaAnahtariYolu || null,
-          });
-          guncellemePaketiSonucu = gp;
-          if (!gp.atlandi) {
-            console.log(`📦 Güncelleme paketi: ${gp.kabukDosyaSayisi} kabuk dosyası, `
-              + `${gp.boyut} bayt (${gp.tarYolu})`);
-          }
-        } catch (guncellemePaketiError) {
-          console.warn('⚠️ Güncelleme paketi üretilemedi (paketleme devam ediyor):',
-            guncellemePaketiError.message);
-          guncellemePaketiSonucu = { hata: guncellemePaketiError.message };
-        }
-      }
+      // ESKİ SET GÜNCELLEME PAKETİ (guncelleme.tar.gz) KALDIRILDI (26.09, D-2): runner tar'ı
+      // hiçbir yere yüklemiyor (d825123), G manifestlerinin tek yazarı tools/g-yayin; eski
+      // üreticinin manifesti G istemcisinde `kanal-g-degil` ile RED. Üretici karantinada:
+      // `_graveyard/2026-09-26-g-eski-uretici/OKU.md`. Geri gelirse sentinel kırılır
+      // (windows-sozlesme-baglanti.test.js, olu-yol-kapisi.test.js).
 
       // SET GÜNCELLEYİCİ ENJEKSİYONU (2026-09-21, sözleşme:
       // `.claude/docs/kitap-guncelleme-sozlesmesi.md`) — KAPI VARSAYILAN AÇIK
@@ -1117,10 +1089,6 @@ MimeType=application/x-electron;
             progress: Math.round(((i + 1) / totalPlatforms) * 100)
           });
         }
-      }
-
-      if (guncellemePaketiSonucu) {
-        results.guncellemePaketi = guncellemePaketiSonucu;
       }
 
       return results;
@@ -2388,8 +2356,8 @@ function closeSplashScreen() {
     }
     
     // Eğer output path'te yoksa, temp dizinine bak.
-    // .exe'YE BAKILIR, "dizin boş mu"ya DEĞİL (2026-09-26, ölçüldü): SET güncelleme paketi
-    // (guncelleme-paketi.js) varsayılan olarak `temp/<job>/windows/guncelleme/` yazar; göreli
+    // .exe'YE BAKILIR, "dizin boş mu"ya DEĞİL (2026-09-26, ölçüldü): eski SET güncelleme
+    // paketi (26.09 karantinada) `temp/<job>/windows/guncelleme/` yazıyordu; göreli
     // tempPath'te electron-builder exe'yi `app/temp/<job>/windows/`e koyar. Eski koşul
     // `files.length === 0` 'guncelleme' dizinini görüp yedek aramayı atlıyor, exe üretildiği
     // hâlde "Windows installer oluşturulamadı" veriyordu.
