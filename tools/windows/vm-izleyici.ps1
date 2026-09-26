@@ -44,6 +44,130 @@ if (-not $HttpModu) {
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
+# ——— ZAMAN AŞIMI TAVANLARI ————————————————————————————————————————————
+# SAHA ARIZASI (2026-09-21, ölçüldü): `komut` dalindaki `& cmd /c $g.komut`
+# cagrisinda ZAMAN ASIMI YOKTU. Bir ajan `Get-PSDrive -PSProvider FileSystem`
+# gonderdi, erisilemeyen bir ag surucusunde asildi; ana dongu 16+ dakika bloke
+# kaldi. Alinan gorev (20260921-102107) sonuc yazamadi, siradaki gorev
+# (20260921-102341) hic alinmadi. Kalp AYRI iste attigi icin host "ayakta" dedi.
+#
+# TAVAN NEDEN GOREV BASINA GECILIR: sabit kisa bir tavan uretimi bozar — 1,3 GB'lik
+# kurulum dosyasi dakikalarca inip kuruluyor. Host her gorevle birlikte kendi
+# tavanindan PAY kadar kisa bir `zamanAsimiSn` gonderir (bkz. karar modulu:
+# guestZamanAsimiSn) ki guest seridi host pes etmeden ONCE acsin ve sonuc dosyasina
+# gercek sebebi yazsin. Asagidakiler yalnizca ALAN GELMEDIGINDE (eski host) gecerli.
+$VARSAYILAN_KOMUT_TAVANI_SN = 600     # host `calistir` varsayilani da 600 sn
+$VARSAYILAN_KUR_TAVANI_SN   = 1800    # host `kur` varsayilani da 1800 sn
+$KOMUT_ONEK = 160                     # sonuca yazilacak komut on eki (sir sizmasin diye kirpik)
+
+# ——— SERIT DAMGASI: KALP YALAN SOYLEMESIN ——————————————————————————————
+# Kalp atisi AYRI iste kosuyor (asagidaki Kalp-Isini-Baslat). Bu, uzun is sirasinda
+# yanlis alarmi onledi ama YENI bir korluk yaratti: ana dongu kilitliyken de kalp
+# atmaya devam ediyor, host "ayakta, yas 2 sn" goruyor. DURUM BILDIRIMI CANLILIK
+# DEGILDIR. Cozum: ana dongu her ilerlemesinde bir damga dosyasi yazar; kalp isi o
+# damgayi kalp govdesinde host'a TASIR. Host boylece "ayakta ama serit N sn'dir
+# ilerlemiyor" diyebilir (src/windows/vm-kapi-karar.js -> seritDurumu).
+$DonguDosyasi = Join-Path $Calisma 'dongu.json'
+
+function Dongu-Damgala([string]$durum, $gorev, $zamanAsimiSn) {
+  try {
+    $n = [ordered]@{
+      sonDonguDamgasi   = (Get-Date).ToUniversalTime().ToString('o')
+      donguDurumu       = $durum          # 'bos' | 'calisiyor'
+      donguGorevi       = $gorev
+      donguZamanAsimiSn = $zamanAsimiSn
+    }
+    $gecici = "$DonguDosyasi.tmp"
+    $n | ConvertTo-Json -Compress | Set-Content -Path $gecici -Encoding UTF8
+    Move-Item -Force $gecici $DonguDosyasi     # atomik: kalp isi yarim JSON okumasin
+  } catch { }
+}
+
+# ——— COCUK SUREC: USTU OLDURMEK YETMEZ ————————————————————————————————
+# `cmd /c <komut>` HER ZAMAN en az bir alt surec dogurur (komutun kendisi). Yalniz
+# cmd.exe'yi oldurmek torunu CALISIR birakir: dosya kilidi, ag tutamagi ve CPU
+# onunla kalir; bugunku arizada asilan sey zaten cmd'nin cocugu olan ag erisimiydi.
+# `taskkill /T /F` agacin tamamini keser. taskkill bulunamazsa CIM ile ebeveyn-cocuk
+# agaci yinelemeli dolasilir (Win32_Process.ParentProcessId) — once cocuklar, sonra
+# ust; ters sirada oldurmek torunlari OKSUZ birakip kacirir.
+function Surec-Agaci-Oldur([int]$sid) {
+  if ($sid -le 0) { return }
+  $kesildi = $false
+  try {
+    $tk = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+    if ($tk) { & $tk.Source /PID $sid /T /F 2>&1 | Out-Null; $kesildi = $true }
+  } catch { }
+  if (-not $kesildi) {
+    try {
+      foreach ($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$sid" -ErrorAction SilentlyContinue)) {
+        Surec-Agaci-Oldur ([int]$c.ProcessId)
+      }
+    } catch { }
+    try { Stop-Process -Id $sid -Force -ErrorAction SilentlyContinue } catch { }
+  }
+}
+
+function Kuyruk-Oku([string]$yol, [int]$satir = 40) {
+  try {
+    if (-not (Test-Path $yol)) { return '' }
+    return ((Get-Content -Path $yol -ErrorAction SilentlyContinue | Select-Object -Last $satir) -join "`n")
+  } catch { return '' }
+}
+
+function Komut-OnEki([string]$komut) {
+  if ([string]::IsNullOrEmpty($komut)) { return '' }
+  if ($komut.Length -le $KOMUT_ONEK) { return $komut }
+  return $komut.Substring(0, $KOMUT_ONEK) + '...'
+}
+
+# ZAMAN ASIMLI KOMUT. Ciktilar dosyaya yonlendirilir: `Start-Process -NoNewWindow`
+# ile bellek icinde okumak, surec olduruldugunde okuma is parcaciginin kendisinin
+# asili kalmasi riskini tasir — dosya ise oldurmeden SONRA sakince okunur.
+function Komut-Calistir([string]$komut, [int]$tavanSn) {
+  $ad = [guid]::NewGuid().ToString('N').Substring(0, 8)
+  $oYol = Join-Path $Calisma "komut-$ad.out"
+  $eYol = Join-Path $Calisma "komut-$ad.err"
+  $bas = Get-Date
+  try {
+    $p = Start-Process -FilePath $env:ComSpec -ArgumentList "/c $komut" -PassThru -NoNewWindow `
+           -RedirectStandardOutput $oYol -RedirectStandardError $eYol
+    $bitti = $p.WaitForExit($tavanSn * 1000)
+    $gecenSn = [int]((Get-Date) - $bas).TotalSeconds
+    if (-not $bitti) {
+      Surec-Agaci-Oldur $p.Id
+      Start-Sleep -Milliseconds 500
+      if (-not $p.HasExited) { try { $p.Kill() } catch { } }
+      $kuyruk = (Kuyruk-Oku $oYol) + "`n" + (Kuyruk-Oku $eYol)
+      return [pscustomobject]@{
+        cikis = 124                      # GNU `timeout` ile ayni: "zaman asimiyla kesildi"
+        zamanAsimi = $true
+        gecenSn = $gecenSn
+        komutOnEk = (Komut-OnEki $komut)
+        cikti = "ZAMAN ASIMI: komut $gecenSn sn'de bitmedi (tavan $tavanSn sn); surec agaci oldurudu.`nkomut: $(Komut-OnEki $komut)`n--- son cikti ---`n$($kuyruk.Trim())"
+      }
+    }
+    $kod = 0
+    try { $kod = $p.ExitCode } catch { $kod = 99 }
+    $kuyruk = (Kuyruk-Oku $oYol) + "`n" + (Kuyruk-Oku $eYol)
+    return [pscustomobject]@{
+      cikis = $kod; zamanAsimi = $false; gecenSn = $gecenSn
+      komutOnEk = (Komut-OnEki $komut); cikti = $kuyruk.Trim()
+    }
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $oYol, $eYol
+  }
+}
+
+# Gorevin kendi tavani: sonuc/serit raporunda kullanilir.
+function Gorev-Tavani($g) {
+  if ($g.zamanAsimiSn) { return [int]$g.zamanAsimiSn }
+  switch ($g.tur) {
+    'kur'   { return $VARSAYILAN_KUR_TAVANI_SN }
+    'komut' { return $VARSAYILAN_KOMUT_TAVANI_SN }
+    default { return 300 }
+  }
+}
+
 function Ekran-Al([string]$yol) {
   # Görsel kanıt: çıkış kodu kanıt değildir (host tarafı karar modülü bunu zorunlu tutar).
   $sinir = ([System.Windows.Forms.Screen]::AllScreens)[0].Bounds
@@ -64,23 +188,51 @@ function Surec-Say([string]$ad) {
 # (tek blok, dakikalarca) hiç atış göndermedi, host 31. saniyede "izleyici ölü"
 # deyip görevi BOZUK saydı — oysa iş sapasağlam sürüyordu. Kalp "süreç yaşıyor mu"
 # sorusunun cevabıdır; uzun işin ARKASINDA durmamalı.
+# KALP TEK BASINA YALAN SOYLER (2026-09-21): ayri iste attigi icin ana dongu
+# kilitliyken de tazedir. Bu yuzden her atisin govdesinde ANA DONGUNUN SON ILERLEME
+# DAMGASI gider ($DonguDosyasi). Damga dosyasi yoksa (ilk saniyeler) atis eskisi gibi
+# govdesiz gider ve kopru cıplak ISO yazar — eski davranis korunur.
 function Kalp-Isini-Baslat {
   if ($HttpModu) {
     Start-Job -Name 'vm-kalp' -ScriptBlock {
-      param($a, $b)
+      param($a, $donguDosyasi)
       while ($true) {
-        try { Invoke-RestMethod -Method Post -Uri "$a/kalp" -TimeoutSec 10 | Out-Null } catch { }
+        $govde = $null
+        try { if (Test-Path $donguDosyasi) { $govde = (Get-Content -Raw -Path $donguDosyasi -ErrorAction SilentlyContinue) } } catch { }
+        try {
+          if ($govde) {
+            Invoke-RestMethod -Method Post -Uri "$a/kalp" -Body $govde -ContentType 'application/json' -TimeoutSec 10 | Out-Null
+          } else {
+            Invoke-RestMethod -Method Post -Uri "$a/kalp" -TimeoutSec 10 | Out-Null
+          }
+        } catch { }
         Start-Sleep -Seconds 5
       }
-    } -ArgumentList $Taban, $Belirtec | Out-Null
+    } -ArgumentList $Taban, $DonguDosyasi | Out-Null
   } else {
     Start-Job -Name 'vm-kalp' -ScriptBlock {
-      param($d)
+      param($d, $donguDosyasi)
       while ($true) {
-        try { (Get-Date).ToUniversalTime().ToString('o') | Set-Content -Path (Join-Path $d 'kalp.txt') -Encoding UTF8 } catch { }
+        try {
+          $ek = $null
+          if (Test-Path $donguDosyasi) {
+            try { $ek = (Get-Content -Raw -Path $donguDosyasi -ErrorAction SilentlyContinue) | ConvertFrom-Json } catch { $ek = $null }
+          }
+          $icerik = (Get-Date).ToUniversalTime().ToString('o')
+          if ($ek -and $ek.sonDonguDamgasi) {
+            $icerik = ([ordered]@{
+              kalp              = (Get-Date).ToUniversalTime().ToString('o')
+              sonDonguDamgasi   = $ek.sonDonguDamgasi
+              donguDurumu       = $ek.donguDurumu
+              donguGorevi       = $ek.donguGorevi
+              donguZamanAsimiSn = $ek.donguZamanAsimiSn
+            } | ConvertTo-Json -Compress)
+          }
+          $icerik | Set-Content -Path (Join-Path $d 'kalp.txt') -Encoding UTF8
+        } catch { }
         Start-Sleep -Seconds 5
       }
-    } -ArgumentList $Durum | Out-Null
+    } -ArgumentList $Durum, $DonguDosyasi | Out-Null
   }
 }
 
@@ -115,7 +267,10 @@ function Dosya-Getir([string]$ad, [string]$dogrudanUrl) {
     $hedef = Join-Path $Calisma $ad
     $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
     if ($curl) {
-      & $curl.Source -sS -L --fail --retry 5 --retry-delay 3 -o $hedef $dogrudanUrl
+      # --speed-time/--speed-limit: TOPLAM sureyi kisitlamaz (1,3 GB yavas hatta
+      # saatlerce inebilir) ama 120 sn boyunca 1 KB/s altina duserse baglantiyi
+      # keser. Asili indirme de serit kilitler; "yavas" ile "olmus" ayrimi budur.
+      & $curl.Source -sS -L --fail --retry 5 --retry-delay 3 --speed-time 120 --speed-limit 1024 -o $hedef $dogrudanUrl
       if ($LASTEXITCODE -ne 0) { throw "dogrudan indirme basarisiz (curl rc=$LASTEXITCODE)" }
     } else {
       Invoke-WebRequest -Uri $dogrudanUrl -OutFile $hedef -TimeoutSec 7200 -UseBasicParsing
@@ -131,7 +286,7 @@ function Dosya-Getir([string]$ad, [string]$dogrudanUrl) {
   # belirgin hızlı (IWR yanıtı belleğe tamponluyor). Yoksa IWR'ye düşülür.
   $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
   if ($curl) {
-    & $curl.Source -sS -L --fail --retry 3 --retry-delay 2 -o $hedef $kaynak
+    & $curl.Source -sS -L --fail --retry 3 --retry-delay 2 --speed-time 120 --speed-limit 1024 -o $hedef $kaynak
     if ($LASTEXITCODE -ne 0) { throw "indirme basarisiz (curl rc=$LASTEXITCODE): $ad" }
   } else {
     Invoke-WebRequest -Uri $kaynak -OutFile $hedef -TimeoutSec 3600 -UseBasicParsing
@@ -163,18 +318,40 @@ Kalp-Isini-Durdur      # onceki calistirmadan kalan is varsa
 Kalp-Isini-Baslat
 
 try {
+Dongu-Damgala 'bos' $null $null
 while ($true) {
+  Dongu-Damgala 'bos' $null $null      # her tur: "dongu yasiyor ve BOSTA" (serit olcusu)
   $g = Gorev-Al
   if ($g) {
     $kimlik = $g.kimlik
+    $gorevTavani = Gorev-Tavani $g
+    # Gorev ALINDIGI anda damga 'calisiyor'a doner ve gorevin KENDI tavanini tasir.
+    # Host bunu okur: tavan+pay da asilmissa zaman asimi DA tutmamis demektir.
+    Dongu-Damgala 'calisiyor' $kimlik $gorevTavani
     $cikis = 1; $cikti = ''; $ekranAdi = $null; $ekranYolu = $null; $surecSayisi = 0; $beklenenKanit = $true
+    $durumEtiketi = 'bitti'; $gecenSn = $null; $komutOnEk = $null
+    $gorevBaslangici = Get-Date
     try {
       switch ($g.tur) {
         'kur' {
           $exe = Dosya-Getir $g.dosya $g.dosyaUrl
           if (-not (Test-Path $exe)) { throw "kurulum dosyasi yok: $exe" }
           # NSIS oneClick per-user: /S sessiz kurar, UAC istemez.
-          $p = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru -Wait
+          # ZAMAN ASIMI (2026-09-21): eski kod `-Wait` ile SINIRSIZ bekliyordu. Bir
+          # kurulum UAC/onay penceresinde takilirsa serit yine kilitlenirdi.
+          $p = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
+          if (-not $p.WaitForExit($gorevTavani * 1000)) {
+            Surec-Agaci-Oldur $p.Id
+            Start-Sleep -Milliseconds 500
+            if (-not $p.HasExited) { try { $p.Kill() } catch { } }
+            $durumEtiketi = 'zaman-asimi'
+            $gecenSn = [int]((Get-Date) - $gorevBaslangici).TotalSeconds
+            $komutOnEk = (Komut-OnEki "$exe /S")
+            $cikis = 124
+            $cikti = "ZAMAN ASIMI: kurulum $gecenSn sn'de bitmedi (tavan $gorevTavani sn); surec agaci oldurudu."
+            $ekranAdi = "$kimlik.png"; $ekranYolu = Join-Path $Calisma $ekranAdi; Ekran-Al $ekranYolu
+            break
+          }
           $cikis = $p.ExitCode
           Start-Sleep -Seconds $(if ($g.bekleSn) { [int]$g.bekleSn } else { 25 })
           $surecSayisi = Surec-Say $g.surecAdi
@@ -199,24 +376,40 @@ while ($true) {
           $cikis = 0; $beklenenKanit = $false; $cikti = "kapatildi, kalan=$(Surec-Say $g.surecAdi)"
         }
         'komut' {
-          $r = & cmd /c $g.komut 2>&1
-          $cikis = $LASTEXITCODE
-          $cikti = ($r | Select-Object -Last 40) -join "`n"
+          # ESKI HALI: `$r = & cmd /c $g.komut` — ZAMAN ASIMI YOKTU. 2026-09-21'de
+          # `Get-PSDrive -PSProvider FileSystem` erisilemeyen bir ag surucusunde
+          # asildi ve TUM seridi 16+ dakika kilitledi (kalp atmaya devam ettigi icin
+          # host goremedi). Artik tavan var, cocuk surecler dahil agac oldurulur ve
+          # sonuc dosyasina durum:'zaman-asimi' yazilir — gorev SESSIZCE kaybolmaz.
+          $r = Komut-Calistir $g.komut $gorevTavani
+          $cikis = $r.cikis
+          $cikti = $r.cikti
           $beklenenKanit = $false
+          if ($r.zamanAsimi) {
+            $durumEtiketi = 'zaman-asimi'; $gecenSn = $r.gecenSn; $komutOnEk = $r.komutOnEk
+          }
         }
         default { throw "bilinmeyen gorev turu: $($g.tur)" }
       }
     } catch {
-      $cikis = 99; $cikti = $_.Exception.Message
+      $cikis = 99; $cikti = $_.Exception.Message; $durumEtiketi = 'hata'
     }
 
+    if ($null -eq $gecenSn) { $gecenSn = [int]((Get-Date) - $gorevBaslangici).TotalSeconds }
     $sonucNesne = [ordered]@{
       kimlik = $kimlik; cikis = $cikis; cikti = $cikti; ekran = $ekranAdi
       surecSayisi = $surecSayisi; beklenenKanit = $beklenenKanit
+      durum = $durumEtiketi                # 'bitti' | 'zaman-asimi' | 'hata'
+      gecenSn = $gecenSn
+      komutOnEk = $komutOnEk               # zaman asiminda komutun ilk $KOMUT_ONEK karakteri
+      tavanSn = $gorevTavani
       bitis = (Get-Date).ToUniversalTime().ToString('o')
     }
     try { Sonuc-Gonder $kimlik $sonucNesne $ekranYolu } catch { Write-Host "sonuc gonderilemedi: $($_.Exception.Message)" }
-    Write-Host "gorev $kimlik bitti (cikis=$cikis)"
+    Write-Host "gorev $kimlik bitti (cikis=$cikis, durum=$durumEtiketi, $gecenSn sn)"
+    # SERIT ACILDI: dongu bir sonraki goreve gecebilir. Damgayi HEMEN bosa cek ki
+    # host "hala o gorevin icinde" sanmasin.
+    Dongu-Damgala 'bos' $null $null
   }
   Start-Sleep -Seconds 5
 }

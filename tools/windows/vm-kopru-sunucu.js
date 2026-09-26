@@ -187,7 +187,25 @@ function sunucuKur(belirtec) {
         return;
       }
       if (istek.method === 'POST' && eylem === 'kalp') {
-        atomikYaz(M.kalp, new Date().toISOString());
+        // KALP ARTIK ŞERİT DAMGASI TAŞIR (2026-09-21). İzleyicinin ana döngüsü
+        // her turda `sonDonguDamgasi` basar; kalp işi onu gövdede taşır. Gövdesiz
+        // (yükseltilmemiş) izleyici için ESKİ biçim korunur: çıplak ISO. Böylece
+        // eski guest de, eski host okuyucusu da kopmaz.
+        const ham = await govdeTopla(istek, 64 * 1024);
+        let ek = null;
+        try {
+          const o = JSON.parse(ham.toString('utf8').trim() || 'null');
+          if (o && typeof o === 'object') ek = o;
+        } catch { ek = null; }
+        const alanlar = ['sonDonguDamgasi', 'donguDurumu', 'donguGorevi', 'donguZamanAsimiSn'];
+        const anlamli = !!(ek && alanlar.some((a) => ek[a] != null));
+        if (anlamli) {
+          const nesne = { kalp: new Date().toISOString() };
+          for (const a of alanlar) if (ek[a] != null) nesne[a] = ek[a];
+          atomikYaz(M.kalp, JSON.stringify(nesne));
+        } else {
+          atomikYaz(M.kalp, new Date().toISOString());
+        }
         yanit.writeHead(204).end();
         return;
       }

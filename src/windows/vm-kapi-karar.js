@@ -33,30 +33,146 @@ const KALP_TAZE_SN = 30;
 const KALP_MESGUL_SN = 300;      // izleyici bu süreden eski kalp attıysa ölü sayılır
 const VARSAYILAN_ZAMAN_ASIMI_SN = 900;
 
+// ——— ŞERİT (ANA DÖNGÜ) İLERLEMESİ ——————————————————————————————————————
+// SAHA ARIZASI (2026-09-21, ölçüldü): izleyicinin `komut` dalı erişilemeyen bir ağ
+// sürücüsünde asıldı. Kalp atışı AYRI işte koştuğu için 5 sn'de bir atmaya devam
+// etti → `hazir` "ayakta, yaş 2 sn" dedi. Oysa ANA DÖNGÜ 16+ dakika blokeydi:
+// alınan görev (20260921-102107) sonuç yazamadı, sıradaki görev (…-102341) hiç
+// alınmadı. Bu, bu depoda kayıtlı "online ama ölü" sınıfının birebir tekrarı —
+// DURUM BİLDİRİMİ CANLILIK DEĞİLDİR; ölçü, işin kendi kanalından gelen ilerlemedir.
+// Düzeltme: kalp, ana döngünün SON İLERLEME DAMGASINI taşır (sonDonguDamgasi) ve
+// yanında döngünün ne yaptığını söyler (boşta mı, hangi görevin içinde mi, o görevin
+// kendi tavanı kaç sn). Şerit değerlendirmesi burada, saf katmanda yapılır.
+const SERIT_BOS_AZAMI_SN = 60;       // boştaki döngü ~5 sn'de bir damga basar; 60 sn = 12 kaçırılmış tur
+const SERIT_PAY_SN = 60;             // görev tavanı + bu pay da aşıldıysa zaman aşımı DA tutmamış demektir
+const SERIT_VARSAYILAN_TAVAN_SN = 900;   // görev kendi tavanını bildirmediyse (eski izleyici gövdesi)
+
+// Guest tavanı host tavanından bu kadar KISA tutulur: guest kendi şeridini host pes
+// etmeden ÖNCE açsın ve sonuç dosyasına gerçek sebebi ("zaman-asimi") yazsın. Eşit
+// olsaydı yarış olurdu — host sessizlikten "zaman-asimi" derken guest hâlâ kilitli
+// kalabilirdi, yani bugünkü arızanın aynısı.
+const GUEST_PAY_SN = 30;
+const GUEST_ASGARI_SN = 30;
+const GUEST_VARSAYILAN_SN = 600;
+
+/**
+ * Kalp dosyasının HAM içeriğini çözer.
+ *
+ * İKİ BİÇİM OKUNUR — geriye dönük uyum ZORUNLU:
+ *   - çıplak ISO damgası -> ESKİ izleyici/köprü (şerit bilgisi YOK)
+ *   - JSON nesnesi       -> yeni izleyici: {kalp, sonDonguDamgasi, donguDurumu,
+ *                           donguGorevi, donguZamanAsimiSn}
+ * Çözülemeyen içerik kalpMs:null döner (host onu "yok" sayar) — çökmek YASAK.
+ * @param {string|Buffer|null} ham
+ * @returns {{kalpMs:number|null, dongu:{damgaMs:number,durum:string,gorev:string|null,zamanAsimiSn:number|null}|null}}
+ */
+function kalpAyristir(ham) {
+  const metin = (ham == null ? '' : String(ham)).trim();
+  if (!metin) return { kalpMs: null, dongu: null };
+  if (metin[0] !== '{') {
+    const t = Date.parse(metin);
+    return { kalpMs: Number.isFinite(t) ? t : null, dongu: null };
+  }
+  let o;
+  try { o = JSON.parse(metin); } catch { return { kalpMs: null, dongu: null }; }
+  if (!o || typeof o !== 'object') return { kalpMs: null, dongu: null };
+  const kalpT = Date.parse(o.kalp);
+  const damgaT = Date.parse(o.sonDonguDamgasi);
+  const sayi = Number(o.donguZamanAsimiSn);
+  const dongu = Number.isFinite(damgaT) ? {
+    damgaMs: damgaT,
+    durum: o.donguDurumu === 'calisiyor' ? 'calisiyor' : 'bos',
+    gorev: o.donguGorevi || null,
+    zamanAsimiSn: Number.isFinite(sayi) && sayi > 0 ? sayi : null,
+  } : null;
+  return { kalpMs: Number.isFinite(kalpT) ? kalpT : null, dongu };
+}
+
+/**
+ * Ana döngü ilerliyor mu? (Kalp atışından BAĞIMSIZ soru — arızanın özü buydu.)
+ *
+ *   dongu yok            -> 'bilinmiyor' (eski izleyici; bilmediğimizi söyleriz, "iyi" demeyiz)
+ *   boşta + damga taze   -> 'akiyor'
+ *   boşta + damga bayat  -> 'tikali'   (döngü görev almadan bir yerde asılı)
+ *   görev içinde, tavan+pay aşılmamış -> 'calisiyor' (normal uzun iş)
+ *   görev içinde, tavan+pay aşılmış   -> 'tikali'    (görevin kendi zaman aşımı DA tutmamış)
+ * @returns {{serit:string, yasSn:number|null, gorev:string|null, uyari?:string}}
+ */
+function seritDurumu(dongu, simdiMs) {
+  if (!dongu || !Number.isFinite(dongu.damgaMs)) {
+    return { serit: 'bilinmiyor', yasSn: null, gorev: null };
+  }
+  const yasSn = Math.max(0, Math.floor((simdiMs - dongu.damgaMs) / 1000));
+  const gorev = dongu.gorev || null;
+  if (dongu.durum === 'calisiyor') {
+    const tavan = (dongu.zamanAsimiSn || SERIT_VARSAYILAN_TAVAN_SN) + SERIT_PAY_SN;
+    if (yasSn > tavan) {
+      return {
+        serit: 'tikali', yasSn, gorev,
+        uyari: `ayakta ama şerit ${yasSn} sn'dir ilerlemiyor — görev ${gorev || '?'} kendi tavanını (${tavan} sn) aştı, zaman aşımı TUTMAMIŞ`,
+      };
+    }
+    return { serit: 'calisiyor', yasSn, gorev };
+  }
+  if (yasSn > SERIT_BOS_AZAMI_SN) {
+    return {
+      serit: 'tikali', yasSn, gorev,
+      uyari: `ayakta ama şerit ${yasSn} sn'dir ilerlemiyor — döngü boşta görünüyor ama damga basmıyor (eşik ${SERIT_BOS_AZAMI_SN} sn)`,
+    };
+  }
+  return { serit: 'akiyor', yasSn, gorev };
+}
+
+/**
+ * Host, guest'e hangi tavanı versin? Host kendi tavanından PAY kadar kısa.
+ * Sebebi yukarıda (GUEST_PAY_SN): guest önce konuşsun, host sessizliği yorumlamasın.
+ */
+function guestZamanAsimiSn(hostSn) {
+  const h = Number(hostSn);
+  if (!Number.isFinite(h) || h <= 0) return GUEST_VARSAYILAN_SN;
+  return Math.max(GUEST_ASGARI_SN, Math.floor(h) - GUEST_PAY_SN);
+}
+
 /**
  * İzleyici ayakta mı? Kalp atışı damgasına bakar.
+ *
+ * KALP TEK BAŞINA YETMEZ: kalp ayrı işte attığı için ana döngü kilitliyken de taze
+ * görünür (2026-09-21 arızası). `secenek.dongu` verilirse sonuca `serit` alanı da
+ * eklenir; `serit === 'tikali'` -> izleyici SÜREÇ olarak yaşıyor ama İŞ akmıyor.
+ * `durum` bilerek 'ayakta' kalır: süreç gerçekten ayakta ve ölçüm komutları hâlâ
+ * kuyruğa yazılabilir; şerit arızası AYRI bir eksende raporlanır (yanlış alarm
+ * üretip tüm kapıyı kilitlemeyelim).
  * @param {number|null} kalpMs kalp dosyasının damgası (ms) — okunamadıysa null
  * @param {number} simdiMs
+ * @param {{gorevUcusta?:boolean, dongu?:object|null}} [secenek]
  */
 function izleyiciDurumu(kalpMs, simdiMs, secenek) {
+  const serit = seritDurumu(secenek && secenek.dongu, simdiMs);
+  const ekle = (r) => {
+    r.serit = serit.serit;
+    if (serit.yasSn != null) r.seritYasSn = serit.yasSn;
+    if (serit.gorev) r.seritGorevi = serit.gorev;
+    if (serit.uyari) r.uyari = r.uyari ? `${r.uyari}; ${serit.uyari}` : serit.uyari;
+    return r;
+  };
   if (kalpMs == null || !Number.isFinite(kalpMs)) {
-    return { durum: 'yok', sebep: 'kalp atışı bulunamadı — izleyici hiç başlatılmamış' };
+    return ekle({ durum: 'yok', sebep: 'kalp atışı bulunamadı — izleyici hiç başlatılmamış' });
   }
   const yasSn = Math.floor((simdiMs - kalpMs) / 1000);
   if (yasSn < 0) {
     // Guest saati ileri — köprü yine çalışır ama yaş ölçülemez.
-    return { durum: 'ayakta', yasSn: 0, uyari: 'guest saati host\'tan ileri' };
+    return ekle({ durum: 'ayakta', yasSn: 0, uyari: 'guest saati host\'tan ileri' });
   }
   const mesgul = !!(secenek && secenek.gorevUcusta);
   const esik = mesgul ? KALP_MESGUL_SN : KALP_TAZE_SN;
   if (yasSn > esik) {
-    return { durum: 'olu', yasSn, sebep: `son kalp ${yasSn} sn önce (eşik ${esik})` };
+    return ekle({ durum: 'olu', yasSn, sebep: `son kalp ${yasSn} sn önce (eşik ${esik})` });
   }
   // Susmuş ama eşiği aşmamış meşgul izleyici: ayakta sayılır, sessizlik BİLDİRİLİR.
   if (mesgul && yasSn > KALP_TAZE_SN) {
-    return { durum: 'ayakta', yasSn, uyari: `izleyici ${yasSn} sn sessiz — uzun iş sürüyor olmalı` };
+    return ekle({ durum: 'ayakta', yasSn, uyari: `izleyici ${yasSn} sn sessiz — uzun iş sürüyor olmalı` });
   }
-  return { durum: 'ayakta', yasSn };
+  return ekle({ durum: 'ayakta', yasSn });
 }
 
 /**
@@ -73,6 +189,20 @@ function gorevKarari(sonuc, gecenSn, zamanAsimiSn = VARSAYILAN_ZAMAN_ASIMI_SN) {
   }
   if (typeof sonuc !== 'object' || typeof sonuc.cikis !== 'number') {
     return { durum: 'bozuk', sebep: 'sonuç dosyasında `cikis` alanı yok' };
+  }
+  // GUEST KENDİ ZAMAN AŞIMINI BİLDİRDİ (2026-09-21): izleyici komutu kesip süreç
+  // ağacını öldürdüğünde sonuç dosyasına durum:'zaman-asimi' yazar. Bunu 'kaldi'
+  // (çıkış kodu 124) diye raporlamak sebebi GİZLER — görev kaybolmasın, SEBEBİ
+  // kaybolmasın: asılan komut ile başarısız komut aynı şey değildir.
+  if (sonuc.durum === 'zaman-asimi') {
+    return {
+      durum: 'zaman-asimi',
+      sebep: `guest komutu kesti: ${sonuc.gecenSn != null ? `${sonuc.gecenSn} sn` : 'süre bilinmiyor'}` +
+        (sonuc.komutOnEk ? ` — ${sonuc.komutOnEk}` : ''),
+      gecenSn: sonuc.gecenSn,
+      komutOnEk: sonuc.komutOnEk,
+      ciktiKuyrugu: sonuc.cikti,
+    };
   }
   if (sonuc.cikis !== 0) {
     return { durum: 'kaldi', sebep: `çıkış kodu ${sonuc.cikis}`, ciktiKuyrugu: sonuc.cikti };
@@ -147,11 +277,14 @@ function mudahaleKarari({ komut, bendeBayragi = false, pencereAcik = false, vmCa
 // 'komut' dalına gövde üretir. Boş/aşırı uzun satır GÖREV YAZILMADAN reddedilir —
 // kuyruğa çöp girmesin, izleyici 99 ile dönüp kalp atışını meşgul etmesin.
 const KOMUT_AZAMI = 2000;
-function calistirGovdesi(satir) {
+function calistirGovdesi(satir, hostZamanAsimiSn) {
   const s = typeof satir === 'string' ? satir.trim() : '';
   if (!s) return { hata: 'bos-komut' };
   if (s.length > KOMUT_AZAMI) return { hata: 'komut-uzun' };
-  return { govde: { tur: 'komut', komut: s } };
+  // TAVAN GÖREVLE BİRLİKTE GİDER (2026-09-21): izleyici sabit bir tavana
+  // gömülemez — 1,3 GB'lık kurulum dakikalarca sürer, kısa tavan üretimi bozar.
+  // Her görev kendi tavanını taşır; guest tavanı host'unkinden pay kadar kısadır.
+  return { govde: { tur: 'komut', komut: s, zamanAsimiSn: guestZamanAsimiSn(hostZamanAsimiSn) } };
 }
 
 // ——— "EL DEĞMİŞ" İŞARETİ MAKİNE BAZLIDIR ————————————————————————————————
@@ -179,6 +312,9 @@ function baslatmaKipi(bayraklar = []) {
 
 module.exports = {
   izleyiciDurumu, mudahaleKarari, gorevKarari, alarmliMi, gorevKimligi, calistirGovdesi, bendeYolu, baslatmaKipi,
+  kalpAyristir, seritDurumu, guestZamanAsimiSn,
   KOMUT_AZAMI,
   KALP_TAZE_SN, KALP_MESGUL_SN, VARSAYILAN_ZAMAN_ASIMI_SN,
+  SERIT_BOS_AZAMI_SN, SERIT_PAY_SN, SERIT_VARSAYILAN_TAVAN_SN,
+  GUEST_PAY_SN, GUEST_ASGARI_SN, GUEST_VARSAYILAN_SN,
 };

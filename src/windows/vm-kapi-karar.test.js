@@ -205,9 +205,15 @@ test('kapalı VM\'de geri-don yalnız BENDE ile engellenir', () => {
 
 // ——— UZAK KOMUT GÖVDESİ ————————————————————————————————————————————————
 test('calistirGovdesi: normal satır izleyicinin komut dalına gövde üretir', () => {
-  const r = m.calistirGovdesi('  wmic logicaldisk get freespace  ');
+  const r = m.calistirGovdesi('  wmic logicaldisk get freespace  ', 600);
   assert.equal(r.hata, undefined);
-  assert.deepEqual(r.govde, { tur: 'komut', komut: 'wmic logicaldisk get freespace' });
+  // 2026-09-21: gövde artık ZAMAN AŞIMI TAVANINI da taşır (izleyicideki tavansız
+  // `& cmd /c` çağrısı bir ağ sürücüsünde asılıp şeridi 16+ dk kilitlemişti).
+  // Tavan görev başına geçirilir; sabit kısa bir tavan uzun kurulumu bozardı.
+  assert.deepEqual(r.govde, {
+    tur: 'komut', komut: 'wmic logicaldisk get freespace',
+    zamanAsimiSn: m.guestZamanAsimiSn(600),
+  });
 });
 
 test('calistirGovdesi: boş/boşluk satırı görev YAZILMADAN reddedilir', () => {

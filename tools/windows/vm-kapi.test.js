@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const karar = require('../../src/windows/vm-kapi-karar.js');
 
 function tazeKok() {
   const k = fs.mkdtempSync(path.join(os.tmpdir(), 'vmkapi-'));
@@ -91,8 +92,16 @@ test('UÇTAN UCA: çıkış 0 ama ekran yoksa KALDI (çıkış kodu kanıt deği
 });
 
 test('beklerken izleyici ÖLÜRSE sonsuza kadar beklenmez', async () => {
+  // BAYAT TESTTİ (düzeltildi 2026-09-21). Test 120 sn'lik bayat kalple çağırıyordu
+  // ve `durum:'bozuk'` bekliyordu. Kök neden commit b6946ef: `bekle()` izleyiciyi
+  // `{gorevUcusta:true}` ile sorguluyor, o yolda eşik KALP_MESGUL_SN = 300 sn.
+  // Yani 120 sn'lik kalp artık AYAKTA sayılıyor; bekleme "ölü" diyemeden 60 sn'lik
+  // görev tavanına takılıp 'zaman-asimi' dönüyordu (60 sn süren, yanlış çöken test).
+  // KOD DOĞRUYDU, TEST BAYATTI. Eşik artık sabit yazılmıyor — karar modülünden
+  // türetiliyor ki eşik bir daha değişince test kendiliğinden doğru kalsın.
   const { kok, mod } = tazeKok();
-  kalpAt(kok, 120000);           // zaten bayat
+  const bayatMs = (karar.KALP_MESGUL_SN + 60) * 1000;
+  kalpAt(kok, bayatMs);          // meşgul eşiğini de AŞAN kalp → gerçekten ölü
   const kimlik = mod.gorevYaz({ tur: 'ekran' });
   const k = await mod.bekle(kimlik, 60);
   assert.strictEqual(k.durum, 'bozuk');

@@ -68,8 +68,14 @@ Güvenlik sınırları (kod kilitli, `vm-kopru-sunucu.test.js` 12 testle çivili
    sonuç vermez.
 3. **Mac'te doğrula:**
    ```bash
-   node tools/windows/vm-kapi.js hazir     # {"durum":"ayakta","yasSn":3}
+   node tools/windows/vm-kapi.js hazir
+   # {"durum":"ayakta","yasSn":3,"serit":"akiyor","seritYasSn":2}
    ```
+   **`durum` tek başına yeterli DEĞİLDİR** (2026-09-21 dersi): kalp atışı ayrı işte
+   koştuğu için ana döngü kilitliyken de "ayakta" görünür. `serit` alanı ana döngünün
+   ilerleyip ilerlemediğini söyler — `akiyor`/`calisiyor` sağlam, `tikali` arıza,
+   `bilinmiyor` ise guest'te ESKİ izleyici var (bkz. YUKSELTME.md).
+   Çıkış kodları: `0` sağlam · `3` izleyici yok/ölü · `5` ayakta ama şerit tıkalı.
 
 Paylaşılan klasörün çalıştığı bir kurulumda (x64 misafir) izleyici `-Kok <paylaşım yolu>`
 ile de koşar; köprü sunucusuna gerek kalmaz. İki mod da aynı dosya düzenini kullanır.

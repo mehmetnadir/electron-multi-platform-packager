@@ -73,12 +73,12 @@ function vmx() {
   return adaylar[0];
 }
 
-function kalpMs() {
-  try {
-    const ham = fs.readFileSync(KALP_DOSYASI, 'utf8').trim();
-    const t = Date.parse(ham);
-    return Number.isFinite(t) ? t : null;
-  } catch { return null; }
+// KALP DOSYASI ARTIK ŞERİT DAMGASI DA TAŞIR (2026-09-21).
+// Eski izleyici çıplak ISO yazıyordu, yenisi JSON yazıyor; ayrıştırma saf katmanda
+// (karar.kalpAyristir) ve İKİ biçimi de okur — yükseltilmemiş bir makine kopmaz.
+function kalpOku() {
+  try { return karar.kalpAyristir(fs.readFileSync(KALP_DOSYASI, 'utf8')); }
+  catch { return { kalpMs: null, dongu: null }; }
 }
 
 // Paylaşılan klasör bu host+misafir birleşiminde YOK (Fusion 13 / Apple Silicon /
@@ -92,8 +92,8 @@ function izleyiciKomutu() {
 
 function hazirMi() {
   dizinleriKur();
-  const r = karar.izleyiciDurumu(kalpMs(), Date.now());
-  return r;
+  const k = kalpOku();
+  return karar.izleyiciDurumu(k.kalpMs, Date.now(), { dongu: k.dongu });
 }
 
 function gorevYaz(govde) {
@@ -118,8 +118,14 @@ async function bekle(kimlik, zamanAsimiSn) {
     if (k.durum !== 'bekleniyor') return k;
     // İzleyici bu sırada ölürse sessizce beklemeyelim. Ama görev UÇUŞTA:
     // uzun bir indirme/kurulum sırasında susması normaldir (eşik 300 sn).
-    const i = karar.izleyiciDurumu(kalpMs(), Date.now(), { gorevUcusta: true });
+    // ŞERİT AYRI EKSEN: kalp taze olsa da ana döngü ilerlemiyor olabilir — o zaman
+    // burada beklemenin anlamı yok, sebebi söyleyip çıkarız (2026-09-21 arızası).
+    const k2 = kalpOku();
+    const i = karar.izleyiciDurumu(k2.kalpMs, Date.now(), { gorevUcusta: true, dongu: k2.dongu });
     if (i.uyari) console.log(`   … ${i.uyari}`);
+    if (i.serit === 'tikali') {
+      return { durum: 'bozuk', sebep: `izleyici ayakta ama ŞERİT TIKALI: ${i.uyari || ''}`.trim(), serit: i.serit, seritYasSn: i.seritYasSn };
+    }
     if (i.durum !== 'ayakta') {
       return { durum: 'bozuk', sebep: `izleyici ${i.durum}: ${i.sebep || ''}`.trim() };
     }
@@ -221,7 +227,13 @@ async function ana() {
   if (komut === 'hazir') {
     const r = hazirMi();
     console.log(JSON.stringify(r, null, 2));
-    process.exit(r.durum === 'ayakta' ? 0 : 3);
+    // ÜÇ AYRI ÇIKIŞ KODU — "ayakta" tek başına yeşil sayılmaz artık:
+    //   0 ayakta + şerit akıyor/çalışıyor/bilinmiyor
+    //   3 izleyici yok ya da ölü
+    //   5 izleyici AYAKTA ama ŞERİT TIKALI (2026-09-21 arızasının imzası:
+    //     kalp taze, ana döngü kilitli — bekçi bunu yeşil sayarsa yine kaçırır)
+    if (r.durum !== 'ayakta') process.exit(3);
+    process.exit(r.serit === 'tikali' ? 5 : 0);
   }
   if (komut === 'baslat') { kapiBekcisi('baslat'); baslat(); return; }
   if (komut === 'uyut') { kapiBekcisi('uyut'); uyut(); return; }
@@ -254,9 +266,11 @@ async function ana() {
       govde = { tur: 'kur', dosya: ad, surecAdi: bayrak('surec', 'Super Monsters 4'), bekleSn: 25 };
       aciklama = `${(fs.statSync(kaynak).size / 1e6).toFixed(0)} MB köprüden`;
     }
+    const kurTavan = Number(bayrak('zaman-asimi', '1800'));
+    govde.zamanAsimiSn = karar.guestZamanAsimiSn(kurTavan);
     const kimlik = gorevYaz(govde);
-    console.log(`görev ${kimlik} [${MAKINE}] — kuruluyor (${aciklama})`);
-    const k = await bekle(kimlik, Number(bayrak('zaman-asimi', '1800')));
+    console.log(`görev ${kimlik} [${MAKINE}] — kuruluyor (${aciklama}; guest tavanı ${govde.zamanAsimiSn} sn)`);
+    const k = await bekle(kimlik, kurTavan);
     console.log(JSON.stringify(k, null, 2));
     process.exit(k.durum === 'gecti' ? 0 : 1);
   }
@@ -273,11 +287,12 @@ async function ana() {
     // Ekran/süreç kanıtı BEKLENMEZ — izleyici bu dalda beklenenKanit=false döner.
     // Komut TEK argüman olarak gelir (tırnak içinde). Kalan argv bayraklara aittir —
     // 'hostname --zaman-asimi 90' kazası (değer komuta yapışıp `hostname 90` oldu) bu yüzden.
-    const { govde, hata } = karar.calistirGovdesi(process.argv[3]);
+    const hostTavan = Number(bayrak('zaman-asimi', '600'));
+    const { govde, hata } = karar.calistirGovdesi(process.argv[3], hostTavan);
     if (hata) { console.error(`komut reddedildi: ${hata}`); process.exit(2); }
     const kimlik = gorevYaz(govde);
-    console.log(`görev ${kimlik} [${MAKINE}] — ${govde.komut.slice(0, 120)}`);
-    const k = await bekle(kimlik, Number(bayrak('zaman-asimi', '600')));
+    console.log(`görev ${kimlik} [${MAKINE}] — ${govde.komut.slice(0, 120)} (guest tavanı ${govde.zamanAsimiSn} sn / host ${hostTavan} sn)`);
+    const k = await bekle(kimlik, hostTavan);
     const s = sonucOku(kimlik);
     if (s) console.log(`çıkış ${s.cikis}\n${s.cikti || ''}`);
     else console.log(JSON.stringify(k, null, 2));
@@ -294,4 +309,4 @@ async function ana() {
 }
 
 if (require.main === module) ana().catch((e) => { console.error('HATA:', e.message); process.exit(1); });
-module.exports = { hazirMi, gorevYaz, sonucOku, bekle, KOK, D };
+module.exports = { hazirMi, gorevYaz, sonucOku, bekle, kalpOku, KOK, D };
