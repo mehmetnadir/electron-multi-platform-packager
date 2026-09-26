@@ -122,6 +122,16 @@ test('k4Birlestir: GÜNCEL-DEĞİL baskın; sonra GEÇTİ; hepsi ölçülemediys
   assert.equal(b.engeller, true);
   assert.equal(K.k4Birlestir(o2, { ...o2, kaynak: 'electron' }).engeller, false);
   assert.equal(K.k4Birlestir(), null);
+  // Aynı durumda cihaz öne geçer (APK'nın gerçek ortamı); Electron'unki not olarak kalır.
+  const de = { ...d, kaynak: 'electron', sebep: 'de' };
+  const b2 = K.k4Birlestir(de, d);
+  assert.equal(b2.kaynak, 'cihaz');
+  assert.ok(b2.notlar.some((n) => /electron: GÜNCEL-DEĞİL — de/.test(n)));
+  assert.equal(K.k4Birlestir({ ...g, kaynak: 'electron' }, { ...g, kaynak: 'cihaz' }).kaynak, 'cihaz');
+  assert.equal(K.k4Birlestir(de, g).kaynak, 'electron', 'GÜNCEL-DEĞİL yine baskın');
+  // Baskın olmayan cihazın APK KUSURU notu birleşik karara taşınır.
+  const oc = { ...o2, notlar: ['APK KUSURU: isOnline=false'] };
+  assert.ok(K.k4Birlestir(de, oc).notlar.includes('cihaz: APK KUSURU: isOnline=false'));
 });
 
 test('genelKararK4: RED > GÜNCEL-DEĞİL > engelleyen ÖLÇÜLEMEDİ > diğerleri; ATLANDI karar değiştirmez', () => {
@@ -221,6 +231,9 @@ async function sahteCdp(o) {
         const e = String(p.expression || '');
         if (e.includes('function domYokla')) return { result: { type: 'object', value: yoklama() } };
         if (e === 'location.href') return { result: { type: 'string', value: o.url } };
+        if (e.includes(C.INDIRME_KESIK_ANAHTAR)) return { result: { type: 'string', value: JSON.stringify(o.kesik || []) } };
+        if (e.includes(C.CEVRIMICI_ANAHTAR)) return { result: { type: 'string', value: JSON.stringify(o.cevrimici || []) } };
+        if (e.includes('CapacitorHttp.request')) return { result: { type: 'object', value: o.tani || null } };
         if (e.includes('sessionStorage.getItem')) return { result: { type: 'string', value: JSON.stringify(o.kayit || []) } };
         if (e.includes('outerHTML')) return { result: { type: 'string', value: '<html></html>' } };
         // --set-tum: sayfanın Node fs'i (nodeIntegration) — gerçek fs ile sahte SET ağacını okur.
@@ -395,13 +408,106 @@ test('cihaz K4 (sahte WebView): Network görmez, kaydedici DOLU yakalar → GÜN
     assert.equal(olcum.soket, 'webview_devtools_remote_4242');
     assert.ok(a.cagrilar.includes(`forward tcp:${t.port} localabstract:webview_devtools_remote_4242`), a.cagrilar.join(' | '));
     assert.ok(a.cagrilar.includes(`forward --remove tcp:${t.port}`), 'forward temizlenmeli');
-    assert.equal(t.betikler.length, 1, 'belge-başı kaydedici kurulmalı');
-    assert.match(t.betikler[0], /GetKitapGuncellemeBilgi/);
+    assert.equal(t.betikler.length, 2, 'belge-başı isOnline kancası + kaydedici kurulmalı');
+    assert.match(t.betikler[0], /isOnline/);
+    assert.match(t.betikler[1], /GetKitapGuncellemeBilgi/);
     assert.ok(t.yenileme >= 1);
     assert.equal(olcum.e7.durum, 'DOLU', JSON.stringify(olcum.e7));
     const k = K.k4Karari({ olcum, paketSurumleri: { 44187: 33 }, kaynak: 'cihaz' });
     assert.equal(k.durum, 'GUNCEL_DEGIL');
   } finally { await t.kapat(); }
+});
+
+test('cihaz K4 (sahte adb + WebView): motor isOnline=false (HEAD kök 403) → kanca kaydeder, soru cihazdan geçer, not APK KUSURU', async () => {
+  // 26.09 74451: ağ VALIDATED iken motorun açılış yoklaması (HEAD https://besegitim.com) CapacitorHttp
+  // köprüsünde 403 (Cloudflare challenge) → hata → isOnline=false → her soru "Network is offline".
+  const t = await sahteCdp({
+    url: 'https://localhost/', guncelleme: null,
+    kayit: [{ url: GURL(33), http: 200, govde: BOS(33), kanal: 'fetch' }],
+    cevrimici: [false],
+    kesik: ['https://localhost/_capacitor_http_interceptor_?u=https://x/ZKitapZipH/44187-34.zip'],
+    tani: {
+      url: 'https://besegitim.com', kopru: { hata: 'Failed to fetch' }, webviewUA: { http: 403, cf: 'challenge' }, yalin: { http: 200, cf: '' },
+    },
+  });
+  const a = sahteAdb();
+  try {
+    const olcum = await K.cihazK4Olc({ ...kisaSure, adbKos: a.adbKos, paket: 'com.yds.kitap', kanitDizin: kanitDizini(), cdpPort: t.port });
+    assert.match(t.betikler[0], /Object\.defineProperty\(window, 'isOnline'/);
+    assert.deepEqual(olcum.cevrimici.uygulama, [false]);
+    assert.equal(olcum.cevrimici.sabitlendi, true);
+    assert.equal(olcum.cevrimici.yoklama.webviewUA.http, 403);
+    assert.deepEqual(olcum.indirmeKesildi, ['https://localhost/_capacitor_http_interceptor_?u=https://x/ZKitapZipH/44187-34.zip']);
+    assert.equal(olcum.e7.durum, 'BOS', JSON.stringify(olcum.e7));
+    const k = K.k4Karari({ olcum, paketSurumleri: { 44187: 33 }, kaynak: 'cihaz' });
+    assert.equal(k.durum, 'GECTI');
+    assert.equal(k.kaynak, 'cihaz');
+    assert.ok(k.notlar.some((n) => /APK KUSURU/.test(n) && /köprüsü → Failed to fetch/.test(n)
+      && /WebView UA → HTTP 403 cf-mitigated: challenge/.test(n) && /yalın → HTTP 200/.test(n)), k.notlar.join(' | '));
+    assert.equal(K.yoklamaTanisi(null), '');
+    assert.equal(K.yoklamaTanisi({ url: '', hata: 'AppConfig yok' }), ' (tanı: AppConfig yok)');
+    assert.ok(a.cagrilar.includes(`forward --remove tcp:${t.port}`), 'forward temizlenmeli');
+  } finally { await t.kapat(); }
+});
+
+test('cihaz K4: menü beklemesi çevrimiçi açılışa göre uzun (varsayılan CIHAZ_MENU_SN), verilirse o', async () => {
+  const argv = [];
+  const a = sahteAdb();
+  const sahteAna = async (v) => { argv.push(...v); return 4; };
+  await K.cihazK4Olc({ adbKos: a.adbKos, paket: 'p', kanitDizin: kanitDizini(), cdpPort: 1, cdpAna: sahteAna });
+  assert.equal(argv[argv.indexOf('--menu-sn') + 1], String(K.CIHAZ_MENU_SN));
+  assert.ok(K.CIHAZ_MENU_SN >= 60, 'ölçülen 46 sn üstünde pay');
+  assert.ok(argv.includes('--cevrimici-sabitle') && argv.includes('--kaydedici'));
+  argv.length = 0;
+  await K.cihazK4Olc({ adbKos: a.adbKos, paket: 'p', kanitDizin: kanitDizini(), cdpPort: 1, cdpAna: sahteAna, menuSn: 7 });
+  assert.equal(argv[argv.indexOf('--menu-sn') + 1], '7');
+});
+
+test('cihaz K4: motor isOnline=true dediyse not düşmez, tanı sorulmaz', async () => {
+  const t = await sahteCdp({
+    url: 'https://localhost/', guncelleme: null,
+    kayit: [{ url: GURL(33), http: 200, govde: BOS(33), kanal: 'fetch' }],
+    cevrimici: [true],
+    tani: { url: 'https://besegitim.com', http: 403, cf: 'challenge' },
+  });
+  const a = sahteAdb();
+  try {
+    const olcum = await K.cihazK4Olc({ ...kisaSure, adbKos: a.adbKos, paket: 'com.yds.kitap', kanitDizin: kanitDizini(), cdpPort: t.port });
+    assert.deepEqual(olcum.cevrimici.uygulama, [true]);
+    assert.equal(olcum.cevrimici.yoklama, null);
+    const k = K.k4Karari({ olcum, paketSurumleri: { 44187: 33 }, kaynak: 'cihaz' });
+    assert.ok(!k.notlar.some((n) => /APK KUSURU/.test(n)));
+  } finally { await t.kapat(); }
+});
+
+test('isOnline kancası: motorun atadığı değer kaydedilir, okumada true döner; zip indirmesi kesilir; ikinci kurulum no-op', () => {
+  const depo = {};
+  const baglam = {
+    JSON, String, Promise, TypeError, decodeURIComponent,
+    sessionStorage: { getItem: (k) => (k in depo ? depo[k] : null), setItem: (k, v) => { depo[k] = String(v); } },
+  };
+  baglam.window = baglam;
+  vm.createContext(baglam);
+  vm.runInContext(C.CEVRIMICI_KAYNAK, baglam);
+  vm.runInContext(C.CEVRIMICI_KAYNAK, baglam);
+  vm.runInContext('window.isOnline = false;', baglam); // motorun açılış yoklaması düştü
+  assert.equal(vm.runInContext('window.isOnline', baglam), true);
+  assert.deepEqual(JSON.parse(depo[C.CEVRIMICI_ANAHTAR]), [false]);
+  // Güncelleme zip indirmesi (shim → CapacitorWebFetch, köprü adresi kodlu) kesilir; soru geçer.
+  vm.runInContext('window.CapacitorWebFetch = function (u) { return Promise.resolve(u); };', baglam);
+  const koprU = (u) => `https://localhost/_capacitor_http_interceptor_?u=${encodeURIComponent(u)}`;
+  const zip = vm.runInContext(`CapacitorWebFetch(${JSON.stringify(koprU('https://www.besegitim.com/Uploads/ZKitapZipH/72859-2.zip'))})`, baglam);
+  const soru = vm.runInContext(`CapacitorWebFetch(${JSON.stringify(koprU(GURL(33)))})`, baglam);
+  return Promise.all([zip.then(() => 'gecti', (e) => e.message), soru]).then(([z, q]) => {
+    assert.match(z, /indirmesi kesik/);
+    assert.equal(q, koprU(GURL(33)));
+    assert.deepEqual(JSON.parse(depo[C.INDIRME_KESIK_ANAHTAR]), ['https://localhost/_capacitor_http_interceptor_?u=https://www.besegitim.com/Uploads/ZKitapZipH/72859-2.zip']);
+    // Electron K4 ile aynı desen (kosum/main.js).
+    const main = fs.readFileSync(path.join(__dirname, 'kosum', 'main.js'), 'utf8');
+    assert.ok(main.includes(`const K4_INDIRME_DESENI = ${C.K4_INDIRME_DESENI.toString()};`), 'desen Electron K4 ile aynı olmalı');
+    assert.equal(C.argumanlar(['--cevrimici-sabitle', '1']).cevrimiciSabitle, true);
+    assert.equal(C.argumanlar([]).cevrimiciSabitle, false, 'varsayılan kapalı (ProBook/Electron yolu aynı)');
+  });
 });
 
 test('cihaz K4: WebView hata ayıklama soketi yok → ÖLÇÜLEMEDİ + gerekçe, forward denenmez', async () => {

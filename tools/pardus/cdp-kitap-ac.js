@@ -42,6 +42,15 @@
  *                   yeniden yükleme). CapacitorHttp fetch'i yerel köprüden geçirir, Network olayı
  *                   DOĞMAZ; kaydedici cevabı sayfa içinde yakalar (sessionStorage, gezinmede
  *                   kaybolmaz). Kayıtlar Network cevaplarıyla aynı yorumlayıcıdan geçer.
+ *   --cevrimici-sabitle 1  belge-başı `window.isOnline` kancası (Android cihaz K4). Motor açılışta
+ *                   bir kez `fetch(baseEndpointUrl,{method:'HEAD',mode:'no-cors'})` ile isOnline
+ *                   hesaplar, sonra http fetch'lerini `Network is offline` ile keser. CapacitorHttp
+ *                   bu HEAD'i yerel köprüden WebView başlıklarıyla geçirir; besegitim.com kökü buna
+ *                   HTTP ≥400 döner (Mac/srv21'den kök: 403 `cf-mitigated: challenge`), gövdesiz HEAD
+ *                   hatası köprüde FileNotFoundException olur → "Failed to fetch" → isOnline=false
+ *                   (ölçüldü 26.09, 74451, ağ VALIDATED; APK kusuru). Kanca motorun kendi kararını
+ *                   KAYDEDER (`cevrimici.uygulama`), okumada true döndürür: güncelleme sorusu cihazın
+ *                   gerçek ağ yığınından gider; güncelleme zip indirmesi Electron K4 gibi kesilir.
  *
  * SET TÜM ALT KİTAPLAR (KABUL_SET_TUM=1 → `--set-tum 1`, varsayılan KAPALI; iki kapı da bu bayrakla
  * çağırır): motor yalnız açılan kitabı sorar (SM2 Set: 58237 hiç sorulmadı). E7'den sonra, oturum
@@ -80,6 +89,7 @@ function argumanlar(argv) {
     aralikMs: 1000,
     hedefDeseni: '',
     kaydedici: false,
+    cevrimiciSabitle: false,
     setTum: false,
     setTumSn: 90,
   };
@@ -89,7 +99,7 @@ function argumanlar(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const k = argv[i];
     const v = argv[i + 1];
-    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; } else if (k === '--hedef-deseni') { a.hedefDeseni = v || ''; i += 1; } else if (k === '--kaydedici') { a.kaydedici = v === '1'; i += 1; } else if (k === '--set-tum') { a.setTum = v === '1'; i += 1; }
+    if (sayi[k]) { a[sayi[k]] = Number(v); i += 1; } else if (k === '--host') { a.host = v; i += 1; } else if (k === '--kanit') { a.kanit = v; i += 1; } else if (k === '--kurulum-koku') { a.kurulumKoku = v; i += 1; } else if (k === '--yeniden-yukle') { a.yenidenYukle = v !== '0'; i += 1; } else if (k === '--hedef-deseni') { a.hedefDeseni = v || ''; i += 1; } else if (k === '--kaydedici') { a.kaydedici = v === '1'; i += 1; } else if (k === '--cevrimici-sabitle') { a.cevrimiciSabitle = v === '1'; i += 1; } else if (k === '--set-tum') { a.setTum = v === '1'; i += 1; }
   }
   return a;
 }
@@ -289,6 +299,109 @@ async function kaydediciOku(cdp) {
   } catch (_) {
     return [];
   }
+}
+
+/** sessionStorage anahtarı — çevrimiçi kancası motorun isOnline atamalarını yazar. */
+const CEVRIMICI_ANAHTAR = 'empp-k4-cevrimici';
+/** sessionStorage anahtarı — kancanın kestiği güncelleme indirmeleri. */
+const INDIRME_KESIK_ANAHTAR = 'empp-k4-indirme-kesik';
+/** Electron K4 ile AYNI desen (tools/kabul/kosum/main.js K4_INDIRME_DESENI). */
+const K4_INDIRME_DESENI = /\/ZKitapZipH?\/|\.zip(?:[?#]|$)/i;
+
+/**
+ * Belge-başı `window.isOnline` kancası (`--cevrimici-sabitle 1`, yalnız Android cihaz K4). Motorun
+ * açılış yoklaması atadığı değer kaydedilir (sahadaki davranışın kanıtı), okumada true döner.
+ * Güncelleme sorusunun kendisine DOKUNMAZ: istek motorun kendi yolundan (CapacitorHttp) gider.
+ * Çevrimiçi motor DOLU cevapta güncelleme zip'ini indirmeye kalkar (74451: ~111 MB) → Electron K4
+ * gibi ZKitapZip(H)/*.zip indirmesi KESİLİR: android shim'in indiricisi `CapacitorWebFetch`i çağrı
+ * anında okur, o sarılır (köprü adresi `…interceptor_?u=<kodlu>` çözülüp denenir).
+ */
+const CEVRIMICI_KAYNAK = `(function () {
+  if (window.__emppK4Cevrimici) return;
+  window.__emppK4Cevrimici = true;
+  var ANAHTAR = ${JSON.stringify(CEVRIMICI_ANAHTAR)};
+  function kaydet(v) {
+    try {
+      var l = JSON.parse(sessionStorage.getItem(ANAHTAR) || '[]');
+      if (l.length < 20) { l.push(v === true || v === false ? v : String(v)); sessionStorage.setItem(ANAHTAR, JSON.stringify(l)); }
+    } catch (e) { /* depolama yok */ }
+  }
+  try {
+    Object.defineProperty(window, 'isOnline', { configurable: true, enumerable: true,
+      get: function () { return true; }, set: function (v) { kaydet(v); } });
+  } catch (e) { /* tanımlanamadı — motorun kendi değeri kalır */ }
+  var KESIK = ${JSON.stringify(INDIRME_KESIK_ANAHTAR)};
+  var ZIP = ${K4_INDIRME_DESENI.toString()};
+  function kesikKaydet(u) {
+    try {
+      var l = JSON.parse(sessionStorage.getItem(KESIK) || '[]');
+      if (l.length < 50) { l.push(String(u).slice(0, 200)); sessionStorage.setItem(KESIK, JSON.stringify(l)); }
+    } catch (e) { /* depolama yok */ }
+  }
+  function kes(f) {
+    if (typeof f !== 'function' || f.__emppK4Kes) return f;
+    var s = function (g) {
+      var u = typeof g === 'string' ? g : String((g && g.url) || g);
+      try { u = decodeURIComponent(u); } catch (e) { /* ham kalsın */ }
+      if (ZIP.test(u)) { kesikKaydet(u); return Promise.reject(new TypeError('EMPP kabul K4: güncelleme indirmesi kesik')); }
+      return f.apply(this, arguments);
+    };
+    s.__emppK4Kes = true;
+    return s;
+  }
+  var cwf = kes(window.CapacitorWebFetch);
+  try {
+    Object.defineProperty(window, 'CapacitorWebFetch', { configurable: true, enumerable: true,
+      get: function () { return cwf; }, set: function (v) { cwf = kes(v); } });
+  } catch (e) { /* tanımlanamadı */ }
+}());`;
+
+/**
+ * Motorun canlılık yoklamasını üç yoldan tekrarlar (yalnız motor isOnline=false dediyse; tanıdır,
+ * kararı değiştirmez): `kopru` = motorun gerçek yolu (Capacitor fetch köprüsü, HEAD) · `webviewUA` =
+ * eklentiyle aynı HEAD, WebView başlığıyla (köprü WebView başlıklarını taşır) · `yalin` = eklenti,
+ * başlıksız. Köprü HEAD'de gövde olmadığından HTTP ≥400'ü cevap değil hata yapar (Capacitor
+ * WebViewLocalServer: getErrorStream null → getInputStream FileNotFoundException).
+ */
+const CEVRIMICI_TANI = `(function () {
+  // app.config.js \`const AppConfig\` (global sözcüksel bağ, window özelliği DEĞİL — ölçüldü 26.09).
+  var A = typeof AppConfig !== 'undefined' ? AppConfig : window.AppConfig;
+  var C = window.Capacitor; var u = A && A.baseEndpointUrl;
+  if (!u || !C || !C.Plugins || !C.Plugins.CapacitorHttp) return { url: u || '', hata: 'AppConfig.baseEndpointUrl ya da CapacitorHttp yok' };
+  function hata(e) { return { hata: String((e && e.message) || e) }; }
+  function iste(ek) {
+    return C.Plugins.CapacitorHttp.request({ url: u, method: 'HEAD', headers: ek }).then(function (r) {
+      var h = r.headers || {};
+      return { http: r.status, cf: h['cf-mitigated'] || h['Cf-Mitigated'] || '' };
+    }, hata);
+  }
+  var kopru = typeof window.CapacitorWebFetch !== 'function' ? Promise.resolve(null)
+    : window.CapacitorWebFetch(location.origin + '/_capacitor_http_interceptor_?u=' + encodeURIComponent(u), { method: 'HEAD' })
+      .then(function (r) { return { http: r.status }; }, hata);
+  return Promise.all([kopru, iste({ 'User-Agent': navigator.userAgent }), iste({})]).then(function (l) {
+    return { url: u, kopru: l[0], webviewUA: l[1], yalin: l[2] };
+  });
+}())`;
+
+/** Kancanın kaydettiği isOnline atamaları + (false varsa) yoklama tanısı. Fırlatmaz. */
+async function cevrimiciOku(cdp) {
+  const c = { sabitlendi: true, uygulama: [], indirmeKesildi: [], yoklama: null };
+  const oku = async (anahtar) => {
+    try {
+      const ham = await cdp.degerlendir(
+        `(() => { try { return sessionStorage.getItem(${JSON.stringify(anahtar)}) || '[]'; } catch (e) { return '[]'; } })()`,
+        5000,
+      );
+      const l = JSON.parse(String(ham || '[]'));
+      return Array.isArray(l) ? l : [];
+    } catch (_) { return []; }
+  };
+  c.uygulama = await oku(CEVRIMICI_ANAHTAR);
+  c.indirmeKesildi = (await oku(INDIRME_KESIK_ANAHTAR)).map(String);
+  if (c.uygulama.includes(false)) {
+    try { c.yoklama = await cdp.degerlendir(CEVRIMICI_TANI, 45000); } catch (e) { c.yoklama = { hata: tekSatir(e.message, 200) }; }
+  }
+  return c;
 }
 
 /**
@@ -509,16 +622,23 @@ async function kos(a, sonuc) {
     cdp.gonder('Log.enable', {}, 10000).catch(() => {}),
     cdp.gonder('Page.enable', {}, 10000).catch(() => {}),
   ]);
-  // --kaydedici: belge-başı kaydedici + bir kez yeniden yükleme (açılıştaki soru da kaydedilsin).
-  if (a.kaydedici) {
+  // --kaydedici / --cevrimici-sabitle: belge-başı betikler + bir kez yeniden yükleme (açılıştaki
+  // soru da kaydedilsin; motorun açılış canlılık yoklaması kancanın içinden geçsin).
+  const betikler = [
+    ...(a.cevrimiciSabitle ? [CEVRIMICI_KAYNAK] : []),
+    ...(a.kaydedici ? [KAYDEDICI_KAYNAK] : []),
+  ];
+  if (betikler.length) {
     try {
-      await cdp.gonder('Page.addScriptToEvaluateOnNewDocument', { source: KAYDEDICI_KAYNAK }, 10000);
+      for (const source of betikler) await cdp.gonder('Page.addScriptToEvaluateOnNewDocument', { source }, 10000);
       await cdp.gonder('Page.reload', { ignoreCache: false }, 10000);
-      sonuc.kaydedici = { kuruldu: true };
+      if (a.kaydedici) sonuc.kaydedici = { kuruldu: true };
+      if (a.cevrimiciSabitle) sonuc.cevrimici = { sabitlendi: true };
       sonuc.yenidenYuklendi = true;
       await bekle(Math.max(200, a.aralikMs * 2));
     } catch (e) {
-      sonuc.kaydedici = { kuruldu: false, hata: tekSatir(e.message, 200) };
+      if (a.kaydedici) sonuc.kaydedici = { kuruldu: false, hata: tekSatir(e.message, 200) };
+      if (a.cevrimiciSabitle) sonuc.cevrimici = { sabitlendi: false, hata: tekSatir(e.message, 200) };
     }
   }
 
@@ -677,6 +797,9 @@ async function ana(argv = process.argv.slice(2), yaz = (s) => process.stdout.wri
     sonuc.kaydedici = { ...(sonuc.kaydedici || {}), kayit: kayit.length };
     cevaplar = kayitlariBirlestir(sonuc.dinleyici.hamlar(), kayit).map(guncellemeCevabiCoz);
   }
+  if (a.cevrimiciSabitle && sonuc.cdp && sonuc.cevrimici && sonuc.cevrimici.sabitlendi) {
+    sonuc.cevrimici = await cevrimiciOku(sonuc.cdp);
+  }
   const e7 = sonuc.dinleyici ? e7Ozetle(cevaplar) : { durum: 'OLCULEMEDI', ayrinti: 'CDP oturumu kurulamadı', oneri: '' };
   let st = null;
   if (a.setTum) st = await setTumOlc(sonuc, a, secenek);
@@ -713,4 +836,5 @@ module.exports = {
   GUNCELLEME_DESENI, KITAP_URL_DESENI, CIKIS, argumanlar, tekSatir, guncellemeCevabiCoz, e7Ozetle,
   sayfaTuru, kartSec, tiklamaIfadesi, ana,
   KAYDEDICI_ANAHTAR, KAYDEDICI_KAYNAK, kayitlariBirlestir, desenleHedefSec,
+  CEVRIMICI_ANAHTAR, CEVRIMICI_KAYNAK, CEVRIMICI_TANI, INDIRME_KESIK_ANAHTAR, K4_INDIRME_DESENI,
 };

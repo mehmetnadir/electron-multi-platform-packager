@@ -547,6 +547,7 @@ function k4Raporu(kararlar, olcumler, paketSurum, setTumKarar = null) {
       kaynak: o.kaynak, e6: o.e6, e7: o.e7, cevaplar: o.cevaplar, cdpPort: o.cdpPort || null, sureSn: o.sureSn,
       kanit: o.kanit, profil: o.profil || null, profilBos: o.profilBos, soket: o.soket || null,
       indirmeKesildi: o.indirmeKesildi || [], etkinlesme: (o.etkinlesme || []).length, kaydedici: o.kaydedici || null,
+      cevrimici: o.cevrimici || null,
     })),
   };
 }
