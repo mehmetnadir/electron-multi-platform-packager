@@ -375,11 +375,19 @@ KURU=1 KURU_DIZIN="$K" ARALIK_SN=0.3 IMZA_CAFILE="$F/test-ca.crt" IMZA_BEKLENEN_
 ( KURU=1 KURU_DIZIN="$K" ARALIK_SN=0.3 IMZA_CAFILE="$F/test-ca.crt" IMZA_BEKLENEN_CN="Kuru Test Imzaci" \
   TAVAN_SN=1 EXE_REMOVE_KOMUTU="$(er_fake)" \
   bash "$BETIK" bekle-ve-tak "$F/kitap.exe" --tavan-dk 1 --tavan2-dk 2 > "$L" 2>&1 ) & PID=$!
-sleep 3; kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+# DÜZELTME 26.09: sabit "sleep 3" ağır yüklü makinede 1. deneme tavanı (TAVAN_SN=1,
+# saniye çözünürlüklü date +%s ile gerçekte ~2 sn) + exe-remove + hazırla + 2. deneme
+# başlangıcını garanti etmiyordu → flaky FAIL. Satırı bekleyerek yakala (60×0,25 sn tavan).
+for _i in $(seq 1 60); do icerir "$L" "tavan 120 sn (bu deneme)" && break; sleep 0.25; done
+kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
 kontrol "(v) --tavan2-dk 2 (TAVAN2_SN env yok) → 2. deneme tavanı 120 sn" \
   icerir "$L" "tavan 120 sn (bu deneme)"
 kontrol "(v) --tavan-dk/--tavan2-dk yanlış değer → çıkış 2" bash -c \
   'KURU=1 bash "$0" bekle-ve-tak "$1" --tavan2-dk abc >/dev/null 2>&1; [ $? = 2 ]' "$BETIK" "$F/kitap.exe"
+
+# (vi) GERİLEME 26.09: CANLI exe-remove onaysız (--yes yok) no-op'tu → 3 sa tavanı dolunca yuva temizlenmiyordu.
+kontrol "(vi) CANLI exe-remove komutu onaylı (--yes) ve yalnız windows" \
+  grep -q 'EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove --windows --yes \$YUVA_ID"' "$BETIK"
 
 echo "SONUÇ: $PASS PASS / $FAIL FAIL"
 [ "$FAIL" = 0 ]

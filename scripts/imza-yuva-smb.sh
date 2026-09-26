@@ -149,7 +149,7 @@ else
   IMZALI_DIZIN="${IMZALI_DIZIN:-$(cd "$(dirname "$YEREL")" && pwd)/imzali}"
   unset IMZA_CAFILE IMZA_BEKLENEN_CN KURU_TAKAS_BOZ KURU_BOZ_DOSYA EXE_REMOVE_KOMUTU BILDIR_KOMUTU # test ayarları CANLIda yok
   TETIK_KOMUTU="yayincilikadm book exe-create $YUVA_ID --wait 0" # SABİT
-  EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove $YUVA_ID"     # SABİT — 2. denemeden önce yuva temizliği
+  EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove --windows --yes $YUVA_ID"  # SABİT (--yes: onaysız no-op) — 2. denemeden önce yuva temizliği
   BILDIR_KOMUTU="bildir"                                         # SABİT — 2 denemede de tavan dolarsa
   log "CANLI KİP — yuva: $KOK/$YUVA_ID/windows.exe"
   sleep 5
