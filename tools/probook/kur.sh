@@ -7,7 +7,7 @@
 #      volume'ünden aktarır (Mac şeridiyle BİREBİR aynı ikililer; ProBook'ta indirme yok)
 #   3) kayıtlı logoları (Mac paketleyici /api/logos) ~/empp-serit/logolar'a eşler
 #   4) kendini ProBook'ta `probook` kipinde koşturur (aşağıda)
-#   5) kaynak arşivini eşler (arsiv-esle.sh; Mac arşivi otorite, ProBook birebir kopya)
+#   5) kaynak arşivini + 43e23 motor kanoniğini eşler (arsiv-esle.sh; Mac otorite, yalnız LAN)
 # ProBook kipi (ssh ile):
 #   disk kapısı · ~/empp-serit ağacı · Node 22 x64 resmi tarball (sha256 doğrulamalı, SİSTEME
 #   KURULMAZ) · npm ci (lock değiştiyse) · /usr/local/bin/appimagetool sarmalayıcısı (tek dosya;

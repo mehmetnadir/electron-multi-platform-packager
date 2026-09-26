@@ -283,7 +283,8 @@ function macAraciSaglamMi() {
 }
 
 // PROBOOK ŞERİDİ (2026-09-26, plan karar 2): ProBook sağlıklıyken (nabız ≤10 dk, ajan ayakta,
-// API erişilebilir, disk kapısı, kaynak arşivi eşit) Mac `pardus` yeteneğini DÜŞÜRÜR; değilse
+// API erişilebilir, kaynak arşivi eşit, 43e23 motor kanoniği eşit, disk kapısı) Mac `pardus`
+// yeteneğini DÜŞÜRÜR; değilse
 // alır. Kod varsayılanı KAPALI (EMPP_PROBOOK_SERIT=1 ile açılır) → kapalıyken null, davranış aynı.
 // Nabız ARKA PLANDA okunur (heartbeat beklemez); ilk karar main()'de ilk heartbeat'ten önce.
 let seritDenetcisi = seritDenetcisiKur({
@@ -292,6 +293,12 @@ let seritDenetcisi = seritDenetcisiKur({
   log,
   olayBildir: olayBildirici({ env: process.env, log: warn }),
   arsivOzetiFn: () => require('./kaynak-arsivi').arsivOzeti().ozet,
+  // Mac docker şeridinin kullandığı kanonik (EMPP_MOTOR_KANONIK ya da ~/.empp-agent/motor),
+  // doğrulanmış sha12.
+  motorSha12Fn: () => {
+    const k = require('../packaging/motor-surumu').kanonikOzetEsz();
+    return k ? k.sha12 : null;
+  },
   arsivEsle: arsivEsleyici({
     betik: path.join(__dirname, '..', '..', 'tools', 'probook', 'arsiv-esle.sh'),
     host: probookHostSec(process.env),

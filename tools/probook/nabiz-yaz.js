@@ -11,6 +11,8 @@
  *    süreç ayakta ama internet/jeton yoksa ProBook iş kiralayamaz — Mac devralmalı.
  *  - `arsivOzeti`: ~/.empp-agent/kaynak-arsivi özeti; Mac'inkiyle farklıysa Mac alır
  *    (ProBook arşivdeki kitabı İmpark exe'sinden, ESKİ arayüzle üretmesin).
+ *  - `motorSha12`: 43e23 motor kanoniğinin (EMPP_MOTOR_KANONIK) DOĞRULANMIŞ sha12'si; yoksa null.
+ *    Mac'inkiyle farklıysa Mac alır (ProBook paketinde motor değişmez ya da başka motor girer).
  */
 const fs = require('fs');
 const os = require('os');
@@ -46,10 +48,14 @@ function pidCanli(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-function nabizOlustur({ simdi, runnerPid, runnerCanli, commit, baslama, disk, kabulgizli, bayraklar, api, arsivOzeti, kuyrukta }) {
+function nabizOlustur({
+  simdi, runnerPid, runnerCanli, commit, baslama, disk, kabulgizli, bayraklar, api, arsivOzeti, kuyrukta,
+  motorSha12,
+}) {
   return {
     api: api || 'olculmedi',
     arsivOzeti: arsivOzeti || null,
+    motorSha12: motorSha12 || null,
     kuyrukta: Number.isFinite(kuyrukta) ? kuyrukta : null,
     zaman: new Date(simdi).toISOString(),
     ajan: runnerCanli ? 'active' : 'olu',
@@ -74,6 +80,17 @@ function atomikYaz(dosya, nesne) {
 function arsivOzetiOku(kok) {
   try {
     return require(path.join(__dirname, '..', '..', 'src', 'agent', 'kaynak-arsivi.js')).arsivOzeti(kok).ozet;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** ProBook motor kanoniğinin doğrulanmış sha12'si (motor-surumu.js yoksa null — eski kurulum). */
+function motorSha12Oku(kanonikYol) {
+  try {
+    const m = require(path.join(__dirname, '..', '..', 'src', 'packaging', 'motor-surumu.js'));
+    const o = m.kanonikOzetEsz(kanonikYol);
+    return o ? o.sha12 : null;
   } catch (_) {
     return null;
   }
@@ -114,9 +131,14 @@ function apiYoklayici({ api, tokenDosyasi, fetchImpl = (...a) => fetch(...a), es
   return { yokla, durum: () => durum, kuyrukta: () => kuyrukta };
 }
 
-function birKez({ dosya, runnerPid, commit, baslama, serit, home, simdi = Date.now(), api = null, arsivKok = null, kuyrukta = null }) {
+function birKez({
+  dosya, runnerPid, commit, baslama, serit, home, simdi = Date.now(), api = null, arsivKok = null,
+  kuyrukta = null, motorKanonik = null,
+}) {
   const n = nabizOlustur({
     api, kuyrukta, arsivOzeti: arsivOzetiOku(arsivKok || path.join(home, '.empp-agent', 'kaynak-arsivi')),
+    motorSha12: motorSha12Oku(motorKanonik || process.env.EMPP_MOTOR_KANONIK
+      || path.join(home, '.empp-agent', 'motor', 'kanonik.json')),
     simdi, runnerPid, runnerCanli: pidCanli(runnerPid), commit, baslama,
     disk: diskOlc(path.join(serit, 'work')), kabulgizli: kabulgizliSay(home),
     bayraklar: {
@@ -154,4 +176,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { diskOlc, kabulgizliSay, pidCanli, nabizOlustur, atomikYaz, birKez, apiYoklayici, arsivOzetiOku };
+module.exports = {
+  diskOlc, kabulgizliSay, pidCanli, nabizOlustur, atomikYaz, birKez, apiYoklayici, arsivOzetiOku,
+  motorSha12Oku,
+};

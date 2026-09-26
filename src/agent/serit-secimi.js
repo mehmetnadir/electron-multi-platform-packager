@@ -42,10 +42,13 @@ function nabizAyristir(metin) {
  * @param {boolean|null} [p.oncekiMacAlir] önceki karar (olay üretimi için)
  * @param {number|null} [p.sunucuSonGorulmeMs] sunucu ajan listesindeki son görülme (varsa)
  * @param {string|null} [p.arsivOzeti]     Mac kaynak arşivinin özeti (null = kıyas yok)
+ * @param {string|null} [p.motorSha12]     Mac 43e23 motor kanoniğinin doğrulanmış sha12'si
+ *                                         (null = kıyas yok)
  * @returns {{macPardusAlsin:boolean, probookSaglikli:boolean, sebep:string, olay:null|'devir'|'geri-birak'}}
  */
 function seritKarari({
   nabiz, simdi, oncekiMacAlir = null, sunucuSonGorulmeMs = null, arsivOzeti = null,
+  motorSha12 = null,
   esikMs = ESIK_MS, diskMinGb = DISK_MIN_GB, dolulukMax = DOLULUK_MAX,
 }) {
   let sebep = '';
@@ -61,6 +64,12 @@ function seritKarari({
   else if (arsivOzeti && nabiz.arsivOzeti && nabiz.arsivOzeti !== arsivOzeti) {
     sebep = `kaynak arşivi farklı (ProBook ${String(nabiz.arsivOzeti).slice(0, 8)} ≠ Mac ${String(arsivOzeti).slice(0, 8)})`;
   } else if (arsivOzeti && !nabiz.arsivOzeti) sebep = 'ProBook kaynak arşivi özeti yok';
+  // Motor (2026-09-26, E3): iki şeridin 43e23 kanoniği eşit değilse aynı kaynak iki makinede farklı
+  // motorla paketlenir (ProBook'ta kanonik yoksa motor HİÇ değişmez). Mac kanoniği otorite; Mac'te
+  // yoksa kıyas yok (Mac'e devretmek daha iyi bir motor getirmez).
+  else if (motorSha12 && nabiz.motorSha12 && nabiz.motorSha12 !== motorSha12) {
+    sebep = `motor kanoniği farklı (ProBook ${nabiz.motorSha12} ≠ Mac ${motorSha12})`;
+  } else if (motorSha12 && !nabiz.motorSha12) sebep = 'ProBook motor kanoniği yok';
   else if (Number.isFinite(nabiz.diskBosGb) && nabiz.diskBosGb < diskMinGb) {
     sebep = `disk kapısı düşük (${nabiz.diskBosGb} GB < ${diskMinGb} GB)`;
   } else if (Number.isFinite(nabiz.dolulukYuzde) && nabiz.dolulukYuzde > dolulukMax) {
@@ -182,11 +191,12 @@ function arsivEsleyici({ betik, host, log = () => {}, aralikMs = 10 * 60 * 1000,
  * pardus yoksa null döner (runner davranışı birebir eskisi gibi).
  * - `tazele()` async, kendini `aralikMs` ile kısar, aynı anda tek okuma; sonuç `karar()`.
  * - `uygula(caps)` SENKRON: son kararı uygular. İlk okumadan önce karar yok → Mac alır.
- * - Olay (devir / geri-bırak) → `log` + `olayBildir`. Arşiv farkında `arsivEsle` tetiklenir.
+ * - Olay (devir / geri-bırak) → `log` + `olayBildir`. Arşiv ya da motor kanoniği farkında
+ *   `arsivEsle` tetiklenir (eşleyici ikisini birlikte taşır).
  */
 function seritDenetcisiKur({
   env = process.env, caps = [], okuyucu = null, saat = () => Date.now(), log = () => {},
-  olayBildir = null, arsivOzetiFn = null, arsivEsle = null, aralikMs = 60000,
+  olayBildir = null, arsivOzetiFn = null, motorSha12Fn = null, arsivEsle = null, aralikMs = 60000,
 } = {}) {
   if (env.EMPP_PROBOOK_SERIT !== '1' || !Array.isArray(caps) || !caps.includes('pardus')) return null;
   const oku = okuyucu || nabizOkuyucuAsenkron({
@@ -210,13 +220,21 @@ function seritDenetcisiKur({
       try { nabiz = await oku(); } catch (_) { nabiz = null; }
       let arsivOzeti = null;
       try { arsivOzeti = arsivOzetiFn ? arsivOzetiFn() : null; } catch (_) { arsivOzeti = null; }
-      const yeni = seritKarari({ nabiz, simdi: saat(), oncekiMacAlir: karar ? karar.macPardusAlsin : null, arsivOzeti });
+      let motorSha12 = null;
+      try { motorSha12 = motorSha12Fn ? motorSha12Fn() : null; } catch (_) { motorSha12 = null; }
+      const yeni = seritKarari({
+        nabiz, simdi: saat(), oncekiMacAlir: karar ? karar.macPardusAlsin : null,
+        arsivOzeti, motorSha12,
+      });
       karar = yeni;
       if (yeni.olay) {
         log(olayMetni(yeni));
         if (olayBildir) { try { olayBildir(yeni); } catch (_) { /* bildirim üretimi düşürmez */ } }
       }
-      if (arsivEsle && nabiz && /kaynak arşivi|arşivi özeti yok/.test(yeni.sebep)) arsivEsle(yeni.sebep);
+      // Eşleyici arşivle birlikte motor kanoniğini de taşır (arsiv-esle.sh, yalnız LAN).
+      if (arsivEsle && nabiz && /kaynak arşivi|arşivi özeti yok|motor kanoniği/.test(yeni.sebep)) {
+        arsivEsle(yeni.sebep);
+      }
       return karar;
     })().finally(() => { suren = null; });
     return suren;

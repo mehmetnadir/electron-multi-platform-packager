@@ -257,3 +257,37 @@ test('birleştirme 26.09: zip aynı, impark_kaynagi farklı → bayat kararı ay
   assert.equal(k.macPardusAlsin, true);
   assert.match(k.sebep, /kaynak arşivi farklı/);
 });
+
+// ALTINCI KOŞUL — motor eşit (2026-09-26, E3): iki şeridin 43e23 kanoniği farklıysa ProBook seçilmez.
+test('motor kanoniği: Mac sha12 verildiyse ProBook sha12 eşit olmalı; yoksa/farklıysa Mac alır', () => {
+  const k = '03e8af70a0f3';
+  assert.equal(seritKarari({ nabiz: nabiz({ motorSha12: k }), simdi: T, motorSha12: k }).probookSaglikli, true);
+  const farkli = seritKarari({ nabiz: nabiz({ motorSha12: 'f44371530000' }), simdi: T, motorSha12: k });
+  assert.equal(farkli.macPardusAlsin, true);
+  assert.equal(farkli.sebep, 'motor kanoniği farklı (ProBook f44371530000 ≠ Mac 03e8af70a0f3)');
+  assert.equal(seritKarari({ nabiz: nabiz(), simdi: T, motorSha12: k }).sebep, 'ProBook motor kanoniği yok');
+  assert.equal(seritKarari({ nabiz: nabiz({ motorSha12: null }), simdi: T, motorSha12: k }).macPardusAlsin, true);
+  assert.equal(seritKarari({ nabiz: nabiz({ motorSha12: 'f44371530000' }), simdi: T }).probookSaglikli, true,
+    'Mac kanoniği yoksa kıyas yok (devretmek daha iyi motor getirmez)');
+  // arşiv farkı önce raporlanır; ikisi de eşitse disk vb. sonraki koşullar sürer
+  assert.match(seritKarari({ nabiz: nabiz({ arsivOzeti: 'a', motorSha12: 'x' }), simdi: T, arsivOzeti: 'b', motorSha12: k }).sebep, /kaynak arşivi farklı/);
+  assert.match(seritKarari({ nabiz: nabiz({ motorSha12: k, diskBosGb: 1 }), simdi: T, motorSha12: k }).sebep, /disk kapısı/);
+});
+
+test('denetçi: motor farkında eşleyici tetiklenir; eşitlenince ProBook döner; motorSha12Fn hatası kıyası kapatır', async () => {
+  const { seritDenetcisiKur } = require('./serit-secimi');
+  let cevap = nabiz({ motorSha12: null }); const tetik = []; let fn = () => '03e8af70a0f3';
+  const d = seritDenetcisiKur({
+    env: { EMPP_PROBOOK_SERIT: '1' }, caps: ['pardus'], saat: () => T, aralikMs: 0,
+    okuyucu: async () => cevap, motorSha12Fn: () => fn(), arsivEsle: (s) => tetik.push(s),
+  });
+  await d.tazele();
+  assert.equal(d.karar().macPardusAlsin, true);
+  assert.deepEqual(tetik, ['ProBook motor kanoniği yok']);
+  cevap = nabiz({ motorSha12: '03e8af70a0f3' }); await d.tazele();
+  assert.equal(d.karar().probookSaglikli, true);
+  assert.equal(d.karar().olay, 'geri-birak');
+  cevap = nabiz({ motorSha12: 'aaaaaaaaaaaa' }); fn = () => { throw new Error('okunamadı'); };
+  await d.tazele();
+  assert.equal(d.karar().probookSaglikli, true, 'Mac kanoniği okunamazsa kıyas yapılmaz');
+});

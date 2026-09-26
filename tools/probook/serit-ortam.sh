@@ -22,6 +22,9 @@ export EMPP_LOGO_PORT="${EMPP_LOGO_PORT:-3095}"
 export EMPP_LOGO_DIZIN="${EMPP_LOGO_DIZIN:-$SERIT/logolar}"
 export PACKAGER_API="${PACKAGER_API:-http://127.0.0.1:$EMPP_LOGO_PORT}"
 export EMPP_SOURCE_CACHE="${EMPP_SOURCE_CACHE:-$SERIT/cache/kaynak}"
+# 43e23 motor kanonigi (2026-09-26, E3): Mac docker seridiyle AYNI degisken. Kanonik Mac'ten LAN ile
+# eslenir (arsiv-esle.sh); nabiz-yaz.js sha12'sini nabza yazar, Mac esit degilse pardus'u kendi alir.
+export EMPP_MOTOR_KANONIK="${EMPP_MOTOR_KANONIK:-$HOME/.empp-agent/motor/kanonik.json}"
 export TMPDIR="${TMPDIR_SERIT:-$SERIT/work}"
 # Kabul boşluk beklemesi (başka kapı/uygulama) ajan zaman aşımına sayılır; zaman aşımı
 # runner'da "ertelenebilir" sınıftır (failed YAZILMAZ). Derleme 2011 CPU'da uzun sürer.
