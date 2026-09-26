@@ -8,9 +8,9 @@
  *   { "ad": "kabul",
  *     "esleme": [ { "onek": "/guncelleme/set/73768/android/", "dizin": "<mutlak>" }, … ],
  *     "surumJson": null | { …surum.json yerine verilecek nesne (imzasız tetik yalanı) } }
- * Her istek `--gunluk` JSONL'ine yazılır: { zaman, senaryo, yol, durum, boyut }.
+ * Her istek `--jsonl` dosyasına yazılır: { zaman, senaryo, yol, durum, boyut }.
  *
- *   node tools/g-android/g-test-sunucu.js --port 8443 --sertifika <dizin> --senaryo <json> --gunluk <jsonl>
+ *   node tools/g-android/g-test-sunucu.js --port 8443 --sertifika <dizin> --senaryo <json> --jsonl <dosya>
  */
 const fs = require('fs');
 const path = require('path');
@@ -24,9 +24,9 @@ function arg(ad, v = null) {
 const port = Number(arg('port', '8443'));
 const sertifika = arg('sertifika');
 const senaryoYolu = arg('senaryo');
-const gunlukYolu = arg('gunluk');
+const gunlukYolu = arg('jsonl');
 if (!sertifika || !senaryoYolu || !gunlukYolu) {
-  console.error('kullanım: --port --sertifika <dizin> --senaryo <json> --gunluk <jsonl>');
+  console.error('kullanım: --port --sertifika <dizin> --senaryo <json> --jsonl <dosya>');
   process.exit(2);
 }
 
