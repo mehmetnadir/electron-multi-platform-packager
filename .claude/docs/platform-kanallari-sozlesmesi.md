@@ -2,9 +2,8 @@
 
 > Taslak: 2026-09-26 (oturum 006cff11). Onay Nadir'in. Girdi `kitap-kaynak-sozlesmesi.md`'den gelir, burada
 > tanımlanmaz. Windows ayrı ve ONAYLI: `windows-paketleme-sozlesmesi.md`. Kurulu dosyanın güncelliğini izleyen
-> bekçi ayrı sözleşmede yazılıyor. `book-update/.claude/docs/pardus-hatti-sozlesmesi.md` (23.09) kararları
-> §Pardus şeridi'ne bağlandı. Kanıt tabanı: HEAD `b363059`, canlı 3001 `2484677` (`/api/health`, 09:24Z başladı),
-> DB `pipeline-sql` 26.09 13:05, `~/.empp-agent/agent.log` 26.09.
+> bekçi ayrı sözleşmede yazılıyor. Kanıt tabanı (commit/health/DB/log) ve tarihli ölçüm ayrıntıları →
+> `docs/arastirma/platform-kanallari-kanit-20260926.md`.
 
 ## Amaç
 Tek build klasöründen (geçişte İmpark exe'si) üç platform paketini tek hatta üretmek:
@@ -22,13 +21,9 @@ Nadir'in beyanı spec'tir; Windows (`windows-paketleme-sozlesmesi.md`) dahil dö
 | O4 | **Motor `43e23fce…js` güncelliği index'le birlikte bizde:** bizim derlememiz kanonik (24.09 karar 2, `tek-kabuk-ve-guncelleme-plani-2026-09-24.md`), G kanalıyla dağıtılır. **Kapsam (Nadir 26.09):** G yalnız kitabın **ANA** klasöründeki kopyayı değiştirir; kitap index'i yalnız kendi dizinindekini çağırır. `htmletk/…/etk/` kopyaları **KAPSAM DIŞI**, G dokunmaz. | 73581 ölçümü: kök kopya `1bcb5b8c…`, dört kitap kopyası `f4437153…` (aynı, ANA klasör — G burayı hedefler), etkinlik kopyası `1c6096ef…` (üç farklı sürüm tek pakette, `htmletk/…/etk/` — kapsam dışı) | G istemcisi (O3) |
 | O5 | **Kitap içeriği İmpark güncellemeleriyle (K):** `GetKitapGuncellemeBilgi` → `ZKitapZipH`. | Android çalışıyor (74451); Pardus 26.09'da açıldı (`a0cc28d`); Windows (bizim NSIS) kod var, Windows'ta ölçülmedi; mac KAPALI | mac kapısı + başsız kabulde K senaryosu; Windows'ta bir ölçüm |
 
-Sonuç (itiraz, 26.09): G istemcisi olmayan paket sonradan uzaktan güncellenemez. 26.09 YDS koşusunun mac, android ve
-pardus paketleri G'siz çıkıyor; G gelince kullanıcılar bir kez daha yeni paket kurmalı. Koşu durdurulmadı, çünkü
-canlıdaki bozuk index'li paketler daha kötü.
+Sonuç (itiraz, 26.09): G istemcisi olmayan paket sonradan uzaktan güncellenemez. 26.09 YDS koşusunun mac, android ve pardus paketleri G'siz çıkıyor; G gelince kullanıcılar bir kez daha yeni paket kurmalı. Koşu durdurulmadı, çünkü canlıdaki bozuk index'li paketler daha kötü.
 
-**Ortam (KARARLANDI, Nadir 2026-09-26):** paketleme/kabul ağır işleri (derleme, başsız kabul, tam test, emülatör)
-makine geneli 2 slotlu semafordan geçer (`~/.empp-agent/agir.sh`); başsız kabul kendi odak-ölçümüyle pencere
-çalmadığını doğrular. Detay: `sozlesme.md` Başsız kabul satırı.
+**Ortam (KARARLANDI, Nadir 2026-09-26):** paketleme/kabul ağır işleri (derleme, başsız kabul, tam test, emülatör) makine geneli 2 slotlu semafordan geçer (`~/.empp-agent/agir.sh`); başsız kabul kendi odak-ölçümüyle pencere çalmadığını doğrular. Detay: `sozlesme.md` Başsız kabul satırı.
 
 ## İşlevler
 | İşlev | Ne yapar | Nerede koşar | Masada nerede |
@@ -63,14 +58,10 @@ Not: Atlas/Waypoint 9'un kabuk öz-güncelleme manifesti ayrı üründedir (`int
 Bu hattan geçen her Pardus paketinin çalışma zamanı Electron `^27`'dir (`packagingService.js:1302`); o manifest bunu paketten okumalı.
 
 ## "Üret, bekle, onaylanınca yayınla" — bugünkü hâl
-- Ara durum YOK. Kabul GEÇTİ → aynı işte R2'ye yazılır, `completed`, portal düğmesi açılır (`runner.js:1869-1874`,
-  `build-agents.ts:677-708`). Kuyruğa iş koymak hâlâ yayına onaydır; onayı artık otomatik kapı veriyor.
-- Başsız kabul runner'da 26.09 09:24Z'den beri açık (`run-agent.sh:41-42`; kod varsayılanı KAPALI,
-  `basliksiz-kabul-kapisi.js:9,32`). Kapı CLI'ı her işte diskten okunur, runner yeniden başlatılmadan güncellenir.
-- İlk canlı sonuçlar: 73768 mac ÖLÇÜLEMEDİ (25 sn, NODE_OPTIONS arızası, d5add17 ile düzeldi); 72378 android RED
-  (Electron katmanı GEÇTİ, emülatörde "ekranda içerik yok"); 59835 android GEÇTİ (270 sn). Yanlış-pozitif oranı ÖLÇÜLMEDİ.
-- Geri alma yok: yeni paket aynı ada yazılır, başka adlı eski paket silinir (`build-agents.ts:667`), ajan çalışma
-  dizinini siler (`runner.js:1898`). İnceleme için R2'den geri indirilir.
+- Ara durum YOK. Kabul GEÇTİ → aynı işte R2'ye yazılır, `completed`, portal düğmesi açılır (`runner.js:1869-1874`, `build-agents.ts:677-708`). Kuyruğa iş koymak hâlâ yayına onaydır; onayı artık otomatik kapı veriyor.
+- Başsız kabul runner'da 26.09 09:24Z'den beri açık (`run-agent.sh:41-42`; kod varsayılanı KAPALI, `basliksiz-kabul-kapisi.js:9,32`). Kapı CLI'ı her işte diskten okunur, runner yeniden başlatılmadan güncellenir.
+- İlk canlı sonuçlar (73768/72378/59835) ve yanlış-pozitif oranı (ÖLÇÜLMEDİ) → araştırma dosyası.
+- Geri alma yok: yeni paket aynı ada yazılır, başka adlı eski paket silinir (`build-agents.ts:667`), ajan çalışma dizinini siler (`runner.js:1898`). İnceleme için R2'den geri indirilir.
 
 ## SET paketleri (apk/dmg/impark açılmama) — bugünkü durum
 | Katman | Durum | Kanıt |
@@ -80,10 +71,8 @@ Bu hattan geçen her Pardus paketinin çalışma zamanı Electron `^27`'dir (`pa
 | Yayıncı güncellemesi SET kökünü ezmesin; ezilmişse iş hatası | kodda | baefe86 (26.09 10:43) |
 | Kabul: mac/android başsız, pardus ProBook | canlı | `run-agent.sh:41-42,58` |
 | Kaynak: köprüdeki exe'lerde kanonik kabuk yok (49 set kaydı) | AÇIK: 13 YDS setinin build zip'i İmpark'a yüklenmeyi bekliyor | `tek-kabuk-…plani:133-142` |
-| 26.09 saha | 59835 SM2 Set: pardus ProBook GEÇTİ, android GEÇTİ, mac noterli (kabul öncesi). 73768: pardus GEÇTİ, mac yeniden kuyrukta | `agent.log` |
 
-Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 öncesinde R2'ye çıkmış SET paketleri
-(kaçının bozuk olduğu ÖLÇÜLMEDİ).
+Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 öncesinde R2'ye çıkmış SET paketleri (kaçının bozuk olduğu ÖLÇÜLMEDİ). 26.09 saha kanıtı (59835/73768) → araştırma dosyası.
 
 ## Pardus şeridi (23.09 + 24.09 kararları)
 | Şerit | Karar | Bugün |
@@ -96,38 +85,21 @@ Paketleyici tarafı kapandı. Açık olan iki şey var: kaynak kabuğu ve 26.09 
 
 Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar. srv21 fallback açık karar 5'tedir.
 
-## Veri ve sınırlar (ölçülen değerler norm değildir; `agent.log` 26.09)
-- mac: 72380 tek kitap 5 dk 20 sn / 0,41 GB · 59834 set 12 dk 38 sn / 1,46 GB · 59835 set 59 dk 49 sn / 0,78 GB (noter dahil).
-- android: 73768 5 dk 15 sn / 0,67 GB (kabulsüz) · 59835 6 dk 32 sn / 0,69 GB (kabul 270 sn) · 72378 kabul RED 348 sn
-  (emülatör açılışı 73 sn, kurulum 156 sn).
-- pardus: 72380 5 dk 23 sn / 0,34 GB (ProBook 248 sn) · 73768 10 dk 14 sn / 0,74 GB (80 sn) · 59835 7 dk 12 sn / 0,70 GB (313 sn).
-  Bloktest 2,2 GB: Mac Docker 1025 sn, ProBook yerli 367 sn, yerel kabul 51 sn (`pardus-seridi-probook-plani…:8-20`, `sozlesme.md:32`).
-- R2: 300 MB üstü çok parçalı, 64 MB parça (`runner.js:389-390`); ofiste 25 MB/s, dışarıda 4 MB/s (`run-agent.sh:94-97`).
+## Veri ve sınırlar
+Ölçülen mac/android/pardus/R2 süre-boyut değerleri (norm değildir) → araştırma dosyası.
 
 ## Pakete girmeyecekler — Windows politikası dört platformda (KARARLANDI, Nadir 2026-09-26)
 > *"diğer os'ların paketlerini üretirken windows paketinde uyguladığımız gereksizleri atma politikasını onlarda da
 > uygulamalıyız."*
-- Liste TEK kaynaktan gelir (`src/packaging/paket-disi-liste.js`); windows/macos/linux electron-builder
-  `files` dizileri `...paketDisiListe.elektronBuilderDesenleri('<platform>')` yayar, Android `www` kopyası
-  `www-copy-exclude.js` → `fsKopyaFiltresi(…, 'android')`; kopya liste yasak (`paket-disi-liste.test.js`).
-- Kapsam: `node_modules`, kök `temp/`, `uploads/`, `build/`, `**/temp/data/storage.im` (yayıncının kendi
-  kullanıcı verisi, G2), `_` önekli kök dizinler. Bir madde bir platformda kırılma riski taşırsa modülde o
-  platform `platformlar`dan çıkar ve `muafiyet` gerekçesi yazılır.
+- Liste TEK kaynaktan gelir (`src/packaging/paket-disi-liste.js`); windows/macos/linux electron-builder `files` dizileri `...paketDisiListe.elektronBuilderDesenleri('<platform>')` yayar, Android `www` kopyası `www-copy-exclude.js` → `fsKopyaFiltresi(…, 'android')`; kopya liste yasak (`paket-disi-liste.test.js`).
+- Kapsam: `node_modules`, kök `temp/`, `uploads/`, `build/`, `**/temp/data/storage.im` (yayıncının kendi kullanıcı verisi, G2), `_` önekli kök dizinler. Bir madde bir platformda kırılma riski taşırsa modülde o platform `platformlar`dan çıkar ve `muafiyet` gerekçesi yazılır.
 - 26.09 öncesi: mac/linux'ta `build/` ve `storage.im` dışlanmıyordu; Android yalnız `node_modules` + `.git`.
 - 26.09 denetimi — MUAFİYET YOK, dört madde dört platformda:
-  - `build/` mac/linux: electron-builder buildResources'ı DİSKTEN okur (`readdir`/`path.join(buildResourcesDir)`),
-    `files`'tan bağımsız; mac entitlements/ikon/dmg arka planı `build/` dışından mutlak yol. `workingPath/build/`e
-    yalnız Windows yazar (NSIS, `icon.ico`). Android: web kökü sarmal `build/` olamaz (yükleme açılırken tek
-    sarmal dizin köke alınır, `queueService`).
-  - `storage.im`: motor `existsSync||saveStorage({})`; mac/linux/windows yazma fs-shim ile WORK'e, Android
-    empp-android-shim VFS'ine. storage.im'siz kaynaklar (45538, 45482, 73581) dört platformda zaten çıkıyor.
-    Davranış farkı (G2'nin amacı): yayıncının ayarları/son sayfası/"tur tamamlandı"sı yeni kullanıcıya taşınmaz.
-  - Android kök `temp/`: göreli çıktı yolunda electron-builder çıktısı + tek kitapta kullanıcı verisi;
-    `uploads/`: motor yerel `uploads/` okumaz.
-  - Bilinen biçim farkı (davranışı değiştirilmedi): kökteki `_x.js` DOSYASI electron-builder'da `!_*` ile
-    dışlanır, Android'de kalır (kaynaklarda örneği sıfır).
-- Ayrı karar (bu maddeye dahil DEĞİL): kayıpsız sayfa WebP bugün yalnız Windows'ta; diğer platformlar ProBook /
-  cihaz ölçümünden sonra.
+  - `build/` mac/linux: electron-builder buildResources'ı DİSKTEN okur (`readdir`/`path.join(buildResourcesDir)`), `files`'tan bağımsız; mac entitlements/ikon/dmg arka planı `build/` dışından mutlak yol. `workingPath/build/`e yalnız Windows yazar (NSIS, `icon.ico`). Android: web kökü sarmal `build/` olamaz (yükleme açılırken tek sarmal dizin köke alınır, `queueService`).
+  - `storage.im`: motor `existsSync||saveStorage({})`; mac/linux/windows yazma fs-shim ile WORK'e, Android empp-android-shim VFS'ine. storage.im'siz kaynaklar (45538, 45482, 73581) dört platformda zaten çıkıyor. Davranış farkı (G2'nin amacı): yayıncının ayarları/son sayfası/"tur tamamlandı"sı yeni kullanıcıya taşınmaz.
+  - Android kök `temp/`: göreli çıktı yolunda electron-builder çıktısı + tek kitapta kullanıcı verisi; `uploads/`: motor yerel `uploads/` okumaz.
+  - Bilinen biçim farkı (davranışı değiştirilmedi): kökteki `_x.js` DOSYASI electron-builder'da `!_*` ile dışlanır, Android'de kalır (kaynaklarda örneği sıfır).
+- Ayrı karar (bu maddeye dahil DEĞİL): kayıpsız sayfa WebP bugün yalnız Windows'ta; diğer platformlar ProBook / cihaz ölçümünden sonra.
 
 ## Kapılar (kod varsayılanı → canlı değer, `run-agent.sh`)
 | Bayrak | Kod varsayılanı | Canlı | Not |
@@ -142,41 +114,22 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 | Canlı 3001 | `/api/health` kapıları yukarıdakiyle aynı; commit 2484677 ≠ HEAD b363059 | | fark: belge, imza betiği, kabul CLI'ı (her işte diskten okunur) |
 
 ## Açık kararlar (Nadir — tek tek sorulur)
-1. **Kabulden geçen paket insan onayı beklemeden yayına çıksın mı?** Öneri: evet; kanıt masada görünsün, ilk 20 RED/GEÇTİ elle
-   doğrulanana kadar her RED bildirim olarak gelsin. Gerekçe: 72378 RED'inin gerçek olup olmadığı bilinmiyor, oran ölçülmedi.
-2. **Önceki paket geri dönüş için saklansın mı?** Öneri: evet, `softwares/<id>/_onceki/` altında son 1 sürüm, silme yerine
-   taşıma. Gerekçe: bugün bozuk paket fark edilirse tek yol 5-60 dk'lık yeniden üretim; build zip'te "son 2 sürüm" kuralı var.
-3. **Pardus AppRun paketi "büyükse" değil "farklıysa" mı kursun?** Öneri: evet, kıyas `paket.json` üretim zamanıyla. Gerekçe:
-   içerik-hash sürümü sıralanamaz (`surum-turet.js:241-242`), `sort -V` kıyası (`apprun-template.sh:125`) yeni paketi yaklaşık
-   yarı olasılıkla "eski" sayıp kurmaz. Kod okumasıyla çıkarıldı, ProBook'ta iki ardışık paketle ÖLÇÜLECEK.
-4. **16 hazır Pardus paketi Silinecekler'e taşınıp devralma kapatılsın mı?** Öneri: evet; devralma ProBook şeridiyle
-   paketleyici commit eşitliği şartıyla geri açılır. Gerekçe: paketler baefe86'dan önce üretildi, tek koruma ProBook kabulü.
-5. **srv21 Pardus fallback'ı (23.09) uygulansın mı?** Öneri: hayır, ProBook + Mac Docker ikilisiyle kapatılsın. Gerekçe:
-   iki bağımsız şerit var, srv21 paketleyicisi Mac'ten ayrışmış, srv21 paylaşılan üretim sunucusu (nazik build kuralı).
-6. **İçerik kanalı K Pardus'ta açılsın mı (`windows,linux`)?** Öneri: evet, macos imzalı derlemede ölçülünce eklensin.
-   Gerekçe: bugün mac/Pardus'ta kitap güncellemesi iner ama açılmaz; ProBook'ta 57806 v2→v4 geçti.
-7. **Android APK'ya artan versionCode ve kalıcı, yedekli bir imza anahtarı verilsin mi?** Öneri: evet, versionCode = panel sürüm
-   kodu × 1000 + sayaç. Anahtar bugünkü debug anahtarı kalsın, yedeği alınsın. Gerekçe: anahtar kaybolursa kurulu APK'lar güncellenemez.
-8. **Kabuldeki "aktivasyon bekleniyor" işareti keypanel.db'den mi gelsin?** Öneri: evet. Gerekçe: runner başlık regex'i
-   kullanıyor (`runner.js:1714`), kaynak sözleşmesi keypanel diyor (`kitap-kaynak-sozlesmesi.md:49-53`).
+1. **Kabulden geçen paket insan onayı beklemeden yayına çıksın mı?** Öneri: evet; kanıt masada görünsün, ilk 20 RED/GEÇTİ elle doğrulanana kadar her RED bildirim olarak gelsin. Gerekçe: 72378 RED'inin gerçek olup olmadığı bilinmiyor, oran ölçülmedi.
+2. **Önceki paket geri dönüş için saklansın mı?** Öneri: evet, `softwares/<id>/_onceki/` altında son 1 sürüm, silme yerine taşıma. Gerekçe: bugün bozuk paket fark edilirse tek yol 5-60 dk'lık yeniden üretim; build zip'te "son 2 sürüm" kuralı var.
+3. **Pardus AppRun paketi "büyükse" değil "farklıysa" mı kursun?** Öneri: evet, kıyas `paket.json` üretim zamanıyla. Gerekçe: içerik-hash sürümü sıralanamaz (`surum-turet.js:241-242`), `sort -V` kıyası (`apprun-template.sh:125`) yeni paketi yaklaşık yarı olasılıkla "eski" sayıp kurmaz. Kod okumasıyla çıkarıldı, ProBook'ta iki ardışık paketle ÖLÇÜLECEK.
+4. **16 hazır Pardus paketi Silinecekler'e taşınıp devralma kapatılsın mı?** Öneri: evet; devralma ProBook şeridiyle paketleyici commit eşitliği şartıyla geri açılır. Gerekçe: paketler baefe86'dan önce üretildi, tek koruma ProBook kabulü.
+5. **srv21 Pardus fallback'ı (23.09) uygulansın mı?** Öneri: hayır, ProBook + Mac Docker ikilisiyle kapatılsın. Gerekçe: iki bağımsız şerit var, srv21 paketleyicisi Mac'ten ayrışmış, srv21 paylaşılan üretim sunucusu (nazik build kuralı).
+6. **İçerik kanalı K Pardus'ta açılsın mı (`windows,linux`)?** Öneri: evet, macos imzalı derlemede ölçülünce eklensin. Gerekçe: bugün mac/Pardus'ta kitap güncellemesi iner ama açılmaz; ProBook'ta 57806 v2→v4 geçti.
+7. **Android APK'ya artan versionCode ve kalıcı, yedekli bir imza anahtarı verilsin mi?** Öneri: evet, versionCode = panel sürüm kodu × 1000 + sayaç. Anahtar bugünkü debug anahtarı kalsın, yedeği alınsın. Gerekçe: anahtar kaybolursa kurulu APK'lar güncellenemez.
+8. **Kabuldeki "aktivasyon bekleniyor" işareti keypanel.db'den mi gelsin?** Öneri: evet. Gerekçe: runner başlık regex'i kullanıyor (`runner.js:1714`), kaynak sözleşmesi keypanel diyor (`kitap-kaynak-sozlesmesi.md:49-53`).
 
 ## Yapılmayacaklar
-Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon kanalına (ImWin32.dll, imKeys.dll) dokunmak ya da
-kod/anahtar gömmek · bayat paketleyici kopyasıyla üretmek · srv21'de ağır derlemeyi varsayılan yapmak · düz disk/önbellek
-sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m- zip'i kaynak almak.
+Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon kanalına (ImWin32.dll, imKeys.dll) dokunmak ya da kod/anahtar gömmek · bayat paketleyici kopyasıyla üretmek · srv21'de ağır derlemeyi varsayılan yapmak · düz disk/önbellek sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m- zip'i kaynak almak.
 
 ## Uygulama durumu (26.09)
-- Kod var ve canlı: noter kapısı, Pardus disk kapısı, ProBook kabulü, başsız kabul (macos+android), SET düzeltmeleri,
-  sürüm türetme, Android K8/K9.
+- Kod var ve canlı: noter kapısı, Pardus disk kapısı, ProBook kabulü, başsız kabul (macos+android), SET düzeltmeleri, sürüm türetme, Android K8/K9.
 - Kod var, devrede değil: ProBook şeridi (kayıt + runner yaması), `serit-secimi.js`.
-- Kod yok: build zip'i kaynak alma (runner SFX bekliyor), hold durumu, kabul kanıtı ekranı, artefakt geçmişi, srv21
-  fallback, kanal 1 bekçisi, hazır devralmada commit kontrolü, Android versionCode, AppRun hash-güvenli kıyas.
+- Kod yok: build zip'i kaynak alma (runner SFX bekliyor), hold durumu, kabul kanıtı ekranı, artefakt geçmişi, srv21 fallback, kanal 1 bekçisi, hazır devralmada commit kontrolü, Android versionCode, AppRun hash-güvenli kıyas.
 
-## Eskiyen belgeler (dosya:satır → ne değişmeli)
-- ~~`sozlesme.md:26,32,36,117`~~ düzeltildi (26.09, bu oturum): disk kapısı/ProBook durumu/kabul kapısı/başsız kabul canlı değeri.
-- `book-update/.claude/docs/masaustu-mobil-paketleme.md:11` Android ajanı Server21 → Mac ajanı (Server21 son nabız 09-09).
-- `…/masaustu-mobil-paketleme.md:12` kaynak `/Uploads/KitapTekExe` → köprü R2 (`build-agents.ts:289-300`), hedef build zip.
-- `book-update/.claude/docs/paket-yapilari-tek-kitap-vs-set.md:60-61` "tüm SET paketleri açılmıyor" → bu belge §SET.
-- `book-update/.claude/docs/pardus-hatti-sozlesmesi.md:16-28` → 24.09 ProBook kararları ve bu belge §Pardus şeridi'ne bağlanmalı.
-- `uretim-masasi-mac/docs/sozlesmeler/04-bu-mac-guncelleme.md:70` ve `05-yayinla.md:63` "Pardus her zaman bu Mac'te" → hazır devralma + ProBook.
-- `book-update/CLAUDE.md:124` (SET açılmıyor) ve `:131` (noter onaysız dmg) → bu belge; noter artık zorunlu.
+## Eskiyen belgeler
+Dosya:satır → ne değişmeli listesi → araştırma dosyası (`docs/arastirma/platform-kanallari-kanit-20260926.md`).
