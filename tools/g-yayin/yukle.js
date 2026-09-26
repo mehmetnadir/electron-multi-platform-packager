@@ -9,6 +9,12 @@
  *   Kapı 2 (onay): `--onayli` yoksa hiçbir şey yazılmaz, yalnız plan basılır (kuru).
  *   Ek kapı: yerel durum ÜRETİM açık anahtarıyla doğrulanmalı; TEST imzalı manifest canlıya çıkmaz.
  *
+ * Android G ucu da yüklenir: istemci (`src/platforms/android/empp-g-istemci.js` `kimlikKoku`)
+ * `guncelleme/set/<id>/android/{surum.json, manifest.json, manifest.json.sig, dosya/<yol>}` ister
+ * (kitap arşivi paylaşılan `kitap/` adresinden) — yüklenmezse Android 404 alır, hiç güncelleme
+ * görmez. Aynı sıra: android/dosya içerikle, android manifest manifestle, android surum.json
+ * EN SON.
+ *
  * Neyin yükleneceği plandan değil, yerel imzalı durum ile CANLI listenin kıyasından çıkar (kendini
  * onaran, tekrar koşulabilir): eksik ya da farklı olan yüklenir; değişmez anahtar (`kitap/`,
  * `surumler/`) canlıda farklıysa HİÇBİR ŞEY yüklenmez. Sıra: kitap → dosya → surumler →
@@ -88,7 +94,11 @@ async function canliListe(rclone, uzakOnek) {
   return cikti;
 }
 
-function sira(goreli) {
+/** Android ucu kendi `android/` önekinde AYNI düzeni taşır (bkz. yayinla.js ANDROID_ONEKI). */
+const ANDROID_ONEK = 'android/';
+
+function sira(ham) {
+  const goreli = ham.startsWith(ANDROID_ONEK) ? ham.slice(ANDROID_ONEK.length) : ham;
   if (goreli.startsWith('kitap/')) return 1;
   if (goreli.startsWith('dosya/')) return 2;
   if (goreli.startsWith('surumler/')) return 3;
@@ -132,7 +142,10 @@ async function yukle(a, ops = {}) {
     const tam = path.join(setDizini, ...goreli.split('/'));
     istenen.set(goreli, { goreli, tam: fs.existsSync(tam) ? tam : null, zorunlu });
   };
-  for (const g of m.kabuk) ekleYerel(`dosya/${g.yol}`, false);
+  for (const g of m.kabuk) {
+    ekleYerel(`dosya/${g.yol}`, false);
+    ekleYerel(`${ANDROID_ONEK}dosya/${g.yol}`, false);
+  }
   for (const g of m.kitaplar || [])
     if (g.durum === 'ekle')
       ekleYerel(`kitap/${decodeURIComponent(g.kaynak.slice(kitapOneki.length))}`, false);
@@ -145,8 +158,10 @@ async function yukle(a, ops = {}) {
       }
     }
   }
-  for (const f of ['manifest.json', `manifest.json${kg.IMZA_UZANTI}`, 'surum.json'])
+  for (const f of ['manifest.json', `manifest.json${kg.IMZA_UZANTI}`, 'surum.json']) {
     ekleYerel(f, true);
+    ekleYerel(`${ANDROID_ONEK}${f}`, true);
+  }
 
   const uzakOnek = `${hedef.uzakKok}/guncelleme/set/${setKimligi}`;
   const canli = await canliListe(rclone, uzakOnek);
@@ -154,8 +169,10 @@ async function yukle(a, ops = {}) {
   const cakisma = [];
   let atlanan = 0;
   // Canlı daha yeni bir sürümdeyse (başka bir yayın) geri götürme: hiçbir şey yüklenmez.
-  if (canli['surum.json']) {
-    const r = await rclone(['cat', `${uzakOnek}/surum.json`]);
+  // İki uç da (canonical + android/) ayrı ayrı bakılır.
+  for (const onek of ['', ANDROID_ONEK]) {
+    if (!canli[`${onek}surum.json`]) continue;
+    const r = await rclone(['cat', `${uzakOnek}/${onek}surum.json`]);
     let canliSurum = null;
     try {
       canliSurum = JSON.parse(r.stdout).surum;
@@ -163,9 +180,11 @@ async function yukle(a, ops = {}) {
       canliSurum = null;
     }
     if (r.kod !== 0 || !gSurum.gecerliMi(canliSurum)) {
-      cakisma.push(`canlı surum.json okunamadı ya da G3 değil (${canliSurum})`);
+      cakisma.push(`canlı ${onek}surum.json okunamadı ya da G3 değil (${canliSurum})`);
     } else if (gSurum.kiyasla(canliSurum, m.surum) > 0) {
-      cakisma.push(`canlı sürüm ${canliSurum} yereldekinden (${m.surum}) yeni — geri götürülmez`);
+      cakisma.push(
+        `${onek}canlı sürüm ${canliSurum} yereldekinden (${m.surum}) yeni — geri götürülmez`,
+      );
     }
   }
   for (const n of istenen.values()) {

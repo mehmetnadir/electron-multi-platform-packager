@@ -990,7 +990,8 @@ function ciktiDogrula({ cikti, setKimligi, acik }) {
 /**
  * YAYIN SONRASI DOĞRULAMA — canlı uçtan (CDN/R2) indirir, istemcinin göreceği gibi denetler:
  * imza (varsayılan ÜRETİM açık anahtarı), kanal/kimlik/sürüm, surum.json eşliği, her `dosya/<yol>`
- * sha256+boyut; `arsivler` ile kitap arşivleri de akışla indirilip (diske yazılmadan) özetlenir.
+ * sha256+boyut; Android ucu (`android/{surum.json, manifest.json(.sig), dosya/<yol>}`) — eksikse
+ * RED; `arsivler` ile kitap arşivleri de akışla indirilip (diske yazılmadan) özetlenir.
  * Yalnız GET yapar; hiçbir şey yazmaz.
  */
 async function uzakDogrula({
@@ -1065,6 +1066,36 @@ async function uzakDogrula({
       hatalar.push(e.message);
     }
   }
+  // Android G ucu — istemci (`empp-g-istemci.js` `kimlikKoku`) surum.json, manifest.json(.sig)
+  // ve dosya/<yol>'u `<taban>/set/<id>/android/` altından ister (kitap arşivi paylaşılan kitap/
+  // adresinden). Eksik uç = Android istemcisi 404 → HİÇ güncelleme görmez: RED. TEK imza
+  // paylaşılır: android manifest+imza canonical'ın BİREBİR aynısı olmalı.
+  const aKok = `${kok}/${ANDROID_ONEKI}`;
+  let androidDosya = 0;
+  try {
+    const aSurum = JSON.parse((await getirB(`${aKok}/surum.json`)).toString('utf8'));
+    const aGovde = await getirB(`${aKok}/manifest.json`);
+    const aImza = (await getirB(`${aKok}/manifest.json${kg.IMZA_UZANTI}`)).toString('utf8');
+    if (!aGovde.equals(govde) || aImza !== imza)
+      hatalar.push(`${ANDROID_ONEKI}/manifest.json(.sig) canonical manifestle birebir aynı değil`);
+    if (!aSurum || aSurum.surum !== m.surum)
+      hatalar.push(
+        `${ANDROID_ONEKI}/surum.json (${aSurum && aSurum.surum}) ≠ manifest (${m.surum})`,
+      );
+  } catch (e) {
+    hatalar.push(`${ANDROID_ONEKI} ucu: ${e.message}`);
+  }
+  for (const g of Array.isArray(m.kabuk) ? m.kabuk : []) {
+    if (!kg.kabukGirdisiGecerliMi(g) || !durum.gYoluMu(g.yol)) continue;
+    try {
+      const v = await getirB(`${aKok}/dosya/${g.yol.split('/').map(encodeURIComponent).join('/')}`);
+      if (v.length !== g.boyut || sha256(v) !== g.sha256)
+        hatalar.push(`${ANDROID_ONEKI}/dosya/${g.yol} sha256/boyut tutmuyor`);
+      androidDosya += 1;
+    } catch (e) {
+      hatalar.push(`${ANDROID_ONEKI} ucu: ${e.message}`);
+    }
+  }
   if (arsivler) {
     for (const g of (m.kitaplar || []).filter((x) => x && x.durum === 'ekle')) {
       // `dosyalar[]` varsa gerçek baytlar gerekir (kıyas için) — geçici bir dosyaya iner,
@@ -1107,7 +1138,7 @@ async function uzakDogrula({
       }
     }
   }
-  return sonuc({ surum: m.surum, dosya, arsiv, kitaplar: (m.kitaplar || []).length });
+  return sonuc({ surum: m.surum, dosya, androidDosya, arsiv, kitaplar: (m.kitaplar || []).length });
 }
 
 /* ------------------------------------------------------------------ CLI */
@@ -1153,6 +1184,7 @@ async function main(argv, ops = {}) {
 
 module.exports = {
   KIMLIK_DESENI,
+  ANDROID_ONEKI,
   ANDROID_EKLEME_ANAHTARI,
   ANDROID_EKLEME_ONERISI,
   ANDROID_DONUK_DOSYASI,
