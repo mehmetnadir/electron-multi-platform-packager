@@ -158,6 +158,18 @@ Bu belge 23.09'daki "kanal 1"i "ProBook ya da Mac Docker" diye yeniden tanımlar
 - **Hâlâ açık:** emülatörde uçtan uca (3 senaryo) + kabul önce/sonra koşulmadı; cihazda WebCrypto Ed25519
   ölçülmedi; APK `versionName` appVersion'a bağlı değil (paket sürümü ayrı dosyada); R2'ye gerçek yükleme yok
   (yerel `--cikti` ağacı, `yukle.js`'in plan/upload akışına android/ anahtarları henüz eklenmedi).
+- **Eklenen kitaba fs-shim (26.09, dal `g-yayin-shim`):** `kitapArsiviHazirla` eklenen kitabın kök `index.html`'ine
+  paketleyicinin alt-kitap etiketlerini (`window.__emppSubBook="bookN"` + `../empp-fs-shim.js`) koyar — tek kaynak
+  `src/packaging/fs-shim-subbook-html.js` (paketleyici `injectFsShimIntoSubBooks` de onu çağırır). Arşiv ve imzalı
+  `dosyalar[]` enjeksiyon SONRASI içerikten; etiketler varsa bayta dokunulmaz; başka kitabın `__emppSubBook`'u RED.
+  Windows (yerinde) ve mac/Pardus (örtü) aynı arşivi kullanır; çalışma anında ikinci enjeksiyon yok.
+- **AÇIK — Android eklenen kitabı bugün REDDEDER (ölçüldü 26.09):** paylaşılan arşiv Electron biçimidir; gerçek
+  `EmppGKatman.ac+incele` g-yayin arşivinde `indexShimli=false shimVar=false manifestVar=false` verir → istemci
+  `kitap-android-hazir-degil:bookN`. `android-uctan-uca.test.js` bu üç işareti sahte köprüde `true` döndürür, açığı
+  göstermez. Android uyarlaması (kitap başına `empp-android-shim.js` + `empp-manifest.json`, etiket, viewport,
+  bundle `window.isApp=true` yaması — `normalizeBookViewerViewports`) Electron'u bozacağı için paylaşılan arşive
+  KONAMAZ → ayrı Android arşivi + manifestte platform başına kaynak gerekir (şema + iki istemci). Electron fs-shim
+  etiketi Android'de etkisizdir (android shim önce `__emppFsShim` kurar; fs-shim onu görünce kurulmaz).
 
 ## Yapılmayacaklar
 Kabulsüz yükleme · `AGENT_NOTER_ZORUNLU=0`'ı kalıcı yapmak · aktivasyon kanalına (ImWin32.dll, imKeys.dll) dokunmak ya da kod/anahtar gömmek · bayat paketleyici kopyasıyla üretmek · srv21'de ağır derlemeyi varsayılan yapmak · düz disk/önbellek sabitlerini geri koymak · paketleyicide SET menüsü/konfig uydurmak (K1) · m- zip'i kaynak almak.

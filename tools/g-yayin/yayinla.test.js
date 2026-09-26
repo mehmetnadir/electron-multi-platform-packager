@@ -609,3 +609,154 @@ test('dosyalarKarsilastir: birim — eksik/fazla/farklı sha256 hepsi yakalanır
     /uyuşmuyor/,
   );
 });
+
+/* ------------------------------------------------ G ile eklenen kitaba fs-shim (26.09) */
+
+/**
+ * NEDEN: G ile EKLENEN kitap paketleme anında pakette yoktu → `bookN/index.html` paketleyicinin
+ * alt-kitap fs-shim etiketlerini almamıştı → renderer `fs` okumaları örtüyü (mac/Pardus) ve WORK'ü
+ * (Windows) görmüyordu. Etiketler burada DÜZ METİNLE beklenir (paketleyici çıktısıyla aynı biçim);
+ * üretim kodu tek kaynağı (`src/packaging/fs-shim-subbook-html.js`) çağırır.
+ */
+const SHIM_ETIKETLERI =
+  '<head><script>window.__emppSubBook="book4";</script>\n' +
+  '<script src="../empp-fs-shim.js"></script>';
+
+function arsivOku(o) {
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const m = JSON.parse(fs.readFileSync(path.join(setDizini, 'manifest.json'), 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+  const zipYolu = path.join(setDizini, 'kitap', decodeURIComponent(b4.kaynak.split('/kitap/')[1]));
+  const girdiler = kg.arsivCozVarsayilan(fs.readFileSync(zipYolu));
+  const index = girdiler.find((g) => g.yol === 'index.html').veri.toString('utf8');
+  return { setDizini, m, b4, zipYolu, index };
+}
+
+const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
+
+async function ekleYayinla(o, kaynak, ek = {}) {
+  return y.yayinla(
+    temel(o, 'https://ornek.invalid/guncelleme', {
+      ilk: true,
+      oncekiSurum: '2.65.1',
+      panel: 65,
+      index: o.yaz('i.html', o.html('a')),
+      ekle: { book4: kaynak },
+      ...ek,
+    }),
+    sessiz,
+  );
+}
+
+test('fs-shim: dizinden eklenen kitap sayfası enjekte girer; dosyalar[] + dogrula tutarlı', async () => {
+  const o = ortam();
+  o.yaz('book4/index.html', o.html('book4'));
+  o.yaz('book4/sayfa/1.txt', 's1');
+  const r = await ekleYayinla(o, path.join(o.d, 'girdi', 'book4'));
+  assert.deepEqual(r.fsShim, { book4: 'enjekte' });
+  const a = arsivOku(o);
+  assert.ok(a.index.includes(SHIM_ETIKETLERI), a.index);
+  assert.equal(a.index, o.html('book4').replace('<head>', SHIM_ETIKETLERI));
+  // Kaynak dosyaya dokunulmadı (yalnız arşivdeki kopya değişir).
+  const kaynakSayfa = fs.readFileSync(path.join(o.d, 'girdi', 'book4', 'index.html'), 'utf8');
+  assert.equal(kaynakSayfa, o.html('book4'));
+  // İmzalı dosyalar[]: index.html girdisi enjeksiyon SONRASI baytın sha256/boyutu.
+  const gi = a.b4.dosyalar.find((g) => g.yol === 'index.html');
+  assert.equal(gi.sha256, sha(Buffer.from(a.index, 'utf8')));
+  assert.equal(gi.boyut, Buffer.byteLength(a.index, 'utf8'));
+  assert.notEqual(gi.sha256, sha(Buffer.from(o.html('book4'), 'utf8')), 'kaynak sha256 DEĞİL');
+  assert.deepEqual(a.b4.dosyalar, zip.zipIcerigi(a.zipYolu));
+  // Arşiv sha256/boyutu da son (enjekte) arşivin kendisi.
+  const v = fs.readFileSync(a.zipYolu);
+  assert.equal(a.b4.sha256, sha(v));
+  assert.equal(a.b4.boyut, v.length);
+  const d = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d.gecti, true, d.hatalar.join('; '));
+});
+
+test('fs-shim: idempotent — etiketli sayfa bayt bayt aynı kalır, çift etiket yok', async () => {
+  const o = ortam();
+  const etiketli = o.html('book4').replace('<head>', SHIM_ETIKETLERI);
+  o.yaz('book4/index.html', etiketli);
+  const r = await ekleYayinla(o, path.join(o.d, 'girdi', 'book4'));
+  assert.deepEqual(r.fsShim, { book4: 'zaten-var' });
+  const a = arsivOku(o);
+  assert.equal(a.index, etiketli);
+  assert.equal(a.index.split('empp-fs-shim.js').length - 1, 1);
+  assert.equal(a.index.split('__emppSubBook').length - 1, 1);
+});
+
+test('fs-shim: hazır zip — etiketsiz yeniden paketlenir, etiketliye dokunulmaz', async () => {
+  // (a) etiketsiz zip → enjekte edilmiş yeni arşiv
+  const o = ortam();
+  const ham = path.join(o.d, 'ham.zip');
+  zip.zipYaz(ham, [
+    { yol: 'index.html', veri: Buffer.from(o.html('book4')) },
+    { yol: 'sayfa/1.txt', veri: Buffer.from('s1') },
+  ]);
+  const r = await ekleYayinla(o, ham);
+  assert.deepEqual(r.fsShim, { book4: 'enjekte' });
+  const a = arsivOku(o);
+  assert.ok(a.index.includes(SHIM_ETIKETLERI));
+  assert.notEqual(a.b4.sha256, sha(fs.readFileSync(ham)), 'arşiv yeniden yazıldı');
+  assert.deepEqual(a.b4.dosyalar, zip.zipIcerigi(a.zipYolu));
+  assert.deepEqual(
+    a.b4.dosyalar.map((g) => g.yol),
+    ['index.html', 'sayfa/1.txt'],
+  );
+  const d = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d.gecti, true, d.hatalar.join('; '));
+
+  // (b) etiketli zip → arşiv kaynak zip'in BİREBİR aynısı (yeniden sıkıştırma yok)
+  const o2 = ortam();
+  const hazir = path.join(o2.d, 'hazir.zip');
+  zip.zipYaz(hazir, [
+    { yol: 'index.html', veri: Buffer.from(o2.html('book4').replace('<head>', SHIM_ETIKETLERI)) },
+    { yol: 'sayfa/1.txt', veri: Buffer.from('s1') },
+  ]);
+  const r2 = await ekleYayinla(o2, hazir);
+  assert.deepEqual(r2.fsShim, { book4: 'zaten-var' });
+  const a2 = arsivOku(o2);
+  assert.equal(a2.b4.sha256, sha(fs.readFileSync(hazir)));
+});
+
+test('fs-shim: başka kitabın ad-alanını taşıyan sayfa RED; index.html yoksa uyarı', async () => {
+  const o = ortam();
+  o.yaz(
+    'book4/index.html',
+    o.html('book4').replace('<head>', '<head><script>window.__emppSubBook="book2";</script>'),
+  );
+  await assert.rejects(
+    ekleYayinla(o, path.join(o.d, 'girdi', 'book4')),
+    /başka kitabın ad-alanını taşıyor .*"book2"/,
+  );
+
+  const o2 = ortam();
+  o2.yaz('book4/kapak.txt', 'k');
+  o2.yaz('book4/sayfa/1.txt', 's1');
+  const uyarilar = [];
+  const r = await y.yayinla(
+    temel(o2, 'https://ornek.invalid/guncelleme', {
+      ilk: true,
+      oncekiSurum: '2.66.1',
+      panel: 66,
+      index: o2.yaz('i.html', o2.html('a')),
+      ekle: { book4: path.join(o2.d, 'girdi', 'book4') },
+    }),
+    { gunluk: (m) => uyarilar.push(m) },
+  );
+  assert.deepEqual(r.fsShim, { book4: 'index-yok' });
+  assert.ok(uyarilar.some((m) => /book4: kökte index\.html yok/.test(m)), uyarilar.join('\n'));
+});
+
+test('kaynak-sentinel: g-yayin etiketi KENDİ kurmaz — paketleyicinin tek kaynağını çağırır', () => {
+  const kaynak = fs.readFileSync(path.join(__dirname, 'yayinla.js'), 'utf8');
+  assert.ok(kaynak.includes("require('../../src/packaging/fs-shim-subbook-html')"));
+  assert.ok(kaynak.includes('fsShimHtml.injectFsShimIntoSubBookHtml('));
+  assert.ok(!kaynak.includes('<script'), 'etiket kopyası yok (etiketi yalnız tek kaynak kurar)');
+  const paketleyici = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'packaging', 'fs-shim-subbook-inject.js'),
+    'utf8',
+  );
+  assert.match(paketleyici, /injectFsShimIntoSubBookHtml\(bookHtml, relBookDir\)/);
+});

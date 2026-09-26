@@ -27,6 +27,7 @@ const anahtar = require('../g-yayin/anahtar');
 const zip = require('../g-yayin/zip-yaz');
 const yayin = require('../g-yayin/yayinla');
 const { MOTOR_DOSYA_ADI } = require('../g-yayin/durum');
+const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
 const { VARSAYILAN_DIZIN } = require('./sunucu');
 const o = require('./ortak');
 
@@ -57,7 +58,12 @@ function motor(s) {
 }
 
 function kitapYaz(kok, dizin, motorSurumu, ekSayfa) {
-  yaz(kok, `${dizin}/index.html`, `<!doctype html><html><body>${dizin}</body></html>\n`);
+  // Gerçek kitap sayfası gibi `<head>` taşır: fs-shim etiketleri paketleyicideki gibi oraya girer.
+  yaz(
+    kok,
+    `${dizin}/index.html`,
+    `<!doctype html><html><head><meta charset="utf-8"></head><body>${dizin}</body></html>\n`,
+  );
   yaz(kok, `${dizin}/${MOTOR_DOSYA_ADI}`, motor(motorSurumu));
   yaz(kok, `${dizin}/sayfa/1.txt`, `${dizin} sayfa 1\n`);
   if (ekSayfa) yaz(kok, `${dizin}/sayfa/${ekSayfa}`, `${dizin} ek sayfa\n`);
@@ -440,6 +446,13 @@ async function hazirla(s = {}) {
     [`book2/${MOTOR_DOSYA_ADI}`]: motorV2,
   };
   for (const [y, s] of Object.entries(kaynakOz)) if (y.startsWith('book4/')) gDosyalari[y] = s;
+  // Eklenen kitabın sayfası arşive PAKETLEYİCİNİN alt-kitap fs-shim enjeksiyonuyla girer (g-yayin
+  // `kitapArsiviHazirla` → `src/packaging/fs-shim-subbook-html.js`, tek kaynak): beklenen = kaynak
+  // sayfa + o dönüşüm. Etiketin varlığı ayrıca `uctan-uca.test.js`'te düz metinle sınanır.
+  const book4Index = fs.readFileSync(path.join(kaynak, 'book4', 'index.html'), 'utf8');
+  gDosyalari['book4/index.html'] = o.sha256(
+    Buffer.from(fsShimHtml.injectFsShimIntoSubBookHtml(book4Index, 'book4').html, 'utf8'),
+  );
   const tabanDosyalari = {};
   for (const [y, s] of Object.entries(taban0)) {
     if (y.startsWith('book3/') || y in gDosyalari) continue;

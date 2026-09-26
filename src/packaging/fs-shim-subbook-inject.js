@@ -29,6 +29,8 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { findSubBookDirs } = require('./sub-book-dirs');
+// Etiket biçimi + idempotentlik TEK KAYNAKTA: G yayın aracı (tools/g-yayin) da bunu çağırır.
+const { injectFsShimIntoSubBookHtml } = require('./fs-shim-subbook-html');
 
 /**
  * @param {string} appPath - Electron uygulamasının kök dizini (kök index.html'in
@@ -53,25 +55,15 @@ async function injectFsShimIntoSubBooks(appPath) {
         results.push({ book: relBookDir, action: 'no-index' });
         continue;
       }
-      let bookHtml = await fs.readFile(bookIndexPath, 'utf8');
-      const depth = relBookDir.split('/').length;
-      const relShimSrc = '../'.repeat(depth) + 'empp-fs-shim.js';
-      const subBookVar = `<script>window.__emppSubBook=${JSON.stringify(relBookDir)};</script>`;
-      const shimTag = `<script src="${relShimSrc}"></script>`;
+      const bookHtml = await fs.readFile(bookIndexPath, 'utf8');
+      const { html, changed, relShimSrc } = injectFsShimIntoSubBookHtml(bookHtml, relBookDir);
 
-      let toInject = '';
-      if (!bookHtml.includes('window.__emppSubBook')) toInject += subBookVar;
-      if (!bookHtml.includes('empp-fs-shim.js')) toInject += (toInject ? '\n' : '') + shimTag;
-
-      if (!toInject) {
+      if (!changed) {
         results.push({ book: relBookDir, action: 'already-injected' });
         continue;
       }
 
-      bookHtml = bookHtml.includes('<head>')
-        ? bookHtml.replace('<head>', '<head>' + toInject)
-        : toInject + bookHtml;
-      await fs.writeFile(bookIndexPath, bookHtml);
+      await fs.writeFile(bookIndexPath, html);
       results.push({ book: relBookDir, action: 'injected', relShimSrc });
     } catch (bookErr) {
       results.push({ book: relBookDir, action: 'error', error: bookErr.message });

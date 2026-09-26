@@ -121,6 +121,25 @@ test(
       assert.equal(bul('gecerli').ikinci, 'guncel (1 istek)');
       assert.match(bul('geri-alma-tetik').sebep, /^manifest-reddedildi:surum-eski$/);
       assert.match(bul('baska-set-tetik').sebep, /^manifest-reddedildi:baska-set$/);
+      // G ile EKLENEN kitabın sayfası paketleyicinin alt-kitap fs-shim etiketlerini taşımalı —
+      // yoksa renderer fs okumaları örtüyü/WORK'ü görmez. Düz metinle (fonksiyondan bağımsız).
+      // Windows (yerinde): kurulu ağaç; örtü: etkin görünüm, paket gövdesinde book4 YOK.
+      const yer = path.join(k.calisma, 'gecerli');
+      const sayfa = fs.readFileSync(
+        path.join(yer, kip === 'ortu' ? 'gorunum' : 'kurulu', 'book4', 'index.html'),
+        'utf8',
+      );
+      assert.ok(
+        sayfa.startsWith(
+          '<!doctype html><html><head><script>window.__emppSubBook="book4";</script>\n' +
+            '<script src="../empp-fs-shim.js"></script><meta charset="utf-8">',
+        ),
+        kip + ': book4/index.html fs-shim almamış: ' + sayfa.slice(0, 160),
+      );
+      assert.equal(sayfa.split('empp-fs-shim.js').length - 1, 1, kip + ': tek shim etiketi');
+      if (kip === 'ortu') {
+        assert.equal(fs.existsSync(path.join(yer, 'kurulu', 'book4')), false, 'gövdeye yazılmadı');
+      }
     }
 
     // dogrula.js: kurulu ağaç 'degismez' kipinde geçer, 'tam' kipinde kalır.
