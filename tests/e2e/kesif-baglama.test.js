@@ -904,3 +904,21 @@ test('keşif → db-kanit: keşfedilen kitap/platform paket-denetle db-kanit ad�
   assert.equal(db.kanit.olcum.db_boyut, veri.length);
   assert.equal(db.kanit.olcum.cdn_boyut, veri.length);
 });
+
+test('K4 başsız: kapının gerçek güncellik katmanı (k4-guncellik.guncellikKatmani) e2e okuyucusuna aynı anlamla gider', () => {
+  const K4 = require('../../tools/kabul/k4-guncellik');
+  const karar = (k4) => ({ katmanlar: { guncellik: K4.guncellikKatmani(k4) || undefined } });
+  const gec = KK.k4Basliksiz(karar({ durum: K4.K4_DURUM.GECTI, kod: 0, sebep: 'menü v15 = İmpark Vs 15' }));
+  assert.equal(gec.durum, 'GECTI');
+  assert.match(gec.sebep, /v15 = İmpark Vs 15/, 'GEÇTİ özeti okuyucuya taşınmalı');
+  const eski = KK.k4Basliksiz(karar({ durum: K4.K4_DURUM.GUNCEL_DEGIL, kod: 3, sebep: 'menü v13 < İmpark Vs 15' }));
+  assert.equal(eski.durum, 'KALDI');
+  assert.match(eski.sebep, /güncel değil: menü v13/);
+  const olc = KK.k4Basliksiz(karar({ durum: K4.K4_DURUM.OLCULEMEDI, kod: 4, sebep: 'CDP bağlanmadı' }));
+  assert.equal(olc.durum, 'OLCULEMEDI');
+  assert.match(olc.sebep, /CDP bağlanmadı/);
+  // KABUL_K4 kapalı (ATLANDI) → katman yazılmaz → okuyucu "sormuyor" KALDI (gerçek eksik)
+  const atl = KK.k4Basliksiz(karar({ durum: K4.K4_DURUM.ATLANDI }));
+  assert.equal(atl.durum, 'KALDI');
+  assert.match(atl.sebep, /güncelliği sormuyor/);
+});

@@ -200,9 +200,11 @@ function k4Basliksiz(karar) {
         "başsız kabul güncelliği sormuyor: karar.json'da güncellik (G manifesti / İmpark içerik " +
         'kanalı) katmanı yok (tools/kabul/basliksiz-kabul.js)',
     };
-  if (g.durum === 'GECTI') return { durum: DURUM.GECTI, sebep: (g.sebepler || []).join('; ') };
-  if (g.durum === 'RED') return { durum: DURUM.KALDI, sebep: (g.sebepler || []).join('; ') };
-  return { durum: DURUM.OLCULEMEDI, sebep: (g.sebepler || []).join('; ') || String(g.durum) };
+  // Yazan: tools/kabul/k4-guncellik.js `guncellikKatmani` — GECTI'de `sebepler` boş, ölçüm özeti `ozet`'te.
+  const neden = (g.sebepler || []).join('; ') || g.ozet || '';
+  if (g.durum === 'GECTI') return { durum: DURUM.GECTI, sebep: neden };
+  if (g.durum === 'RED') return { durum: DURUM.KALDI, sebep: neden };
+  return { durum: DURUM.OLCULEMEDI, sebep: neden || String(g.durum) };
 }
 
 module.exports = {
