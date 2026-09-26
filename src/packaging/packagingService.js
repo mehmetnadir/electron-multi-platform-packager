@@ -710,6 +710,10 @@ MimeType=application/x-electron;
           motorDamgasiSonucu = { durum: 'hata', hata: motorError.message };
         }
       }
+      // Makine-okur tek satır (2026-09-26, E3/D-1): Pardus derleme betikleri (docker + ProBook)
+      // bunu `tools/pardus/motor-kanonik.js son` ile okuyup ajan log'una taşır — kanonik
+      // görünmezse "bilinmiyor" sessiz kalmaz. null = kapı kapalı.
+      console.log(motorSurumu.damgaSatiri(motorDamgasiSonucu));
 
       // PAKET KİMLİK MANİFESTİ (Katman 1, 2026-09-20) — KAPI VARSAYILAN AÇIK
       // (`EMPP_PAKET_MANIFESTI=0` kapatır). Kurulu exe'nin "ben hangi setim, içimde

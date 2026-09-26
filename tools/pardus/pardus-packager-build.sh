@@ -17,6 +17,12 @@
 # demek bugune kadar HICBIR SEY yapmiyordu — degisken docker'a gecirilmiyordu, kapi sessizce
 # kapali kaliyordu. Artik ikisi de -e ile aktariliyor (varsayilanlar degismedi: webp KAPALI,
 # olu temizlik ACIK).
+# MOTOR KANONIGI (2026-09-26, kanit E3 / karar D-1): kanonik `~/.empp-agent/motor/kanonik.json`
+#   (ya da EMPP_MOTOR_KANONIK) konteynere SALT-OKUR /motor olarak baglanir ve paketleyici
+#   EMPP_MOTOR_KANONIK=/motor/kanonik.json ile onu okur. Eskiden hic baglanmiyordu: motorDegistir
+#   "bilinmiyor" deyip 43e23 motoruna dokunmuyordu, satir yalniz konteyner log'unda kaliyordu.
+#   Kanonik yoksa derleme DURMAZ ama `UYARI motor:` satiri stdout'a (ajan log'una) duser; derleme
+#   sonrasi paketin `EMPP_MOTOR` damgasi da aktarilir. EMPP_MOTOR_SURUMU=0 konteynere gecer (T6).
 # Ozellikler: idempotent (imaj/volume varsa yeniden kurmaz), disk kapisi (BOYUT ORANTILI), tek build
 # (kilit), her adimda log, nice ile dusuk oncelik, Rosetta+AppImage binfmt kaydi.
 set -euo pipefail
@@ -28,7 +34,7 @@ set -euo pipefail
 TOOLS="${PARDUS_TOOLS:-$(cd "$(dirname "$0")" && pwd -P)}"
 REPO="${PACKAGER_REPO:-$(cd "$TOOLS/../.." && pwd -P)}"
 IMG="packager-linux:2"   # :2 = zenity gomulu (2026-09-15)
-LOCK="/tmp/f1-pardus/.pardus-packager.lock"
+LOCK="${PARDUS_KILIT:-/tmp/f1-pardus/.pardus-packager.lock}"   # test kendi kilidini verir
 DISK_KAT="${PARDUS_DISK_KAT:-5}"          # olculen tepe/kaynak orani (2026-09-19)
 DISK_TABAN_GB="${PARDUS_DISK_TABAN_GB:-15}" # es zamanli isler icin ayrilan taban
 MIN_FREE_GB="${PARDUS_MIN_FREE_GB:-}"     # ACIK override; bostaysa boyut-orantili hesap konusur
@@ -52,7 +58,10 @@ elif ! mkdir "$LOCK" 2>/dev/null; then
   kill -0 "$OLDPID" 2>/dev/null && die "baska bir build calisiyor (pid $OLDPID, $LOCK)"
   rm -rf "$LOCK"; mkdir "$LOCK" || die "kilit alinamadi"
 fi
-echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT
+# Kilit pid'i ve silinmesi YALNIZ kilidi biz aldiysak (2026-09-26): PARALEL kipte kilit alinmaz;
+# eskiden burada yine yaziliyordu — kilit dizini yoksa `set -e` betigi dusuruyordu, varsa (baska
+# bir build tutuyorsa) pid'i ezip EXIT'te O build'in kilidini siliyordu.
+[ "${PARDUS_PARALEL:-0}" = "1" ] || { echo $$ > "$LOCK/pid"; trap 'rm -rf "$LOCK"' EXIT; }
 [ "${PARDUS_PARALEL:-0}" = "1" ] || { docker ps --format '{{.Names}}' | grep -q '^pardus-pack-' && die "calisan pardus-pack-* konteyneri var"; }
 
 # --- girdi ---
@@ -104,6 +113,19 @@ S=":rosetta-appimage:M::\\x7f\\x45\\x4c\\x46\\x02\\x01\\x01\\x00\\x00\\x00\\x00\
 printf "%s" "$S" | nsenter -t 1 -m -u -n -i sh -c "[ -e /proc/sys/fs/binfmt_misc/rosetta-appimage ] || cat > /proc/sys/fs/binfmt_misc/register; grep -q enabled /proc/sys/fs/binfmt_misc/rosetta-appimage && echo binfmt-ok"' 2>&1 | grep -q binfmt-ok || die "rosetta-appimage binfmt kaydi basarisiz"
 log "binfmt: rosetta-appimage aktif"
 
+# --- 43e23 motor kanonigi (E3 / D-1): dogrulanirsa salt-okur baglanir, yoksa ACIK UYARI ---
+MOTOR_YOL="${EMPP_MOTOR_KANONIK:-$HOME/.empp-agent/motor/kanonik.json}"
+MOTOR_ARGS=()
+if ! command -v node >/dev/null 2>&1; then
+  log "UYARI motor: node yok, kanonik denetlenemedi ($MOTOR_YOL) — 43e23 motoru DEGISMEYECEK"
+elif MOTOR_SATIR=$(node "$TOOLS/motor-kanonik.js" on "$MOTOR_YOL" 2>&1); then
+  MOTOR_DIZIN="$(cd "$(dirname "$MOTOR_YOL")" && pwd -P)"
+  MOTOR_ARGS=(-v "$MOTOR_DIZIN":/motor:ro -e "EMPP_MOTOR_KANONIK=/motor/$(basename "$MOTOR_YOL")")
+  log "$MOTOR_SATIR — konteynere /motor olarak baglaniyor (salt-okur)"
+else
+  log "$MOTOR_SATIR"
+fi
+
 # --- build ---
 JOB="j$(date +%y%m%d-%H%M%S)"
 mkdir -p "$OUT/raw"
@@ -122,6 +144,8 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}" \
   -e EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
+  -e EMPP_MOTOR_SURUMU="${EMPP_MOTOR_SURUMU:-1}" \
+  ${MOTOR_ARGS[@]+"${MOTOR_ARGS[@]}"} \
   -v "$IN_MOUNT":/in:ro -v "$OUT/raw":/out -v "$TOOLS":/tools:ro \
   "$IMG" "$APP_NAME" "$VER" "$JOB" >> "$LOGF" 2>&1
 RC=$?
@@ -133,6 +157,11 @@ IMPARK=$(ls "$OUT"/raw/linux/*.impark 2>/dev/null | head -1)
 [ -n "$IMPARK" ] || die ".impark uretilmedi (log: $LOGF)"
 mv -f "$IMPARK" "$OUT/"; IMPARK="$OUT/$(basename "$IMPARK")"
 log "impark: $IMPARK ($(du -h "$IMPARK" | cut -f1))"
+# Paketin motor damgasi ajan log'una (bilinmiyor/kapali/karisik ise UYARI satiriyla).
+if command -v node >/dev/null 2>&1; then
+  while IFS= read -r l; do log "$l"; done \
+    < <(node "$TOOLS/motor-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
+fi
 
 # --- dogrulama (kanit) ---
 docker run --rm --platform linux/amd64 --entrypoint /tools/impark-dogrula.sh \

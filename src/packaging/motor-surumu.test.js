@@ -157,3 +157,98 @@ test('acikMi: varsayılan AÇIK, EMPP_MOTOR_SURUMU=0 kapatır', () => {
   assert.equal(M.acikMi({ EMPP_MOTOR_SURUMU: '0' }), false);
   assert.equal(M.acikMi({ EMPP_MOTOR_SURUMU: '1' }), true);
 });
+
+// ---------------------------------------------------------------------------
+// İKİ PARDUS ŞERİDİ (2026-09-26, kanıt E3 / T6 / D-1): ANA kopya sha12'si, senkron kanonik
+// okuma (nabız + şerit denetçisi), makine-okur damga satırı.
+// ---------------------------------------------------------------------------
+
+/** Doğrulanabilir kanonik önbellek kurar: <dizin>/{43e23…js, kanonik.json}. */
+async function kanonikKur(icerik = 'KANONIK-MOTOR-v2', ek = {}) {
+  const dizin = await fs.mkdtemp(path.join(os.tmpdir(), 'motor-kanonik-'));
+  await fs.writeFile(path.join(dizin, M.MOTOR_DOSYA_ADI), icerik);
+  const json = { sha12: sha12(icerik), surum: '2026.9.12', surumler: {}, ...ek };
+  await fs.writeFile(path.join(dizin, 'kanonik.json'), JSON.stringify(json));
+  return { dizin, yol: path.join(dizin, 'kanonik.json'), sha12: sha12(icerik) };
+}
+
+test('anaKopyaMi: kök ve doğrudan bookN/ ANA; htmletk/etk iç kopyası ANA DEĞİL', () => {
+  assert.equal(M.anaKopyaMi(M.MOTOR_DOSYA_ADI), true);
+  assert.equal(M.anaKopyaMi(`book3/${M.MOTOR_DOSYA_ADI}`), true);
+  assert.equal(M.anaKopyaMi(`book1/htmletk/u1/etk/${M.MOTOR_DOSYA_ADI}`), false);
+  assert.equal(M.anaKopyaMi('book1/baska.js'), false);
+  assert.equal(M.anaSha12([{ dosya: `book1/${M.MOTOR_DOSYA_ADI}`, sonraSha12: 'a' },
+    { dosya: `book2/${M.MOTOR_DOSYA_ADI}`, sonraSha12: 'b' }]), null, 'karışık ANA → null');
+  assert.equal(M.anaSha12([]), null);
+});
+
+test('T6 kod tarafı: kanonik görünürse paket.json.motorSurumu.sha12 = kanonik (ANA kopyalar)', async () => {
+  const kok = await sentetikAgacKur('YAYINCI-ESKI');
+  const k = await kanonikKur();
+  try {
+    const d = await M.motorDegistir(kok, k.yol);
+    assert.equal(d.durum, 'guncel');
+    assert.equal(d.sha12, k.sha12);
+    const pj = JSON.parse(await fs.readFile(path.join(kok, 'paket.json'), 'utf8'));
+    assert.equal(pj.motorSurumu.sha12, k.sha12);
+    assert.equal(pj.motorSurumu.kanonikSha12, k.sha12);
+  } finally {
+    await fs.remove(kok);
+    await fs.remove(k.dizin);
+  }
+});
+
+test('T6 negatif: kanonik GÖRÜNMEZSE durum bilinmiyor, motor değişmez, sha12 = eski ANA motor', async () => {
+  const kok = await sentetikAgacKur('YAYINCI-ESKI');
+  try {
+    const d = await M.motorDegistir(kok, path.join(kok, 'yok', 'kanonik.json'));
+    assert.equal(d.durum, 'bilinmiyor');
+    assert.equal(d.degisen, 0);
+    assert.equal(d.sha12, sha12('YAYINCI-ESKI'), 'değişmemiş motorun izi pakette kalır');
+    const pj = JSON.parse(await fs.readFile(path.join(kok, 'paket.json'), 'utf8'));
+    assert.equal(pj.motorSurumu.durum, 'bilinmiyor');
+    assert.equal(pj.motorSurumu.kanonikSha12, null);
+  } finally {
+    await fs.remove(kok);
+  }
+});
+
+test('kanonikOzetEsz: doğrulanmış {sha12, surum}; hash tutmazsa / dosya yoksa / sürüm bozuksa null', async () => {
+  const k = await kanonikKur();
+  try {
+    assert.deepEqual(M.kanonikOzetEsz(k.yol), { sha12: k.sha12, surum: '2026.9.12' });
+    await fs.writeFile(path.join(k.dizin, M.MOTOR_DOSYA_ADI), 'BASKA-ICERIK');
+    assert.equal(M.kanonikOzetEsz(k.yol), null, 'json sha12 ≠ dosya → null');
+    await fs.remove(path.join(k.dizin, M.MOTOR_DOSYA_ADI));
+    assert.equal(M.kanonikOzetEsz(k.yol), null, 'motor dosyası yok → null');
+    assert.equal(M.kanonikOzetEsz(path.join(k.dizin, 'yok.json')), null);
+  } finally {
+    await fs.remove(k.dizin);
+  }
+  const b = await kanonikKur('X', { surum: 'eski' });
+  try {
+    assert.equal(M.kanonikOzetEsz(b.yol), null, 'geçersiz sürüm → null (kanonikYukle ile aynı ölçüt)');
+    assert.equal(await M.kanonikYukle(b.yol), null);
+  } finally {
+    await fs.remove(b.dizin);
+  }
+});
+
+test('damgaSatiri ↔ damgaSatiriAyristir gidiş-dönüş; null damga = kapı kapalı; son satır kazanır', () => {
+  const s = M.damgaSatiri({ durum: 'guncel', sha12: '03e8af70a0f3', kanonikSha12: '03e8af70a0f3', kanonikSurum: '2026.9.12', degisen: 5 });
+  assert.equal(s, 'EMPP_MOTOR durum=guncel sha12=03e8af70a0f3 kanonik=03e8af70a0f3 surum=2026.9.12 degisen=5');
+  assert.equal(M.damgaSatiri(null), 'EMPP_MOTOR durum=kapali sha12=- kanonik=YOK');
+  const o = M.damgaSatiriAyristir(`[io] x\n${M.damgaSatiri({ durum: 'bilinmiyor', sha12: 'f44371530000' })}\n${s}\n`);
+  assert.equal(o.durum, 'guncel');
+  assert.equal(o.sha12, '03e8af70a0f3');
+  assert.equal(M.damgaSatiriAyristir('EMPP_MOTORX durum=a\nhiçbir şey'), null);
+});
+
+test('packagingService motor adımından sonra makine-okur damga satırını basar (Pardus betikleri okur)', async () => {
+  const src = await fs.readFile(path.join(__dirname, 'packagingService.js'), 'utf8');
+  assert.match(src, /console\.log\(motorSurumu\.damgaSatiri\(motorDamgasiSonucu\)\);/);
+  const motorBlok = src.indexOf('motorSurumu.motorDegistir(workingPath');
+  const satir = src.indexOf('motorSurumu.damgaSatiri(motorDamgasiSonucu)');
+  const manifest = src.indexOf('paketManifesti.paketeUygula(workingPath');
+  assert.ok(motorBlok > 0 && satir > motorBlok && satir < manifest, 'motor adımından sonra, manifestten önce');
+});

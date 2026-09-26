@@ -29,6 +29,7 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
       dockerInfo: d.status, dockerPs: p.status, kabulTimeout: e.AGENT_PARDUS_KABUL_TIMEOUT_MS,
       derlemeKilidi: e.EMPP_DERLEME_KABUL_KILIDI, indirme: e.AGENT_DOWNLOAD_RATE || '', kanitArsiv: e.EMPP_KANIT_ARSIV, path: e.PATH, nodeOpt: e.NODE_OPTIONS, upload: e.AGENT_UPLOAD_RATE,
       yetimKaldi: require('fs').existsSync(e.EMPP_SERIT_KOK + '/work/empp-agent-eski'),
+      motorKanonik: e.EMPP_MOTOR_KANONIK,
     }));
     setTimeout(() => process.exit(0), 1500);
   `);
@@ -38,7 +39,8 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
     encoding: 'utf8', timeout: 20000,
     env: { ...process.env, EMPP_SERIT_KOK: serit, EMPP_LOGO_PORT: '0', HOME: serit,
       AGENT_CAPS: '', PROBOOK_HOST: '', PARDUS_BUILD_SCRIPT: '', EMPP_PARDUS_KABUL: '', EMPP_LINUX_DEB: '', PACKAGER_API: '',
-      NODE_OPTIONS: '', AGENT_UPLOAD_RATE: '', EMPP_DERLEME_KABUL_KILIDI: '', EMPP_KANIT_ARSIV: '', AGENT_DOWNLOAD_RATE: '' },
+      NODE_OPTIONS: '', AGENT_UPLOAD_RATE: '', EMPP_DERLEME_KABUL_KILIDI: '', EMPP_KANIT_ARSIV: '', AGENT_DOWNLOAD_RATE: '',
+      EMPP_MOTOR_KANONIK: '' },
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
@@ -58,6 +60,8 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
   assert.match(r.stdout, /runner cikti rc=0/);
   assert.equal(o.derlemeKilidi, '1', 'derleme boyunca kabul kilidi (B.2)');
   assert.equal(o.kanitArsiv, path.join(serit, 'kanit'), 'kabul kanıtı 14 gün (B.1)');
+  assert.equal(o.motorKanonik, path.join(serit, '.empp-agent', 'motor', 'kanonik.json'), 'Mac docker şeridiyle aynı değişken (E3)');
+  assert.equal(nabiz.motorSha12, null, 'motor-surumu.js olmayan (eski) kurulumda nabız düşmez, alan null');
   assert.ok(o.path.split(':').includes(path.join(serit, 'opt', 'bin')), 'kullanıcı düzeyi unrar PATH\'te');
   assert.match(o.nodeOpt, /--dns-result-order=ipv4first/);
   assert.match(o.upload, /^(25M|4M)$/);

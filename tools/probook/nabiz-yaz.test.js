@@ -94,3 +94,31 @@ test('apiYoklayici: ok → tek hata durumu bozmaz → iki ardışık hata "hata"
   cevap = { status: 204, json: async () => { throw new Error('boş'); } };
   assert.equal(await y.yokla(), 'ok');
 });
+
+test('nabız ProBook motor kanoniğinin DOĞRULANMIŞ sha12\'sini taşır; bozuk/yoksa null → Mac alır', () => {
+  const crypto = require('node:crypto');
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'nabiz-motor-'));
+  fs.mkdirSync(path.join(kok, 'work'));
+  const md = path.join(kok, '.empp-agent', 'motor');
+  fs.mkdirSync(md, { recursive: true });
+  const sha = crypto.createHash('sha256').update('KANONIK-v2').digest('hex').slice(0, 12);
+  fs.writeFileSync(path.join(md, '43e23fce2b7009474555a77.js'), 'KANONIK-v2');
+  fs.writeFileSync(path.join(md, 'kanonik.json'), JSON.stringify({ sha12: sha, surum: '2026.9.12' }));
+  const dosya = path.join(kok, 'log', 'nabiz.json');
+  const simdi = Date.now();
+  const once = process.env.EMPP_MOTOR_KANONIK;
+  delete process.env.EMPP_MOTOR_KANONIK;
+  try {
+    birKez({ dosya, runnerPid: process.pid, commit: 'x', serit: kok, home: kok, simdi, api: 'ok' });
+    const n = nabizAyristir(fs.readFileSync(dosya, 'utf8'));
+    assert.equal(n.motorSha12, sha, 'varsayılan ~/.empp-agent/motor/kanonik.json');
+    assert.equal(seritKarari({ nabiz: n, simdi, diskMinGb: 0, dolulukMax: 100, motorSha12: sha }).probookSaglikli, true);
+    fs.writeFileSync(path.join(md, '43e23fce2b7009474555a77.js'), 'YARIM-AKTARIM');
+    birKez({ dosya, runnerPid: process.pid, commit: 'x', serit: kok, home: kok, simdi, api: 'ok' });
+    const n2 = nabizAyristir(fs.readFileSync(dosya, 'utf8'));
+    assert.equal(n2.motorSha12, null, 'hash tutmayan kanonik nabza girmez');
+    assert.match(seritKarari({ nabiz: n2, simdi, diskMinGb: 0, dolulukMax: 100, motorSha12: sha }).sebep, /ProBook motor kanoniği yok/);
+  } finally {
+    if (once !== undefined) process.env.EMPP_MOTOR_KANONIK = once;
+  }
+});

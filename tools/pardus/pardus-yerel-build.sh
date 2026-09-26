@@ -16,6 +16,8 @@
 #   PARDUS_DOGRULA   (impark-dogrula.sh) — test icin degistirilebilir
 #   PARDUS_ICERIK_GUNCELLEME (linux) — K kanali, Mac docker seridiyle ayni
 #   EMPP_DERLEME_KABUL_KILIDI (0) — 1: derleme boyunca ~/.kabul.lock tutulur (serit-ajan.sh acar)
+#   EMPP_MOTOR_KANONIK (~/.empp-agent/motor/kanonik.json) — 43e23 motor kanonigi; Mac'ten LAN ile
+#     eslenir (tools/probook/arsiv-esle.sh). Yoksa derleme DURMAZ, `UYARI motor:` satiri (D-1).
 # Cikti: <cikti>/<ad>.impark, <cikti>/dogrula/rapor.txt, <cikti>/raw/packager.log,
 #        <cikti>/pardus-packager-build.log (her asama `ASAMA <ad> <sn>` satiriyla damgali).
 set -euo pipefail
@@ -139,6 +141,13 @@ export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-0}"
 # "impark güncellemelerini alıyorlar"). Ortamdaki EMPP_ICERIK_GUNCELLEME (Mac'te 'windows') OKUNMAZ;
 # kapatmak: PARDUS_ICERIK_GUNCELLEME=0. Parite testi: pardus-yerel-build.test.js.
 export EMPP_ICERIK_GUNCELLEME="${PARDUS_ICERIK_GUNCELLEME:-linux}"
+# 43e23 motor kanonigi (2026-09-26, E3 / D-1) — Mac docker seridiyle AYNI degisken ve denetci.
+# Paketleyici (motorDegistir) EMPP_MOTOR_KANONIK'i okur; ProBook'ta kanonik yoksa motor degismez,
+# bu artik sessiz degil: once/sonra satirlari ajan log'una duser.
+export EMPP_MOTOR_KANONIK="${EMPP_MOTOR_KANONIK:-$HOME/.empp-agent/motor/kanonik.json}"
+export EMPP_MOTOR_SURUMU="${EMPP_MOTOR_SURUMU:-1}"   # 0 = motor kapisi kapali (T6), docker ile ayni
+MOTOR_SATIR=$(node "$TOOLS/motor-kanonik.js" on "$EMPP_MOTOR_KANONIK" 2>&1) || true
+log "$MOTOR_SATIR"
 log "paketleyici basliyor (job $JOB, DEB=$EMPP_LINUX_DEB) — log: $OUT/raw/packager.log"
 set +e
 ( cd "$WORKAPP" && node "$TOOLS/packager-run-yerel.js" "$REPO" "$SID" "$APP_NAME" "$VER" "$JOB" ) \
@@ -147,6 +156,8 @@ RC=$?
 set -e
 asama paketleyici
 [ $RC -eq 0 ] || die "paketleyici rc=$RC (son satirlar: $(tail -3 "$OUT/raw/packager.log" | tr '\n' ' '))"
+while IFS= read -r l; do log "$l"; done \
+  < <(node "$TOOLS/motor-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
 
 LINUX_OUT="$WORKAPP/temp/$JOB/linux"
 IMPARK=$(ls "$LINUX_OUT"/*.impark 2>/dev/null | head -1 || true)

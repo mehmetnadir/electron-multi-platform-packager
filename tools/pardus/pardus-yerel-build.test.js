@@ -22,8 +22,17 @@ module.exports = { startPackaging: async (job, info) => {
     icerik: process.env.EMPP_ICERIK_GUNCELLEME, setGuncelleme: process.env.EMPP_SET_GUNCELLEME,
     kabulKilidi: process.env.KABUL_KILIT ? (fs.existsSync(process.env.KABUL_KILIT) ? fs.readFileSync(process.env.KABUL_KILIT, 'utf8') : 'YOK') : null,
     cache: process.env.ELECTRON_CACHE, cwdBin: fs.existsSync('node_modules/.bin/electron-builder'),
+    motorKanonik: process.env.EMPP_MOTOR_KANONIK, motorKapi: process.env.EMPP_MOTOR_SURUMU,
     info, girdi: fs.readdirSync(up).sort(),
   }));
+  // STUB_MOTOR=1: packagingService'in motor adımı BİREBİR (gerçek motor-surumu.js, varsayılan yol =
+  // bu süreçteki EMPP_MOTOR_KANONIK) + makine-okur damga satırı + paket.json çıktıya.
+  if (process.env.STUB_MOTOR === '1') {
+    const M = require(process.env.STUB_MOTOR_MODUL);
+    const md = M.acikMi() ? await M.motorDegistir(up) : null;
+    console.log(M.damgaSatiri(md));
+    if (fs.existsSync(p.join(up, 'paket.json'))) fs.copyFileSync(p.join(up, 'paket.json'), p.join(d, 'paket.json'));
+  }
   fs.writeFileSync(p.join(up, 'index.html'), 'PAKETLEYICI DEGISTIRDI');
   fs.writeFileSync(p.join(d, 'Deneme-1.0.0.impark'), 'IMPARK');
   return { linux: { success: true } };
@@ -174,4 +183,52 @@ test('kabul kilidi: süren kabul varsa bekler; boşalmazsa ERTELENEBİLİR işar
   assert.equal(ertelenebilirKaynakHatasi(`pardus-packager-build.sh rc=1: ${r.stdout.slice(-1500)}`), true, 'runner failed YAZMAZ');
   assert.equal(fs.readFileSync(kilit, 'utf8'), icerik, 'başkasının kilidi aynen');
   assert.equal(fs.existsSync(path.join(o.cikti, 'raw', 'linux', 'ozet.json')), false, 'paketleyici hiç koşmadı');
+});
+
+// MOTOR KANONİĞİ (2026-09-26, E3 / T6 / D-1): ProBook şeridi Mac docker şeridiyle AYNI değişkeni
+// (EMPP_MOTOR_KANONIK, varsayılan ~/.empp-agent/motor/kanonik.json) ve aynı denetçiyi kullanır.
+const crypto = require('node:crypto');
+const MOTOR = '43e23fce2b7009474555a77.js';
+const sha12 = (x) => crypto.createHash('sha256').update(x).digest('hex').slice(0, 12);
+function motorOrtami() {
+  const o = ortam();
+  fs.mkdirSync(path.join(o.kaynak, 'book1'));
+  fs.writeFileSync(path.join(o.kaynak, 'book1', MOTOR), 'YAYINCI-ESKI');
+  const ev = path.join(o.kok, 'ev');
+  fs.mkdirSync(ev);
+  const ek = {
+    HOME: ev, EMPP_MOTOR_KANONIK: '', EMPP_MOTOR_SURUMU: '', STUB_MOTOR: '1',
+    STUB_MOTOR_MODUL: path.join(__dirname, '..', '..', 'src', 'packaging', 'motor-surumu.js'),
+  };
+  return { o, ev, ek };
+}
+const paketJson = (o) => JSON.parse(fs.readFileSync(path.join(o.cikti, 'raw', 'linux', 'paket.json'), 'utf8'));
+
+test('motor: ProBook varsayılanı ~/.empp-agent/motor; kanonik varsa paket motoru kanonik, sha12 paket.json\'da', () => {
+  const { o, ev, ek } = motorOrtami();
+  const md = path.join(ev, '.empp-agent', 'motor');
+  fs.mkdirSync(md, { recursive: true });
+  fs.writeFileSync(path.join(md, MOTOR), 'KANONIK-v2');
+  fs.writeFileSync(path.join(md, 'kanonik.json'), JSON.stringify({ sha12: sha12('KANONIK-v2'), surum: '2026.9.12' }));
+  const r = kos(o, o.kaynak, ek);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const oz = JSON.parse(fs.readFileSync(path.join(o.cikti, 'raw', 'linux', 'ozet.json'), 'utf8'));
+  assert.equal(oz.motorKanonik, path.join(ev, '.empp-agent', 'motor', 'kanonik.json'), 'paketleyici aynı değişkeni görür');
+  assert.equal(oz.motorKapi, '1');
+  assert.match(r.stdout, new RegExp(`motor: kanonik ${sha12('KANONIK-v2')} 2026\\.9\\.12`));
+  assert.match(r.stdout, new RegExp(`motor: paket durum=guncel sha12=${sha12('KANONIK-v2')}`));
+  assert.doesNotMatch(r.stdout, /UYARI motor/);
+  assert.equal(paketJson(o).motorSurumu.sha12, sha12('KANONIK-v2'));
+  assert.equal(fs.readFileSync(path.join(o.kaynak, 'book1', MOTOR), 'utf8'), 'YAYINCI-ESKI', 'kaynak yerinde değişmez');
+});
+
+test('motor: ProBook\'ta kanonik yoksa derleme DURMAZ, iki UYARI satırı; paket.json durum=bilinmiyor', () => {
+  const { o, ek } = motorOrtami();
+  const r = kos(o, o.kaynak, ek);
+  assert.equal(r.status, 0, `D-1: önce UYARI\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /UYARI motor: kanonik yok ya da doğrulanamadı/);
+  assert.match(r.stdout, /UYARI motor: paket motoru kanonik DEĞİL \(durum=bilinmiyor/);
+  const pj = paketJson(o);
+  assert.equal(pj.motorSurumu.durum, 'bilinmiyor');
+  assert.equal(pj.motorSurumu.sha12, sha12('YAYINCI-ESKI'));
 });

@@ -278,6 +278,73 @@ async function kanonikYukle(kanonikYol = KANONIK_YOLU_VARSAYILAN) {
 }
 
 /**
+ * "ANA" kopya mı (Nadir 26.09, sözleşme O4): tek kitapta kök, SET'te doğrudan `bookN/` altı
+ * (kök kopya da sayılır). `bookN/…/htmletk/…/etk/` gibi iç kopyalar ANA DEĞİL. SAF.
+ * @param {string} rel kök-göreli POSIX yol
+ */
+function anaKopyaMi(rel) {
+  const p = String(rel || '').split('/');
+  return p[p.length - 1] === MOTOR_DOSYA_ADI && p.length <= 2;
+}
+
+/** ANA kopyaların son sha12'si: hepsi aynıysa o değer, yoksa/karışıksa null. SAF. */
+function anaSha12(kopyalar) {
+  const set = new Set((kopyalar || []).filter((k) => anaKopyaMi(k.dosya)).map((k) => k.sonraSha12));
+  return set.size === 1 ? [...set][0] : null;
+}
+
+/**
+ * `kanonikYukle`'nin SENKRON eşi (2026-09-26, iki Pardus şeridi): ProBook nabzı ve Mac şerit
+ * denetçisi olay döngüsünde bunu okur. Aynı ölçüt: json sha12 (12 hane) + geçerli `surum` +
+ * yanındaki motor dosyasının sha12'si json'dakiyle aynı ve boş değil. Şüphede null.
+ * `tools/probook/arsiv-esle.sh` içindeki `MOTOR_JS` bu fonksiyonun bağımlılıksız eşidir
+ * (ProBook'taki eski depo sürümünde de koşsun diye); eşlik testle çivili.
+ * @param {string} [kanonikYol]
+ * @returns {{sha12:string, surum:string}|null}
+ */
+function kanonikOzetEsz(kanonikYol = KANONIK_YOLU_VARSAYILAN) {
+  try {
+    const k = JSON.parse(fs.readFileSync(kanonikYol, 'utf8'));
+    if (!k || typeof k.sha12 !== 'string' || k.sha12.length !== 12) return null;
+    if (!surumParcala(k.surum)) return null;
+    const icerik = fs.readFileSync(path.join(path.dirname(kanonikYol), MOTOR_DOSYA_ADI));
+    if (!icerik.length) return null;
+    const sha12 = crypto.createHash('sha256').update(icerik).digest('hex').slice(0, 12);
+    return sha12 === k.sha12 ? { sha12, surum: k.surum } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Paketleyicinin log'una basılan TEK makine-okur satır — Pardus derleme betikleri bunu
+ * `tools/pardus/motor-kanonik.js son` ile okuyup ajan log'una aktarır. SAF.
+ * `null` damga = kapı kapalı (`EMPP_MOTOR_SURUMU=0`).
+ */
+function damgaSatiri(damga) {
+  const d = damga && typeof damga === 'object' ? damga : { durum: 'kapali' };
+  const a = [
+    `durum=${d.durum || 'olculmedi'}`, `sha12=${d.sha12 || '-'}`, `kanonik=${d.kanonikSha12 || 'YOK'}`,
+  ];
+  if (d.kanonikSurum) a.push(`surum=${d.kanonikSurum}`);
+  if (Number.isFinite(d.degisen)) a.push(`degisen=${d.degisen}`);
+  return `EMPP_MOTOR ${a.join(' ')}`;
+}
+
+/** Metindeki SON `EMPP_MOTOR ...` satırını `{durum, sha12, kanonik, ...}`e çevirir; yoksa null. */
+function damgaSatiriAyristir(metin) {
+  const satirlar = String(metin || '').split(/\r?\n/).filter((l) => /(^|\s)EMPP_MOTOR\s/.test(l));
+  if (!satirlar.length) return null;
+  const govde = satirlar[satirlar.length - 1].replace(/^.*?EMPP_MOTOR\s+/, '');
+  const o = {};
+  for (const parca of govde.trim().split(/\s+/)) {
+    const i = parca.indexOf('=');
+    if (i > 0) o[parca.slice(0, i)] = parca.slice(i + 1);
+  }
+  return o.durum ? o : null;
+}
+
+/**
  * `paket.json`'a `motorSurumu` alanını birleştirir (diğer alanlar korunur). Dosya yoksa
  * yalnız `{motorSurumu}` ile oluşturur. I/O.
  */
@@ -346,6 +413,10 @@ async function motorDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYILAN, opt
 
   const damga = {
     durum,
+    // `sha12` (2026-09-26, E3/T6): kitapların ANA klasöründeki kopyaların SON hâli — hepsi aynıysa
+    // o değer, karışık ya da yoksa null. Kanonik bilinmiyorsa da dolar (değişmemiş eski motorun
+    // izi); `paket.json.motorSurumu.sha12` kabulde kanonikle kıyaslanır.
+    sha12: anaSha12(kopyalar),
     kanonikSha12: kanonik ? kanonik.sha12 : null,
     kanonikSurum: kanonik ? kanonik.surum : null,
     degisen: kopyalar.filter((k) => k.karar === 'degisti').length,
@@ -434,6 +505,11 @@ module.exports = {
   paketJsonaDamgaYaz,
   motorDegistir,
   motorKapisi,
+  anaKopyaMi,
+  anaSha12,
+  kanonikOzetEsz,
+  damgaSatiri,
+  damgaSatiriAyristir,
   rozetSurumuOku,
   rozetSurumuOkuEsz,
   acikMi,
