@@ -28,6 +28,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const kg = require('../../src/runtime/kitap-guncelleyici');
@@ -80,6 +81,24 @@ function dosyaSha256(yol) {
     fs.closeSync(fd);
   }
   return { sha256: h.digest('hex'), boyut };
+}
+
+/**
+ * Manifestteki imzalı `dosyalar[]` listesini arşivin GERÇEK içeriğiyle (aynı yöntemle,
+ * `zip.zipIcerigi`, yeniden türetilmiş) kıyaslar. Tutuyorsa `null`, tutmuyorsa hata metni.
+ */
+function dosyalarKarsilastir(beklenen, gercek) {
+  const b = new Map(beklenen.map((g) => [g.yol, g]));
+  const gr = new Map(gercek.map((g) => [g.yol, g]));
+  if (b.size !== gr.size)
+    return `dosyalar listesi arşivle uyuşmuyor (liste ${b.size} ≠ arşiv ${gr.size} dosya)`;
+  for (const [yol, g] of b) {
+    const h = gr.get(yol);
+    if (!h) return `dosyalar listesindeki yol arşivde yok: ${yol}`;
+    if (h.sha256 !== g.sha256 || h.boyut !== g.boyut)
+      return `dosyalar listesi arşivle uyuşmuyor: ${yol}`;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ argümanlar */
@@ -266,7 +285,7 @@ function yerelSurumOku(setDizini) {
   }
 }
 
-/** Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış zip. */
+/** Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış zip + içerik listesi. */
 function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   const y = path.resolve(String(kaynak));
   let st;
@@ -286,9 +305,11 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   } else {
     throw new Error(`--ekle ${dizin}: kaynak dosya ya da dizin değil: ${y}`);
   }
-  const denetim = zip.zipDenetle(gecici);
+  // İSTEMCİNİN okuyucusuyla açıp doğrular VE (yol,sha256,boyut) listesini üretir — bu liste
+  // manifestin imzalı `dosyalar[]` alanına gider, istemci arşivi açmadan doğrulayabilsin diye.
+  const dosyalar = zip.zipIcerigi(gecici);
   const oz = dosyaSha256(gecici);
-  return { gecici, sha256: oz.sha256, boyut: oz.boyut, adet: denetim.adet };
+  return { gecici, sha256: oz.sha256, boyut: oz.boyut, adet: dosyalar.length, dosyalar };
 }
 
 function kitapAdi(dizin, sha) {
@@ -380,7 +401,7 @@ async function yayinla(a, ops = {}) {
     const ad = kitapAdi(d, ar.sha256);
     const kaynak = `${taban}/set/${encodeURIComponent(setKimligi)}/kitap/${ad}`;
     arsivler.set(d, { ...ar, ad, kaynak });
-    degisiklik.ekle[d] = { kaynak, sha256: ar.sha256, boyut: ar.boyut };
+    degisiklik.ekle[d] = { kaynak, sha256: ar.sha256, boyut: ar.boyut, dosyalar: ar.dosyalar };
   }
 
   // 5) Yeni tam durum.
@@ -584,8 +605,20 @@ function ciktiDogrula({ cikti, setKimligi, acik }) {
       continue;
     }
     const oz = dosyaSha256(y);
-    if (oz.sha256 !== g.sha256 || oz.boyut !== g.boyut)
+    if (oz.sha256 !== g.sha256 || oz.boyut !== g.boyut) {
       hatalar.push(`kitap/${ad} sha256/boyut manifestle uyuşmuyor`);
+    } else if (g.dosyalar !== undefined) {
+      if (!durum.dosyalarGecerliMi(g.dosyalar)) {
+        hatalar.push(`kitap/${ad} dosyalar listesi bozuk`);
+      } else {
+        try {
+          const uyusmazlik = dosyalarKarsilastir(g.dosyalar, zip.zipIcerigi(y));
+          if (uyusmazlik) hatalar.push(`kitap/${ad}: ${uyusmazlik}`);
+        } catch (e) {
+          hatalar.push(`kitap/${ad} dosyalar listesiyle denetlenemedi: ${e.message}`);
+        }
+      }
+    }
   }
   if (yerelEksik.length)
     uyarilar.push(`yerelde olmayan taşınan dosya (R2'de olmalı): ${yerelEksik.join(', ')}`);
@@ -672,16 +705,43 @@ async function uzakDogrula({
   }
   if (arsivler) {
     for (const g of (m.kitaplar || []).filter((x) => x && x.durum === 'ekle')) {
+      // `dosyalar[]` varsa gerçek baytlar gerekir (kıyas için) — geçici bir dosyaya iner,
+      // yoksa eskisi gibi hiçbir şey yazılmadan akışla atılır (`/dev/null`).
+      const listeVar = g.dosyalar !== undefined;
+      if (listeVar && !durum.dosyalarGecerliMi(g.dosyalar)) {
+        hatalar.push(`${g.dizin}: dosyalar listesi bozuk`);
+        arsiv += 1;
+        continue;
+      }
+      const gecici = listeVar
+        ? path.join(
+            os.tmpdir(),
+            `g-yayin-dogrula-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`,
+          )
+        : null;
       try {
-        const r = await akisla(g.kaynak, process.platform === 'win32' ? 'NUL' : '/dev/null', {
-          zamanAsimi: 120000,
-        });
-        if (r.durum !== 200) hatalar.push(`HTTP ${r.durum}: ${g.kaynak}`);
-        else if (r.boyut !== g.boyut || r.ozet !== g.sha256)
+        const r = await akisla(
+          g.kaynak,
+          gecici || (process.platform === 'win32' ? 'NUL' : '/dev/null'),
+          { zamanAsimi: 120000 },
+        );
+        if (r.durum !== 200) {
+          hatalar.push(`HTTP ${r.durum}: ${g.kaynak}`);
+        } else if (r.boyut !== g.boyut || r.ozet !== g.sha256) {
           hatalar.push(`${g.dizin} arşivi sha256/boyut tutmuyor`);
+        } else if (gecici) {
+          const uyusmazlik = dosyalarKarsilastir(g.dosyalar, zip.zipIcerigi(gecici));
+          if (uyusmazlik) hatalar.push(`${g.dizin}: ${uyusmazlik}`);
+        }
         arsiv += 1;
       } catch (e) {
         hatalar.push(`${g.dizin} arşivi indirilemedi: ${e.message}`);
+      } finally {
+        if (gecici) {
+          try {
+            fs.unlinkSync(gecici);
+          } catch (e) {}
+        }
       }
     }
   }
@@ -742,6 +802,7 @@ module.exports = {
   oncekiManifestOku,
   kitapArsiviHazirla,
   kitapAdi,
+  dosyalarKarsilastir,
   yayinla,
   ciktiDogrula,
   uzakDogrula,

@@ -14,8 +14,11 @@
  * `bookN/43e23fce2b7009474555a77.js`. Kapsam dışı bir yol önceki manifestte bile olsa
  * RED (sessiz taşıma yok).
  *
- * Saf modül.
+ * Saf modül (yalnız `kitap-guncelleyici`'nin saf yol-güvenliği yardımcısını kullanır —
+ * ağ/fs YOK).
  */
+
+const kg = require('../../src/runtime/kitap-guncelleyici');
 
 const MOTOR_DOSYA_ADI = '43e23fce2b7009474555a77.js';
 const INDEX_YOLU = 'index.html';
@@ -54,6 +57,21 @@ function kitapDiziniDenetle(d, ne) {
 }
 
 /**
+ * Bir arşiv-içi dosya girdisi geçerli mi: `yol` arşiv köküne göreli ve güvenli
+ * (`..`/mutlak/boş segment RED — `kg.yolGuvenliMi`), `sha256`+`boyut` tam.
+ * Bu, imzalı `kitaplar[].dosyalar[]` girdisinin biçimsel doğrulamasıdır (K1'deki yol
+ * kaçışı denetimiyle AYNI kaynak — iki ayrı yol-güvenliği reddedicisi tutmak yasak).
+ */
+function dosyaGirdisiGecerliMi(g) {
+  return !!g && typeof g.yol === 'string' && g.yol !== '' && kg.yolGuvenliMi(g.yol) && ozetGecerliMi(g);
+}
+
+/** `dosyalar[]` listesi: dizi, en az bir girdi, hepsi geçerli. */
+function dosyalarGecerliMi(liste) {
+  return Array.isArray(liste) && liste.length > 0 && liste.every(dosyaGirdisiGecerliMi);
+}
+
+/**
  * Önceki manifestin G durumunu okur. Kapsam dışı / bozuk girdi → HATA.
  * @returns {{kabuk: Map<string,object>, kitaplar: Map<string,object>}}
  */
@@ -75,13 +93,19 @@ function oncekiDurum(onceki) {
       throw new Error(`önceki manifestte bozuk kitap girdisi: ${JSON.stringify(g && g.dizin)}`);
     }
     if (g.durum === 'cikar') kitaplar.set(g.dizin, { dizin: g.dizin, durum: 'cikar' });
-    else if (g.durum === 'ekle' && ozetGecerliMi(g) && typeof g.kaynak === 'string') {
+    else if (
+      g.durum === 'ekle' &&
+      ozetGecerliMi(g) &&
+      typeof g.kaynak === 'string' &&
+      (g.dosyalar === undefined || dosyalarGecerliMi(g.dosyalar))
+    ) {
       kitaplar.set(g.dizin, {
         dizin: g.dizin,
         durum: 'ekle',
         kaynak: g.kaynak,
         sha256: g.sha256,
         boyut: g.boyut,
+        ...(g.dosyalar !== undefined ? { dosyalar: g.dosyalar } : {}),
       });
     } else throw new Error(`önceki manifestte bozuk kitap girdisi: ${g.dizin}`);
   }
@@ -120,6 +144,8 @@ function birlestir(onceki, d) {
   for (const [k, v] of Object.entries(ekle)) {
     if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak)
       throw new Error(`${k} arşiv özeti bozuk`);
+    if (v.dosyalar !== undefined && !dosyalarGecerliMi(v.dosyalar))
+      throw new Error(`${k} dosyalar listesi bozuk`);
   }
   if (
     deg.index === undefined &&
@@ -145,6 +171,7 @@ function birlestir(onceki, d) {
       kaynak: v.kaynak,
       sha256: v.sha256,
       boyut: v.boyut,
+      ...(v.dosyalar !== undefined ? { dosyalar: v.dosyalar } : {}),
     });
     // Yeni arşiv kendi motorunu taşır; eski (taşınan) motor girdisi onu ezmesin.
     kabuk.delete(motorYolu(k));
@@ -186,6 +213,8 @@ module.exports = {
   KITAP_DIZIN_DESENI,
   gYoluMu,
   motorYolu,
+  dosyaGirdisiGecerliMi,
+  dosyalarGecerliMi,
   oncekiDurum,
   birlestir,
 };
