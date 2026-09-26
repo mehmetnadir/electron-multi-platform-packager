@@ -49,18 +49,20 @@ test('uygulamaKokunuBul: asar > app/ > kök sırası; APK assets/public', () => 
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-test('kokEnvanteri: dizin ve asar ağacında AYNI sonuç (SET tanıma = bookN/app.config.js)', async () => {
+test('kokEnvanteri: dizin ve asar ağacında AYNI sonuç (SET tanıma = motor imzası index.html+app.config.js, K8)', async () => {
   const d = gecici('env');
   try {
     fs.writeFileSync(path.join(d, 'index.html'), '<title>Set</title>');
     fs.writeFileSync(path.join(d, 'set-menu.json'), JSON.stringify({ kitaplar: [{ ad: 'A', grup: '' }] }));
     for (const b of ['book1', 'book2', 'book10']) {
       fs.mkdirSync(path.join(d, b));
+      fs.writeFileSync(path.join(d, b, 'index.html'), '<html></html>');
       fs.writeFileSync(path.join(d, b, 'app.config.js'), '');
     }
-    fs.mkdirSync(path.join(d, 'book3')); // app.config.js yok → sayılmaz
+    fs.mkdirSync(path.join(d, 'book3')); // ikisi de yok → sayılmaz
     const e1 = P.kokEnvanteri(d, false);
-    assert.deepEqual(e1.kitapDizinleri, ['book1', 'book2', 'book10']);
+    // findEngineDirsInPathList ile AYNI (lexical) sıralama — book10 < book2 (K8 kanonik fonksiyonu)
+    assert.deepEqual(e1.kitapDizinleri, ['book1', 'book10', 'book2']);
     assert.equal(e1.setMi, true);
     assert.equal(e1.kokAppConfig, false);
     assert.equal(e1.setMenu.kitaplar[0].ad, 'A');
@@ -72,6 +74,56 @@ test('kokEnvanteri: dizin ve asar ağacında AYNI sonuç (SET tanıma = bookN/ap
     assert.deepEqual(e2.kitapDizinleri, e1.kitapDizinleri);
     assert.equal(e2.indexHtml, e1.indexHtml);
     fs.rmSync(path.dirname(hedef), { recursive: true, force: true });
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('kokEnvanteri K8 (1/2): ad deseni TUTMAYAN alt-kitap dizinleri (Tudem tarzı) SET olarak tanınır', () => {
+  const d = gecici('env-tudem');
+  try {
+    fs.writeFileSync(path.join(d, 'index.html'), '<title>Tudem</title>');
+    for (const b of ['fasikuller-01', 'okula-basladim', 'd1-portfolyo']) {
+      fs.mkdirSync(path.join(d, b));
+      fs.writeFileSync(path.join(d, b, 'index.html'), '<html></html>');
+      fs.writeFileSync(path.join(d, b, 'app.config.js'), 'const AppConfig = {};');
+    }
+    const e = P.kokEnvanteri(d, false);
+    assert.deepEqual(e.kitapDizinleri, ['d1-portfolyo', 'fasikuller-01', 'okula-basladim']);
+    assert.equal(e.setMi, true, 'ad deseni ^book\\d+$ tutmasa da motor imzasıyla SET tanınmalı');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('kokEnvanteri K8 (2/2): "book1" ADINDA klasör olsa da motor imzası (index.html+app.config.js) yoksa SET sayılmaz', () => {
+  const d = gecici('env-tekil');
+  try {
+    // Tek kitabın KENDİ kökü — SET DEĞİL.
+    fs.writeFileSync(path.join(d, 'index.html'), '<title>Tekil Kitap</title>');
+    fs.writeFileSync(path.join(d, 'app.config.js'), 'const AppConfig = {};');
+    // ad deseni tutan ama motor imzası EKSİK bir "book1" klasörü (yalnız app.config.js,
+    // index.html yok) — eski ad-deseni kodu bunu SAYARDI (yalnız isme bakardı).
+    fs.mkdirSync(path.join(d, 'book1'));
+    fs.writeFileSync(path.join(d, 'book1', 'app.config.js'), '');
+    const e = P.kokEnvanteri(d, false);
+    assert.deepEqual(e.kitapDizinleri, [], '"book1" adı tek başına yeterli değil — index.html eksik');
+    assert.equal(e.setMi, false, 'tek kitap kökü SET sayılmamalı');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('GERİLEME (K8): ad deseni regex\'ine dönülürse Tudem tarzı dizinler hiç bulunamaz', () => {
+  const d = gecici('env-gerileme');
+  try {
+    for (const b of ['fasikuller-01', 'okula-basladim']) {
+      fs.mkdirSync(path.join(d, b));
+      fs.writeFileSync(path.join(d, b, 'index.html'), '<html></html>');
+      fs.writeFileSync(path.join(d, b, 'app.config.js'), 'const AppConfig = {};');
+    }
+    // Eski (K8-öncesi) davranışın doğrudan simülasyonu: ^book\d+$ regex'i.
+    const entries = fs.readdirSync(d, { withFileTypes: true });
+    const eskiTarz = entries.filter((e) => e.isDirectory() && /^book\d+$/i.test(e.name)).map((e) => e.name);
+    assert.deepEqual(eskiTarz, [], 'eski regex Tudem adlarının hiçbirini yakalayamaz (kanıtın gücü)');
+    // Gerçek (düzeltilmiş) kokEnvanteri bunları bulur:
+    const e = P.kokEnvanteri(d, false);
+    assert.deepEqual(e.kitapDizinleri, ['fasikuller-01', 'okula-basladim']);
+    assert.equal(e.setMi, true);
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 

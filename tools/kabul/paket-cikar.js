@@ -20,6 +20,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { yedizListeCoz, yukSec, arsivYolunuYerelYap } = require('../../scripts/windows-paket-kapisi');
 const { ikilidenSurum, macUygulamaSurumu, versionDosyasi } = require('./calisma-zamani');
+const { findEngineDirsInPathList, SKIP_DIR_NAMES } = require('../../src/packaging/sub-book-dirs');
 
 const PLATFORMLAR = ['mac', 'android', 'windows', 'pardus', 'dizin', 'zip'];
 
@@ -84,8 +85,37 @@ function uygulamaKokunuBul(taban) {
 }
 
 /**
- * Uygulama kökünün envanteri: SET mi, hangi bookN'ler app.config.js taşıyor,
- * set-menu.json, kök index.html metni. asar ise @electron/asar ile okunur.
+ * Kök İÇİNDE (kök hariç, en fazla 2 seviye aşağı) `index.html` + `app.config.js`
+ * dosyalarına BİRLİKTE sahip her dizini kök-göreli, POSIX yollu, sıralı bir dizi
+ * olarak listeler. AD DESENİ (`^book\d+$`) KULLANMAZ — motor imzası (K8,
+ * `.claude/docs/set-paketi-know-how.md`). `findEngineDirsInPathList` ile AYNI
+ * kanonik algoritma (`src/packaging/sub-book-dirs.js`); burada yalnız girdi
+ * (tam bir POSIX yol listesi) gerçek `fs.readdirSync` ile üretilir çünkü
+ * `SKIP_DIR_NAMES` altına asla inilmez (performans + yanlış-pozitif önleme).
+ */
+function dizinYolListesi(kok, maxDepth = 2) {
+  const l = [];
+  const walk = (dir, rel, derinlik) => {
+    let girisler;
+    try { girisler = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of girisler) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      l.push(childRel);
+      if (e.isDirectory() && !SKIP_DIR_NAMES.has(e.name) && derinlik < maxDepth) {
+        walk(path.join(dir, e.name), childRel, derinlik + 1);
+      }
+    }
+  };
+  walk(kok, '', 0);
+  return l;
+}
+
+/**
+ * Uygulama kökünün envanteri: SET mi, hangi alt-kitap dizinleri motor imzası
+ * (`index.html`+`app.config.js`) taşıyor, set-menu.json, kök index.html metni.
+ * asar ise @electron/asar ile okunur. SET tanıma AD DESENİNDEN BAĞIMSIZ (K8) —
+ * `src/packaging/sub-book-dirs.js` `findEngineDirsInPathList` kanonik fonksiyonuna
+ * bağlıdır; Tudem tarzı (`fasikuller-01/`, `okula-basladim/`) adlar da tanınır.
  */
 function kokEnvanteri(kok, asarMi) {
   let listele;
@@ -101,26 +131,13 @@ function kokEnvanteri(kok, asarMi) {
       try { return asar.extractFile(kok, rel).toString('utf8'); } catch (_) { return null; }
     };
   } else {
-    listele = () => {
-      const l = [];
-      for (const e of fs.readdirSync(kok, { withFileTypes: true })) {
-        l.push(e.name);
-        if (e.isDirectory() && /^book\d+$/i.test(e.name)) {
-          for (const e2 of fs.readdirSync(path.join(kok, e.name))) l.push(`${e.name}/${e2}`);
-        }
-      }
-      return l;
-    };
+    listele = () => dizinYolListesi(kok);
     oku = (rel) => {
       try { return fs.readFileSync(path.join(kok, rel), 'utf8'); } catch (_) { return null; }
     };
   }
   const liste = listele();
-  const kitapDizinleri = [...new Set(liste
-    .map((p) => /^(book\d+)\/app\.config\.js$/i.exec(p))
-    .filter(Boolean)
-    .map((m) => m[1]))]
-    .sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)));
+  const kitapDizinleri = findEngineDirsInPathList(liste, { maxDepth: 2 });
   let setMenu = null;
   const sm = oku('set-menu.json');
   if (sm) { try { setMenu = JSON.parse(sm); } catch (_) { setMenu = null; } }
