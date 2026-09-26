@@ -82,6 +82,16 @@
   denetimine güvenme. AppRun `.empp-version` önbelleği için kapı eski kurulumları geçici
   yeniden adlandırır, sonunda geri koyar.
 
+- **Başsız kabul kapısı — mac/Android/Windows (K18'in Mac'teki eşi, 2026-09-26):**
+  `node tools/kabul/basliksiz-kabul.js <paket>` paketi BU Mac'te odak çalmadan açıp ölçer
+  (Electron offscreen + LSUIElement çalışma zamanı kopyası `~/.empp-agent/kabul-kanit/_calisma-zamani/`;
+  Android'de ek pencerisiz emülatör). Runner'da `EMPP_BASLIKSIZ_KABUL=1` (varsayılan KAPALI).
+  Tuzaklar: Claude Code/VS Code ortamı `ELECTRON_RUN_AS_NODE=1` verir → Electron Node gibi koşar,
+  koşum bunu siler; paketlenmiş `.app`/`open` ASLA kullanılmaz; `Pixel_8_Pro_API_35`'te 9 Eylül'den
+  bayat snapshot kilidi var (emülatör "snapshot operation pending" ile çıkar) → varsayılan AVD Fold.
+  Electron 39 (node_modules) `show:false`+LSUIElement'e rağmen ~3 sn odak çaldı → yalnız kanıtlı
+  27.3.11 koşar. Tek kitap paketinde kök motor rafı olabilir (MEÇ 73714, BES 74451) → kapağa tıklanır.
+
 ## İlgili Dosyalar
 | Dosya | Amaç |
 |---|---|

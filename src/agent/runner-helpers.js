@@ -593,11 +593,19 @@ const DISK_KAPISI_ISARETI = '[ertelenebilir-kaynak-darligi]';
 /** ProBook'a ERİŞİLEMEMESİ hatalarını ayıran işaret (mesaja gömülür). */
 const PROBOOK_KAPISI_ISARETI = '[ertelenebilir-probook-erisimi]';
 
+/**
+ * Başsız kabul kapısının ÖLÇEMEMESİ (Electron çalışma zamanı / emülatör / hdiutil
+ * altyapısı) — paket kusuru DEĞİL; yükleme yapılmaz ama `failed` da yazılmaz
+ * (src/agent/basliksiz-kabul-kapisi.js, 2026-09-26).
+ */
+const BASLIKSIZ_KABUL_ISARETI = '[ertelenebilir-basliksiz-kabul]';
+
 function ertelenebilirKaynakHatasi(err) {
   const raw = typeof err === 'string' ? err
     : (err && typeof err === 'object' && typeof err.message === 'string') ? err.message
       : '';
-  return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI);
+  return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI)
+    || raw.includes(BASLIKSIZ_KABUL_ISARETI);
 }
 
 /**
@@ -878,6 +886,7 @@ module.exports = {
   DISK_KAPISI_ISARETI,
   probookErisilemezHatasi,
   PROBOOK_KAPISI_ISARETI,
+  BASLIKSIZ_KABUL_ISARETI,
   guncellemeDosyalariniSirala,
   guncellemeIcerikTipi,
   tarListesiniAyristir,

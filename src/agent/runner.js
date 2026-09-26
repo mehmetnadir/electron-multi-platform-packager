@@ -48,6 +48,7 @@ const {
   guncellemeDosyalariniSirala, guncellemeIcerikTipi, tarListesiniAyristir,
 } = require('./runner-helpers');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
+const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -1575,6 +1576,25 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
 }
 
 /**
+ * BAŞSIZ KABUL KAPISI (Nadir 2026-09-26: "bu bilgisayarda odak çalmadan bir kabul kapısı").
+ * 26.09'da SET kökü ezilmiş 73768 mac/android paketleri kabulsüz R2'ye gitti; Pardus'u
+ * yalnız ProBook yakaladı. Paket bu Mac'te görünmez Electron koşumunda (Android'de ek
+ * olarak pencerisiz emülatörde) açılıp ölçülür. `EMPP_BASLIKSIZ_KABUL=1` ile açılır,
+ * varsayılan KAPALI. Gövde ve sonuç sınıflaması `basliksiz-kabul-kapisi.js`'te:
+ * RED → throw (failed), ÖLÇÜLEMEDİ → ertelenebilir işaretli throw (failed YAZILMAZ).
+ */
+async function basliksizKabul(artifactPath, packagerPlatform, job, work) {
+  await basliksizKabulKapisi({
+    artifactPath,
+    platform: packagerPlatform,
+    bookId: job.bookId,
+    aktivasyon: aktivasyonBeklenir(job.bookTitle),
+    calismaDizini: work,
+    log,
+  });
+}
+
+/**
  * Hazır (başka şeritte üretilmiş) .impark'ı bulur: `<HAZIR_DIR>/<bookId>.impark`
  * ve yanındaki `<bookId>.json` içindeki `srcVersion` ajanın kaynak sürümüyle AYNI
  * olmalı — yoksa BAŞKA bir kaynaktan üretilmiş paketi yüklemiş oluruz (sessiz
@@ -1820,6 +1840,9 @@ async function processJob(auth, job) {
     if (packagerPlatform === 'macos') {
       await signAndNotarizeMac(artifactPath);
     }
+
+    // 4b. Başsız kabul kapısı — RED alan paket R2'ye YÜKLENMEZ (bayrak kapalıysa no-op).
+    await basliksizKabul(artifactPath, packagerPlatform, job, work);
 
     // 5. POST artifact FILE back (server uploads to R2).
     log('posting result (completed) with artifact file...');
