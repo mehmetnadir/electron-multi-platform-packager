@@ -409,7 +409,7 @@ async function presignUpload(auth, job) {
 const { applyPublisherUpdate, latestLocalUpdate } = require('./publisher-update');
 const { dahaYeniMi } = require('./surum-kiyas');
 const { arsivKaynagi } = require('./kaynak-arsivi');
-const { icerikKapisiDenetle } = require('./icerik-kapisi');
+const { icerikKapisiDenetle, icerikKapisiDenetleZip } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 const { KAYNAK_KOK_INDEX_MARKER: KOK_INDEX_KAYNAK_MARKER } = require('../packaging/kok-index-denetimi');
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
@@ -1818,6 +1818,23 @@ async function processJob(auth, job) {
       }
     }
     } // if (!hazirDevir) — hazır paketde kaynak indirme/çıkarma/zip adımları atlanır
+
+    // İÇERİKSİZ KAYNAK KAPISI — ZIP YOLU (2026-09-26, entegrasyon bulgusu). Yukarıdaki dizin
+    // tabanlı kapı (icerikKapisiDenetle) yalnız TAZE İNDİRME dalında (extractSfx/findBuildDir)
+    // çalışır. `cacheHit` — arşiv (kaynak ARŞİVDEN) ya da kaynak önbelleği HIT — zip'i HİÇ
+    // AÇMADAN doğrudan taşır; bu iki yolda kapı bugüne kadar HİÇ devreye girmiyordu. Ölçülen
+    // 45550/45551/11845 içeriksiz zip'leri arşive/önbelleğe HIT olsaydı kapı atlanır, içeriksiz
+    // paket yine üretilirdi. Merdivenden ÖNCE — merdiven zaten "içerik var" varsayımıyla
+    // ZKitapZipH indirir, içeriksiz bir kaynağı BÜYÜTMEMELİ.
+    if (cacheHit) {
+      const icerikZipSonuc = await icerikKapisiDenetleZip(zipPath, {
+        kaynakAdi: path.basename(String(job.downloadUrl || '').split('?')[0]) || undefined,
+        log,
+      });
+      if (!icerikZipSonuc.gecti) {
+        throw new Error(icerikZipSonuc.sebep);
+      }
+    }
 
     // İÇERİK MERDİVENİ (S0 + S1) — kaynak hazır (arşiv kopyası ya da önbellek/exe'den kurulan
     // build.zip), paketlemeden ÖNCE. Yalnız İŞ KOPYASI (zipPath) değişir: arşiv ve kaynak önbelleği

@@ -13,8 +13,10 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
+const AdmZip = require('adm-zip');
 const {
   KAPI_ISARETI, acikMi, bookNMi, degerlendir, dizinTara, icerikKapisiDenetle,
+  yolListesiTara, girisListesindenDegerlendir, zipGirisAdlariniOku, icerikKapisiDenetleZip,
 } = require('./icerik-kapisi');
 
 /** 11845 (SM3-v49.exe) tarzı — yalnız motor: kökte assets/ yok, bookN/ yok. */
