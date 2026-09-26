@@ -157,11 +157,15 @@ function zipYaz(hedef, girdiler) {
 }
 
 /**
- * Arşivi İSTEMCİNİN okuyucusuyla açıp denetler: açılabiliyor mu, her yol güvenli mi,
- * tek sarmal dizin var mı, en az bir dosya var mı.
- * @returns {{adet:number, yollar:string[]}}
+ * Arşivi İSTEMCİNİN okuyucusuyla açıp her dosyanın (göreli yol, sha256, boyut) üçlüsünü
+ * döner — sıralı (yol'a göre), belirlenimci. Aynı denetimleri uygular: açılabiliyor mu,
+ * her yol güvenli mi (`..`/mutlak RED), tek sarmal dizin var mı, en az bir dosya var mı.
+ * Bu liste G manifestinin imzalı `kitaplar[].dosyalar[]` alanına gider — istemci arşivi
+ * AÇMADAN, indirdiği bu listeyle karşılaştırıp doğrulayabilsin diye (ihlali: arşivi açılışta
+ * yeniden doğrulamak, diskte ×2 yer).
+ * @returns {{yol:string, sha256:string, boyut:number}[]}
  */
-function zipDenetle(zipYolu) {
+function zipIcerigi(zipYolu) {
   let girdiler;
   try {
     girdiler = kg.arsivCozVarsayilan(fs.readFileSync(zipYolu));
@@ -169,20 +173,35 @@ function zipDenetle(zipYolu) {
     throw new Error(`arşiv istemcinin okuyucusuyla açılamadı (${e.message}): ${zipYolu}`);
   }
   if (!girdiler.length) throw new Error(`arşiv boş: ${zipYolu}`);
-  const yollar = [];
+  const dosyalar = [];
   for (const g of girdiler) {
     if (!kg.yolGuvenliMi(g.yol)) throw new Error(`arşivde güvensiz yol: ${JSON.stringify(g.yol)}`);
-    yollar.push(g.yol.replace(/\\/g, '/'));
+    dosyalar.push({
+      yol: g.yol.replace(/\\/g, '/'),
+      sha256: kg.sha256(g.veri),
+      boyut: g.veri.length,
+    });
   }
-  const kokDosyasi = yollar.some((y) => !y.includes('/'));
-  const kokDallari = new Set(yollar.map((y) => y.split('/')[0]));
+  dosyalar.sort((a, b) => (a.yol < b.yol ? -1 : a.yol > b.yol ? 1 : 0));
+  const kokDosyasi = dosyalar.some((g) => !g.yol.includes('/'));
+  const kokDallari = new Set(dosyalar.map((g) => g.yol.split('/')[0]));
   if (!kokDosyasi && kokDallari.size === 1) {
     throw new Error(
       `arşiv tek sarmal dizin içeriyor (${[...kokDallari][0]}/…) — arşiv kökü kitap ` +
         'dizininin İÇİ olmalı; istemci onu bookN/bookN/… diye açar',
     );
   }
-  return { adet: girdiler.length, yollar };
+  return dosyalar;
+}
+
+/**
+ * Arşivi İSTEMCİNİN okuyucusuyla açıp denetler: açılabiliyor mu, her yol güvenli mi,
+ * tek sarmal dizin var mı, en az bir dosya var mı.
+ * @returns {{adet:number, yollar:string[]}}
+ */
+function zipDenetle(zipYolu) {
+  const dosyalar = zipIcerigi(zipYolu);
+  return { adet: dosyalar.length, yollar: dosyalar.map((g) => g.yol) };
 }
 
 module.exports = {
@@ -191,5 +210,6 @@ module.exports = {
   crc32,
   dizindenGirdiler,
   zipYaz,
+  zipIcerigi,
   zipDenetle,
 };

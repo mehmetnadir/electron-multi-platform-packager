@@ -8,9 +8,43 @@ const path = require('path');
 const crypto = require('crypto');
 const y = require('./yayinla');
 const anahtar = require('./anahtar');
-const { MOTOR_DOSYA_ADI: M } = require('./durum');
+const durum = require('./durum');
+const { MOTOR_DOSYA_ADI: M } = durum;
+const zip = require('./zip-yaz');
 const kg = require('../../src/runtime/kitap-guncelleyici');
 const { sunucuBaslat } = require('../g-uctan-uca/sunucu');
+
+/**
+ * `uzakDogrula`'yı ağ olmadan sınamak için: `<taban>/set/<id>/…` isteklerini doğrudan
+ * `--cikti` dizininin aynı ağacından okur/indirir (gerçek dosya baytları — sahte değil).
+ */
+function yerelUzakBaglantisi(cikti, setKimligi, taban) {
+  const kok = path.join(path.resolve(cikti), 'set', String(setKimligi));
+  const kimlikKoku = `${taban}/set/${encodeURIComponent(setKimligi)}`;
+  const cozYol = (adres) => {
+    if (!adres.startsWith(kimlikKoku + '/')) return null;
+    return path.join(
+      kok,
+      ...adres
+        .slice(kimlikKoku.length + 1)
+        .split('/')
+        .map(decodeURIComponent),
+    );
+  };
+  const getir = async (adres) => {
+    const y2 = cozYol(adres);
+    if (!y2 || !fs.existsSync(y2)) return { durum: 404, govde: Buffer.alloc(0) };
+    return { durum: 200, govde: fs.readFileSync(y2) };
+  };
+  const arsiviIndir = async (adres, hedef) => {
+    const y2 = cozYol(adres);
+    if (!y2 || !fs.existsSync(y2)) return { durum: 404, boyut: 0, ozet: '' };
+    const v = fs.readFileSync(y2);
+    fs.writeFileSync(hedef, v);
+    return { durum: 200, boyut: v.length, ozet: crypto.createHash('sha256').update(v).digest('hex') };
+  };
+  return { getir, arsiviIndir };
+}
 
 function ortam() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'g-yayin-'));
@@ -403,4 +437,163 @@ test('CLI: yayın çıktısında ve hatada özel anahtar baytı yok', async () =
     o.anahtarYolu,
   ]);
   assert.equal(d.cikis, 0, d.metin);
+});
+
+test('yayinla: ekle girdisine imzalı dosyalar[] listesi eklenir (arşivle birebir, sıralı)', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  o.yaz('book4/index.html', o.html('book4'));
+  o.yaz('book4/sayfa/ölçü.txt', 'ç');
+  await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.63.1',
+      panel: 63,
+      index: o.yaz('i.html', o.html('a')),
+      ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+    }),
+    sessiz,
+  );
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const m = JSON.parse(fs.readFileSync(path.join(setDizini, 'manifest.json'), 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+  assert.ok(Array.isArray(b4.dosyalar) && b4.dosyalar.length === 2);
+  assert.ok(b4.dosyalar.every(durum.dosyaGirdisiGecerliMi), 'her girdi biçimsel geçerli');
+  assert.deepEqual(
+    b4.dosyalar.map((g) => g.yol),
+    ['index.html', 'sayfa/ölçü.txt'],
+  );
+  // Bağımsız olarak arşivden yeniden türetilen liste birebir aynı olmalı.
+  const zipAd = fs.readdirSync(path.join(setDizini, 'kitap'))[0];
+  const gercek = zip.zipIcerigi(path.join(setDizini, 'kitap', zipAd));
+  assert.deepEqual(b4.dosyalar, gercek);
+  assert.equal(y.dosyalarKarsilastir(b4.dosyalar, gercek), null);
+
+  const d1 = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d1.gecti, true, d1.hatalar.join('; '));
+});
+
+test('yayinla: --ekle hazır zip içinde yol kaçışı varsa RED', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  const zipYolu = path.join(o.d, 'kotu.zip');
+  zip.zipYaz(zipYolu, [
+    { yol: 'index.html', veri: Buffer.from('<html>book4</html>') },
+    { yol: '../kacti.txt', veri: Buffer.from('kacti') },
+  ]);
+  await assert.rejects(
+    y.yayinla(
+      temel(o, taban, {
+        ilk: true,
+        oncekiSurum: '2.64.1',
+        panel: 64,
+        index: o.yaz('i.html', o.html('a')),
+        ekle: { book4: zipYolu },
+      }),
+      sessiz,
+    ),
+    /güvensiz yol/,
+  );
+});
+
+test('eski manifest (dosyalar alanı yok) hâlâ doğrulanır — geriye uyumluluk', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  o.yaz('book4/index.html', o.html('book4'));
+  await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.65.1',
+      panel: 65,
+      index: o.yaz('i.html', o.html('a')),
+      ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+    }),
+    sessiz,
+  );
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const manifestYolu = path.join(setDizini, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(manifestYolu, 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+  assert.ok(Array.isArray(b4.dosyalar) && b4.dosyalar.length > 0, 'yeni yayın dosyalar üretmeli');
+  delete b4.dosyalar; // eski istemci/eski manifest simülasyonu (alan hiç yok)
+  const ozel = anahtar.dosyadanOku(o.anahtarYolu);
+  const govde = Buffer.from(JSON.stringify(m), 'utf8');
+  fs.writeFileSync(manifestYolu, govde);
+  fs.writeFileSync(manifestYolu + kg.IMZA_UZANTI, anahtar.imzala(govde, ozel, o.acik));
+
+  const d1 = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d1.gecti, true, d1.hatalar.join('; '));
+
+  const { getir, arsiviIndir } = yerelUzakBaglantisi(o.cikti, '99901', taban);
+  const u1 = await y.uzakDogrula({
+    taban,
+    setKimligi: '99901',
+    acik: o.acik,
+    arsivler: true,
+    getir,
+    arsiviIndir,
+  });
+  assert.equal(u1.gecti, true, u1.hatalar.join('; '));
+});
+
+test('dogrula: dosyalar listesi arşivle uyuşmazsa RED (yerel ve uzak)', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  o.yaz('book4/index.html', o.html('book4'));
+  o.yaz('book4/alt.txt', 'ek dosya');
+  await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.66.1',
+      panel: 66,
+      index: o.yaz('i.html', o.html('a')),
+      ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+    }),
+    sessiz,
+  );
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const manifestYolu = path.join(setDizini, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(manifestYolu, 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+  assert.ok(b4.dosyalar.length >= 2);
+  // Manifesti KURCALA: listedeki bir dosyanın sha256'sını değiştir (arşiv AYNI kalır) ve
+  // AYNI anahtarla yeniden imzala — "yanlış liste imzalanmış/kurcalanmış" senaryosu.
+  b4.dosyalar = [{ ...b4.dosyalar[0], sha256: '0'.repeat(64) }, ...b4.dosyalar.slice(1)];
+  const ozel = anahtar.dosyadanOku(o.anahtarYolu);
+  const govde = Buffer.from(JSON.stringify(m), 'utf8');
+  fs.writeFileSync(manifestYolu, govde);
+  fs.writeFileSync(manifestYolu + kg.IMZA_UZANTI, anahtar.imzala(govde, ozel, o.acik));
+
+  const yerel = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(yerel.gecti, false);
+  assert.match(yerel.hatalar.join(';'), /dosyalar listesi arşivle uyuşmuyor/);
+
+  const { getir, arsiviIndir } = yerelUzakBaglantisi(o.cikti, '99901', taban);
+  const uzak = await y.uzakDogrula({
+    taban,
+    setKimligi: '99901',
+    acik: o.acik,
+    arsivler: true,
+    getir,
+    arsiviIndir,
+  });
+  assert.equal(uzak.gecti, false);
+  assert.match(uzak.hatalar.join(';'), /dosyalar listesi arşivle uyuşmuyor/);
+});
+
+test('dosyalarKarsilastir: birim — eksik/fazla/farklı sha256 hepsi yakalanır', () => {
+  const a = [
+    { yol: 'index.html', sha256: 'a'.repeat(64), boyut: 1 },
+    { yol: 'b.txt', sha256: 'b'.repeat(64), boyut: 2 },
+  ];
+  assert.equal(y.dosyalarKarsilastir(a, a), null);
+  assert.match(y.dosyalarKarsilastir(a, [a[0]]), /uyuşmuyor/);
+  assert.match(
+    y.dosyalarKarsilastir(a, [a[0], { yol: 'baska.txt', sha256: 'c'.repeat(64), boyut: 3 }]),
+    /arşivde yok/,
+  );
+  assert.match(
+    y.dosyalarKarsilastir(a, [a[0], { ...a[1], sha256: 'f'.repeat(64) }]),
+    /uyuşmuyor/,
+  );
 });

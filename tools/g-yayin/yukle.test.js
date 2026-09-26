@@ -63,10 +63,17 @@ function sahteCanli() {
       ? { durum: 200, govde: fs.readFileSync(p) }
       : { durum: 404, govde: Buffer.alloc(0) };
   };
-  const arsiviIndir = async (adres) => {
+  const arsiviIndir = async (adres, hedef) => {
     const p = cdnYolu(adres);
     if (!fs.existsSync(p)) return { durum: 404, boyut: 0, ozet: '' };
     const v = fs.readFileSync(p);
+    // Gerçek `arsiviIndir` sözleşmesi `hedef`e YAZAR (dogrula --arsivler içeriği okur);
+    // sahte de aynı sözleşmeyi tutmalı.
+    if (hedef) {
+      try {
+        fs.writeFileSync(hedef, v);
+      } catch (e) {}
+    }
     return {
       durum: 200,
       boyut: v.length,
