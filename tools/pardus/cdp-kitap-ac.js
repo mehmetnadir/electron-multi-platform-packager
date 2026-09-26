@@ -58,6 +58,7 @@ const {
 const { domYokla } = require('../kabul/kosum/dom-yoklama');
 const { sayfaIzi, konsolSiniflandir } = require('../kabul/olcutler');
 const setTum = require('../kabul/set-guncellik');
+const { guncelDegilOneri } = require('../kabul/guncel-degil-oneri');
 
 const GUNCELLEME_DESENI = /\/GetKitapGuncellemeBilgi(?:[/?#]|$)/i;
 const KITAP_URL_DESENI = /\/book\d+\//i;
@@ -148,9 +149,8 @@ function e7Ozetle(cevaplar = []) {
   if (dolu.length) {
     const tekil = [...new Map(dolu.map((c) => [`${c.id}|${c.versiyon}`, c])).values()];
     const ayrinti = tekil.map((c) => `${c.sebep} (Data=${c.data})`).join('; ');
-    const zipler = tekil.map((c) => `ZKitapZipH/${c.id}-${c.vs}.zip`).join(', ');
-    const oneri = `kaynak S1 ile yenilenmeli (${zipler}); yeni build zip arşive girince yeniden kuyruğa al `
-      + '(İmpark web katmanı gecikmeli: Vs tazeyse ≥10 dk sonra); aynı kaynakla yeniden üretim aynı RED\'i verir';
+    const zipYollari = tekil.map((c) => `ZKitapZipH/${c.id}-${c.vs}.zip`);
+    const oneri = guncelDegilOneri(zipYollari);
     return { durum: 'DOLU', ayrinti, oneri };
   }
   const olc = cevaplar.filter((c) => c.durum === 'OLCULEMEDI');

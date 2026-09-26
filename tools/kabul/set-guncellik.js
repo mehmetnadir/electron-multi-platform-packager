@@ -40,6 +40,7 @@
  * BOZARSAN: tools/kabul/set-guncellik.test.js kırılır (yalnız ilk kitaba bakan mutant dahil).
  */
 const { s0Kaynaktan, menuKonumlari, DURUM: S0 } = require('../../src/agent/icerik-merdiven');
+const { guncelDegilOneri } = require('./guncel-degil-oneri');
 
 const DURUM = Object.freeze({
   GECTI: 'GECTI', GUNCEL_DEGIL: 'GUNCEL_DEGIL', OLCULEMEDI: 'OLCULEMEDI', ATLANDI: 'ATLANDI',
@@ -166,9 +167,7 @@ function setTumKarari(olcum) {
   const atl = satirlar.filter((s) => s.durum === S0.ATLANDI);
   const notlar = atl.map(satirOzeti);
   if (geride.length) {
-    const oneri = `kaynak S1 ile yenilenmeli (${geride.map((s) => `ZKitapZipH/${s.id}-${s.vs}.zip`).join(', ')}); `
-      + 'yeni build zip arşive girince yeniden kuyruğa al (İmpark web katmanı gecikmeli: Vs tazeyse ≥10 dk sonra); '
-      + 'aynı kaynakla yeniden üretim aynı sonucu verir';
+    const oneri = guncelDegilOneri(geride.map((s) => `ZKitapZipH/${s.id}-${s.vs}.zip`));
     return sonuc(DURUM.GUNCEL_DEGIL, `SET alt kitap geride: ${geride.map((s) => `${s.kitap} ${s.id} paket v${s.surum} `
       + `< İmpark v${s.vs}`).join('; ')}`, { oneri, notlar: [...olc.map(satirOzeti), ...guncel.map(satirOzeti), ...notlar] });
   }

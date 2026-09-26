@@ -48,6 +48,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const cdpAc = require('../pardus/cdp-kitap-ac');
 const ig = require('../../src/runtime/icerik-guncelleme');
+const { guncelDegilOneri } = require('./guncel-degil-oneri');
 
 const K4_DURUM = Object.freeze({
   GECTI: 'GECTI', GUNCEL_DEGIL: 'GUNCEL_DEGIL', OLCULEMEDI: 'OLCULEMEDI', ATLANDI: 'ATLANDI',
@@ -148,9 +149,7 @@ function k4Karari({
   }
   if (eski.length) {
     const tekil = [...new Map(eski.map((k) => [k.id, k])).values()];
-    const oneri = `kaynak S1 ile yenilenmeli (${tekil.map((k) => `ZKitapZipH/${k.id}-${k.vs}.zip`).join(', ')}); `
-      + 'yeni build zip arşive girince yeniden kuyruğa al (İmpark web katmanı gecikmeli: Vs tazeyse ≥10 dk sonra); '
-      + 'aynı kaynakla yeniden üretim aynı sonucu verir';
+    const oneri = guncelDegilOneri(tekil.map((k) => `ZKitapZipH/${k.id}-${k.vs}.zip`));
     return sonuc(K4_DURUM.GUNCEL_DEGIL, tekil.map((k) => `${k.id} paket v${k.paket} < İmpark v${k.vs} `
       + `(motor v${k.versiyon || '?'} sordu, Data boş)`).join('; '), { oneri });
   }
