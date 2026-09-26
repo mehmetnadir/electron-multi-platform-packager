@@ -711,6 +711,36 @@ function probookErisilemezHatasi(cikti, timedOut = false) {
 }
 
 /**
+ * probook-kabul.sh'in YENİ iki karar sınıfını ayırır — saf fonksiyon (2026-09-26, kabul kapısı
+ * canlı yarısı; rapor ~/.empp-agent/arastirma/e2e-kanit-pardus-kabul-20260926.md §B.1):
+ *   rc 3 RED-GÜNCEL-DEĞİL → stdout `GUNCEL-DEGIL: <ayrıntı>` + `yeniden kuyruk onerisi: <öneri>`;
+ *        runner `failed` yazar, last_error `güncel değil:` ile başlar, paket YÜKLENMEZ.
+ *   rc 4 ÖLÇÜLEMEDİ       → stdout `OLCULEMEDI: <sebep>`; paket kusuru DEĞİL, `failed` yazılmaz.
+ * Diğer kodlar için null (eski sınıflama: erişilemez / RED).
+ * @param {{code:number, stdout?:string, stderr?:string, timedOut?:boolean}} kabul
+ * @returns {{durum:'GUNCEL_DEGIL'|'OLCULEMEDI', sebep:string, oneri:string}|null}
+ */
+function pardusKabulSinifi(kabul) {
+  if (!kabul || kabul.timedOut) return null;
+  const cikti = `${kabul.stdout || ''}\n${kabul.stderr || ''}`;
+  const satir = (desen) => {
+    const m = cikti.split('\n').map((s) => s.replace(/^\[kabul\]\s*/, '')).find((s) => desen.test(s));
+    return m ? m.replace(desen, '').trim() : '';
+  };
+  if (kabul.code === 3) {
+    return {
+      durum: 'GUNCEL_DEGIL',
+      sebep: satir(/^GUNCEL-DEGIL:\s*/) || 'kapı güncel değil dedi (ayrıntı yok)',
+      oneri: satir(/^yeniden kuyruk onerisi:\s*/),
+    };
+  }
+  if (kabul.code === 4) {
+    return { durum: 'OLCULEMEDI', sebep: satir(/^OLCULEMEDI:\s*/) || 'kapı ölçemedi (ayrıntı yok)', oneri: '' };
+  }
+  return null;
+}
+
+/**
  * Bir hata nesnesinden loglanabilir TEK SATIRLIK özet üretir — saf fonksiyon.
  *
  * KÖK NEDEN (2026-09-13 ölçüm, 18 günlük heartbeat günlüğü): 3930 heartbeat
@@ -970,6 +1000,7 @@ module.exports = {
   noterHatasiErtelenebilirMi,
   noterHatasi,
   probookErisilemezHatasi,
+  pardusKabulSinifi,
   PROBOOK_KAPISI_ISARETI,
   BASLIKSIZ_KABUL_ISARETI,
   guncellemeDosyalariniSirala,

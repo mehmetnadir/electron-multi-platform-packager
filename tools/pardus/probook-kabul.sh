@@ -7,10 +7,34 @@
 # açmak bu sınıfı yakalar.
 #
 # Kullanim: probook-kabul.sh <paket.impark | uzak:/ProBook/yolu.impark> [kanit-dizini]
-#   Cikis 0 = kabul (kurulum + acilis + kok sayfa temiz), !=0 = RED (paket yuklenmemeli)
+#   Cikis 0 = GECTI (kurulum + acilis + kok sayfa temiz [+ E6 kitap acildi])
+#         1 = RED-KUSUR (paket yuklenmemeli)
+#         3 = RED-GUNCEL-DEGIL (stdout "GUNCEL-DEGIL: ..." + "yeniden kuyruk onerisi: ..."; yuklenmez)
+#         4 = OLCULEMEDI (stdout "OLCULEMEDI: ..."; paket kusuru DEGIL, runner failed YAZMAZ)
 # Ortam: PROBOOK_HOST (varsayilan etapadmin@100.73.161.76 — Tailscale), PROBOOK_KEY (~/.ssh/id_ed25519),
 #        PROBOOK_BEKLE (acilis icin ust sinir sn, varsayilan 300),
 #        PROBOOK_PENCERE (surec gorulduikten sonra cizim payi sn, varsayilan 25)
+#
+# CANLI YARI (2026-09-26, rapor ~/.empp-agent/arastirma/e2e-kanit-pardus-kabul-20260926.md §B;
+# Nadir: "kabul kapisi yalniz aciliyor mu diye bakmamali"). UC BAYRAK, HEPSI VARSAYILAN KAPALI —
+# ProBook'ta olculmemis iki varsayim var (Electron 27 paketinde --remote-debugging-port aciliyor mu;
+# ayri HOME'da ETAP cizimi ayni mi). Kapaliyken davranis birebir eskisi.
+#   KABUL_CDP=1   E6 + E7: uygulama `--remote-debugging-port=<bos port, 3000 degil>` ile acilir;
+#                 menu pikseli gecince cdp-kitap-ac.js ilk kitaba girer (DOM tiklamasi, xdotool YOK),
+#                 okuyucu sayfa izi + kitap ekrani pikseli (ayni esikler) olculur (E6); motorun
+#                 GetKitapGuncellemeBilgi cevabi yakalanir, Data doluysa cikis 3 (E7).
+#                 Uzak kipte CDP ucuna ssh -L tuneliyle baglanilir. KABUL_NODE (varsayilan node),
+#                 KABUL_CDP_PORT_TABAN (ProBook, 9337), KABUL_TUNEL_PORT_TABAN (Mac, 9437),
+#                 KABUL_KITAP_SN (60), KABUL_E7_SN (20).
+#   KABUL_AYRI_EV=1  E8: uygulama AYRI ev diziniyle kosar (HOME + XDG_CONFIG/CACHE/DATA_HOME):
+#                 ~/.config/<ad>/work 17.09'dan kalici — eski K indirmesi ya da aktivasyon anahtari
+#                 yanlis GECTI uretebilir. Ev: KABUL_EV (ProBook'ta tam yol) ya da
+#                 <KABUL_EV_KOK, varsayilan ~/empp-serit/kabul-ev>/ev-<damga>; baslangicta BOS olmali.
+#                 Ogretmen kurulumlari GIZLENMEZ (gizle/temizlik ev dizininde kosar). Ev dizini
+#                 kanita (ortam.txt) ve stdout'a yazilir; bitiste kurulum temizlenir, geri kalan
+#                 (userData = K/aktivasyon kaniti) KABUL_EV_GUN (3) gun tutulur.
+#   KABUL_AKTIVASYON_OLCULEMEDI=1  aktivasyon ekraninda "ICERIK dogrulanmadi" ile GECTI yerine
+#                 cikis 4 (OLCULEMEDI). Kapaliyken bugunku kural.
 #
 # Kurulum onbellegi tuzagi: AppRun `.empp-version` isaretine bakar; ayni surum zaten
 # kuruluysa paketi ACMAZ, ESKI kurulumu calistirir -> kapi bayat paketi onaylar.
@@ -56,8 +80,38 @@ kanit_al(){
 }
 say(){ printf '[kabul] %s\n' "$*"; }
 red(){ say "RED: $*"; temizle; exit 1; }
+olculemedi(){ say "OLCULEMEDI: $*"; temizle; exit 4; }
+# shellcheck source=kabul-karar.sh
+. "$BETIK_DIZIN/kabul-karar.sh"
 
 DAMGA=$(date +%s)
+CDP="${KABUL_CDP:-0}"
+AYRI_EV="${KABUL_AYRI_EV:-0}"
+AKT_OLC="${KABUL_AKTIVASYON_OLCULEMEDI:-0}"
+CDP_TABAN="${KABUL_CDP_PORT_TABAN:-9337}"
+TUNEL_TABAN="${KABUL_TUNEL_PORT_TABAN:-9437}"
+EV_GUN="${KABUL_EV_GUN:-3}"
+TUNEL_PID=""
+EV_HAZIR=0
+EV_BUDA=0
+# EV_IFADE uzak (ya da yerel) kabukta ACILIR: '$HOME' metni ProBook'un kendi ev dizinidir.
+# E8 kapaliyken '$HOME' → tum yollar eskisiyle ayni (TABAN=$HOME/DijiTap, manifest $HOME/.kabul-*).
+# shellcheck disable=SC2016
+EV_IFADE='$HOME'
+EV_ONEK=""
+if [ "$AYRI_EV" = "1" ]; then
+  if [ -n "${KABUL_EV:-}" ]; then
+    EV_IFADE="$KABUL_EV"
+  else
+    EV_KOK="${KABUL_EV_KOK:-empp-serit/kabul-ev}"
+    case "$EV_KOK" in /*) EV_IFADE="$EV_KOK/ev-$DAMGA-$$" ;; *) EV_IFADE="\$HOME/$EV_KOK/ev-$DAMGA-$$" ;; esac
+    EV_BUDA=1
+  fi
+  case "$EV_IFADE" in
+    *[\'\"\`\;\&\|\<\>]*|*'$('*) say "OLCULEMEDI: gecersiz kabul evi yolu: $EV_IFADE"; exit 4 ;;
+  esac
+  EV_ONEK="HOME=\"$EV_IFADE\" "
+fi
 if [ "$YEREL" = "1" ]; then
   YOL="${GIRDI#uzak:}"
   [ -f "$YOL" ] || { say "RED: paket bulunamadi: $YOL"; exit 1; }
@@ -103,16 +157,43 @@ kilit(){ # $1 = al|birak ; stdout: probook-kilit.sh ciktisi
 temizle(){
   [ "$TEMIZLENDI" = "1" ] && return 0
   TEMIZLENDI=1
+  [ -n "$TUNEL_PID" ] && kill "$TUNEL_PID" 2>/dev/null
   # Gizlemeden ONCE cikista (mesgul/disk/kilit RED) govde kosmaz: hicbir sey degismedi.
+  # E8: govde AYRI EVDE kosar (manifest, kurulum ve pkill deseni ev dizinine bagli).
   if [ "$BASLADI" = "1" ]; then
-    "${SSH[@]}" "bash -s '$DAMGA' '$KOPYALA' '$UZAK'" \
+    "${SSH[@]}" "${EV_ONEK}bash -s '$DAMGA' '$KOPYALA' '$UZAK'" \
       >>"$KANIT/temizlik.log" 2>&1 <"$BETIK_DIZIN/probook-temizlik.sh"
   elif [ "$KOPYALA" = "1" ] && [ "$KILIT" = "1" ]; then
     "${SSH[@]}" "rm -f '$UZAK'" >/dev/null 2>&1
   fi
+  [ "$EV_HAZIR" = "1" ] && ev_bitir
   [ "$KILIT" = "1" ] && kilit birak >>"$KANIT/temizlik.log"
   kanit_sakla
   return 0
+}
+# E8 BITIS: gercek ~/DijiTap + ~/.config envanteri oncesiyle ayni mi (yalitim kaniti, T3);
+# kabul evi kanit olarak kalir (userData: K gunlugu, aktivasyon izi), KABUL_EV_GUN'den eski
+# ev-* dizinleri budanir (yalniz turetilmis kokte; elle verilen KABUL_EV'in ustune DOKUNULMAZ).
+ev_bitir(){
+  "${SSH[@]}" "bash -s" >"$KANIT/ev-bitis.log" 2>&1 <<UZAKEVSON
+KEV="$EV_IFADE"
+echo "ENVANTER_SONRA=\$( { ls -1A "\$HOME/DijiTap" "\$HOME"/DijiTap/*/ "\$HOME/.config"; } 2>/dev/null | cksum | awk '{print \$1"-"\$2}')"
+echo "KABUL_EV_KB=\$(du -sk "\$KEV" 2>/dev/null | cut -f1)"
+if [ "$EV_BUDA" = "1" ]; then
+  find "\$(dirname "\$KEV")" -mindepth 1 -maxdepth 1 -type d -name 'ev-*' -mtime +$EV_GUN -exec rm -rf {} + 2>/dev/null
+fi
+exit 0
+UZAKEVSON
+  local sonra
+  sonra=$(sed -n 's/^ENVANTER_SONRA=//p' "$KANIT/ev-bitis.log" | tail -1)
+  if [ -n "$sonra" ] && [ "$sonra" = "${ENVANTER_ONCE:-}" ]; then
+    echo "E8_ENVANTER=ayni ($sonra)" >> "$KANIT/ortam.txt"
+    say "E8: gercek ~/DijiTap + ~/.config envanteri degismedi"
+  else
+    echo "E8_ENVANTER=DEGISTI (once=${ENVANTER_ONCE:-?} sonra=${sonra:-?})" >> "$KANIT/ortam.txt"
+    say "UYARI: E8 gercek ~/DijiTap + ~/.config envanteri degisti (once=${ENVANTER_ONCE:-?} sonra=${sonra:-?})"
+  fi
+  echo "KABUL_EV_KB=$(sed -n 's/^KABUL_EV_KB=//p' "$KANIT/ev-bitis.log" | tail -1)" >> "$KANIT/ortam.txt"
 }
 # KANIT ARŞİVİ (plan B.1, 2026-09-26): runner iş sonunda çalışma dizinini — kanıt dahil — siler.
 # EMPP_KANIT_ARSIV verilirse (ProBook şeridi: ~/empp-serit/kanit) kanıt oraya kopyalanır ve
@@ -229,21 +310,75 @@ if [ "$KOPYALA" = "1" ]; then
     || { say "RED: kopyalanamadi"; exit 1; }
 fi
 
-say "eski kurulumlar gizleniyor + paket baslatiliyor"
+{
+  echo "CDP=$CDP"
+  echo "KABUL_AYRI_EV=$AYRI_EV"
+  echo "AKTIVASYON=$AKTIVASYON KABUL_AKTIVASYON_OLCULEMEDI=$AKT_OLC"
+} > "$KANIT/ortam.txt"
+# E8 HAZIRLIK: ayri ev dizini BOS olmali (eski K indirmesi / aktivasyon anahtari tasimasin).
+# Gercek ~/DijiTap + ~/.config envanterinin parmak izi alinir; bitiste (ev_bitir) kiyaslanir.
+if [ "$AYRI_EV" = "1" ]; then
+  "${SSH[@]}" "bash -s" > "$KANIT/ev.log" 2>&1 <<UZAKEV
+set -u
+KEV="$EV_IFADE"
+if [ -e "\$KEV" ] && [ -n "\$(ls -A "\$KEV" 2>/dev/null)" ]; then echo "EV_DOLU=\$KEV"; exit 5; fi
+mkdir -p "\$KEV/.config" "\$KEV/.cache" "\$KEV/.local/share" || { echo "EV_KURULAMADI=\$KEV"; exit 6; }
+echo "KABUL_EV=\$KEV"
+echo "ENVANTER_ONCE=\$( { ls -1A "\$HOME/DijiTap" "\$HOME"/DijiTap/*/ "\$HOME/.config"; } 2>/dev/null | cksum | awk '{print \$1"-"\$2}')"
+UZAKEV
+  KEV_GERCEK=$(sed -n 's/^KABUL_EV=//p' "$KANIT/ev.log" | tail -1)
+  ENVANTER_ONCE=$(sed -n 's/^ENVANTER_ONCE=//p' "$KANIT/ev.log" | tail -1)
+  if grep -q '^EV_DOLU=' "$KANIT/ev.log"; then
+    olculemedi "E8 kabul evi bos degil: $(sed -n 's/^EV_DOLU=//p' "$KANIT/ev.log" | tail -1) — eski veri yanlis GECTI uretebilir"
+  fi
+  [ -n "$KEV_GERCEK" ] || olculemedi "E8 kabul evi kurulamadi ($(tail -1 "$KANIT/ev.log"))"
+  EV_HAZIR=1
+  {
+    echo "KABUL_EV=$KEV_GERCEK"
+    echo "XDG_CONFIG_HOME=$KEV_GERCEK/.config"
+    echo "XDG_CACHE_HOME=$KEV_GERCEK/.cache"
+    echo "XDG_DATA_HOME=$KEV_GERCEK/.local/share"
+    echo "ENVANTER_ONCE=$ENVANTER_ONCE"
+  } >> "$KANIT/ortam.txt"
+  say "E8: ayri ev dizini: $KEV_GERCEK (ogretmen kurulumlari gizlenmez)"
+  say "paket ayri evde baslatiliyor"
+else
+  echo "KABUL_EV=yok (gercek HOME; E8 kapali)" >> "$KANIT/ortam.txt"
+  say "eski kurulumlar gizleniyor + paket baslatiliyor"
+fi
 BASLADI=1
 # GIZLEME GOVDESI AYRI DOSYADA (2026-09-19): iki kurulum kokunu de gezer ve
 # envanteri /tmp/kabul-onceki-<damga>.txt'ye yazar; temizlik ayni dosyayi okur.
 # Gerekcesi ve kanitlari: tools/pardus/probook-gizle.sh basligi.
-"${SSH[@]}" "bash -s '$DAMGA' '$UZAK' '${KABUL_HEDEF:-}'" > "$KANIT/baslat.log" 2>&1 <"$BETIK_DIZIN/probook-gizle.sh" \
+# E8: ayni govde AYRI EVDE kosar → gizlenecek bir sey yok, yalniz manifest + KURULUM hedefi.
+"${SSH[@]}" "${EV_ONEK}bash -s '$DAMGA' '$UZAK' '${KABUL_HEDEF:-}'" > "$KANIT/baslat.log" 2>&1 <"$BETIK_DIZIN/probook-gizle.sh" \
   || { say "RED: gizleme adimi basarisiz"; exit 1; }
 
+# CDP PORTU (E6/E7): ProBook'ta bos ilk port (3000 YASAK). Bulunamazsa uygulama bayraksiz acilir,
+# E6 OLCULEMEDI olur. Eski surec portu tutuyorsa (Windows kabulu dersi 4) o port atlanir.
 "${SSH[@]}" "bash -s" >> "$KANIT/baslat.log" 2>&1 <<UZAKBETIK
 set -u
 UZAK="$UZAK"
+KEV="$EV_IFADE"
 [ -f "\$UZAK" ] || { echo "HATA: uzak paket yok: \$UZAK"; exit 3; }
 chmod +x "\$UZAK"
+CDP_PORT=""
+if [ "$CDP" = "1" ]; then
+  for p in \$(seq $CDP_TABAN $((CDP_TABAN + 40))); do
+    [ "\$p" = 3000 ] && continue
+    (exec 3<>"/dev/tcp/127.0.0.1/\$p") 2>/dev/null && continue
+    CDP_PORT=\$p; break
+  done
+  echo "CDP_PORT=\$CDP_PORT"
+fi
 : > /tmp/kabul-calisma.log
-setsid env DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority "\$UZAK" > /tmp/kabul-calisma.log 2>&1 < /dev/null &
+if [ "$AYRI_EV" = "1" ]; then
+  setsid env DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority HOME="\$KEV" XDG_CONFIG_HOME="\$KEV/.config" \
+    XDG_CACHE_HOME="\$KEV/.cache" XDG_DATA_HOME="\$KEV/.local/share" \
+    "\$UZAK" \${CDP_PORT:+--remote-debugging-port=\$CDP_PORT} > /tmp/kabul-calisma.log 2>&1 < /dev/null &
+else
+  setsid env DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority "\$UZAK" \${CDP_PORT:+--remote-debugging-port=\$CDP_PORT} > /tmp/kabul-calisma.log 2>&1 < /dev/null &
+fi
 echo \$! > /tmp/kabul-baslatan.pid
 echo "baslatildi: \$UZAK (baslatan pid=\$(cat /tmp/kabul-baslatan.pid))"
 UZAKBETIK
@@ -262,7 +397,10 @@ export DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority
 # tekil kitap paketleri ~/DijiTap/<alan-adi>/<Kitap> altina kurulur. Eski kalip
 # yalniz birincisini tutuyordu; Lingo-Land-Grade-3 kosusunda gercek uygulama
 # surecinin yolu hic eslesmedi.
-TABAN="\$HOME/DijiTap"
+# E8: kok AYRI EVDEDIR (KEV); E8 kapaliyken KEV=\$HOME, yol eskisiyle ayni.
+KEV="$EV_IFADE"
+TABAN="\$KEV/DijiTap"
+echo "TABAN=\$TABAN"
 gecen=0
 while [ \$gecen -lt $BEKLE ]; do
   sleep 10; gecen=\$((gecen+10))
@@ -298,7 +436,7 @@ while [ \$gecen -lt $BEKLE ]; do
     APPPID=\$pid
     # Hedef AppRun'dan okunamadiysa (manifestte KURULUM yok): BIZIM baslattigimiz surecin
     # kurulum dizini bu kosunundur — ONCEKI listesindeyse degildir, yazilmaz.
-    MAN="\$HOME/.kabul-$DAMGA.manifest"
+    MAN="\$KEV/.kabul-$DAMGA.manifest"
     if [ -f "\$MAN" ] && ! grep -q '^KURULUM ' "\$MAN"; then
       rel=\${exe#\$TABAN/}; kok=\${rel%%/*}; r2=\${rel#*/}; ad=\${r2%%/*}
       if [ -n "\$kok" ] && [ -n "\$ad" ] && [ "\$kok" != "\$rel" ] && ! grep -Fxq "ONCEKI \$kok/\$ad" "\$MAN"; then
@@ -340,14 +478,15 @@ say "pencere acildi (${SURE} sn): '$PADI' (wid=$WID) — cizim icin ${PENCERE} s
 #   kirik (yukleniyor "..." ekrani): sapma 0.020 · koyu piksel 0.00047 · renk sayisi 10
 #   saglam (kitap 1/88)            : sapma 0.198 · koyu piksel 0.51    · renk sayisi 93750
 # Yavas acilan paketi haksiz yere REDDETMEMEK icin olcum DENEME sayisinca tekrarlanir.
-DENEME="${PROBOOK_DENEME:-4}"
-GECERLI=0
-for i in $(seq 1 "$DENEME"); do
-  "${SSH[@]}" "bash -s" > "$KANIT/durum.txt" 2>&1 <<UZAKBETIK2
+# PENCERE OLCUMU (menu ve — E6 — kitap ekrani AYNI olcut). $1 = dosya eki ("" | "-kitap"),
+# $2 = cizim payi sn. Cikti: $KANIT/durum$1.txt + SUREC/SAPMA/KOYU/RENK/GEO/PADI degiskenleri.
+pencere_olc(){
+  local ek="$1" sn="$2"
+  "${SSH[@]}" "bash -s" > "$KANIT/durum$ek.txt" 2>&1 <<UZAKBETIK2
 set -u
 export DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority
 xdotool windowactivate --sync $WID 2>/dev/null
-sleep $PENCERE
+sleep $sn
 # SUREC ARTIK KALIP SAYMAZ (2026-09-19 olculdu): `pgrep -c -f '[D]ijiTap/DijiTap'`
 # olcum aninda 6 donuyordu ama o 6 surec AppRun'in kurulum/baslatma surecleriydi;
 # gercek uygulama (~/DijiTap/<alan-adi>/<Kitap>/zkitap.bin) hic sayilmiyordu. Kapi
@@ -356,26 +495,36 @@ sleep $PENCERE
 echo "SUREC=\$(kill -0 $APPPID 2>/dev/null && echo 1 || echo 0)"
 echo "PENCERE_ADI=\$(xdotool getwindowname $WID 2>/dev/null)"
 echo "GEOMETRI=\$(xdotool getwindowgeometry $WID 2>/dev/null | awk '/Geometry/{print \$2}')"
-import -window $WID /tmp/kabul-ekran.png 2>/dev/null && echo "EKRAN=var"
-import -window root /tmp/kabul-masaustu.png 2>/dev/null
-echo "SAPMA=\$(convert /tmp/kabul-ekran.png -colorspace Gray -format '%[fx:standard_deviation]' info: 2>/dev/null)"
-echo "KOYU=\$(convert /tmp/kabul-ekran.png -colorspace Gray -threshold 85% -format '%[fx:1-mean]' info: 2>/dev/null)"
-echo "RENK=\$(identify -format '%k' /tmp/kabul-ekran.png 2>/dev/null)"
+import -window $WID /tmp/kabul-ekran$ek.png 2>/dev/null && echo "EKRAN=var"
+import -window root /tmp/kabul-masaustu$ek.png 2>/dev/null
+echo "SAPMA=\$(convert /tmp/kabul-ekran$ek.png -colorspace Gray -format '%[fx:standard_deviation]' info: 2>/dev/null)"
+echo "KOYU=\$(convert /tmp/kabul-ekran$ek.png -colorspace Gray -threshold 85% -format '%[fx:1-mean]' info: 2>/dev/null)"
+echo "RENK=\$(identify -format '%k' /tmp/kabul-ekran$ek.png 2>/dev/null)"
 echo "--- KONSOL"
 grep -i "CONSOLE\|ERROR\|not found\|okunamad" /tmp/kabul-calisma.log 2>/dev/null | tail -10
 UZAKBETIK2
-  SUREC=$(grep -o 'SUREC=[0-9]*' "$KANIT/durum.txt" | cut -d= -f2 | head -1)
-  SAPMA=$(grep '^SAPMA=' "$KANIT/durum.txt" | cut -d= -f2 | head -1)
-  KOYU=$(grep '^KOYU=' "$KANIT/durum.txt" | cut -d= -f2 | head -1)
-  RENK=$(grep '^RENK=' "$KANIT/durum.txt" | cut -d= -f2 | head -1 | tr -d ' ')
-  GEO=$(grep '^GEOMETRI=' "$KANIT/durum.txt" | cut -d= -f2 | head -1)
-  PADI=$(grep '^PENCERE_ADI=' "$KANIT/durum.txt" | cut -d= -f2- | head -1)
+  SUREC=$(grep -o 'SUREC=[0-9]*' "$KANIT/durum$ek.txt" | cut -d= -f2 | head -1)
+  SAPMA=$(grep '^SAPMA=' "$KANIT/durum$ek.txt" | cut -d= -f2 | head -1)
+  KOYU=$(grep '^KOYU=' "$KANIT/durum$ek.txt" | cut -d= -f2 | head -1)
+  RENK=$(grep '^RENK=' "$KANIT/durum$ek.txt" | cut -d= -f2 | head -1 | tr -d ' ')
+  GEO=$(grep '^GEOMETRI=' "$KANIT/durum$ek.txt" | cut -d= -f2 | head -1)
+  PADI=$(grep '^PENCERE_ADI=' "$KANIT/durum$ek.txt" | cut -d= -f2- | head -1)
+}
+# Esikler probook ile olcutler.js'te AYNI: sapma >= 0.05, koyu >= 0.005, renk >= 500 (aktivasyonda 0).
+piksel_gecerli(){
+  local RENK_ESIGI=500
+  [ "$AKTIVASYON" = "1" ] && RENK_ESIGI=0
+  awk -v s="${SAPMA:-0}" -v k="${KOYU:-0}" -v r="${RENK:-0}" -v re="$RENK_ESIGI" \
+    'BEGIN{print (s+0 >= 0.05 && k+0 >= 0.005 && r+0 >= re) ? 1 : 0}'
+}
+
+DENEME="${PROBOOK_DENEME:-4}"
+GECERLI=0
+for i in $(seq 1 "$DENEME"); do
+  pencere_olc "" "$PENCERE"
   say "olcum $i/$DENEME: surec=${SUREC:-0} pencere=${GEO:-?} sapma=${SAPMA:-?} koyu=${KOYU:-?} renk=${RENK:-?} baslik='${PADI:-}'"
   [ "${SUREC:-0}" -ge 1 ] || red "uygulama olcum aninda kapanmisti (surec yok)"
-  RENK_ESIGI=500
-  [ "$AKTIVASYON" = "1" ] && RENK_ESIGI=0
-  GECERLI=$(awk -v s="${SAPMA:-0}" -v k="${KOYU:-0}" -v r="${RENK:-0}" -v re="$RENK_ESIGI" \
-    'BEGIN{print (s+0 >= 0.05 && k+0 >= 0.005 && r+0 >= re) ? 1 : 0}')
+  GECERLI=$(piksel_gecerli)
   [ "$GECERLI" = "1" ] && break
   [ "$i" -lt "$DENEME" ] && say "  icerik henuz yok — yeniden olculecek"
 done
@@ -394,10 +543,117 @@ if [ "$GECERLI" != "1" ]; then
 fi
 [ -s "$KANIT/ekran.png" ] || say "UYARI: ekran goruntusu alinamadi (kanit eksik)"
 
-temizle
-if [ "$AKTIVASYON" = "1" ] && [ "${RENK:-0}" -lt 500 ] 2>/dev/null; then
-  say "KABUL (aktivasyon ekrani): $AD — motor acildi ve kod istedi; ICERIK dogrulanmadi"
-else
-  say "KABUL: $AD"
+# ---------------------------------------------------------------------------------------------
+# E6/E7 (KABUL_CDP=1): ilk kitaba gir, motorun guncelleme sorusunu yakala. Aktivasyon ekraninda
+# kitap acilamaz (diyalog) — atlanir, karar kabul_karar'da (KABUL_AKTIVASYON_OLCULEMEDI).
+# ---------------------------------------------------------------------------------------------
+AKT_SERI="$AKTIVASYON"
+AKT_EKRAN=0
+if [ "$AKTIVASYON" = "1" ] && [ "${RENK:-0}" -lt 500 ] 2>/dev/null; then AKT_EKRAN=1; fi
+M_RENK="${RENK:-0}"
+E6=ATLANDI; E6_SEBEP=""; E6_URL=""; E7=ATLANDI; E7_AYRINTI=""; E7_ONERI=""
+
+# Uzak kipte ProBook'taki CDP portuna ssh -L; yerel kipte dogrudan. Istemci BU makinede kosar
+# (Mac'te depo + node var; ProBook seridinde ~/empp-serit/repo + node 22).
+cdp_olc(){
+  local yp="" koku p
+  CDP_PORT=$(sed -n 's/^CDP_PORT=//p' "$KANIT/baslat.log" | tail -1)
+  koku=$(sed -n 's/^TABAN=//p' "$KANIT/bekle.log" | tail -1)
+  echo "CDP_PORT=${CDP_PORT:-yok}" >> "$KANIT/ortam.txt"
+  if [ -z "$CDP_PORT" ]; then
+    E6=OLCULEMEDI; E6_SEBEP="ProBook'ta bos CDP portu bulunamadi (taban $CDP_TABAN)"; E7=OLCULEMEDI
+    return 0
+  fi
+  if [ "$YEREL" = "1" ]; then
+    yp="$CDP_PORT"
+  else
+    for p in $(seq "$TUNEL_TABAN" $((TUNEL_TABAN + 40))); do
+      [ "$p" = 3000 ] && continue
+      (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && continue
+      ssh -N -o ExitOnForwardFailure=yes -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -i "$KEY" \
+        -L "127.0.0.1:$p:127.0.0.1:$CDP_PORT" "$HOST" >>"$KANIT/cdp.log" 2>&1 &
+      TUNEL_PID=$!
+      sleep 2
+      if kill -0 "$TUNEL_PID" 2>/dev/null; then yp="$p"; break; fi
+      TUNEL_PID=""
+    done
+    if [ -z "$yp" ]; then
+      E6=OLCULEMEDI; E6_SEBEP="CDP tuneli kurulamadi (ssh -L, taban $TUNEL_TABAN)"; E7=OLCULEMEDI
+      return 0
+    fi
+  fi
+  say "E6/E7: CDP ProBook:$CDP_PORT (baglanti 127.0.0.1:$yp) — ilk kitaba giriliyor"
+  "${KABUL_NODE:-node}" "$BETIK_DIZIN/cdp-kitap-ac.js" --port "$yp" --kanit "$KANIT" --kurulum-koku "$koku" \
+    --kitap-sn "${KABUL_KITAP_SN:-60}" --e7-sn "${KABUL_E7_SN:-20}" > "$KANIT/cdp.txt" 2>>"$KANIT/cdp.log"
+  E6=$(sed -n 's/^E6=//p' "$KANIT/cdp.txt" | tail -1)
+  E6_SEBEP=$(sed -n 's/^E6_SEBEP=//p' "$KANIT/cdp.txt" | tail -1)
+  E6_URL=$(sed -n 's/^E6_URL=//p' "$KANIT/cdp.txt" | tail -1)
+  E7=$(sed -n 's/^E7=//p' "$KANIT/cdp.txt" | tail -1)
+  E7_AYRINTI=$(sed -n 's/^E7_AYRINTI=//p' "$KANIT/cdp.txt" | tail -1)
+  E7_ONERI=$(sed -n 's/^E7_ONERI=//p' "$KANIT/cdp.txt" | tail -1)
+  if [ -z "$E6" ]; then
+    E6=OLCULEMEDI; E6_SEBEP="CDP istemcisi sonuc vermedi ($(tail -1 "$KANIT/cdp.log" 2>/dev/null))"
+  fi
+  [ -n "$E7" ] || E7=OLCULEMEDI
+  [ "$(sed -n 's/^CDP_HEDEF_ESLESTI=//p' "$KANIT/cdp.txt" | tail -1)" = "0" ] \
+    && say "UYARI: CDP hedefi kurulum kokunde degil ($(sed -n 's/^CDP_HEDEF=//p' "$KANIT/cdp.txt" | tail -1))"
+  if [ -n "$TUNEL_PID" ]; then kill "$TUNEL_PID" 2>/dev/null; TUNEL_PID=""; fi
+  return 0
+}
+
+if [ "$CDP" = "1" ] && [ "$AKT_EKRAN" = "0" ]; then
+  cdp_olc
+  say "E6: $E6 — ${E6_SEBEP:-}${E6_URL:+ (url=$E6_URL)}"
+  if [ "$E6" = "GECTI" ]; then
+    # Kitap ekrani AYNI piksel olcutuyle (ImageMagick, ayni esikler): CDP ek kanittir.
+    KGECERLI=0
+    for i in 1 2; do
+      pencere_olc "-kitap" "${KABUL_KITAP_CIZIM:-3}"
+      say "E6 kitap olcumu $i/2: surec=${SUREC:-0} sapma=${SAPMA:-?} koyu=${KOYU:-?} renk=${RENK:-?}"
+      if [ "${SUREC:-0}" -lt 1 ]; then E6=RED; E6_SEBEP="uygulama kitap acildiktan sonra kapandi (surec yok)"; break; fi
+      KGECERLI=$(piksel_gecerli)
+      [ "$KGECERLI" = "1" ] && break
+    done
+    kanit_al /tmp/kabul-ekran-kitap.png "$KANIT/kitap.png"
+    if [ "$E6" = "GECTI" ] && [ "$KGECERLI" != "1" ]; then
+      E6=RED; E6_SEBEP="kitap acildi (${E6_URL:-?}) ama ekranda ICERIK YOK (sapma=${SAPMA:-?} koyu=${KOYU:-?} renk=${RENK:-?})"
+    fi
+  fi
+  say "E7: $E7 — ${E7_AYRINTI:-}"
+  kanit_al /tmp/kabul-calisma.log "$KANIT/calisma.log"
+elif [ "$CDP" = "1" ]; then
+  say "E6/E7: aktivasyon ekrani (renk=$M_RENK) — kitap acilamaz, atlandi"
 fi
-exit 0
+# K uzlasmasi kor mu (73581 dersi): paketin kendi guncelleme uzlasmasi calismiyor → UYARI, karar degil.
+if grep -q "menü çözülemedi" "$KANIT/calisma.log" 2>/dev/null; then
+  say "UYARI: K bu pakette kor (empp-icerik: menu cozulemedi — kitap guncelleme uzlasmasi calismiyor)"
+fi
+
+kabul_karar
+{
+  echo "E6=$E6"; echo "E6_SEBEP=$E6_SEBEP"; echo "E7=$E7"; echo "E7_AYRINTI=$E7_AYRINTI"
+  echo "KARAR=$KARAR ($KARAR_KOD)"; echo "KARAR_SEBEP=$KARAR_SEBEP"
+} >> "$KANIT/ortam.txt"
+temizle
+[ -n "$KARAR_NOT" ] && say "not: $KARAR_NOT"
+[ "$EV_HAZIR" = "1" ] && say "ev dizini: ${KEV_GERCEK:-?}"
+case "$KARAR_KOD" in
+  0)
+    if [ "$AKT_EKRAN" = "1" ]; then
+      say "KABUL (aktivasyon ekrani): $AD — motor acildi ve kod istedi; ICERIK dogrulanmadi"
+    else
+      [ "$CDP" = "1" ] && say "kabul dayanagi: $KARAR_SEBEP"
+      say "KABUL: $AD"
+    fi
+    exit 0 ;;
+  3)
+    say "GUNCEL-DEGIL: $KARAR_SEBEP"
+    say "yeniden kuyruk onerisi: ${E7_ONERI:-kaynak yenilenince yeniden kuyruga al}"
+    exit 3 ;;
+  4)
+    say "OLCULEMEDI: $KARAR_SEBEP"
+    exit 4 ;;
+  *)
+    say "RED: $KARAR_SEBEP"
+    exit 1 ;;
+esac
