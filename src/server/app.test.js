@@ -41,29 +41,26 @@ test('OUTPUT_TTL_HOURS varsayılan 72s (R2 yüklemesi dakikalar — geniş güve
 });
 
 /**
- * SET GÜNCELLEME PAKETİ indirme ucu (sözleşme §Sunucu tarafı — TASARIM, 2026-09-23).
- * `app.js` modül yüklenirken `server.listen(PORT, ...)` koşulsuz çalışıyor (bu
- * dosyanın başındaki not: server'ı ayağa kaldırmadan sözleşmeyi kilitleriz) —
- * bu yüzden gerçek HTTP round-trip DEĞİL, dosyadaki sentinel disiplini: kayıt
- * SIRASI ve gating mantığı kaynaktan kilitlenir.
+ * ÖLÜ UÇ KARANTİNASI (2026-09-26, Librarian §8 — kanıt:
+ * `_graveyard/2026-09-26-olu-guncelleme-ucu/OKU.md`). Eski `GET
+ * /api/download/:jobId/guncelleme` ucunun üreticisi aynı gün kaldırıldığı için
+ * `job.results.guncellemePaketi` hiç set edilmiyordu, uç her zaman 404
+ * dönüyordu; doğrudan çağıran ve 7 günlük log isteği yoktu. Rota kaldırıldı.
+ * `app.js` modül yüklenirken `server.listen(PORT, ...)` koşulsuz çalıştığı için
+ * (bu dosyanın başındaki not) gerçek HTTP round-trip DEĞİL, kaynak sentinel'i:
+ * literal rotanın GERİ GELMEDİĞİNİ kilitler.
  */
-test("/api/download/:jobId/guncelleme literal rota, :platform joker rotasından ÖNCE tanımlı (çakışma yok)", () => {
-  const guncellemeIdx = SRC.indexOf("app.get('/api/download/:jobId/guncelleme'");
-  const platformIdx = SRC.indexOf("app.get('/api/download/:jobId/:platform'");
-  assert.ok(guncellemeIdx > -1, 'guncelleme rotası bulunamadı');
-  assert.ok(platformIdx > -1, ':platform rotası bulunamadı');
-  assert.ok(guncellemeIdx < platformIdx,
-    'guncelleme rotası :platform rotasından SONRA tanımlanmış — Express eşleşmesi çakışır');
+test('/api/download/:jobId/guncelleme ölü uç kaldırıldı — geri gelirse test kırılır', () => {
+  assert.strictEqual(SRC.indexOf("app.get('/api/download/:jobId/guncelleme'"), -1,
+    'ölü guncelleme rotası kaynağa geri eklenmiş — karantina bozulmuş (bkz. _graveyard/2026-09-26-olu-guncelleme-ucu/OKU.md)');
 });
 
-test('/api/download/:jobId/guncelleme: job tamamlanmamışsa veya paket yoksa 404 {error}', () => {
-  const route = SRC.slice(SRC.indexOf("app.get('/api/download/:jobId/guncelleme'"),
-    SRC.indexOf("app.get('/api/download/:jobId/:platform'"));
-  assert.match(route, /job\.status !== 'completed'/);
-  assert.match(route, /job\.results && job\.results\.guncellemePaketi/);
-  // atlandı / hata / dosya yok — üçü de 404 sayılır, sessizce 200 dönmez.
-  assert.match(route, /gp\.atlandi \|\| gp\.hata \|\| !gp\.tarYolu \|\| !fs\.existsSync\(gp\.tarYolu\)/);
-  assert.match(route, /guncelleme-paketi-yok/);
-  assert.match(route, /buildContentDisposition/);
-  assert.match(route, /res\.download\(gp\.tarYolu/);
+test('/api/download/<jobId>/guncelleme isteği artık :platform jokerine düşer ve yine 404 döner (davranış korunur)', () => {
+  const platformIdx = SRC.indexOf("app.get('/api/download/:jobId/:platform'");
+  assert.ok(platformIdx > -1, ':platform rotası bulunamadı');
+  const route = SRC.slice(platformIdx, SRC.indexOf('app.get', platformIdx + 10));
+  // 'guncelleme' artık platform parametresi gibi eşleşir; job.results['guncelleme']
+  // hiçbir yerde yazılmadığı için bu dal her zaman 404 verir.
+  assert.match(route, /!job\.results\[platform\]/);
+  assert.match(route, /res\.status\(404\)/);
 });
