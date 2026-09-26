@@ -10,6 +10,14 @@ const {
   kipCoz, sharpSecenekleri,
 } = require('./sayfa-webp');
 
+// Bu dosyadaki testlerin HİÇBİRİ önbelleği sınamıyor (bkz. webp-onbellek.test.js +
+// sayfa-webp-onbellek.test.js) ama `klasoruDonustur` opts.onbellek verilmezse
+// gerçek `~/.empp-agent/webp-onbellek` dizinini kullanır (bu Mac'te GERÇEK ajanın
+// çalışma dizini). Testlerin o dizine yanlışlıkla dokunmaması için bu dosya
+// boyunca önbelleği env ile KAPALI tutuyoruz.
+test.before(() => { process.env.EMPP_WEBP_ONBELLEK = '0'; });
+test.after(() => { delete process.env.EMPP_WEBP_ONBELLEK; });
+
 /** sharp mock: gerçek işlem yapmaz, `.webp()`'e giden seçenek nesnesini yakalar. */
 function sahteSharpOlustur() {
   const cagrilar = [];
