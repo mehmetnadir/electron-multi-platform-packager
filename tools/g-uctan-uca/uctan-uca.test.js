@@ -19,6 +19,7 @@ const { kos } = require('./kos');
 const { sunucuBaslat, tlsOku, istekHedefi } = require('./sunucu');
 const { agaciDogrula, beklenenOku } = require('./dogrula');
 const o = require('./ortak');
+const yayin = require('../g-yayin/yayinla');
 
 function opensslVarMi() {
   try {
@@ -89,6 +90,44 @@ test(
     assert.equal(h.senaryolar.length, o.SENARYOLAR.length);
     const set = JSON.parse(fs.readFileSync(path.join(h.kurulu, 'empp-set.json'), 'utf8'));
     assert.equal(set.imza.acikAnahtar, h.acikAnahtar);
+
+    // ANDROID EKLEME KAPISI — koşumun "ekle" yayınları anahtarı AÇIKÇA verir (r1, menu-k17);
+    // devralınan ekleme (r2: index+motor, yeni ekleme yok) anahtarsız sürer ve donuk raporlanır.
+    const [a1, a2] = h.android.gecerli;
+    assert.deepEqual([a1.kabul, a1.donuk, a1.yeniEkleme], [true, true, ['book4']]);
+    assert.deepEqual(
+      [a2.kabul, a2.donuk, a2.yeniEkleme, a2.devralinanEkleme],
+      [false, true, [], ['book4']],
+    );
+    assert.deepEqual([h.android.menuK17.kabul, h.android.menuK17.yeniEkleme], [true, ['book4']]);
+    // Aynı girdilerle anahtarsız --ekle RED (hiçbir şey yazılmaz); --cikar + --index geçer.
+    const kaynak = path.join(h.dizin, 'kaynak');
+    const kapi = (ad, ek) => ({
+      komut: 'yayinla',
+      setKimligi: o.SET_KIMLIGI,
+      taban: h.taban,
+      cikti: path.join(d, 'kapi', ad),
+      anahtarDosya: anahtarYolu,
+      ilk: true,
+      oncekiSurum: o.PAKET_SURUMU,
+      panel: o.PANEL,
+      menuTaban: h.kurulu,
+      index: path.join(kaynak, 'index-v2.html'),
+      motorlar: {},
+      ekle: {},
+      cikar: ['book3'],
+      ...ek,
+    });
+    await assert.rejects(
+      yayin.yayinla(kapi('red', { ekle: { book4: path.join(kaynak, 'book4') } }), {
+        gunluk: () => {},
+      }),
+      /^Error: --ekle book4 REDDEDİLDİ \(Android kapısı\)/,
+    );
+    assert.equal(fs.existsSync(path.join(d, 'kapi', 'red')), false, 'RED yayın hiçbir şey yazmaz');
+    const gec = await yayin.yayinla(kapi('gec', {}), { gunluk: () => {} });
+    assert.deepEqual(gec.menu.kitaplar, { book3: 'cikarildi' });
+    assert.deepEqual([gec.android.donuk, gec.android.dosya], [false, null]);
 
     // TLS: ca.pem ile güvenilen gerçek https; ca'sız istek reddedilir.
     const s = await sunucuBaslat({

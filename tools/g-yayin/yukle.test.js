@@ -137,6 +137,7 @@ async function yayinlaOrnek(o) {
       ),
       motorlar: { book1: o.yaz('m.js', 'motor') },
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+      androidEklemeDondururKabul: true,
       cikar: [],
     },
     { gunluk: () => {} },
@@ -313,4 +314,194 @@ test('e2eIndexi: eski işaret atılır, yenisi </html> önüne', () => {
   const b = yk.e2eIndexi(a, 'T2');
   assert.equal((b.match(/empp-g-e2e/g) || []).length, 1);
   assert.match(b, /<!-- empp-g-e2e T2 -->\n<\/html>$/);
+});
+
+/* ------------------------------------------------ Android G ucu yüklenir + doğrulanır (26.09) */
+/*
+ * Android istemcisi (`src/platforms/android/empp-g-istemci.js` `kimlikKoku`) G tabanında
+ * `set/<id>/android/{surum.json, manifest.json, manifest.json.sig, dosya/<yol>}` ister; kitap
+ * arşivini manifestteki paylaşılan `kitap/` adresinden alır (canlı kanıt: sunucu istek günlüğü).
+ * Android paketlerinde G AÇIK — uç yüklenmezse Android 404 alır, hiç güncelleme görmez.
+ */
+
+const G = require('../../src/platforms/android/empp-g-istemci.js');
+const setKabuk = require('../../src/packaging/set-kabuk');
+const { MOTOR_DOSYA_ADI: MOTOR } = require('./durum');
+const A = (k) => `guncelleme/set/74390/android/${k}`;
+
+/** GERÇEK Android istemcisi, sahte CDN'den (kova) okuyan köprüyle. Kitap eklemesi yok. */
+async function androidIstemcisiKos(c, acik) {
+  const kayit = { getir: [], uygula: [] };
+  const yerel = {
+    yapilandirma: async () => ({
+      metin: JSON.stringify({
+        setKimligi: '74390',
+        taban: HEDEF.taban,
+        imza: { alg: 'ed25519', acikAnahtar: acik },
+      }),
+      paket: JSON.stringify({ surum: '2.7.1' }),
+    }),
+    durum: async () => ({ surum: null }),
+    getir: async ({ adres, tavan }) => {
+      kayit.getir.push(new URL(adres).pathname);
+      const r = await c.getir(adres);
+      if (r.durum !== 200) return { durum: r.durum };
+      if (tavan && r.govde.length > tavan) throw new Error('govde-tavani');
+      return { durum: 200, b64: r.govde.toString('base64') };
+    },
+    ozetler: async ({ yollar }) => ({ ozetler: Object.fromEntries(yollar.map((x) => [x, null])) }),
+    yaz: async (a) => {
+      const b = Buffer.from(a.b64, 'base64');
+      if (crypto.createHash('sha256').update(b).digest('hex') !== a.sha256) throw new Error('sha');
+      return { tamam: true };
+    },
+    kitapKur: async () => {
+      throw new Error('bu testte kitap eklemesi yok');
+    },
+    uygula: async (p) => {
+      kayit.uygula.push(p);
+      return { surum: p.surum };
+    },
+  };
+  const rapor = await G.guncellemeyiCalistir({
+    yerel,
+    kabuk: setKabuk,
+    subtle: crypto.webcrypto.subtle,
+  });
+  return { rapor, kayit };
+}
+
+/** Android'e uygun yayın: kök index Android bekçisini geçer (shim etiketi), motor; ekleme YOK. */
+async function androidYayini(o) {
+  return y.yayinla(
+    {
+      komut: 'yayinla',
+      setKimligi: '74390',
+      taban: HEDEF.taban,
+      cikti: o.cikti,
+      anahtarDosya: o.anahtarYolu,
+      ilk: true,
+      oncekiSurum: '2.7.1',
+      panel: 7,
+      index: o.yaz(
+        'ai.html',
+        '<!doctype html><html><head><script src="empp-android-shim.js"></script></head>' +
+          '<body>74390</body></html>\n',
+      ),
+      motorlar: { book1: o.yaz('am.js', 'motor-android') },
+      ekle: {},
+      cikar: [],
+    },
+    { gunluk: () => {} },
+  );
+}
+
+test('android ucu: onaylı yükleme android/ ucunu da yükler → GERÇEK Android istemcisi güncellenir', async () => {
+  const o = ortam();
+  const c = sahteCanli();
+  const r0 = await androidYayini(o);
+  const ops = { ...c, beklenenAcik: o.acik };
+  const kuru = await yk.yukle({ setKimligi: '74390', cikti: o.cikti }, ops);
+  const plan = kuru.yuklenecek.map((p) => p.anahtar);
+  const istenen = ['dosya/index.html', `dosya/book1/${MOTOR}`, 'manifest.json'];
+  istenen.push('manifest.json.sig');
+  for (const k of [...istenen, 'surum.json']) assert.ok(plan.includes(A(k)), `planda yok: ${A(k)}`);
+  const r = await yk.yukle(
+    { setKimligi: '74390', cikti: o.cikti, onayli: true },
+    { ...c, beklenenAcik: o.acik },
+  );
+  assert.equal(r.gecti, true, JSON.stringify(r));
+  assert.equal(r.dogrula.androidDosya, 2);
+  const k = c.kopyalar();
+  const i = (x) => k.indexOf(x);
+  // Sıra: android içerik → (her iki) manifest → iki surum.json EN SON.
+  assert.ok(i('android/dosya/index.html') < i('android/manifest.json'));
+  assert.ok(i('android/manifest.json') < i('android/surum.json'));
+  assert.ok(i('android/manifest.json.sig') < i('android/surum.json'));
+  assert.deepEqual(k.slice(-2).sort(), ['android/surum.json', 'surum.json']);
+  const kopya = c.cagri.find((x) => x[0] === 'copyto' && x[2].endsWith('/android/surum.json'));
+  assert.ok(kopya.includes('Cache-Control: no-cache'));
+  // Android ucu canonical'la bayt bayt aynı (TEK imza).
+  const kova = (g) => fs.readFileSync(path.join(c.kova, ...`guncelleme/set/74390/${g}`.split('/')));
+  assert.ok(kova('android/manifest.json').equals(kova('manifest.json')));
+  assert.ok(kova('android/manifest.json.sig').equals(kova('manifest.json.sig')));
+
+  // GERÇEK Android istemcisi sahte CDN'den okur: güncellenir, istediği yollar android/ altında.
+  const { rapor, kayit } = await androidIstemcisiKos(c, o.acik);
+  assert.equal(rapor.durum, 'guncellendi', JSON.stringify(rapor));
+  assert.equal(rapor.surum, r0.surum);
+  assert.deepEqual(
+    kayit.uygula[0].dosyalar.map((d) => d.yol).sort(),
+    [`book1/${MOTOR}`, 'index.html'],
+  );
+  const kok = '/guncelleme/set/74390/android/';
+  assert.ok(kayit.getir.every((p) => p.startsWith(kok)), kayit.getir.join('\n'));
+  assert.deepEqual(kayit.getir.slice(0, 3), [
+    `${kok}surum.json`,
+    `${kok}manifest.json`,
+    `${kok}manifest.json.sig`,
+  ]);
+});
+
+// Canlıda eksik/bozuk android ucu → dogrula --uzak RED; eski (android'siz) canlı yeniden
+// koşuyla onarılır.
+test('android ucu: canlıda eksik/bozuksa dogrula --uzak RED; yeniden koşu onarır', async () => {
+  const o = ortam();
+  const c = sahteCanli();
+  await androidYayini(o);
+  const ops = { ...c, beklenenAcik: o.acik };
+  await yk.yukle({ setKimligi: '74390', cikti: o.cikti, onayli: true }, ops);
+  const kovaYolu = (g) => path.join(c.kova, ...`guncelleme/set/74390/${g}`.split('/'));
+  const dogrula = () =>
+    y.uzakDogrula({ taban: HEDEF.taban, setKimligi: '74390', acik: o.acik, getir: c.getir });
+  assert.equal((await dogrula()).gecti, true);
+
+  // Bugünkü canlı gibi: android/ ucu hiç yüklenmemiş (bu değişiklikten önceki yukle.js).
+  fs.renameSync(kovaYolu('android'), kovaYolu('android-kenara'));
+  const eksik = await dogrula();
+  assert.equal(eksik.gecti, false);
+  const eksikMetin = eksik.hatalar.join('\n');
+  assert.match(eksikMetin, /android ucu: HTTP 404: .*\/set\/74390\/android\/surum\.json/);
+  assert.match(eksikMetin, /android ucu: HTTP 404: .*\/android\/dosya\/index\.html/);
+  // Yeniden koşu yalnız eksik android/ ucunu yükler, doğrulama geçer.
+  const onar = await yk.yukle({ setKimligi: '74390', cikti: o.cikti, onayli: true }, ops);
+  assert.equal(onar.gecti, true, JSON.stringify(onar));
+  assert.ok(onar.yuklenen.length === 5 && onar.yuklenen.every((x) => x.includes('/android/')));
+
+  // Bozuk android dosyası / ayrışan android manifesti / yanlış android surum.json → RED.
+  const hatalar = async () => (await dogrula()).hatalar.join('\n');
+  fs.writeFileSync(kovaYolu('android/dosya/index.html'), '<html>kurcalanmış</html>');
+  assert.match(await hatalar(), /android\/dosya\/index\.html sha256\/boyut tutmuyor/);
+  fs.copyFileSync(kovaYolu('dosya/index.html'), kovaYolu('android/dosya/index.html'));
+  const canonical = fs.readFileSync(kovaYolu('manifest.json'), 'utf8');
+  fs.writeFileSync(kovaYolu('android/manifest.json'), canonical + ' ');
+  assert.match(await hatalar(), /android\/manifest\.json\(\.sig\) canonical .* aynı değil/);
+  fs.copyFileSync(kovaYolu('manifest.json'), kovaYolu('android/manifest.json'));
+  fs.writeFileSync(kovaYolu('android/surum.json'), JSON.stringify({ surum: '2.7.1' }));
+  assert.match(await hatalar(), /android\/surum\.json \(2\.7\.1\) ≠ manifest \(2\.7\.2\)/);
+  // Kontrol: onarılınca yine GEÇER (yukarıdaki RED'ler yalnız bozukluktan).
+  fs.copyFileSync(kovaYolu('surum.json'), kovaYolu('android/surum.json'));
+  assert.equal((await dogrula()).gecti, true);
+});
+
+test('android ucu: yayın öncesi — yerelde android yoksa / canlı android yeniyse yüklenmez', async () => {
+  const o = ortam();
+  const c = sahteCanli();
+  await androidYayini(o);
+  const ops = { ...c, beklenenAcik: o.acik };
+  const yerelA = path.join(o.cikti, 'set', '74390', 'android', 'dosya', 'index.html');
+  fs.renameSync(yerelA, yerelA + '.kenara');
+  const r = await yk.yukle({ setKimligi: '74390', cikti: o.cikti, onayli: true }, ops);
+  assert.equal(r.gecti, false);
+  assert.match(r.cakisma.join(';'), /android\/dosya\/index\.html: yerelde yok, canlıda da yok/);
+  assert.equal(c.kopyalar().length, 0);
+  fs.renameSync(yerelA + '.kenara', yerelA);
+
+  const aSurum = path.join(c.kova, 'guncelleme', 'set', '74390', 'android', 'surum.json');
+  fs.mkdirSync(path.dirname(aSurum), { recursive: true });
+  fs.writeFileSync(aSurum, JSON.stringify({ surum: '2.7.9' }));
+  const r2 = await yk.yukle({ setKimligi: '74390', cikti: o.cikti, onayli: true }, ops);
+  assert.equal(r2.gecti, false);
+  assert.match(r2.cakisma.join(';'), /android\/canlı sürüm 2\.7\.9 .* geri götürülmez/);
+  assert.equal(c.kopyalar().length, 0);
 });

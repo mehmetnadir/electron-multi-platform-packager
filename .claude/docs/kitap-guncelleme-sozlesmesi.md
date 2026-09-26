@@ -245,6 +245,8 @@ node tools/g-yayin/yayinla.js e2e 74390 [--onayli]    # üret → yükle → can
   bundle `window.isApp=true` yaması — `normalizeBookViewerViewports`) Electron'u bozacağı için paylaşılan arşive
   KONAMAZ → ayrı Android arşivi + manifestte platform başına kaynak gerekir (şema + iki istemci). Electron fs-shim
   etiketi Android'de etkisizdir (android shim önce `__emppFsShim` kurar; fs-shim onu görünce kurulmaz).
+- **Kapı — `--ekle` Android'i dondurur (26.09, dal `g-yayin-android-kapi`):** Android paketlerinde G açık olduğundan `--ekle` içeren yayın varsayılan RED (neden + öneri yolu + anahtar; imza anahtarı ve girdiler okunmadan); bilinçli geçiş yalnız `--android-ekleme-dondurur-kabul` → rapor `android{donuk,yeniEkleme,devralinanEkleme}` + manifest yanında `ANDROID-DONUK.txt` (yüklenmez, durum çözülünce kalkar).
+  Devralınan ekleme (önceki imzalı durumda `ekle`, bu yayında yeni ekleme yok) anahtarsız geçer ama donuk raporlanır; `--cikar`/`--index`/`--motor`/menü kapıdan geçmez; kalıcı çözüm (öneri A/B) Nadir kararında: `~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md`.
 
 ## G istemcisi — kimlik, monoton sürüm, ya hep ya hiç (2026-09-26, dal `g-electron`)
 
@@ -282,12 +284,15 @@ Kanıt: `tools/g-uctan-uca/kos.js` 11 senaryo (her ikisi de `--kip yerinde` ve `
 - **Yer:** politika JS'de (`src/platforms/android/empp-g-istemci.js`: iki kademe, imza, kapsam, plan), mekanizma Java'da
   (`g-java/com/empp/g/`: `EmppGKatman` saf JDK, `EmppGRota` Capacitor RouteProcessor, `EmppGPlugin` köprü).
   Kurulum `g-katmani.js` ← `packagingService.configureAndroidG`; YALNIZ `www/empp-set.json` varsa (kapı
-  `EMPP_SET_GUNCELLEME`; canlıda `windows` → Android'de bugün KAPALI).
+  `EMPP_SET_GUNCELLEME`; canlıda `windows,macos,linux,android` → Android paketlerinde G AÇIK, 26.09 21:10).
+  Kitap EKLEME g-yayin kapısında reddedilir (anahtarsız `--ekle` RED — "G yayın aracı" bölümü): paylaşılan arşiv
+  Electron biçimidir, Android `kitap-android-hazir-degil` ile reddeder ve set Android'de kalıcı donar.
 - **Katman:** `filesDir/empp-g` = `depo/<sha256>` (kabuk) · `kitap/<dizin>-<sha16>/` (eklenen kitap) · `hazirlik/` ·
   `durum.txt`. WebView isteği önce katmandan, yoksa APK'dan; çıkarılan kitap 404. APK değişince katman atılır.
-- **Uç:** `<taban>/set/<kimlik>/android/{surum.json, manifest.json, manifest.json.sig, dosya/…}` — Android'e uyarlanmış
-  ağaçtan; Windows manifesti Android'e uygulanmaz. İmza: WebCrypto Ed25519, yoksa gömülü tweetnacl 1.0.3; ikisi de
-  yoksa KAPALI.
+- **Uç:** `<taban>/set/<kimlik>/android/{surum.json, manifest.json, manifest.json.sig, dosya/…}` (istemci
+  `kimlikKoku`); kitap arşivi manifestteki paylaşılan `kitap/<ad>.zip` adresinden. g-yayin bu ucu canonical manifest +
+  imzanın BAYT BAYT aynısıyla yazar (tek imza); `yukle` onu da yükler, `dogrula --uzak` eksik/bozuk Android ucunu RED
+  eder (26.09). İmza: WebCrypto Ed25519, yoksa gömülü tweetnacl 1.0.3; ikisi de yoksa KAPALI.
 - **Üç güvenlik kuralı (Electron `kitap-guncelleyici.js` e07bc37 ile aynı):**
   1. *Monoton sürüm:* manifest `surum` G3 (`2.<panel>.<sayaç>`) ve KURULU sürümden KESİN büyük olmalı. Kurulu =
      max(`empp-g-paket.json` [paketleme anındaki appVersion], son uygulanan G); G3 olmayan paket sürümü kıyasa

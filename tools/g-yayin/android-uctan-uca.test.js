@@ -81,6 +81,10 @@ async function uretimYap(o) {
       index: o.yaz('i.html', o.menu('menu')),
       motorlar: {},
       ekle: { book7: path.join(o.d, 'girdi', 'book7') },
+      // Android ekleme kapısı: anahtarsız --ekle RED (yayinla.js `androidEklemeKapisi`). Bu test
+      // WIRING sınar ve sahte köprü üç Android işaretini `true` döndürür — gerçek Java katmanı
+      // bu Electron biçimli arşivi reddeder; anahtar o yüzden BİLİNÇLİ verildi.
+      androidEklemeDondururKabul: true,
       cikar: [],
     },
     { gunluk: () => {} },

@@ -16,6 +16,8 @@
  *   Durum   birikimli: önceki imzalı manifest + bu yayının değişiklikleri (durum.js).
  *   İmza    ed25519, manifestin YAZILAN baytları üzerinde; anahtar Anahtar Zinciri
  *           (üretim) ya da dosya (TEST) — anahtar.js.
+ *   Android `--ekle` içeren yayın varsayılan RED (Android ucu kalıcı donar); bilinçli geçiş
+ *           yalnız `--android-ekleme-dondurur-kabul` ile — `androidEklemeKapisi`.
  *
  * Alt komutlar:
  *   yayinla  (varsayılan)  yeni sürümü üret
@@ -59,6 +61,22 @@ const CACHE_DEGISKEN = 'no-cache';
  * Android zip'i üretilmez). Android istemcisi manifestteki kendi bilmediği alanları yok sayar.
  */
 const ANDROID_ONEKI = 'android';
+/**
+ * ANDROID EKLEME KAPISI (26.09 — Android paketlerinde G istemcisi AÇILDI, Nadir: "tüm paketlerde
+ * güncelleme istemcisi olsun"). Eklenen kitabın arşivi yalnız Electron biçimindedir (fs-shim);
+ * Android istemcisi onu İNDİRDİKTEN sonra `kitap-android-hazir-degil:bookN` ile reddeder
+ * (`empp-g-istemci.js`, canlıda ölçüldü) ve manifest birikimli olduğu için (`durum.js`) ekleme
+ * sonraki HER yayına taşınır → o setin Android ucu KALICI donar, motor düzeltmeleri dahil hiçbir
+ * G güncellemesi alamaz. Bu yüzden `--ekle` içeren yayın varsayılan RED; bilinçli geçiş yalnız
+ * `ANDROID_EKLEME_ANAHTARI` ile, görünür uyarıyla (rapor `android` + manifest yanında
+ * `ANDROID_DONUK_DOSYASI`). `--cikar`/`--index`/`--motor`/menü kapıdan geçmez (Android'de canlıda
+ * çalıştığı ölçüldü). Kalıcı çözüm (öneri A/B: ayrı Android arşivi) Nadir kararında. Kuralı belge
+ * değil kapı korur.
+ */
+const ANDROID_EKLEME_ANAHTARI = '--android-ekleme-dondurur-kabul';
+const ANDROID_EKLEME_ONERISI =
+  '~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md';
+const ANDROID_DONUK_DOSYASI = 'ANDROID-DONUK.txt';
 const GECICI_EK = '.g-yayin-gecici';
 const ALT_KOMUTLAR = ['yayinla', 'dogrula', 'kuru-imza', 'yukle', 'e2e'];
 
@@ -154,6 +172,7 @@ function argsAyristir(argv) {
     uzak: null,
     arsivler: false,
     onayli: false,
+    androidEklemeDondururKabul: false,
   };
   if (liste.length && !liste[0].startsWith('--')) a.komut = liste.shift();
   if (!ALT_KOMUTLAR.includes(a.komut)) throw new Error(`bilinmeyen alt komut: ${a.komut}`);
@@ -203,6 +222,7 @@ function argsAyristir(argv) {
     else if (b === '--uzak') a.uzak = deger().replace(/\/+$/, '');
     else if (b === '--arsivler') a.arsivler = true;
     else if (b === '--onayli') a.onayli = true;
+    else if (b === ANDROID_EKLEME_ANAHTARI) a.androidEklemeDondururKabul = true;
     else throw new Error(`bilinmeyen argüman: ${b}`);
   }
   return a;
@@ -494,6 +514,55 @@ async function menuTabanlariTopla(girdi) {
   return { tabanlar, kaynaklar };
 }
 
+/**
+ * ANDROID EKLEME KAPISI — saf (bkz. `ANDROID_EKLEME_ANAHTARI`). `--ekle` içeren yayın, önceki
+ * imzalı durumda devralınan ekleme olsa da olmasa da, anahtarsız RED. Girdiler ve imza anahtarı
+ * okunmadan ÖNCE koşar: üretim anahtarına dokunulmaz, yüzlerce MB'lık arşiv hazırlanmaz.
+ * @returns {string[]} bu yayında eklenen kitap dizinleri (sıralı; boşsa kapı ilgisiz)
+ */
+function androidEklemeKapisi(a) {
+  const eklenen = Object.keys((a && a.ekle) || {}).sort();
+  if (!eklenen.length || (a && a.androidEklemeDondururKabul === true)) return eklenen;
+  throw new Error(
+    `--ekle ${eklenen.join(',')} REDDEDİLDİ (Android kapısı): g-yayin eklenen kitabın arşivini ` +
+      'yalnız Electron biçiminde üretir; Android istemcisi onu indirdikten sonra ' +
+      `kitap-android-hazir-degil:${eklenen[0]} ile reddeder ve manifest eklemeyi sonraki her ` +
+      "yayına taşıdığı için bu setin Android'i KALICI donar (motor düzeltmeleri dahil hiçbir G " +
+      'güncellemesi alamaz). Kalıcı çözüm (öneri A/B) Nadir kararında: ' +
+      `${ANDROID_EKLEME_ONERISI}. ` +
+      '--cikar/--index/--motor bu kapıdan geçmez. Bilinçli geçiş (Android donmasını kabul): ' +
+      ANDROID_EKLEME_ANAHTARI,
+  );
+}
+
+/**
+ * Yeni imzalı durumun Android özeti — saf. Durumda `ekle` girdisi varsa Android ucu DONUKTUR:
+ * bu yayında anahtarla eklenen (`yeniEkleme`) ya da önceki imzalı durumdan devralınan
+ * (`devralinanEkleme`). Yeni ekleme yoksa yayın bugünkü gibi geçer (kapı yalnız YENİ eklemeyi
+ * keser; donma o eklemenin yayınlandığı anda oluşmuştur) ama uyarı her yayında görünür kalır.
+ */
+function androidDurumu(kitaplar, eklenen, kabul) {
+  const eklemeler = (kitaplar || []).filter((k) => k && k.durum === 'ekle').map((k) => k.dizin);
+  const yeniEkleme = eklemeler.filter((d) => eklenen.includes(d));
+  const devralinanEkleme = eklemeler.filter((d) => !eklenen.includes(d));
+  const donuk = eklemeler.length > 0;
+  const parca = [];
+  if (yeniEkleme.length) parca.push(`bu yayında ${ANDROID_EKLEME_ANAHTARI} ile: ${yeniEkleme}`);
+  if (devralinanEkleme.length) parca.push(`önceki imzalı durumdan devralınan: ${devralinanEkleme}`);
+  return {
+    donuk,
+    yeniEkleme,
+    devralinanEkleme,
+    kabul: kabul === true,
+    uyari: donuk
+      ? `ANDROID DONUK — imzalı durumda G ile eklenmiş kitap var (${parca.join('; ')}): Android ` +
+        'istemcisi bu ve sonraki her sürümü kitap-android-hazir-degil ile reddeder (motor ' +
+        `düzeltmeleri dahil); Windows/mac/Pardus etkilenmez. Öneri: ${ANDROID_EKLEME_ONERISI}`
+      : null,
+    dosya: null,
+  };
+}
+
 function kitapAdi(dizin, sha) {
   return `${dizin}-${sha.slice(0, 16)}.zip`;
 }
@@ -527,6 +596,9 @@ async function yayinla(a, ops = {}) {
   const setDizini = path.join(cikti, 'set', setKimligi);
   const geciciDizin = path.join(cikti, '.g-yayin-gecici', setKimligi);
   const saat = typeof ops.saat === 'function' ? ops.saat : () => new Date().toISOString();
+
+  // 0) Android ekleme kapısı — imza anahtarından ve girdilerden ÖNCE (anahtarsız --ekle RED).
+  const eklenenKitaplar = androidEklemeKapisi(a);
 
   // 1) Anahtar — girdiler okunmadan önce: kaynak hatası erken düşsün.
   const an = await anahtar.anahtarYukle({
@@ -634,6 +706,7 @@ async function yayinla(a, ops = {}) {
 
   // 5) Yeni tam durum.
   const yeni = durum.birlestir(onceki, degisiklik);
+  const android = androidDurumu(yeni.kitaplar, eklenenKitaplar, a.androidEklemeDondururKabul);
 
   // 6) Manifest + imza.
   const uretim = saat();
@@ -718,6 +791,21 @@ async function yayinla(a, ops = {}) {
   ekle(5, 'surum.json', path.join(setDizini, 'surum.json'), false);
   atomikYaz(path.join(androidDizini, 'surum.json'), surumJson);
   ekle(5, `${ANDROID_ONEKI}/surum.json`, path.join(androidDizini, 'surum.json'), false);
+  // Android donuksa manifestin YANINDA görünür uyarı (yüklenmez — plan dışı); durum artık donuk
+  // değilse (eklenen kitap çıkarıldı) önceki yayından kalan bayat uyarı kaldırılır.
+  const donukYolu = path.join(setDizini, ANDROID_DONUK_DOSYASI);
+  if (android.donuk) {
+    atomikYaz(
+      donukYolu,
+      `${android.uyari}\n\nset ${setKimligi} · G ${surum} · ${uretim}\n` +
+        `yeni ekleme: ${android.yeniEkleme.join(', ') || '-'}\n` +
+        `devralınan ekleme: ${android.devralinanEkleme.join(', ') || '-'}\n`,
+    );
+    android.dosya = donukYolu;
+    gunluk(`[uyari] ${android.uyari}`);
+  } else if (fs.existsSync(donukYolu)) {
+    fs.unlinkSync(donukYolu);
+  }
 
   // 8) Diskten geri oku ve doğrula.
   const denetim = ciktiDogrula({ cikti, setKimligi, acik: an.acik });
@@ -749,6 +837,8 @@ async function yayinla(a, ops = {}) {
     fsShim: Object.fromEntries([...arsivler].map(([d, ar]) => [d, ar.fsShim])),
     /** `--ekle`/`--cikar`'ın menüye yansıması: biçim, kitap sonuçları, değişenler, tabanlar. */
     menu: menuRaporu,
+    /** Android ekleme kapısı: {donuk, yeniEkleme, devralinanEkleme, kabul, uyari, dosya}. */
+    android,
     yerelEksik: denetim.yerelEksik,
     cikti: setDizini,
     plan: null,
@@ -900,7 +990,8 @@ function ciktiDogrula({ cikti, setKimligi, acik }) {
 /**
  * YAYIN SONRASI DOĞRULAMA — canlı uçtan (CDN/R2) indirir, istemcinin göreceği gibi denetler:
  * imza (varsayılan ÜRETİM açık anahtarı), kanal/kimlik/sürüm, surum.json eşliği, her `dosya/<yol>`
- * sha256+boyut; `arsivler` ile kitap arşivleri de akışla indirilip (diske yazılmadan) özetlenir.
+ * sha256+boyut; Android ucu (`android/{surum.json, manifest.json(.sig), dosya/<yol>}`) — eksikse
+ * RED; `arsivler` ile kitap arşivleri de akışla indirilip (diske yazılmadan) özetlenir.
  * Yalnız GET yapar; hiçbir şey yazmaz.
  */
 async function uzakDogrula({
@@ -975,6 +1066,36 @@ async function uzakDogrula({
       hatalar.push(e.message);
     }
   }
+  // Android G ucu — istemci (`empp-g-istemci.js` `kimlikKoku`) surum.json, manifest.json(.sig)
+  // ve dosya/<yol>'u `<taban>/set/<id>/android/` altından ister (kitap arşivi paylaşılan kitap/
+  // adresinden). Eksik uç = Android istemcisi 404 → HİÇ güncelleme görmez: RED. TEK imza
+  // paylaşılır: android manifest+imza canonical'ın BİREBİR aynısı olmalı.
+  const aKok = `${kok}/${ANDROID_ONEKI}`;
+  let androidDosya = 0;
+  try {
+    const aSurum = JSON.parse((await getirB(`${aKok}/surum.json`)).toString('utf8'));
+    const aGovde = await getirB(`${aKok}/manifest.json`);
+    const aImza = (await getirB(`${aKok}/manifest.json${kg.IMZA_UZANTI}`)).toString('utf8');
+    if (!aGovde.equals(govde) || aImza !== imza)
+      hatalar.push(`${ANDROID_ONEKI}/manifest.json(.sig) canonical manifestle birebir aynı değil`);
+    if (!aSurum || aSurum.surum !== m.surum)
+      hatalar.push(
+        `${ANDROID_ONEKI}/surum.json (${aSurum && aSurum.surum}) ≠ manifest (${m.surum})`,
+      );
+  } catch (e) {
+    hatalar.push(`${ANDROID_ONEKI} ucu: ${e.message}`);
+  }
+  for (const g of Array.isArray(m.kabuk) ? m.kabuk : []) {
+    if (!kg.kabukGirdisiGecerliMi(g) || !durum.gYoluMu(g.yol)) continue;
+    try {
+      const v = await getirB(`${aKok}/dosya/${g.yol.split('/').map(encodeURIComponent).join('/')}`);
+      if (v.length !== g.boyut || sha256(v) !== g.sha256)
+        hatalar.push(`${ANDROID_ONEKI}/dosya/${g.yol} sha256/boyut tutmuyor`);
+      androidDosya += 1;
+    } catch (e) {
+      hatalar.push(`${ANDROID_ONEKI} ucu: ${e.message}`);
+    }
+  }
   if (arsivler) {
     for (const g of (m.kitaplar || []).filter((x) => x && x.durum === 'ekle')) {
       // `dosyalar[]` varsa gerçek baytlar gerekir (kıyas için) — geçici bir dosyaya iner,
@@ -1017,7 +1138,7 @@ async function uzakDogrula({
       }
     }
   }
-  return sonuc({ surum: m.surum, dosya, arsiv, kitaplar: (m.kitaplar || []).length });
+  return sonuc({ surum: m.surum, dosya, androidDosya, arsiv, kitaplar: (m.kitaplar || []).length });
 }
 
 /* ------------------------------------------------------------------ CLI */
@@ -1063,6 +1184,12 @@ async function main(argv, ops = {}) {
 
 module.exports = {
   KIMLIK_DESENI,
+  ANDROID_ONEKI,
+  ANDROID_EKLEME_ANAHTARI,
+  ANDROID_EKLEME_ONERISI,
+  ANDROID_DONUK_DOSYASI,
+  androidEklemeKapisi,
+  androidDurumu,
   MANIFEST_SEMASI,
   KANAL,
   R2_ONEKI,
