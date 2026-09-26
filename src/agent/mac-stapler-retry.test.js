@@ -32,6 +32,7 @@ const {
   STAPLE_KAPISI_ISARETI,
   agStapleCikti,
 } = require('./runner.js');
+const { ertelenebilirKaynakHatasi } = require('./runner-helpers');
 
 async function withFakeBin(scripts, fn) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fake-bin-'));
@@ -156,10 +157,34 @@ test('signAndNotarizeMac: ilk staple denemesi CloudKit yarışıyla düşer, 2. 
   });
 });
 
-test('signAndNotarizeMac: TÜM denemeler tükenirse fırlatmaz (best-effort) ama GÖRÜNÜR işaretle uyarır, mesaj BOŞ değildir', async () => {
+test('NOTER KAPISI: TÜM staple denemeleri tükenirse FIRLATIR (DMG yüklenmez), CloudKit yarışı ERTELENEBİLİR', async () => {
   await withMacSigningEnv(async ({ statePath }) => {
     process.env.FAKE_STAPLE_FAIL_UNTIL = '999'; // hiçbir zaman geçmez
     CONFIG.stapleRetryMax = 2;
+    const cap = captureConsole();
+    let hata = null;
+    try {
+      await withFakeBin({ xcrun: FAKE_XCRUN, codesign: FAKE_CODESIGN }, async () => {
+        await signAndNotarizeMac('/tmp/fake.dmg').catch((e) => { hata = e; });
+      });
+    } finally {
+      cap.restore();
+    }
+    const denemeSayisi = Number(fs.readFileSync(statePath, 'utf8').trim());
+    assert.equal(denemeSayisi, 2, 'CONFIG.stapleRetryMax=2 ise tam 2 deneme yapılmalı, ne az ne çok');
+    assert.ok(hata, 'staple yapılamayan DMG yüklenmemeli — signAndNotarizeMac fırlatmalı');
+    assert.match(hata.message, /^noter onayı alınamadı — DMG yüklenmedi: /);
+    assert.match(hata.message, /Record not found|Error 65/, 'mesaj gerçek Apple hata metnini içermeli');
+    assert.equal(ertelenebilirKaynakHatasi(hata), true, 'CloudKit yayılma yarışı geçici — failed yazılmamalı');
+  });
+});
+
+test('NOTER KAPISI kapalı (AGENT_NOTER_ZORUNLU=0): staple tükenince eski best-effort davranış — fırlatmaz, GÖRÜNÜR işaret', async () => {
+  await withMacSigningEnv(async () => {
+    process.env.FAKE_STAPLE_FAIL_UNTIL = '999';
+    CONFIG.stapleRetryMax = 2;
+    const onceki = CONFIG.noterZorunlu;
+    CONFIG.noterZorunlu = false;
     const cap = captureConsole();
     try {
       await withFakeBin({ xcrun: FAKE_XCRUN, codesign: FAKE_CODESIGN }, async () => {
@@ -167,31 +192,140 @@ test('signAndNotarizeMac: TÜM denemeler tükenirse fırlatmaz (best-effort) ama
       });
     } finally {
       cap.restore();
+      CONFIG.noterZorunlu = onceki;
     }
-    const denemeSayisi = Number(fs.readFileSync(statePath, 'utf8').trim());
-    assert.equal(denemeSayisi, 2, 'CONFIG.stapleRetryMax=2 ise tam 2 deneme yapılmalı, ne az ne çok');
     const sonUyari = cap.calls.warn.find((l) => l.includes(STAPLE_KAPISI_ISARETI));
     assert.ok(sonUyari, `nihai uyarı ${STAPLE_KAPISI_ISARETI} işaretini taşımalı (izleyici bunu grep'ler)`);
     assert.match(sonUyari, /Record not found|Error 65/, 'nihai uyarı BOŞ olmamalı, gerçek Apple hata metnini içermeli');
   });
 });
 
-test('signAndNotarizeMac: notarytool BAŞARISIZ olursa stapler HİÇ çağrılmaz (eski davranış korunur)', async () => {
+test('NOTER KAPISI: notarytool BAŞARISIZ → FIRLATIR ve stapler HİÇ çağrılmaz', async () => {
   await withMacSigningEnv(async ({ statePath }) => {
     const cap = captureConsole();
+    let hata = null;
     try {
       await withFakeBin({
         xcrun: '#!/bin/bash\nif [ "$1" = "notarytool" ]; then echo "kimlik hatasi" 1>&2; exit 1; fi\nexit 0\n',
         codesign: FAKE_CODESIGN,
       }, async () => {
-        await signAndNotarizeMac('/tmp/fake.dmg');
+        await signAndNotarizeMac('/tmp/fake.dmg').catch((e) => { hata = e; });
       });
     } finally {
       cap.restore();
     }
     assert.equal(fs.existsSync(statePath), false, 'notarytool düşerse stapler dosyaya HİÇ dokunmamalı (hiç çağrılmadı)');
-    assert.ok(cap.calls.warn.some((l) => l.includes('notarytool failed')));
+    assert.ok(hata, 'notarytool düşünce DMG yüklenmemeli');
+    assert.match(hata.message, /^noter onayı alınamadı — DMG yüklenmedi: kimlik hatasi/);
   });
+});
+
+// 26.09 06:11/06:14 UTC (59834 mac, 73768 mac) agent.log'undaki BİREBİR çıktı.
+const XCRUN_ANAHTARLIK = `#!/bin/bash
+if [ "$1" = "notarytool" ]; then
+  echo "Conducting pre-submission checks for artifact.dmg and initiating connection to the Apple notary service..."
+  echo "Error: No Keychain password item found for profile: empp-notary" 1>&2
+  exit 69
+fi
+if [ "$1" = "stapler" ]; then echo x > "$FAKE_STAPLE_STATE"; exit 0; fi
+exit 0
+`;
+const XCRUN_INVALID_RC0 = `#!/bin/bash
+if [ "$1" = "notarytool" ]; then
+  echo "Conducting pre-submission checks for artifact.dmg and initiating connection to the Apple notary service..."
+  echo "Processing complete"
+  echo "  id: 11111111-2222-3333-4444-555555555555"
+  echo "  status: Invalid"
+  exit 0
+fi
+if [ "$1" = "stapler" ]; then echo x > "$FAKE_STAPLE_STATE"; exit 0; fi
+exit 0
+`;
+const XCRUN_CEVRIMDISI = `#!/bin/bash
+if [ "$1" = "notarytool" ]; then
+  echo "Error: The Internet connection appears to be offline. NSURLErrorDomain Code=-1009" 1>&2
+  exit 1
+fi
+exit 0
+`;
+
+async function noterKos(xcrun, codesign = FAKE_CODESIGN) {
+  let hata = null;
+  await withMacSigningEnv(async ({ statePath }) => {
+    const cap = captureConsole();
+    try {
+      await withFakeBin({ xcrun, codesign }, async () => {
+        await signAndNotarizeMac('/tmp/fake.dmg').catch((e) => { hata = e; });
+      });
+    } finally {
+      cap.restore();
+    }
+    if (hata) hata.stapleCagrildi = fs.existsSync(statePath);
+  });
+  return hata;
+}
+
+test('NOTER KAPISI: anahtarlık öğesi yok (26.09 vakası) → DMG yüklenmez, ERTELENEBİLİR (failed yazılmaz)', async () => {
+  const hata = await noterKos(XCRUN_ANAHTARLIK);
+  assert.ok(hata, 'fırlatmalı');
+  assert.match(hata.message,
+    /^noter onayı alınamadı — DMG yüklenmedi: Error: No Keychain password item found for profile: empp-notary/);
+  assert.equal(ertelenebilirKaynakHatasi(hata), true);
+  assert.equal(hata.stapleCagrildi, false);
+});
+
+test('NOTER KAPISI: çevrimdışı/ağ hatası → ERTELENEBİLİR', async () => {
+  const hata = await noterKos(XCRUN_CEVRIMDISI);
+  assert.ok(hata);
+  assert.equal(ertelenebilirKaynakHatasi(hata), true);
+});
+
+test('NOTER KAPISI: Apple "status: Invalid" (rc=0 olsa bile) → KALICI, stapler çağrılmaz', async () => {
+  const hata = await noterKos(XCRUN_INVALID_RC0);
+  assert.ok(hata, 'Invalid rc=0 dönse de DMG yüklenmemeli');
+  assert.match(hata.message, /^noter onayı alınamadı — DMG yüklenmedi: status: Invalid/);
+  assert.equal(ertelenebilirKaynakHatasi(hata), false, 'Apple reddi kalıcı hatadır');
+  assert.equal(hata.stapleCagrildi, false);
+});
+
+test('NOTER KAPISI: codesign (imza) hatası → KALICI', async () => {
+  const hata = await noterKos(FAKE_XCRUN,
+    '#!/bin/bash\necho "fake.dmg: The specified item could not be signed: bad signature" 1>&2\nexit 1\n');
+  assert.ok(hata);
+  assert.match(hata.message, /^noter onayı alınamadı — DMG yüklenmedi: .*signed.*\(codesign, rc=1\)/);
+  assert.equal(ertelenebilirKaynakHatasi(hata), false);
+});
+
+test('NOTER KAPISI: codesign errSecInternalComponent (kilitli anahtarlık) → ERTELENEBİLİR, zincir durur', async () => {
+  const hata = await noterKos(FAKE_XCRUN,
+    '#!/bin/bash\necho "/tmp/fake.dmg: errSecInternalComponent" 1>&2\nexit 1\n');
+  assert.ok(hata, 'imzalanamayan DMG yüklenmemeli');
+  assert.match(hata.message, /^noter onayı alınamadı — DMG yüklenmedi: .*errSecInternalComponent \(codesign, rc=1\)/);
+  assert.equal(ertelenebilirKaynakHatasi(hata), true, 'kilitli anahtarlık geçici — failed yazılmamalı');
+  assert.equal(hata.stapleCagrildi, false);
+});
+
+test('NOTER KAPISI: imza kimliği tanımsız → DMG imzasız yüklenmez (KALICI)', async () => {
+  const onceki = CONFIG.signIdentity;
+  CONFIG.signIdentity = '';
+  const cap = captureConsole();
+  try {
+    await assert.rejects(() => signAndNotarizeMac('/tmp/fake.dmg'),
+      (e) => /^noter onayı alınamadı — DMG yüklenmedi: APPLE_SIGN_IDENTITY/.test(e.message)
+        && ertelenebilirKaynakHatasi(e) === false);
+  } finally {
+    cap.restore();
+    CONFIG.signIdentity = onceki;
+  }
+});
+
+test('kaynak-sentinel: processJob noter adımını try/catch ile SARMAZ ve yüklemeden ÖNCE çağırır', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
+  const i = src.indexOf('await signAndNotarizeMac(artifactPath);');
+  const j = src.indexOf('await postResultSuccess(auth, job, artifactPath);');
+  assert.ok(i > 0 && j > i, 'noter adımı yüklemeden önce olmalı');
+  const onu = src.slice(src.lastIndexOf('// 4. macOS', i), j);
+  assert.doesNotMatch(onu, /catch|try\s*\{/, 'noter hatası yutulmamalı');
 });
 
 // ---------------------------------------------------------------------------

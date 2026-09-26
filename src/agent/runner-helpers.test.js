@@ -753,3 +753,48 @@ test('agHatasiOzeti: maxLen parametresi ile kirpma sinirini ozellestirir', () =>
   const ozet = agHatasiOzeti(err, 10);
   assert.equal(ozet.length, 10);
 });
+
+// --- NOTER KAPISI sınıflandırıcısı (2026-09-26, Şef ölçümü) ---
+{
+  const H = require('./runner-helpers');
+  test('noterHatasiErtelenebilirMi: anahtarlık/ağ/zaman aşımı/5xx/CloudKit GEÇİCİ; Invalid/imza KALICI', () => {
+    for (const m of [
+      'Error: No Keychain password item found for profile: empp-notary',
+      'security: SecKeychainSearchCopyNext: User interaction is not allowed.',
+      'Error: The Internet connection appears to be offline.',
+      'Error Domain=NSURLErrorDomain Code=-1001 "The request timed out."',
+      'Error: HTTP status code: 503. Service Unavailable',
+      'The timestamp service is not available.',
+      'CloudKit query for x.dmg failed due to "Record not found".',
+    ]) assert.equal(H.noterHatasiErtelenebilirMi(m), true, m);
+    for (const m of [
+      '  status: Invalid',
+      '  status: Rejected',
+      'x.dmg: The specified item could not be signed',
+      'Error: HTTP status code: 401. Invalid credentials. Username or password is incorrect.',
+      '',
+    ]) assert.equal(H.noterHatasiErtelenebilirMi(m), false, m);
+  });
+
+  test('noterHatasiErtelenebilirMi: Apple reddi geçici işarete BASKIN (Invalid + timeout → kalıcı)', () => {
+    assert.equal(H.noterHatasiErtelenebilirMi('request timed out\n  status: Invalid'), false);
+  });
+
+  test('noterIlkSatir: "Conducting pre-submission…" değil ilk HATA satırı seçilir', () => {
+    const metin = 'Conducting pre-submission checks for artifact.dmg and initiating connection to the Apple notary service...\n'
+      + 'Error: No Keychain password item found for profile: empp-notary\n';
+    assert.equal(H.noterIlkSatir(metin), 'Error: No Keychain password item found for profile: empp-notary');
+    assert.equal(H.noterIlkSatir('tek satır\nikinci'), 'tek satır');
+    assert.equal(H.noterIlkSatir(''), '');
+  });
+
+  test('noterHatasi: metin biçimi + ertelenebilir işaret ana döngü sınıfına bağlanır', () => {
+    const e = H.noterHatasi('notarytool', { code: 69, stdout: 'Conducting…\n', stderr: 'Error: No Keychain password item found for profile: empp-notary' });
+    assert.match(e.message, /^noter onayı alınamadı — DMG yüklenmedi: Error: No Keychain password item found for profile: empp-notary \(notarytool, rc=69\) \[ertelenebilir-noter\]$/);
+    assert.equal(H.ertelenebilirKaynakHatasi(e), true);
+    const k = H.noterHatasi('notarytool', { code: 0, stdout: '  status: Invalid', stderr: '' });
+    assert.equal(H.ertelenebilirKaynakHatasi(k), false);
+    assert.ok(!k.message.includes(H.NOTER_KAPISI_ISARETI));
+    assert.match(H.noterHatasi('stapler', { code: 65, stdout: '', stderr: '' }).message, /\(çıktı boş, rc=65\)/);
+  });
+}

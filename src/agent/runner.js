@@ -14,7 +14,8 @@
  *   3. extract SFX (unrar, fallback 7z) -> find resources/app/build
  *   4. zip build dir -> POST {PACKAGER}/api/upload-build (sessionId)
  *      -> POST {PACKAGER}/api/package -> poll /api/package-status -> download artifact
- *   5. macos: codesign + notarytool (best-effort; skip with warning if env missing)
+ *   5. macos: codesign + notarytool + stapler — NOTER KAPISI (2026-09-26): herhangi biri
+ *      düşerse DMG YÜKLENMEZ (geçici sınıf ertelenir; AGENT_NOTER_ZORUNLU=0 eski best-effort)
  *   6. POST {API}/agents/{id}/result (multipart: file + fields) | on failure: status=failed
  * Heartbeat: POST {API}/agents/{id}/heartbeat every ~15s.
  *
@@ -44,6 +45,7 @@ const {
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
+  noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI,
   guncellemeDosyalariniSirala, guncellemeIcerikTipi, tarListesiniAyristir,
 } = require('./runner-helpers');
@@ -82,6 +84,9 @@ const CONFIG = {
   // beklemeden koşar.
   stapleRetryMax: Number(process.env.AGENT_STAPLE_RETRY_MAX || 4),
   stapleRetryDelayMs: Number(process.env.AGENT_STAPLE_RETRY_DELAY_MS || 20000),
+  // NOTER KAPISI (2026-09-26, Nadir onayı): noter onaysız DMG YÜKLENMEZ. '0' = eski
+  // best-effort davranış (acil geri dönüş anahtarı; varsayılan AÇIK).
+  noterZorunlu: process.env.AGENT_NOTER_ZORUNLU !== '0',
   // Pardus (.impark) — srv21'in packageLinux'ını Docker'da BİREBİR koşturan betik
   // (bkz. pardus-packager-build.sh header). Test'ler bu CONFIG alanlarını (packagerApi
   // gibi) doğrudan üzerine yazıp gerçek spawn ile fake bir betik/binfmt çalıştırır.
@@ -1219,12 +1224,32 @@ async function cacheTavaniUygula(cacheRoot, korunanBookId) {
 }
 
 // ---------------------------------------------------------------------------
-// macOS signing (best-effort).
+// macOS signing + notarization — NOTER KAPISI (2026-09-26).
+//
+// Eskiden best-effort'tu: codesign/notarytool/stapler düşünce uyarı basıp onaysız
+// DMG'yi R2'ye yüklüyordu (26.09 06:11/06:14 UTC — 59834 ve 73768 mac, "No Keychain
+// password item found for profile: empp-notary"). Artık herhangi bir adım düşerse
+// artifact YÜKLENMEZ; iş "noter onayı alınamadı — DMG yüklenmedi: <ilk satır>" ile
+// düşer. Geçici sınıf (anahtarlık kilitli/öğe yok, ağ, zaman aşımı, 5xx, CloudKit
+// yayılma yarışı) `[ertelenebilir-noter]` işareti taşır → ana döngü `failed` YAZMAZ,
+// kira dolunca iş kuyruğa döner. Apple "Invalid"/ret ve imza hatası KALICIDIR.
+// Sınıflandırma: runner-helpers.js `noterHatasi` (saf, testli).
+// `AGENT_NOTER_ZORUNLU=0` eski best-effort davranışı geri getirir (acil anahtar).
 // ---------------------------------------------------------------------------
+function noterKapisi(asama, res, eskiUyari) {
+  const e = noterHatasi(asama, res);
+  if (!CONFIG.noterZorunlu) {
+    warn(eskiUyari, agStapleCikti(res));
+    return null;
+  }
+  warn(e.message);
+  throw e;
+}
+
 async function signAndNotarizeMac(dmgPath) {
   if (!CONFIG.signIdentity) {
-    warn('APPLE_SIGN_IDENTITY not set — skipping codesign/notarize (dmg shipped unsigned)');
-    return;
+    return noterKapisi('yapilandirma', { code: null, stdout: 'APPLE_SIGN_IDENTITY tanımlı değil', stderr: '' },
+      'APPLE_SIGN_IDENTITY not set — skipping codesign/notarize (dmg shipped unsigned)');
   }
   // codesign the .dmg.
   log('codesign:', dmgPath);
@@ -1233,8 +1258,7 @@ async function signAndNotarizeMac(dmgPath) {
   signArgs.push(dmgPath);
   const sign = await run('codesign', signArgs);
   if (sign.code !== 0) {
-    warn('codesign failed (continuing unsigned):', sign.stderr.slice(-300));
-    return;
+    return noterKapisi('codesign', sign, 'codesign failed (continuing unsigned):');
   }
 
   // notarize: prefer a stored keychain profile; else Apple ID + app-specific password.
@@ -1250,14 +1274,16 @@ async function signAndNotarizeMac(dmgPath) {
       '--wait',
     ];
   } else {
-    warn('no notarytool credentials (APPLE_NOTARY_PROFILE or APPLE_ID+APPLE_PASSWORD+APPLE_TEAM_ID) — skipping notarization');
-    return;
+    return noterKapisi('yapilandirma', {
+      code: null, stdout: 'notarytool kimliği yok (APPLE_NOTARY_PROFILE ya da APPLE_ID+APPLE_PASSWORD+APPLE_TEAM_ID)', stderr: '',
+    }, 'no notarytool credentials (APPLE_NOTARY_PROFILE or APPLE_ID+APPLE_PASSWORD+APPLE_TEAM_ID) — skipping notarization');
   }
   log('notarytool submit:', dmgPath);
   const notar = await run('xcrun', notaryArgs);
-  if (notar.code !== 0) {
-    warn('notarytool failed (continuing without staple):', agStapleCikti(notar));
-    return;
+  // `--wait` Apple "Invalid" sonucunda da rc=0 dönebilir — durum satırı ayrıca denetlenir.
+  const notarCikti = `${notar.stdout || ''}\n${notar.stderr || ''}`;
+  if (notar.code !== 0 || /status:\s*(Invalid|Rejected)\b/i.test(notarCikti)) {
+    return noterKapisi('notarytool', notar, 'notarytool failed (continuing without staple):');
   }
 
   // STAPLE RETRY + GÖRÜNÜR HATA (2026-09-21, ölçümle — 8/8 mac işi 2026-09-18'den beri
@@ -1287,12 +1313,11 @@ async function signAndNotarizeMac(dmgPath) {
     }
   }
   if (!staple || staple.code !== 0) {
-    // `failed` YAZILMAZ (best-effort imza dalı, eskisi gibi) — ama artık GÖRÜNÜR
-    // işaretle: notarizasyon TAMAMDIR (Gatekeeper ÇEVRİMİÇİ geçer), yalnız OFFLINE
-    // ilk açılış (stapled ticket) etkilenir. İzleyici bu işareti grep'leyebilir.
-    warn(`${STAPLE_KAPISI_ISARETI} stapler ${maxDeneme} denemede de başarısız (paket NOTARIZE edildi, yalnız çevrimdışı ilk açılış riskli):`,
-      agStapleCikti(staple));
-    return;
+    // 2026-09-26: staple yapılamayan DMG de YÜKLENMEZ (Nadir kuralı). CloudKit yayılma
+    // yarışı ("Record not found") geçici sınıftadır → iş ertelenir, `failed` yazılmaz.
+    // Kapı kapalıysa (AGENT_NOTER_ZORUNLU=0) eski görünür işaretle devam edilir.
+    return noterKapisi('stapler', staple,
+      `${STAPLE_KAPISI_ISARETI} stapler ${maxDeneme} denemede de başarısız (paket NOTARIZE edildi, yalnız çevrimdışı ilk açılış riskli):`);
   }
   log('notarized + stapled:', dmgPath, stapleDeneme > 1 ? `(${stapleDeneme}. denemede)` : '');
 }
@@ -1770,7 +1795,7 @@ async function processJob(auth, job) {
       // Yayıncı güncellemesi (version.html/zip) paketleme anında uygulanır — macOS'ta
       // çalışma zamanında uygulanamaz (asar salt-okunur), bkz. publisher-update.js.
       try {
-        const upd = applyPublisherUpdate(buildDir);
+        const upd = applyPublisherUpdate(buildDir, { log: (s) => warn(s) });
         log(`publisher update: ${upd.reason} (${upd.from} → ${upd.to || '-'}, kurum ${upd.companyId || '?'})`);
       } catch (e) { warn('publisher update uygulanamadı:', agHatasiOzeti(e)); }
       await zipDir(buildDir, zipPath);
@@ -1816,7 +1841,7 @@ async function processJob(auth, job) {
       await packagerDownload(jobId, packagerPlatform, artifactPath);
     }
 
-    // 4. macOS: sign + notarize (best-effort).
+    // 4. macOS: sign + notarize — düşerse FIRLATIR, artifact yüklenmez (noter kapısı).
     if (packagerPlatform === 'macos') {
       await signAndNotarizeMac(artifactPath);
     }

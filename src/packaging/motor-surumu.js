@@ -389,13 +389,25 @@ async function motorKapisi(kokDizin, kanonik) {
  * @returns {Promise<{surum:string|null, main:string|null, parca:string|null}>}
  */
 async function rozetSurumuOku(kitapDizini) {
+  return rozetSurumuOkuEsz(kitapDizini);
+}
+
+/**
+ * `rozetSurumuOku`'nun SENKRON gövdesi — TEK KAYNAK (2026-09-26). Senkron çağıran:
+ * `src/agent/publisher-update.js` (SET dalında her bookN'in okuyucu sürümü; o fonksiyon
+ * üç çağıranda senkron kullanılıyor). Algoritma burada bir kez yazılır; async sürüm
+ * yalnız sarmalayıcıdır — iki ayrı kopya ayrışamaz.
+ * @param {string} kitapDizini
+ * @returns {{surum:string|null, main:string|null, parca:string|null}}
+ */
+function rozetSurumuOkuEsz(kitapDizini) {
   const bos = { surum: null, main: null, parca: null };
   let html;
-  try { html = await fs.readFile(path.join(kitapDizini, 'index.html'), 'utf8'); } catch { return bos; }
+  try { html = fs.readFileSync(path.join(kitapDizini, 'index.html'), 'utf8'); } catch { return bos; }
   const m = html.match(/src="\.?\/?([0-9a-f]{20}\.main\.js)"/);
   if (!m) return bos;
   let main;
-  try { main = await fs.readFile(path.join(kitapDizini, m[1]), 'latin1'); } catch {
+  try { main = fs.readFileSync(path.join(kitapDizini, m[1]), 'latin1'); } catch {
     return { ...bos, main: m[1] };
   }
   const direkt = main.match(/e\.exports=\{i8:"([0-9.]+)"\}/);
@@ -404,7 +416,7 @@ async function rozetSurumuOku(kitapDizini) {
   for (const [, id, hash] of parcalar) {
     const ad = `${hash}.${id}.js`;
     let icerik;
-    try { icerik = await fs.readFile(path.join(kitapDizini, ad), 'latin1'); } catch { continue; }
+    try { icerik = fs.readFileSync(path.join(kitapDizini, ad), 'latin1'); } catch { continue; }
     const v = icerik.match(/e\.exports=\{i8:"([0-9.]+)"\}/);
     if (v) return { surum: v[1], main: m[1], parca: ad };
   }
@@ -423,6 +435,7 @@ module.exports = {
   motorDegistir,
   motorKapisi,
   rozetSurumuOku,
+  rozetSurumuOkuEsz,
   acikMi,
   motorDosyalariniBul,
   dosyaDamgasiHesapla,

@@ -212,3 +212,66 @@ test('sayısal PDF adı kitap adı sayılmaz (pdf/15792.pdf → "Kitap N", "1579
   assert.ok(!html.includes('>15791<') && !html.includes('>15792<'), 'kimlik ad olarak basılmamalı');
   assert.ok(html.includes('Kitap 1'), 'yedek etiket');
 });
+
+// --- 2026-09-26 (73768) KAPI: kök index ezilmiş/eksik SET paketi HATA ile biter ---
+// Eskiden `webz-shell-index-missing` yalnız uyarıydı; mac ve android paketi kabul
+// kapısı olmadığı için bozuk hâliyle R2'ye yüklendi. Yayıncının özel menüsü (K17) ve
+// masaüstünün Web-Z kabuğu bu kapıyı TETİKLEMEMELİ.
+const { setMenuKapisi, SET_KOK_EZILMIS } = require('./set-menu');
+
+const OKUYUCU_KOK_INDEX = '<!doctype html><html><head><title>Akıllı Tahta Uygulaması</title>'
+  + '<script defer="defer" src="./a8f43f74c72b65a3dd05.main.js"></script></head>'
+  + '<body><div id="root"></div></body></html>';
+
+test('KAPI: kabuk dosyaları + kök okuyucu index (ezilmiş) → iş HATA, açık metin', async () => {
+  const kok = await sahteSet({ rootIndex: OKUYUCU_KOK_INDEX });
+  await kabukDosyalari(kok);
+  const r = await ensureSetMenu(kok, { force: true });
+  assert.strictEqual(r.action, 'webz-shell-index-missing');
+  assert.throws(() => setMenuKapisi(r), (e) => e.code === SET_KOK_EZILMIS
+    && e.message.includes("SET kök index'i ezilmiş/eksik — paket yüklenmedi"));
+});
+
+test('KAPI: kabuk dosyaları var, kök index HİÇ yok (eksik) → iş HATA', async () => {
+  const kok = await sahteSet({ rootIndex: null });
+  await kabukDosyalari(kok);
+  const r = await ensureSetMenu(kok, { force: true });
+  assert.throws(() => setMenuKapisi(r), (e) => e.code === SET_KOK_EZILMIS);
+});
+
+test('KAPI: yayıncının özel menüsü (Flashy/K17) → hata YOK, menüye dokunulmaz', async () => {
+  const OZEL = '<!DOCTYPE html><html><head><link rel="stylesheet" href="assets2/styles.css">'
+    + '</head><body><div id="container"><a href="book1/index.html">Kitap</a></div></body></html>';
+  const kok = await sahteSet({ rootIndex: OZEL, assets2: true });
+  // Kabuk izleri olsa BİLE özel menü önce tanınır — kapı tetiklenmez.
+  await kabukDosyalari(kok);
+  const r = await ensureSetMenu(kok, { force: true });
+  assert.strictEqual(r.action, 'custom-menu-kept');
+  assert.doesNotThrow(() => setMenuKapisi(r));
+  assert.strictEqual(fs.readFileSync(path.join(kok, 'index.html'), 'utf8'), OZEL);
+});
+
+test('KAPI: masaüstünün Web-Z kabuğu, tek kitap, kapı kapalı, null → hata YOK', async () => {
+  const kok = await sahteSet({ rootIndex: WEBZ_INDEX });
+  await kabukDosyalari(kok);
+  assert.doesNotThrow(() => setMenuKapisi({ action: 'custom-menu-kept', kabuk: 'webz', books: [] }));
+  const webz = await ensureSetMenu(kok, { force: true });
+  assert.strictEqual(webz.action, 'custom-menu-kept');
+  assert.doesNotThrow(() => setMenuKapisi(webz));
+  for (const action of ['not-a-set', 'disabled', 'generated', 'no-root-index', 'already-generated']) {
+    assert.doesNotThrow(() => setMenuKapisi({ action, books: [] }), action);
+  }
+  assert.doesNotThrow(() => setMenuKapisi(null));
+});
+
+test('kaynak-sentinel: packagingService kapıyı try/catch DIŞINDA çağırır (hata yutulmaz)', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
+  const i = src.indexOf('menuResult = await ensureSetMenu(workingPath');
+  assert.ok(i > 0, 'ensureSetMenu çağrısı bulunamadı');
+  const blok = src.slice(i, i + 1500);
+  const catchSonu = blok.indexOf("console.warn('⚠️ SET menüsü kontrolü başarısız");
+  const kapi = blok.indexOf('setMenuKapisi(menuResult)');
+  assert.ok(catchSonu > 0 && kapi > catchSonu, 'setMenuKapisi catch bloğundan SONRA olmalı');
+  // catch bloğunu kapatan "}" kapıdan önce gelmeli (kapı catch'in İÇİNDE değil).
+  assert.match(blok.slice(catchSonu, kapi), /\n {6}\}\n/);
+});

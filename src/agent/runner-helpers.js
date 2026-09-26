@@ -593,11 +593,92 @@ const DISK_KAPISI_ISARETI = '[ertelenebilir-kaynak-darligi]';
 /** ProBook'a ERİŞİLEMEMESİ hatalarını ayıran işaret (mesaja gömülür). */
 const PROBOOK_KAPISI_ISARETI = '[ertelenebilir-probook-erisimi]';
 
+/** Noter/imza zincirinin GEÇİCİ hatalarını ayıran işaret (mesaja gömülür). */
+const NOTER_KAPISI_ISARETI = '[ertelenebilir-noter]';
+
 function ertelenebilirKaynakHatasi(err) {
   const raw = typeof err === 'string' ? err
     : (err && typeof err === 'object' && typeof err.message === 'string') ? err.message
       : '';
-  return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI);
+  return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI)
+    || raw.includes(NOTER_KAPISI_ISARETI);
+}
+
+// ---------------------------------------------------------------------------
+// NOTER KAPISI (2026-09-26, Nadir onayı) — noter onaysız DMG YÜKLENMEZ.
+//
+// NEDEN: `signAndNotarizeMac` best-effort'tu; notarytool düşünce "continuing without
+// staple" deyip onaysız DMG'yi R2'ye yüklüyordu. Kanıt agent.log 26.09 06:11/06:14 UTC
+// (59834 mac, 73768 mac): "Error: No Keychain password item found for profile:
+// empp-notary". 06:17'den itibaren AYNI profille dört iş Accepted oldu → anahtarlık
+// açılışta kilitliydi, oturum açılınca açıldı: bu sınıf GEÇİCİDİR.
+//
+// SINIFLANDIRMA (Şef ölçümü): ERTELENEBİLİR = anahtarlık öğesi bulunamadı/kilitli, ağ,
+// zaman aşımı, Apple servisine erişilemedi (5xx), stapler'ın CloudKit yayılma yarışı
+// ("Record not found"). Satıra `failed` YAZILMAZ, kira dolunca kuyruğa döner.
+// KALICI = Apple "Invalid"/"Rejected" ve diğer her şey (imza hatası dahil).
+// Kalıcı işaret ertelenebilir işarete BASKIN gelir (Invalid + timeout → kalıcı).
+// ---------------------------------------------------------------------------
+const NOTER_KALICI_RE = [
+  /status:\s*(Invalid|Rejected)\b/i,
+];
+const NOTER_ERTELENEBILIR_RE = [
+  /No Keychain password item found/i,
+  /User interaction is not allowed/i,
+  /errSecInteractionNotAllowed/i,
+  /keychain is locked/i,
+  // codesign'ın kilitli anahtarlık hatası (Şef kararı 26.09 — kök neden açılışta kilitli anahtarlık).
+  /errSecInternalComponent/,
+  /Internet connection appears to be offline/i,
+  /NSURLErrorDomain/i,
+  /network connection was lost/i,
+  /timed out|time[- ]?out\b|zaman aşımı/i,
+  /hostname could not be found|could not connect|unable to connect|cannot connect/i,
+  /\b(ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ECONNREFUSED)\b/,
+  /HTTP (status )?(code:? )?5\d\d\b|Service Unavailable|Bad Gateway|Gateway Timeout/i,
+  /timestamp service is not available/i,
+  /Record not found/i,
+];
+
+/**
+ * Araç çıktısından (stdout+stderr) raporlanacak İLK ANLAMLI satır. notarytool ilk satıra
+ * "Conducting pre-submission checks…" yazar — bilgi taşımaz; ilk hata satırı seçilir
+ * ("Error: No Keychain password item found…"), yoksa ilk boş olmayan satır. SAF.
+ * @param {string} metin
+ * @returns {string}
+ */
+function noterIlkSatir(metin) {
+  const satirlar = String(metin == null ? '' : metin).split(/\r?\n/)
+    .map((s) => s.trim()).filter(Boolean);
+  const hata = satirlar.find((s) => /error|invalid|rejected|failed|fail|hata|denied/i.test(s));
+  return (hata || satirlar[0] || '').slice(0, 300);
+}
+
+/**
+ * Noter/imza hatası geçici mi? SAF. @param {string} metin @returns {boolean}
+ */
+function noterHatasiErtelenebilirMi(metin) {
+  const m = String(metin == null ? '' : metin);
+  if (NOTER_KALICI_RE.some((re) => re.test(m))) return false;
+  return NOTER_ERTELENEBILIR_RE.some((re) => re.test(m));
+}
+
+/**
+ * Noter kapısı hatasını üretir: "noter onayı alınamadı — DMG yüklenmedi: <ilk satır>".
+ * Geçiciyse mesaja `NOTER_KAPISI_ISARETI` eklenir → `ertelenebilirKaynakHatasi` tanır.
+ * @param {string} asama 'codesign' | 'notarytool' | 'stapler' | 'yapilandirma'
+ * @param {{code?:number, stdout?:string, stderr?:string}|null} res
+ * @returns {Error & {ertelenebilir:boolean, asama:string}}
+ */
+function noterHatasi(asama, res) {
+  const ham = res ? [res.stdout, res.stderr].filter((x) => typeof x === 'string').join('\n') : '';
+  const ilk = noterIlkSatir(ham) || `(çıktı boş, rc=${res ? res.code : '?'})`;
+  const ertelenebilir = noterHatasiErtelenebilirMi(ham);
+  const e = new Error(`noter onayı alınamadı — DMG yüklenmedi: ${ilk} (${asama}`
+    + `${res && res.code != null ? `, rc=${res.code}` : ''})${ertelenebilir ? ` ${NOTER_KAPISI_ISARETI}` : ''}`);
+  e.ertelenebilir = ertelenebilir;
+  e.asama = asama;
+  return e;
 }
 
 /**
@@ -876,6 +957,10 @@ module.exports = {
   kaynakCacheTavaniGb,
   ertelenebilirKaynakHatasi,
   DISK_KAPISI_ISARETI,
+  NOTER_KAPISI_ISARETI,
+  noterIlkSatir,
+  noterHatasiErtelenebilirMi,
+  noterHatasi,
   probookErisilemezHatasi,
   PROBOOK_KAPISI_ISARETI,
   guncellemeDosyalariniSirala,

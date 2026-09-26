@@ -9,7 +9,7 @@ const { writeDmgBackground, dmgLayoutConfig } = require('../platforms/macos/dmg-
 const { createWwwCopyFilter } = require('./www-copy-exclude');
 const { ensureSetBookHomeButton } = require('./set-book-home-button');
 const { findSubBookDirs } = require('./sub-book-dirs');
-const { ensureSetMenu } = require('./set-menu');
+const { ensureSetMenu, setMenuKapisi } = require('./set-menu');
 const { injectFsShimIntoSubBooks } = require('./fs-shim-subbook-inject');
 const { ensureWritableTree } = require('./ensure-writable');
 const { checkAndroidGradleHeapPreflight } = require('./android-preflight');
@@ -501,8 +501,9 @@ MimeType=application/x-electron;
       // (sf425 ve Super Monsters 2 Set, ProBook'ta kanıtlı). Kapı VARSAYILAN KAPALI
       // (`EMPP_SET_MENU=1`) — üretim davranışını değiştirmek Nadir'in kararı (K1).
       // Özel menüsü olan SET'lere (Flashy 59480) DOKUNULMAZ; orijinal sayfa yedeklenir.
+      let menuResult = null;
       try {
-        const menuResult = await ensureSetMenu(workingPath, { appName });
+        menuResult = await ensureSetMenu(workingPath, { appName });
         if (menuResult.action === 'generated' || menuResult.action === 'no-root-index') {
           console.log(`🧭 SET menüsü üretildi (${menuResult.mode}): ${menuResult.books.join(', ')}`);
         } else if (menuResult.action === 'custom-menu-kept') {
@@ -511,6 +512,9 @@ MimeType=application/x-electron;
       } catch (menuError) {
         console.warn('⚠️ SET menüsü kontrolü başarısız (paketleme devam ediyor):', menuError.message);
       }
+      // 2026-09-26 (73768) — kök index ezilmiş/eksik SET paketi ÜRETİLMEZ: HATA, uyarı değil.
+      // try/catch DIŞINDA — yukarıdaki catch bu hatayı yutmamalı (startPackaging → job failed).
+      setMenuKapisi(menuResult);
 
       // ÖLÜ MOTOR TEMİZLİĞİ (2026-09-19) — KAPI VARSAYILAN AÇIK (`EMPP_OLU_TEMIZLIK=0` kapatır).
       // sm4 ölçümü: her alt-kitabın kökünde 39–43 MB js/css var, index.html'den
