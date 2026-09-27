@@ -358,6 +358,25 @@ function probookErisimDurumu(host, port = 22) {
   return _probookErisim.erisilir;
 }
 
+// Kabul betiği PROBOOK_HOST'u okur; 'yerel' = kabul ProBook'un kendisinde (probookHostSec onu
+// Tailscale varsayılanına çevirir, o yüzden burada ayrıca korunur).
+function pardusKabulHostu() {
+  return process.env.PROBOOK_HOST === 'yerel' ? 'yerel' : probookHostSec(process.env);
+}
+
+// Açılışta ilk ölçümü bekler (en çok sinirMs): ilk next-job 'ölçülmedi' ile pardus kiralamasın
+// (27.09 12:34: açılıştan 1,4 sn sonra 60014 pardus kiralandı; ERİŞİLEMEZ kararı ancak 16 sn sonraki heartbeat'te devreye girdi).
+async function probookErisimIlkOlcum(host, { sinirMs = 6000, port = 22 } = {}) {
+  const bitis = Date.now() + sinirMs;
+  let v = probookErisimDurumu(host, port);
+  while (v === undefined && Date.now() < bitis) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 50));
+    v = probookErisimDurumu(host, port);
+  }
+  return v;
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   let caps = etkinYetenekler(CONFIG.caps, {
@@ -383,9 +402,7 @@ function guncelYetenekler() {
   // Mac'e pardus'u devretse bile (ör. nabız bayat) ProBook'a erişilemiyorsa kabul yine de
   // imkânsızdır — o yüzden son süzgeç burada, şeridin kararının ÜSTÜNE uygulanır.
   const pardusVar = CONFIG.caps.includes('pardus');
-  // Kabul betiği PROBOOK_HOST'u okur; 'yerel' = kabul ProBook'un kendisinde (probookHostSec onu
-  // Tailscale varsayılanına çevirir, o yüzden burada ayrıca korunur).
-  const kabulHost = process.env.PROBOOK_HOST === 'yerel' ? 'yerel' : probookHostSec(process.env);
+  const kabulHost = pardusKabulHostu();
   const probookErisimi = pardusVar && kabulHost !== 'yerel' ? probookErisimDurumu(kabulHost) : undefined;
   if (pardusVar) {
     caps = pardusKabulErisimUygula(caps, {
@@ -2102,6 +2119,11 @@ async function main() {
   // İlk next-job'dan ÖNCE yetenekleri bildir: sunucu eski listeyle (evde macos dahil) iş kiralamasın.
   // ProBook şeridi açıksa ilk karar BEKLENİR — sağlıklı ProBook varken Mac ilk pardus işini kapmasın.
   if (seritDenetcisi) await seritDenetcisi.tazele({ zorla: true });
+  // Pardus kabul erişim kapısı da ilk kararını bekler (en çok 6 sn) — yoksa ilk kira 'ölçülmedi'.
+  if (CONFIG.caps.includes('pardus') && CONFIG.pardusKabul
+    && process.env.EMPP_PARDUS_KABUL_ERISIM !== '0' && pardusKabulHostu() !== 'yerel') {
+    await probookErisimIlkOlcum(pardusKabulHostu());
+  }
   guncelYetenekler();
   await heartbeat(auth);
 
@@ -2240,6 +2262,7 @@ module.exports = {
   // Pardus kabul erişim kapısı (2026-09-27) — testler prob sonucunu doğrudan enjekte eder
   // ya da gerçek TCP ile (özel port) probookErisimDurumu'nu doğrudan çağırır.
   probookErisimDurumu,
+  probookErisimIlkOlcum,
   _probookErisimAyarla: (d) => { _probookErisim = d; _sonYetenek = ''; },
   packagerStartPackage, postResultSuccess,
   packagerPoll,

@@ -138,6 +138,29 @@ test('guncelYetenekler: PROBOOK_HOST=yerel iken (kabul ProBook\'un kendisinde) p
   }
 });
 
+test('probookErisimIlkOlcum: açılışta ilk ölçümü bekler — kapalı portta sınır içinde false döner', async () => {
+  const srv = net.createServer();
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  await new Promise((r) => srv.close(r)); // port artık kapalı
+  runner._probookErisimAyarla({ t: 0, erisilir: undefined, suruyor: false });
+  try {
+    const bas = Date.now();
+    const v = await runner.probookErisimIlkOlcum('etapadmin@127.0.0.1', { port, sinirMs: 6000 });
+    assert.equal(v, false);
+    assert.ok(Date.now() - bas < 6000, 'sınırı aşmadan döner');
+  } finally {
+    runner._probookErisimAyarla({ t: 0, erisilir: undefined, suruyor: false });
+  }
+});
+
+test('kaynak sentinel: main() ilk heartbeat\'ten ÖNCE pardus erişim ölçümünü bekler', () => {
+  const kaynak = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
+  const bas = kaynak.indexOf('async function main()');
+  const govde = kaynak.slice(bas, kaynak.indexOf('await heartbeat(auth);', bas));
+  assert.match(govde, /await probookErisimIlkOlcum\(/);
+});
+
 // ---------------------------------------------------------------------------
 // (3) Gerçek TCP prob — dinleyen porta erişilir=true, kapalı porta false
 // ---------------------------------------------------------------------------
