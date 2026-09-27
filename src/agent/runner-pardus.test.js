@@ -1077,3 +1077,103 @@ test('pardusKabulSinifi: saf — 3/4 dışında null, zaman aşımında null', (
     { durum: 'GUNCEL_DEGIL', sebep: 'a', oneri: 'b' });
   assert.equal(pardusKabulSinifi({ code: 4, stdout: '' }).sebep, 'kapı ölçemedi (ayrıntı yok)');
 });
+
+// ---------------------------------------------------------------------------
+// KABUL KANITI KALICI (2026-09-27, 45479 pardus): kanitDir işin GEÇİCİ `work` dizini
+// altındadır (outDir/probook-kabul) ve iş bitince fsp.rm(work) ile silinir — GEÇTİ de
+// RED de olsa teşhis kanıtı (aktarim.txt, aktarim-*.err) kayboluyordu. Android/başsız
+// kapının kalıcı kökünü (tools/kabul/basliksiz-kabul.js: kanitAdi/kanitKoku) Pardus da
+// kullanır: ~/.empp-agent/kabul-kanit/<bookId>-pardus-<damga>/ (EMPP_KABUL_KANIT_KOK ile
+// testlerde geçici dizine yönlendirilir).
+// ---------------------------------------------------------------------------
+const { kanitKoku } = require('../../tools/kabul/basliksiz-kabul');
+
+/** EMPP_KABUL_KANIT_KOK'u geçici bir dizine yönlendirip fn'i koşturur, sonra eski hâline döner. */
+async function kalıcıKanıtKöküyle(fn) {
+  const kok = await fsp.mkdtemp(path.join(os.tmpdir(), 'kabul-kok-'));
+  const prev = process.env.EMPP_KABUL_KANIT_KOK;
+  process.env.EMPP_KABUL_KANIT_KOK = kok;
+  try {
+    return await fn(kok);
+  } finally {
+    if (prev === undefined) delete process.env.EMPP_KABUL_KANIT_KOK; else process.env.EMPP_KABUL_KANIT_KOK = prev;
+    await fsp.rm(kok, { recursive: true, force: true });
+  }
+}
+
+test('kabul kanıtı GEÇTİ durumunda kalıcı dizine kopyalanır; .impark/.zip ve 50MB+ ATLANIR', async () => {
+  await kalıcıKanıtKöküyle(async (kok) => {
+    await withFakeKabul([
+      '#!/bin/bash',
+      'mkdir -p "$2"',
+      'echo "ortam-kaniti" > "$2/ortam.txt"',
+      'echo "AKTARIM_SONUC=ESLESTI" > "$2/aktarim.txt"',
+      'cp "$1" "$2/kopya.impark"',
+      'echo zip > "$2/hazir.zip"',
+      'truncate -s 60000000 "$2/buyuk.bin"',
+      'exit 0',
+    ].join('\n'), async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap', '99001');
+      const adlar = await fsp.readdir(kok);
+      const dizinAdi = adlar.find((d) => d.startsWith('99001-pardus-'));
+      assert.ok(dizinAdi, `kalıcı kanıt dizini oluşmalı: ${adlar.join(', ')}`);
+      const hedef = path.join(kok, dizinAdi);
+      assert.equal(fs.existsSync(path.join(hedef, 'ortam.txt')), true);
+      assert.equal(fs.existsSync(path.join(hedef, 'aktarim.txt')), true);
+      assert.equal(fs.existsSync(path.join(hedef, 'kopya.impark')), false, '.impark kopyalanmamalı');
+      assert.equal(fs.existsSync(path.join(hedef, 'hazir.zip')), false, '.zip kopyalanmamalı');
+      assert.equal(fs.existsSync(path.join(hedef, 'buyuk.bin')), false, '50MB üstü kopyalanmamalı');
+    });
+  });
+});
+
+test('kabul kanıtı RED durumunda da kalıcı dizine kopyalanır (kapı yine fırlatır)', async () => {
+  await kalıcıKanıtKöküyle(async (kok) => {
+    await withFakeKabul([
+      '#!/bin/bash',
+      'mkdir -p "$2"',
+      'echo "RED-oncesi-kanit" > "$2/aktarim.txt"',
+      'echo "[kabul] RED: ProBook\'a aktarim dustu — kopyalanamadi (altyapi, paket kusuru degil)"',
+      'exit 1',
+    ].join('\n'), async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      let hata = null;
+      try {
+        await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap', '99002');
+      } catch (e) { hata = e; }
+      assert.ok(hata, 'RED yine fırlatmalı');
+      const adlar = await fsp.readdir(kok);
+      const dizinAdi = adlar.find((d) => d.startsWith('99002-pardus-'));
+      assert.ok(dizinAdi, `RED'te de kalıcı kanıt dizini oluşmalı: ${adlar.join(', ')}`);
+      assert.equal(fs.existsSync(path.join(kok, dizinAdi, 'aktarim.txt')), true);
+    });
+  });
+});
+
+test('bookId verilmezse kalıcı dizin "bilinmiyor" öneki ile açılır (job kimliği eksik olsa da kanıt kaybolmaz)', async () => {
+  await kalıcıKanıtKöküyle(async (kok) => {
+    await withFakeKabul('#!/bin/bash\nmkdir -p "$2"\necho x > "$2/ortam.txt"\nexit 0\n', async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap');
+      const adlar = await fsp.readdir(kok);
+      assert.ok(adlar.find((d) => d.startsWith('bilinmiyor-pardus-')), adlar.join(', '));
+    });
+  });
+});
+
+test('kanıt kopyalama hatası (kanitDir hiç oluşmadı) işi DÜŞÜRMEZ — kapı kendi sonucuna göre karar verir', async () => {
+  await kalıcıKanıtKöküyle(async () => {
+    // Kapı betiği $2'yi (kanitDir) HİÇ oluşturmaz — fsp.cp kaynağı bulamayıp ENOENT atar;
+    // pardusKanitiKaliciyaKopyala bunu yutup uyarı loglamalı, GEÇTİ sonucu (rc=0) yine de
+    // fırlatmadan dönmeli (kanıt eksikliği paket kusuru DEĞİL).
+    await withFakeKabul('#!/bin/bash\nexit 0\n', async (kdir) => {
+      const outDir = path.join(kdir, 'out');
+      await fsp.mkdir(outDir, { recursive: true });
+      await assert.doesNotReject(pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Test Kitap', '99003'));
+    });
+  });
+});

@@ -51,6 +51,9 @@ const {
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
   pardusBetikEnv, claimGSurumu,
 } = require('./runner-helpers');
+// Kalıcı kabul kanıtı kökü — başsız (android/mac/windows) kapı AYNI kökü kullanır
+// (tools/kabul/basliksiz-kabul.js); Pardus da aynı adlandırma+kökle yazar (bkz. §DÜZELTME 2).
+const { kanitAdi, kanitKoku } = require('../../tools/kabul/basliksiz-kabul');
 const { denetle: imparkDenetle, ozet: imparkOzet } = require('./impark-butunluk');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
 const {
@@ -1470,7 +1473,7 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
     }
     const mbH = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
     log(`pardus: impark hazır — ${artifactPath} (${mbH}MB)`);
-    await pardusKabulKapisi(artifactPath, outDir, appName);
+    await pardusKabulKapisi(artifactPath, outDir, appName, kimlik.bookId);
     // Hazır kaynağı ANCAK kapı geçtikten sonra sil. Ölçüm 2026-09-17 (45695):
     // kopyalar kopyalanmaz siliniyordu; kapı düşünce srv21'deki iş dizini de
     // temizlenmiş olduğu için paket TAMAMEN kayboldu ve baştan üretildi.
@@ -1533,7 +1536,38 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
   const mb = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
   log(`pardus: impark hazır — ${artifactPath} (${mb}MB)`);
 
-  await pardusKabulKapisi(artifactPath, outDir, appName);
+  await pardusKabulKapisi(artifactPath, outDir, appName, kimlik.bookId);
+}
+
+// KABUL KANITI KALICI (2026-09-27, 45479 pardus): pardusKabulKapisi'nin kanit dizini
+// (`outDir/probook-kabul`) işin GEÇİCİ çalışma dizininin (`work`) altındadır ve iş bitince
+// `fsp.rm(work, ...)` ile silinir — GEÇTİ de RED de olsa teşhis kanıtı (aktarim.txt,
+// aktarim-*.err, ortam.txt) kayboluyordu (45479: boş sha256 ölçüm hatasını teşhis etmek
+// için gereken kanıt hiç kalmamıştı). Başsız kapı (android/mac/windows) kanıtı zaten kalıcı
+// `~/.empp-agent/kabul-kanit/<bookId>-<platform>-<damga>/` altına yazıyor (tools/kabul/
+// basliksiz-kabul.js: kanitAdi/kanitKoku) — Pardus da AYNI kök + adlandırmayı kullanır.
+// Yalnız KÜÇÜK kanıt dosyaları kopyalanır: .impark/.zip (paketin kendisi, GB mertebesinde)
+// ve 50 MB üstü her şey ATLANIR. Kopyalama hatası (ör. kanitDir hiç oluşmadıysa) işi
+// DÜŞÜRMEZ — yalnız uyarı loglanır.
+const PARDUS_KANIT_ATLA_BOYUT = 50 * 1000 * 1000;
+async function pardusKanitiKaliciyaKopyala(kanitDir, bookId) {
+  try {
+    const hedef = path.join(kanitKoku(), kanitAdi(bookId || 'bilinmiyor', 'pardus'));
+    await fsp.mkdir(hedef, { recursive: true });
+    await fsp.cp(kanitDir, hedef, {
+      recursive: true,
+      filter: (kaynakYolu) => {
+        let st;
+        try { st = fs.statSync(kaynakYolu); } catch (_) { return true; }
+        if (st.isDirectory()) return true;
+        if (/\.(impark|zip)$/i.test(kaynakYolu)) return false;
+        return st.size <= PARDUS_KANIT_ATLA_BOYUT;
+      },
+    });
+    log('pardus: kabul kanıtı kalıcı:', hedef);
+  } catch (e) {
+    warn('pardus: kabul kanıtı kalıcı dizine kopyalanamadı —', (e && e.message) || e);
+  }
 }
 
 /**
@@ -1543,7 +1577,7 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
  * Kapı paketi gerçek ProBook'ta kurar, açar, süreç/pencere/piksel kanıtı toplar;
  * geçmezse HATA fırlatır → yükleme YOK. Hazır (srv21) paket de bu kapıdan geçer.
  */
-async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
+async function pardusKabulKapisi(artifactPath, outDir, bookTitle, bookId) {
   if (!CONFIG.pardusKabul) return;
   const aktivasyon = aktivasyonBeklenir(bookTitle);
   log('pardus: ProBook kabul kapısı başlıyor —', CONFIG.pardusKabulScript,
@@ -1553,6 +1587,7 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle) {
   const kabul = await runKabulBetigi([CONFIG.pardusKabulScript, artifactPath, kanitDir],
     { EMPP_AKTIVASYON_BEKLENIR: aktivasyon ? '1' : '0', KABUL_NODE: process.execPath });
   for (const satir of String(kabul.stdout || '').split('\n').filter(Boolean)) log('  [kabul]', satir);
+  await pardusKanitiKaliciyaKopyala(kanitDir, bookId);
   if (kabul.code !== 0) {
     const cikti = String(kabul.stdout || kabul.stderr || '');
     const sebep = kabul.timedOut

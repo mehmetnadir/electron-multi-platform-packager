@@ -617,7 +617,7 @@ function ozetle(a) {
 }
 
 module.exports = {
-  argumanCoz, kitapIdTuret, kanitAdi, icerikKarari, calis, kosumAgi, agAcikYenidenKosulmali,
+  argumanCoz, kitapIdTuret, kanitAdi, kanitKoku, icerikKarari, calis, kosumAgi, agAcikYenidenKosulmali,
   AKTIVASYON_CIHAZ_MENU_SN,
 };
 

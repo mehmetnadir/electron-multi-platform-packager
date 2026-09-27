@@ -64,7 +64,17 @@ cp "$kaynak" "$hedef" || exit 1
 exit 0
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'route'), '#!/bin/bash\necho "   gateway: ${SAHTE_GW:-192.168.2.1}"\n', { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'sha256sum'), '#!/bin/bash\nexec shasum -a 256 "$@"\n', { mode: 0o755 });
+  // SAHTE_SHA_UZAK_ILK_BOS=1: uzak sha256sum ilk cagrida bos doner (dosya "henuz gorunmuyor"
+  // gibi — kontrol baglantisi olcemedi), SAHTE_SHA_SAYAC isaretlendikten sonraki cagrilarda
+  // gercek sha256'yi doner (retry basariyla sonuclanir senaryosu).
+  fs.writeFileSync(path.join(bin, 'sha256sum'), `#!/bin/bash
+if [ -n "\${SAHTE_SHA_UZAK_ILK_BOS:-}" ] && [ ! -e "\${SAHTE_SHA_SAYAC:-/dev/null/yok}" ]; then
+  mkdir -p "$(dirname "\${SAHTE_SHA_SAYAC:-/tmp/yok}")" 2>/dev/null
+  : > "\${SAHTE_SHA_SAYAC:-/tmp/yok}" 2>/dev/null
+  exit 1
+fi
+exec shasum -a 256 "$@"
+`, { mode: 0o755 });
   const yerel = path.join(kok, 'paket.impark');
   fs.writeFileSync(yerel, Buffer.from('impark-deneme-' + '0123456789'.repeat(1000)));
   const env = {
@@ -73,6 +83,9 @@ exit 0
     PROBOOK_HOST: 'etapadmin@100.73.161.76',
     PROBOOK_KEY: path.join(kok, 'yok-anahtar'),
     SAHTE_MID_ATLAMA: 'abc123', SAHTE_MID_KONTROL: 'abc123',
+    // sha_u bosken retry oncesi gercek bekleme (varsayilan 5 sn) testleri yavaslatmasin.
+    PROBOOK_AKTARIM_SHA_BEKLE: '0',
+    SAHTE_SHA_SAYAC: path.join(kok, 'sha-sayac'),
     ...ek,
   };
   return { kok, uzak, iz, yerel, env, hedef: path.join(uzak, 'kabul-1.impark'), kanit: path.join(kok, 'kanit') };
@@ -130,13 +143,37 @@ test('GUVENLIK: scp yolunda da bozulma yakalanir (yol ne olursa olsun sha256 iki
   assert.doesNotMatch(scpSatirlari(r.iz)[0], /ProxyCommand/);
 });
 
-test('GUVENLIK: ProBook tarafi sha256 alinamazsa (dosya yok) ESLESTI sayilmaz', () => {
+// DUZELTME (2026-09-27, 45479 pardus): rc=0 (scp/aktarim TAMAMLANDI) ama ProBook sha256'si
+// KONTROL baglantisindan (bir daha denense de) hic ALINAMAZSA bu bir OLCUM basarisizligidir
+// (aktarim düşmedi — kontrol ssh'i o an ulasamadi), bayt bozulmasinin KANITI DEGIL. Eskiden
+// bu senaryo "sha256 UYUSMADI" (donus 2, GERCEK RED) sayilip failed yazdiriyordu.
+test('GUVENLIK->DUZELTME: scp rc=0 + ProBook sha256 (iki denemede de) alinamazsa donus 1 DOGRULANAMADI, UYUSMADI degil', () => {
   const o = ortam({ PROBOOK_AKTARIM: 'scp' });
   // scp "basarili" ama hedefe hic yazmiyor (yanlis makine/yol) — sahte scp'yi ez.
   fs.writeFileSync(path.join(o.kok, 'bin', 'scp'), `#!/bin/bash\nprintf 'scp %s\\n' "$*" >> "${o.iz}"\nexit 0\n`, { mode: 0o755 });
   const r = kos(o);
-  assert.equal(r.status, 2, r.stdout);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /sha256 alinamadi/);
+  assert.doesNotMatch(r.stdout, /sha256 UYUSMADI/);
   assert.match(r.kanit, /^SHA256_PROBOOK=yok$/m);
+  assert.match(r.kanit, /^AKTARIM_SONUC=DOGRULANAMADI$/m);
+  assert.match(r.kanit, /^PROBOOK_BAYT=/m);
+});
+
+test('DUZELTME: ilk denemede sha_u bos, retry\'de dolu ve eslesiyor → donus 0 (ESLESTI)', () => {
+  const o = ortam({ PROBOOK_AKTARIM: 'srv21', SAHTE_SHA_UZAK_ILK_BOS: '1' });
+  const r = kos(o);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /sha256 eslesti/);
+  assert.match(r.kanit, /^AKTARIM_SONUC=ESLESTI$/m);
+});
+
+test('GERILEME (degismedi): sha_u dolu ve GERCEK farkli (bayt bozuldu) → donus 2 kalir, DOGRULANAMADI degil', () => {
+  const o = ortam({ PROBOOK_AKTARIM: 'srv21', SAHTE_SCP_BOZ: '1' });
+  const r = kos(o);
+  assert.equal(r.status, 2, r.stdout);
+  assert.match(r.kanit, /^AKTARIM_SONUC=UYUSMADI$/m);
+  assert.doesNotMatch(r.kanit, /AKTARIM_SONUC=DOGRULANAMADI/);
 });
 
 test('srv21: atlama hedefi baska makine (machine-id farkli) → srv21 KULLANILMAZ, dogrudan scp', () => {
@@ -298,11 +335,24 @@ test('kabul uctan uca: srv21 + scp yedegi ikisi de duserse RED "ProBook\'a aktar
   assert.equal(fs.existsSync(path.join(r.o.kok, 'kabul.lock')), false, 'kilit birakilmali');
 });
 
-test('kabul uctan uca GERILEME: sha256 dogrulanamazsa (aktarim dogrulanamadi) runner ERTELEMEZ', () => {
-  // scp "basarili" ama ProBook tarafinda sha256 alinamiyor → donus 2 → RED, altyapi sinifi DEGIL.
+// DUZELTME (2026-09-27, 45479 pardus): scp "basarili" (rc=0) ama ProBook tarafinda sha256
+// KONTROL baglantisindan (iki denemede de) ALINAMIYORSA artik "aktarim dogrulanamadi" (donus 2,
+// GERCEK RED) DEGIL — donus 1 (DOGRULANAMADI), caginan probook-kabul.sh bunu genel "AKT_RC != 0"
+// dalina dusurup "RED: ProBook'a aktarim dustu — kopyalanamadi (altyapi, paket kusuru degil)"
+// yazar; runner probookErisilemezHatasi bunu ERTELENEBILIR sayar (failed YAZILMAZ). Eskiden
+// (bu testin adi "runner ERTELEMEZ"di) bu tam da 45479'un kendisiydi: olcum basarisizligi
+// paket kusuru gibi failed yazdiriyordu.
+test('kabul uctan uca DUZELTME: sha256 (kontrol baglantisi) OLCULEMEZSE runner ERTELER, RED-paket-kusuru degil', () => {
   const r = kabulKos({});
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stdout, /RED: aktarim dogrulanamadi/);
-  assert.doesNotMatch(r.stdout, /aktarim dustu/);
-  assert.equal(probookErisilemezHatasi(r.stdout), false);
+  assert.match(r.stdout, /sha256 alinamadi/);
+  assert.match(r.stdout, /RED: ProBook'a aktarim dustu — kopyalanamadi \(altyapi, paket kusuru degil\)/);
+  assert.doesNotMatch(r.stdout, /RED: aktarim dogrulanamadi/);
+  assert.equal(probookErisilemezHatasi(r.stdout), true, 'olcum basarisizligi altyapidir — runner failed YAZMAMALI');
 });
+
+// NOT: kabulKos() harness'i SAHTE_UZAK_KOK ile scp hedefini yeniden yazar (dosya bu dizinin
+// ALTINA iner) ama ssh uzerinden calisan aktarim_sha_uzak HALA remap-edilmemis $uzak yolunu
+// sorar — bu yuzden bu harness'te ProBook sha256'si HER ZAMAN bos doner (gercek FARKLI-ama-dolu
+// bir sha_u burada uretilemez). GERCEK uyusmazlik regresyonu direkt probook_aktar seviyesinde
+// yukarida kilitli ("GUVENLIK: aktarimda bayt bozulursa" + "GERILEME (degismedi)" testleri).

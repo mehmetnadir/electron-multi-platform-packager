@@ -48,13 +48,24 @@
 #   ev hattini tamamen doldurmamak icin)
 # Kullanim:
 #   kutuphane: HOST, KEY ve SSH dizisi tanimliyken `. probook-aktarim.sh; probook_aktar <yerel> <uzak> [kanit]`
-#     donus 0 = aktarildi + sha256 eslesti · 1 = kopyalanamadi · 2 = sha256 uyusmadi/dogrulanamadi
+#     donus 0 = aktarildi + sha256 eslesti
+#           1 = kopyalanamadi (scp basarisiz) VEYA ProBook sha256'si KONTROL baglantisindan
+#               hic ALINAMADI (bir deneme daha sonra da bos) — OLCUM basarisizligidir, bayt
+#               bozulmasinin KANITI DEGIL; altyapi sinifi (runner probookErisilemezHatasi
+#               bunu ertelenebilir sayar) — 2026-09-27, 45479: bos sha "UYUSMADI" sayilip
+#               RED-paket-kusuru gibi failed yazdiriyordu, oysa kontrol ssh'i o an
+#               ulasamamisti (aktarim'in kendisi 760 MB tam gitmisti).
+#           2 = sha256 GERCEK uyusmazlik — iki taraf da dolu ve FARKLI (bayt bozuldu,
+#               test edilecek != yayinlanacak) — GERCEK RED, ertelenebilir DEGIL.
 #   CLI (deneme/olcum): probook-aktarim.sh <yerel> <uzak-yol> [kanit-dizini]   (PROBOOK_AKTARIM varsayilan oto)
+#   PROBOOK_AKTARIM_SHA_BEKLE (sn, varsayilan 5): sha_u ilk denemede bosken retry oncesi bekleme;
+#     testlerde 0'a cekilir.
 
 AKT_ATLAMA="${PROBOOK_SRV21_ATLAMA:-root@10.0.0.21}"
 AKT_PORT="${PROBOOK_SRV21_PORT:-2222}"
 AKT_LAN="${PROBOOK_LAN_HEDEF:-etapadmin@192.168.1.55}"
 AKT_OFIS_GW="${PROBOOK_OFIS_GW:-192.168.1.254}"
+AKT_SHA_BEKLE="${PROBOOK_AKTARIM_SHA_BEKLE:-5}"
 AKT_YOL=scp
 AKT_SEBEP=""
 
@@ -137,7 +148,7 @@ aktarim_boyut_uzak(){
 
 probook_aktar(){
   local yerel="$1" uzak="$2" kanit="${3:-}" boyut=0 t0=0 sure=1 hiz=0 sha_y="" sha_u="" yol="" rc=0 sonuc=""
-  local err_dir="" hata="" basla="" s21_rc="" s21_sn="" s21_utc="" s21_bayt="" s21_hata=""
+  local err_dir="" hata="" basla="" s21_rc="" s21_sn="" s21_utc="" s21_bayt="" s21_hata="" pb_bayt=""
   aktarim_yolu_sec
   aktarim_say "aktarim yolu: $AKT_YOL ($AKT_SEBEP)"
   sha_y=$(aktarim_sha_yerel "$yerel")
@@ -165,7 +176,21 @@ probook_aktar(){
   hiz=$(( boyut / 1000 / sure ))
   if [ "$rc" = 0 ]; then
     sha_u=$(aktarim_sha_uzak "$uzak")
-    if [ -n "$sha_u" ] && [ "$sha_u" = "$sha_y" ]; then sonuc=ESLESTI; else sonuc=UYUSMADI; fi
+    # BOS sha_u = OLCUM basarisizligi (kontrol ssh'i o an ProBook'a ulasamadi), bayt
+    # bozulmasinin KANITI DEGIL (2026-09-27, 45479). Bir kez daha dene, hala bossa
+    # DOGRULANAMADI say — GERCEK uyusmazlikla (iki taraf dolu ve FARKLI) KARISTIRMA.
+    if [ -z "$sha_u" ]; then
+      [ "$AKT_SHA_BEKLE" -gt 0 ] 2>/dev/null && sleep "$AKT_SHA_BEKLE"
+      sha_u=$(aktarim_sha_uzak "$uzak")
+    fi
+    if [ -n "$sha_u" ] && [ "$sha_u" = "$sha_y" ]; then
+      sonuc=ESLESTI
+    elif [ -z "$sha_u" ]; then
+      sonuc=DOGRULANAMADI
+      pb_bayt=$(aktarim_boyut_uzak "$uzak")
+    else
+      sonuc=UYUSMADI
+    fi
   else
     sonuc=KOPYALANAMADI
   fi
@@ -190,6 +215,7 @@ probook_aktar(){
         echo "AKTARIM_SRV21_PROBOOK_BAYT=${s21_bayt:-?}"
         echo "AKTARIM_SRV21_HATA=$s21_hata"
       fi
+      [ "$sonuc" = DOGRULANAMADI ] && echo "PROBOOK_BAYT=${pb_bayt:-?}"
     } > "$kanit/aktarim.txt"
   fi
   case "$sonuc" in
@@ -198,6 +224,9 @@ probook_aktar(){
       return 0 ;;
     KOPYALANAMADI)
       aktarim_say "aktarim: kopyalanamadi (yol=$yol rc=$rc, ${sure} sn, $(aktarim_utc))${hata:+; ssh: $hata}"
+      return 1 ;;
+    DOGRULANAMADI)
+      aktarim_say "aktarim: ProBook sha256 alinamadi (kontrol baglantisi; ProBook'ta ${pb_bayt:-?} B) — altyapi, paket kusuru degil"
       return 1 ;;
     *)
       aktarim_say "aktarim: sha256 UYUSMADI — Mac ${sha_y:0:16} / ProBook ${sha_u:-yok} (test edilecek bayt yayinlanacak bayt degil)"
