@@ -30,6 +30,23 @@
  * KÖK EZİLMİŞ demektir — iş HATA ile düşer, paket yüklenmez.
  * `harf-kapisi.js`'teki `mod=dusur` ilkesiyle aynı: yutma, yukarı taşı.
  *
+ * ANDROID YAMALARI İSTİSNASI (2026-09-28, 45100 android — yanlış-pozitif, ölçümle) —
+ * `agent.log` 27.09 20:55: 45100 (16 kitaplık "Influence Grade 12" SETİ, birleşik-SPA
+ * biçimi — her alt kitabın `kok` alanı boş, kök TEK gerçek okuyucu index.html'i) için
+ * `ezilmis` uyarısı çıktı. Gerçek iş klasörü (`empp-agent-Y1R5l7`, iş bitmeden önce
+ * kanıt olarak kopyalandı) kanıtladı ki paketteki kök, kaynağın (`.empp-kaynak-kok-index.html`)
+ * BİREBİR aynısıydı — enjekte script satırları ve `main.js`/`main.css` hash'i dışında,
+ * `packagingService.js`'in `enableAndroidFullscreen()` adımının BİLEREK eklediği DÖRT şey
+ * hariç: (a) viewport meta'nın android için yeniden yazılması, (b) "Android Fullscreen
+ * Support" `<style>` bloğu, (c) aynı işaretli `<script>` bloğu (`deviceready`/StatusBar),
+ * (d) `cordova.js` script etiketi — ayrıca `sayfa-on-getirme.js`'in ürettiği
+ * `<script>/*EMPP_ON_GETIRME*\/` ön-getirme betiği (kitap sayfa yollarını listeler,
+ * içerik SETin kendi kitap kimliklerinden deterministik türer). Bunların hiçbiri menü
+ * değil, hiçbiri yabancı içerik değil — dördü de bu paketleyicinin KENDİ, belgelenmiş,
+ * platforma özgü yama adımları. `kok-index-denetimi.test.js`'te normalizasyon gerçek
+ * 45100 kaynak/paket çiftiyle (küçültülmüş örnek) doğrulandı: yamalar çıkarılınca
+ * `kNorm === gNorm` (sadık), `motorKopyasiMi`/menü dallarına hiç girmiyor.
+ *
  * NEREYE BAĞLI: `packagingService.js` içinde, set-menu (K17) adımından SONRA ve platform
  * fan-out'undan (`switch(platform)`) ÖNCE — `harf-kapisi.js` ile TAM AYNI konum, TEK
  * noktadan tüm platformlar (pardus/mac/android/windows) için geçerli. Kaynak kök
@@ -77,6 +94,74 @@ function anaDosyaReferanslariniNormallestir(html) {
   return html.replace(ANA_DOSYA_HASH_DESENI, 'HASH.main.$1');
 }
 
+/**
+ * `sayfa-on-getirme.js`'in `betikUret()`'inin köke yazdığı `<script>/*EMPP_ON_GETIRME*\/…`
+ * ön-getirme bloğu — kitabın/SETin kendi sayfa yollarından deterministik türer, İÇERİK
+ * farkı DEĞİLDİR (bkz. dosya başlığı "ANDROID YAMALARI İSTİSNASI").
+ */
+const ON_GETIRME_SCRIPT_DESENI = /<script>\/\*EMPP_ON_GETIRME\*\/[\s\S]*?<\/script>/g;
+
+/**
+ * `packagingService.js`'in `enableAndroidFullscreen()` adımının bilerek eklediği iki blok:
+ * "Android Fullscreen Support" `<style>` ve aynı işaretli `<script>` (`deviceready`/
+ * StatusBar/NavigationBar/orientation lock) — ayrıca yine o adımın eklediği `cordova.js`
+ * script etiketi. Üçü de yalnız android paketlemede eklenir, İÇERİK farkı DEĞİLDİR.
+ */
+const ANDROID_FULLSCREEN_CSS_DESENI = /<style>\s*\/\* Android Fullscreen Support \*\/[\s\S]*?<\/style>/g;
+const ANDROID_FULLSCREEN_JS_DESENI = /<script>\s*\/\/ Android Fullscreen Support[\s\S]*?<\/script>/g;
+const CORDOVA_SCRIPT_DESENI = /<script\s+src=["']cordova\.js["']>\s*<\/script>\s*/gi;
+
+/**
+ * Aynı adımın viewport meta etiketini android için yeniden yazması (`device-width,
+ * initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover`) — kaynağın
+ * kendi viewport'u ne olursa olsun bu üzerine yazılır, İÇERİK farkı DEĞİLDİR. Kıyastan
+ * önce HER İKİ tarafın viewport meta'sı da aynı yer tutucuya indirgenir.
+ */
+const VIEWPORT_META_DESENI = /<meta\s+name=["']viewport["'][^>]*>/gi;
+
+/**
+ * `icons.js` referansına eklenen cache-busting sorgu dizesi (`?v=123` vb.) — İÇERİK
+ * farkı DEĞİLDİR, yalnız tarayıcı önbelleğini kırmak için.
+ */
+const ICONS_QUERY_DESENI = /(\bicons\.js)\?v=\d+/gi;
+
+/**
+ * `core/kurumLogo.png` → `core/kurumlogo.png` harf-duyarlılığı farkı (Android'in
+ * case-sensitive dosya sistemi için bilerek küçük harfe çevrilir, bkz.
+ * `packagingService.js` satır ~973/~1698 yorumları) — İÇERİK farkı DEĞİLDİR.
+ */
+const KURUM_LOGO_CASE_DESENI = /core\/kurumLogo\.png/g;
+
+/**
+ * Yukarıdaki bloklar çıkarılınca geriye kalan fazla boş satırları (blok kaldırma
+ * yan etkisi) temizler — anlam taşımaz, yalnız biçim. Saf.
+ */
+function bosSatirlariSadelestir(html) {
+  return html
+    .replace(/\s*\n\s*(<\/body>)/gi, '$1')
+    .replace(/\n{2,}/g, '\n');
+}
+
+/**
+ * `packagingService.js`'in android paketlemede köke bilerek uyguladığı BEŞ yamayı
+ * (ön-getirme betiği, fullscreen CSS/JS, cordova script, viewport yeniden yazımı,
+ * icons.js sorgu dizesi, kurumLogo.png harf farkı) metinden çıkarır/normalize eder.
+ * Kaynakta bu yamalar hiç yoktur; pakette varsa İÇERİK farkı SAYILMAZ. Saf.
+ */
+function androidYamalariniCikar(html) {
+  if (typeof html !== 'string') return html;
+  return bosSatirlariSadelestir(
+    html
+      .replace(ON_GETIRME_SCRIPT_DESENI, '')
+      .replace(ANDROID_FULLSCREEN_CSS_DESENI, '')
+      .replace(ANDROID_FULLSCREEN_JS_DESENI, '')
+      .replace(CORDOVA_SCRIPT_DESENI, '')
+      .replace(VIEWPORT_META_DESENI, '<meta name="viewport" content="NORMALIZED">')
+      .replace(ICONS_QUERY_DESENI, '$1')
+      .replace(KURUM_LOGO_CASE_DESENI, 'core/kurumlogo.png'),
+  );
+}
+
 /** Runner'ın güncellemeden ÖNCE bıraktığı gerçek kaynak kök index'i (bkz. T5 / dosya başlığı). */
 const KAYNAK_KOK_INDEX_MARKER = '.empp-kaynak-kok-index.html';
 
@@ -86,8 +171,9 @@ const KAYNAK_KOK_INDEX_MARKER = '.empp-kaynak-kok-index.html';
  */
 function normalle(html) {
   if (html === null || html === undefined) return null;
-  return anaDosyaReferanslariniNormallestir(enjekteSatirlariCikar(String(html)))
-    .replace(/\r\n/g, '\n').trim();
+  return androidYamalariniCikar(
+    anaDosyaReferanslariniNormallestir(enjekteSatirlariCikar(String(html))),
+  ).replace(/\r\n/g, '\n').trim();
 }
 
 /**
@@ -255,6 +341,7 @@ module.exports = {
   enjekteSatirlariCikar,
   ANA_DOSYA_HASH_DESENI,
   anaDosyaReferanslariniNormallestir,
+  androidYamalariniCikar,
   KAYNAK_KOK_INDEX_MARKER,
   normalle,
   karsilastir,

@@ -19,6 +19,7 @@ const path = require('node:path');
 const {
   enjekteSatirlariCikar, normalle, karsilastir, modOku, acikMi, denetle,
   kokIndexOku, paketeUygula, anaDosyaReferanslariniNormallestir,
+  androidYamalariniCikar,
   KAYNAK_KOK_INDEX_MARKER, kaynakSnapshotAl,
 } = require('./kok-index-denetimi');
 const { MENU_ISARETI } = require('./set-menu');
@@ -165,6 +166,72 @@ test('motor kopyası kaynak + K17 kapalıyken dokunulmamış kök → sadik (hen
 test('motor kopyası/yok kaynak + ne aynı ne K17 imzalı bir kök → ezilmis', () => {
   const r = karsilastir(MOTOR_KOPYASI, '<html><body>beklenmeyen içerik</body></html>');
   assert.strictEqual(r.sonuc, 'ezilmis');
+});
+
+// ───────────────── GERİLEME (6): android yamaları (2026-09-28, 45100 — yanlış-pozitif) ─────────────────
+//
+// 45100 ("Influence Grade 12" SETİ, 16 kitap, birleşik-SPA kökü — main.js referanslı
+// gerçek okuyucu index.html'i, K17/Web-Z menüsü YOK çünkü SET kendi içinde tek SPA)
+// android paketlemede `ezilmis` uyardı. Gerçek iş klasöründen (`empp-agent-Y1R5l7`)
+// alınan kaynak/paket kökleri (küçültülmüş örnek — tam metin `arastirma/45100-*.html`
+// değil, buradaki fixture'lar) kanıtladı: fark yalnız `packagingService.js`'in
+// `enableAndroidFullscreen()` adımı + `sayfa-on-getirme.js`'in ürettiği bilinen yamalardı.
+const KAYNAK_TEK_SPA = '<!doctype html><html lang="en"><head>'
+  + '<meta charset="UTF-8"/>'
+  + '<meta name="viewport" content="width=device-width,initial-scale=0.9"/>'
+  + '<script src="icons.js"></script>'
+  + '<title>Akıllı Tahta Uygulaması</title></head>'
+  + '<body><script defer="defer" src="./42c86ce0fe3ad185f93d.main.js"></script>'
+  + '<link href="./b9ea95bc3dffcbc36a58.main.css" rel="stylesheet">'
+  + '<img src="./core/kurumLogo.png" style="display: none;"></body></html>';
+
+/** `packagingService.js` + `sayfa-on-getirme.js`'in android paketlemede uyguladığı BEŞ yama. */
+const PAKET_ANDROID_YAMALI = '<!doctype html><html lang="en"><head>'
+  + '<script src="empp-android-shim.js"></script><script src="empp-fs-shim.js"></script>'
+  + '<meta charset="UTF-8"/>'
+  + '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, '
+  + 'user-scalable=no, viewport-fit=cover">'
+  + '<script src="icons.js?v=123"></script>'
+  + '<title>Akıllı Tahta Uygulaması</title>'
+  + '<style>\n/* Android Fullscreen Support */\nbody{margin:0}\n</style>'
+  + '</head>'
+  + '<body><script defer="defer" src="./bd0c1a4f650802c98ebf.main.js"></script>'
+  + '<link href="./c84d32924edb93d564b1.main.css" rel="stylesheet">'
+  + '<script src="cordova.js"></script>'
+  + '<img src="./core/kurumlogo.png" style="display: none;">'
+  + '<script>/*EMPP_ON_GETIRME*/(function(){var SAYFALAR=["assets/28005/pages/1.png"];})();</script>\n\n'
+  // Gerçek 45100 paketinde iki enjekte blok arasında VE </body>'den önce birden çok
+  // boş satır kalıyordu (bloklar ayrı ayrı kaldırılınca yan etki) — bosSatirlariSadelestir
+  // bunu yutmazsa `\s` yerine yalnız `[ \t]` kullanan ilk sürüm burada `ezilmis` üretiyordu
+  // (2026-09-28 ölçümü, gerçek dosya çifti). Bilerek İKİ `\n` bırakıldı, tek değil.
+  + '<script>\n// Android Fullscreen Support\ndocument.addEventListener(\'deviceready\',function(){});\n</script>\n\n'
+  + '</body></html>';
+
+test('GERİLEME (6a): birleşik-SPA kaynak + android yamaları (viewport/icons.js/fullscreen/'
+  + 'ön-getirme/cordova/main.js hash/kurumLogo case) → sadik (45100 android, ölçümle)', () => {
+  const r = karsilastir(KAYNAK_TEK_SPA, PAKET_ANDROID_YAMALI);
+  assert.strictEqual(r.sonuc, 'sadik');
+});
+
+test('GERİLEME (6b) KONTROL: android yamaları ÜSTÜNE gerçek yabancı içerik eklenirse '
+  + 'yine ezilmis (androidYamalariniCikar aşırı geniş normalize ETMİYOR)', () => {
+  const yabanciIcerikli = PAKET_ANDROID_YAMALI.replace(
+    '</body>', '<div id="yabanci-menu">beklenmeyen menü</div></body>',
+  );
+  const r = karsilastir(KAYNAK_TEK_SPA, yabanciIcerikli);
+  assert.strictEqual(r.sonuc, 'ezilmis');
+});
+
+test('androidYamalariniCikar: EMPP_ON_GETIRME/fullscreen/cordova bloklarını çıkarır, '
+  + 'viewport+icons.js+kurumLogo case normalize eder', () => {
+  const temiz = androidYamalariniCikar(PAKET_ANDROID_YAMALI);
+  assert.ok(!temiz.includes('EMPP_ON_GETIRME'));
+  assert.ok(!temiz.includes('Android Fullscreen Support'));
+  assert.ok(!temiz.includes('cordova.js'));
+  assert.ok(!temiz.includes('icons.js?v=123'));
+  assert.ok(temiz.includes('icons.js'));
+  assert.ok(!temiz.includes('kurumLogo.png'));
+  assert.ok(temiz.includes('kurumlogo.png'));
 });
 
 // ─────────────────────────── modOku / acikMi ───────────────────────────
