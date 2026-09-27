@@ -24,6 +24,14 @@ const O = require('./olcutler');
 
 const YASAK_AVD = 'TCDD_MITM';
 const VARSAYILAN_AVD = 'Pixel_Fold_API_35';
+/**
+ * Cihaz okuyucu aşaması üst sınırı (sn). Aşama iki ardışık yeterli ölçümde ERKEN biter;
+ * sağlam pakette maliyeti yoktur. 27.09 45538 (English Up 5 Set): makine yükü ~100 iken
+ * (kurulum 372 sn ≈ 3×, emülatörde 3 kez "System UI isn't responding") okuyucu ~85 sn'de
+ * açıldı; 60 sn'lik sınır son ölçümü "Kitap Açılıyor.." karesinde aldı, hemen ardından
+ * kaydedilen kitap.png ise açılmış okuyucuyu gösteriyordu → sahte RED.
+ */
+const CIHAZ_KITAP_SN = 120;
 
 function sdkKoku() {
   return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || path.join(os.homedir(), 'Library', 'Android', 'sdk');
@@ -534,7 +542,7 @@ async function cihazKabulu(p) {
       const kitapYeterli = (o) => o.surecCanli && !o.yukleniyor.length && O.pikselKarari(o.piksel, { aktivasyon: p.aktivasyon }).gecti
         && !o.kartSayisi;
       sonuc.kitap = await asamaOlc(arac, seri, {
-        paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.kitapBekleSn || 60, yeterli: kitapYeterli,
+        paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.kitapBekleSn || CIHAZ_KITAP_SN, yeterli: kitapYeterli,
         kanitDizin, ad: 'kitap', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
       });
     }
@@ -634,6 +642,7 @@ function avdAdaylari(verilen) {
 module.exports = {
   YASAK_AVD,
   VARSAYILAN_AVD,
+  CIHAZ_KITAP_SN,
   avdAdaylari,
   badgingCoz,
   kurulumSebebi,
