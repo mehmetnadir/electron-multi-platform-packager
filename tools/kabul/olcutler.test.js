@@ -274,3 +274,41 @@ test('asnAyikla / pidAyikla: lsappinfo çıktı biçimleri', () => {
   assert.equal(O.pidAyikla('"pid"=2449\n"LSDisplayName"="Code"'), 2449);
   assert.equal(O.pidAyikla('"pid"=[ NULL ]'), null);
 });
+
+// 27.09 45469/45472 android: aktivasyon kodlu seri. Gerçek ölçümler (kabul-kanit karar.json).
+const AKT_DIYALOG_PIKSEL = { sapma: 0.180517, koyu: 0.853358, renk: 483 }; // 45472 cihaz: gri zemin + kod diyaloğu
+const AKT_METIN = 'Aktivasyon Kitabı görüntülemek için aktivasyon kodunu giriniz. Aktivasyon Kodu AKTIVE ET';
+const OFFLINE_YUKLENIYOR = { sapma: 0.019238, koyu: 0.000397, renk: 27 }; // 45469 ağ kapalı koşum
+
+test('aktivasyonEkraniMi: kod diyaloğu metni tanınır, boş/başka metin tanınmaz', () => {
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: AKT_METIN }), true);
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: '' }), false);
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: 'Unit 1 Reading' }), false);
+  assert.equal(O.aktivasyonEkraniMi(null), false);
+});
+
+test('asamaKarari aktivasyon: kod diyaloğu okuyucu aşamasında GEÇTİ (sayfa izi aranmaz, ProBook ile aynı)', () => {
+  const b = { asama: 'kitap', setMi: false, beklenenKart: 0, aktivasyon: true };
+  const olcum = { baslik: 'Akıllı Tahta Uygulaması', kartSayisi: 0, yukleniyor: [], piksel: AKT_DIYALOG_PIKSEL,
+    gorunurMetin: AKT_METIN };
+  const k = O.asamaKarari(olcum, b);
+  assert.equal(k.durum, 'GECTI', k.sebepler.join(' | '));
+  assert.match(k.notlar.join(' '), /aktivasyon ekranı/);
+});
+
+test('asamaKarari aktivasyon (mutasyon): diyalog yoksa, yükleniyorsa ya da ekran beyazsa yine RED', () => {
+  const b = { asama: 'kitap', setMi: false, beklenenKart: 0, aktivasyon: true };
+  const iyi = { baslik: 'x', kartSayisi: 0, yukleniyor: [], piksel: AKT_DIYALOG_PIKSEL, gorunurMetin: AKT_METIN };
+  // aktivasyon bayrağı olmadan aynı ekran eskisi gibi RED (sayfa izi yok)
+  assert.equal(O.asamaKarari(iyi, { ...b, aktivasyon: false }).durum, 'RED');
+  // bayrak var ama diyalog metni yok → sayfa izi aranır
+  assert.match(O.asamaKarari({ ...iyi, gorunurMetin: '' }, b).sebepler.join(' '), /sayfa çizmedi/);
+  // 45469 ağ kapalı koşumu: yükleniyor + beyaz → RED
+  const offline = O.asamaKarari({ ...iyi, gorunurMetin: '', piksel: OFFLINE_YUKLENIYOR,
+    yukleniyor: ['seçici:#loader-root.loading .lds-ellipsis'] }, b);
+  assert.equal(offline.durum, 'RED');
+  // metin var ama ekran beyaz → piksel yine düşürür
+  assert.equal(O.asamaKarari({ ...iyi, piksel: OFFLINE_YUKLENIYOR }, b).durum, 'RED');
+  // metin var ama hâlâ yükleniyor göstergesi → RED
+  assert.equal(O.asamaKarari({ ...iyi, yukleniyor: ['seçici:.lds-ellipsis'] }, b).durum, 'RED');
+});

@@ -226,7 +226,8 @@ async function kos() {
         cb({ cancel: true });
       },
     );
-  } else if (K4) {
+  } else if (K4 || G.indirmeKes) {
+    // K4 ve aktivasyon kodlu seri (ağ açık içerik koşumu): sunucuya soru serbest, zip indirmesi kesik.
     session.defaultSession.webRequest.onBeforeRequest(
       { urls: ['http://*/*', 'https://*/*'] },
       (ayrinti, cb) => {

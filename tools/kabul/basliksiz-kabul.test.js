@@ -226,3 +226,43 @@ test('icerikKarari: koşum ölçüm üretmediyse ÖLÇÜLEMEDİ (GEÇTİ değil)
   const k = icerikKarari({ envanter: { setMi: true, indexHtml: '' }, kosum: null, beklenenKart: 3 });
   assert.equal(k.durum, 'OLCULEMEDI');
 });
+
+// 27.09 45469/45472: aktivasyon kodlu seri ağ kapalı koşumda "Network is offline" ile yükleniyor
+// ekranında kaldı (paket sağlam — ağ açık K4 koşumu kod diyaloğunu gösterdi).
+test('kosumAgi: ilk koşum ağ kapalı (aktivasyonda da); aktivasyon turu ağ açık + zip kesik; --ag tam açık', () => {
+  const { kosumAgi } = require('./basliksiz-kabul');
+  assert.deepEqual(kosumAgi(argumanCoz(['p.apk'])), { agKapali: true, indirmeKes: false });
+  assert.deepEqual(kosumAgi(argumanCoz(['p.apk', '--aktivasyon'])), { agKapali: true, indirmeKes: false });
+  assert.deepEqual(kosumAgi(argumanCoz(['p.apk', '--aktivasyon']), { aktivasyonTuru: true }),
+    { agKapali: false, indirmeKes: true });
+  assert.deepEqual(kosumAgi(argumanCoz(['p.apk', '--ag'])), { agKapali: false, indirmeKes: false });
+});
+
+test('agAcikYenidenKosulmali: yalnız aktivasyon + ağ kapalı + RED + "Network is offline"', () => {
+  const { agAcikYenidenKosulmali: f } = require('./basliksiz-kabul');
+  const kosum = { konsol: [{ seviye: 'error', mesaj: 'Error: Network is offline' }] };
+  const red = { durum: 'RED' };
+  assert.equal(f({ aktivasyon: true, ag: false, karar: red, kosum }), true);
+  assert.equal(f({ aktivasyon: false, ag: false, karar: red, kosum }), false, 'aktivasyon serisi değil');
+  assert.equal(f({ aktivasyon: true, ag: true, karar: red, kosum }), false, 'zaten ağ açık koşuldu');
+  assert.equal(f({ aktivasyon: true, ag: false, karar: { durum: 'GECTI' }, kosum }), false, '45477: ağ kapalı içerik açıldı');
+  assert.equal(f({ aktivasyon: true, ag: false, karar: red, kosum: { konsol: [] } }), false, 'başka sebepli RED');
+});
+
+test('icerikKarari aktivasyon: tek kitapta kod diyaloğu GEÇTİ, ağ kapalı yükleniyor ekranı RED', () => {
+  const envanter = { setMi: false, indexHtml: '' };
+  const menu = {
+    baslik: 'Akıllı Tahta Uygulaması', kartSayisi: 0, yukleniyor: [], sayfaGorseli: 0, tuval: 0, arkaPlanSayfa: 0,
+    piksel: { sapma: 0.18, koyu: 0.85, renk: 480 },
+    gorunurMetin: 'Aktivasyon Kitabı görüntülemek için aktivasyon kodunu giriniz. Aktivasyon Kodu AKTIVE ET',
+  };
+  const kosum = { asamalar: { menu }, ileriAdim: { tur: 'kitaplik', kart: null }, konsol: [] };
+  const k = icerikKarari({ envanter, kosum, beklenenKart: 0, aktivasyon: true });
+  assert.equal(k.durum, 'GECTI', k.sebepler.join(' | '));
+  const offline = {
+    ...kosum,
+    asamalar: { menu: { ...menu, gorunurMetin: '', yukleniyor: ['seçici:.lds-ellipsis'],
+      piksel: { sapma: 0.019238, koyu: 0.000397, renk: 27 } } },
+  };
+  assert.equal(icerikKarari({ envanter, kosum: offline, beklenenKart: 0, aktivasyon: true }).durum, 'RED');
+});
