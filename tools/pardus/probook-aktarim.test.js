@@ -38,15 +38,27 @@ if [[ "$komut" == *machine-id* ]]; then
   [ "$m" = YOK ] && exit 255
   echo "$m"; exit 0
 fi
+# Kabul temizligi (uzak kopyayi silme) yerel makinede KOSMAZ — yalniz iz dosyasinda kalir.
+case "$komut" in "rm "*) exit 0 ;; esac
 exec bash -c "$komut"
 `, { mode: 0o755 });
+  // SAHTE_*_HATA: gercek ssh gibi stderr'e dusus sebebi yazar (tani kaniti testleri).
+  // SAHTE_SCP_ATLAMA_YARIM=N: srv21 yolu dusmeden once hedefe N bayt yazar (yarim aktarim).
+  // SAHTE_UZAK_KOK: uzak yol (ornegin kabulun /tmp/kabul-*.impark'i) bu dizinin altina yazilir.
   fs.writeFileSync(path.join(bin, 'scp'), `#!/bin/bash
 printf 'scp %s\\n' "$*" >> "${iz}"
 atlama=0
 for a in "$@"; do case "$a" in ProxyCommand=*) atlama=1 ;; esac; done
-[ "$atlama" = 1 ] && [ -n "\${SAHTE_SCP_ATLAMA_RC:-}" ] && exit "$SAHTE_SCP_ATLAMA_RC"
-[ "$atlama" = 0 ] && [ -n "\${SAHTE_SCP_DUZ_RC:-}" ] && exit "$SAHTE_SCP_DUZ_RC"
-kaynak="\${@: -2:1}"; hedef="\${@: -1}"; hedef="\${hedef#*:}"
+kaynak="\${@: -2:1}"; hedef="\${@: -1}"; hedef="\${SAHTE_UZAK_KOK:-}\${hedef#*:}"
+if [ "$atlama" = 1 ] && [ -n "\${SAHTE_SCP_ATLAMA_RC:-}" ]; then
+  [ -n "\${SAHTE_SCP_ATLAMA_YARIM:-}" ] && head -c "$SAHTE_SCP_ATLAMA_YARIM" "$kaynak" > "$hedef"
+  [ -n "\${SAHTE_SCP_ATLAMA_HATA:-}" ] && printf '%s\\n' "$SAHTE_SCP_ATLAMA_HATA" >&2
+  exit "$SAHTE_SCP_ATLAMA_RC"
+fi
+if [ "$atlama" = 0 ] && [ -n "\${SAHTE_SCP_DUZ_RC:-}" ]; then
+  [ -n "\${SAHTE_SCP_DUZ_HATA:-}" ] && printf '%s\\n' "$SAHTE_SCP_DUZ_HATA" >&2
+  exit "$SAHTE_SCP_DUZ_RC"
+fi
 cp "$kaynak" "$hedef" || exit 1
 [ "\${SAHTE_SCP_BOZ:-0}" = 1 ] && printf 'X' >> "$hedef"
 exit 0
@@ -204,7 +216,93 @@ test('kabul: PROBOOK_AKTARIM bosken eski tek scp satiri AYNEN durur (varsayilan 
 
 test('kabul: aktarim donus 2 (sha256) ve 1 RED ile cikar (exit 1 → temizlik trap uzak kopyayi siler)', () => {
   const s = fs.readFileSync(KABUL, 'utf8');
-  const blok = s.slice(s.indexOf('probook_aktar "$GIRDI"'), s.indexOf('probook_aktar "$GIRDI"') + 300);
+  const blok = s.slice(s.indexOf('probook_aktar "$GIRDI"'), s.indexOf('probook_aktar "$GIRDI"') + 700);
   assert.match(blok, /\[ "\$AKT_RC" = 2 \] && \{ say "RED: [^"]*sha256[^"]*"; exit 1; \}/);
-  assert.match(blok, /\[ "\$AKT_RC" = 0 \] \|\| \{ say "RED: kopyalanamadi"; exit 1; \}/);
+  // Karar sozlugu ayni (exit 1); yalniz metin runner'in ertelenebilir sinifina girer.
+  assert.match(blok, /\[ "\$AKT_RC" = 0 \] \|\| \{ say "RED: ProBook'a aktarim dustu[^"]*"; exit 1; \}/);
+});
+
+// ---------------------------------------------------------------------------
+// AKTARIM DUSUSU (2026-09-27, 45477 pardus): srv21 atlamasi 6 dk sonra dustu, scp yedegi
+// 600/1277 MB'ta kaldi (Mac kapak kapali pilde uyudu) → "RED: kopyalanamadi" → failed.
+// (1) Tani: ssh'in dusus sebebi kanitta ve stdout'ta (eskiden scp -q ile hic yoktu).
+// (2) Sinif: iki yol da duserse kabul "ProBook'a aktarim dustu" der, runner ERTELER.
+// ---------------------------------------------------------------------------
+const { probookErisilemezHatasi } = require('../../src/agent/runner-helpers');
+
+test('tani: scp -q YOK — ssh dusus sebebini (LogLevel QUIET) susturmaz', () => {
+  const o = ortam({ PROBOOK_AKTARIM: 'srv21', SAHTE_SCP_ATLAMA_RC: '1' });
+  const scp = scpSatirlari(kos(o).iz);
+  assert.equal(scp.length, 2, scp.join('\n'));
+  for (const s of scp) assert.doesNotMatch(s, /(^| )-q( |$)/, s);
+});
+
+test('tani: iki yol da duserse ssh stderr son satirlari aktarim.txt\'ye ve stdout\'a, srv21 yarim bayt + UTC saat', () => {
+  const o = ortam({
+    PROBOOK_AKTARIM: 'srv21', SAHTE_SCP_ATLAMA_RC: '1', SAHTE_SCP_DUZ_RC: '1', SAHTE_SCP_ATLAMA_YARIM: '4096',
+    SAHTE_SCP_ATLAMA_HATA: 'Timeout, server 192.168.1.55 not responding.',
+    SAHTE_SCP_DUZ_HATA: 'ssh: connect to host 100.73.161.76 port 22: No route to host',
+  });
+  const r = kos(o);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.kanit, /^AKTARIM_SRV21_RC=1$/m);
+  assert.match(r.kanit, /^AKTARIM_SRV21_SN=\d+$/m);
+  assert.match(r.kanit, /^AKTARIM_SRV21_DUSUS_UTC=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/m);
+  assert.match(r.kanit, /^AKTARIM_SRV21_PROBOOK_BAYT=4096$/m);
+  assert.match(r.kanit, /^AKTARIM_SRV21_HATA=Timeout, server 192\.168\.1\.55 not responding\.$/m);
+  assert.match(r.kanit, /^AKTARIM_HATA=ssh: connect to host 100\.73\.161\.76 port 22: No route to host$/m);
+  assert.match(r.kanit, /^AKTARIM_RC=1$/m);
+  assert.match(r.stdout, /srv21 yolu dustu \(rc=1, \d+ sn, ProBook'ta 4096 B, [^)]*Z\) — scp yedek yoluna geciliyor; ssh: Timeout/);
+  assert.match(r.stdout, /kopyalanamadi \(yol=scp rc=1, \d+ sn, [^)]*Z\); ssh: ssh: connect to host/);
+  assert.ok(fs.existsSync(path.join(o.kanit, 'aktarim-srv21.err')));
+  assert.ok(fs.existsSync(path.join(o.kanit, 'aktarim-scp.err')));
+});
+
+test('tani: basarili aktarimda srv21 satirlari yazilmaz, AKTARIM_HATA bos', () => {
+  const o = ortam({ PROBOOK_AKTARIM: 'srv21' });
+  const r = kos(o);
+  assert.equal(r.status, 0, r.stdout);
+  assert.doesNotMatch(r.kanit, /AKTARIM_SRV21_/);
+  assert.match(r.kanit, /^AKTARIM_HATA=$/m);
+  assert.match(r.kanit, /^AKTARIM_RC=0$/m);
+});
+
+/** probook-kabul.sh'i uzak kipte, sahte ssh/scp ile, sandbox HOME + kilitle kosturur. */
+function kabulKos(ek) {
+  const o = ortam({ PROBOOK_AKTARIM: 'srv21', ...ek });
+  const home = path.join(o.kok, 'home');
+  const uzakKok = path.join(o.kok, 'probook');
+  fs.mkdirSync(home);
+  fs.mkdirSync(path.join(uzakKok, 'tmp'), { recursive: true });
+  const env = {
+    ...o.env, HOME: home, KABUL_KILIT: path.join(o.kok, 'kabul.lock'), SAHTE_UZAK_KOK: uzakKok,
+    KABUL_BOSLUK_TAVAN: '5', KABUL_BOSLUK_ARALIK: '1',
+  };
+  for (const k of ['KABUL_CDP', 'KABUL_AYRI_EV', 'KABUL_EV', 'KABUL_SET_TUM', 'KABUL_K4', 'EMPP_KANIT_ARSIV']) delete env[k];
+  const r = spawnSync('bash', [KABUL, o.yerel, o.kanit], { encoding: 'utf8', env, timeout: 60000 });
+  const iz = fs.existsSync(o.iz) ? fs.readFileSync(o.iz, 'utf8') : '';
+  return { ...r, iz, o };
+}
+
+test('kabul uctan uca: srv21 + scp yedegi ikisi de duserse RED "ProBook\'a aktarim dustu", exit 1, runner ERTELER', () => {
+  const r = kabulKos({
+    SAHTE_SCP_ATLAMA_RC: '1', SAHTE_SCP_DUZ_RC: '1',
+    SAHTE_SCP_ATLAMA_HATA: 'Timeout, server 192.168.1.55 not responding.',
+    SAHTE_SCP_DUZ_HATA: 'ssh: connect to host 100.73.161.76 port 22: No route to host',
+  });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /\[kabul\] RED: ProBook'a aktarim dustu — kopyalanamadi \(altyapi, paket kusuru degil\)/);
+  assert.match(r.stdout, /srv21 yolu dustu .*ssh: Timeout, server 192\.168\.1\.55 not responding/);
+  assert.equal(probookErisilemezHatasi(r.stdout), true, 'aktarim dususu altyapidir — runner failed YAZMAMALI');
+  assert.match(r.iz, /rm -f '\/tmp\/kabul-\d+\.impark'/, 'temizlik uzak kopyayi silmeye calismali');
+  assert.equal(fs.existsSync(path.join(r.o.kok, 'kabul.lock')), false, 'kilit birakilmali');
+});
+
+test('kabul uctan uca GERILEME: sha256 dogrulanamazsa (aktarim dogrulanamadi) runner ERTELEMEZ', () => {
+  // scp "basarili" ama ProBook tarafinda sha256 alinamiyor → donus 2 → RED, altyapi sinifi DEGIL.
+  const r = kabulKos({});
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /RED: aktarim dogrulanamadi/);
+  assert.doesNotMatch(r.stdout, /aktarim dustu/);
+  assert.equal(probookErisilemezHatasi(r.stdout), false);
 });

@@ -352,7 +352,11 @@ if [ "$KOPYALA" = "1" ]; then
     . "$BETIK_DIZIN/probook-aktarim.sh"
     probook_aktar "$GIRDI" "$UZAK" "$KANIT"; AKT_RC=$?
     [ "$AKT_RC" = 2 ] && { say "RED: aktarim dogrulanamadi (sha256 Mac != ProBook)"; exit 1; }
-    [ "$AKT_RC" = 0 ] || { say "RED: kopyalanamadi"; exit 1; }
+    # AKTARIM DUSUSU = ALTYAPI (2026-09-27, 45477 pardus): srv21 + scp yedegi ikisi de
+    # kopyalayamadiysa paket kusuru DEGIL (Mac uyudu / ag koptu) — "ProBook'a baglanilamadi" ile
+    # ayni sinif. Cikis kodu 1 kalir (karar sozlugu ayni); runner probookErisilemezHatasi bu
+    # metni ERTELENEBILIR sayar, satira failed yazilmaz (kira dolunca is kuyruga doner).
+    [ "$AKT_RC" = 0 ] || { say "RED: ProBook'a aktarim dustu — kopyalanamadi (altyapi, paket kusuru degil)"; exit 1; }
   else
     scp -q -o ConnectTimeout=10 -o BatchMode=yes -i "$KEY" "$GIRDI" "$HOST:$UZAK" \
       || { say "RED: kopyalanamadi"; exit 1; }

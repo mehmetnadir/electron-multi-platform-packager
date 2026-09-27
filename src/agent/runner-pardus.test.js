@@ -944,6 +944,56 @@ test('kabul kapısı: ProBook YANIT VERMEZSE (zaman aşımı) da ERTELENEBİLİR
   }
 });
 
+// AKTARIM DÜŞÜŞÜ (2026-09-27, ölçümle): 45477 pardus'un gerçek kabul çıktısı. srv21 atlaması
+// 04:56Z'de düştü, scp yedeği Mac kapak kapalı pilde uyuyunca 600/1277 MB'ta kaldı; eski
+// "RED: kopyalanamadi" satırı `failed` yazdırdı, iş 06:02'de yeniden kiralandı.
+async function kabulHatasi(govde) {
+  let hata = null;
+  await withFakeKabul(govde, async (kdir) => {
+    const outDir = path.join(kdir, 'out');
+    await fsp.mkdir(outDir, { recursive: true });
+    try { await pardusKabulKapisi(path.join(kdir, 'artifact.impark'), outDir, 'Privilege Grade 11'); } catch (e) { hata = e; }
+  });
+  assert.ok(hata, 'fırlamalı (paket yüklenmez)');
+  return hata;
+}
+const KABUL_45477_ONCESI = [
+  '#!/bin/bash',
+  'echo "[kabul] ProBook disk: 114925 MB bos (gerekli ~5190 MB)"',
+  'echo "[kabul] kopyalaniyor: artifact.impark (1276 MB)"',
+  'echo "[kabul] aktarim yolu: srv21 (oto: gw 192.168.2.1, srv21 atlamasi hazir (root@10.0.0.21:2222 -> etapadmin@192.168.1.55, ayni machine-id))"',
+  'echo "[kabul] aktarim: srv21 yolu dustu (rc=1) — scp yedek yoluna geciliyor"',
+];
+
+test('kabul kapısı: AKTARIM DÜŞÜŞÜ (45477 — srv21 + scp yedeği düştü) ERTELENEBİLİR sayılır, failed YAZILMAZ', async () => {
+  const hata = await kabulHatasi([...KABUL_45477_ONCESI,
+    'echo "[kabul] aktarim: kopyalanamadi (yol=scp rc=1)"',
+    'echo "[kabul] RED: ProBook\'a aktarim dustu — kopyalanamadi (altyapi, paket kusuru degil)"',
+    'exit 1', ''].join('\n'));
+  assert.ok(hata.message.includes(PROBOOK_KAPISI_ISARETI), hata.message);
+  assert.equal(ertelenebilirKaynakHatasi(hata), true, 'aktarım düşüşü altyapıdır — ana döngü failed YAZMAMALI');
+  assert.match(hata.message, /ProBook'a erişilemedi \(rc=1\):.*aktarim dustu/);
+});
+
+test('kabul kapısı: eski tek-scp yolunun "RED: kopyalanamadi" satırı da ERTELENEBİLİR (aynı sınıf)', async () => {
+  const hata = await kabulHatasi('#!/bin/bash\necho "[kabul] kopyalaniyor: a.impark (900 MB)"\necho "[kabul] RED: kopyalanamadi"\nexit 1\n');
+  assert.equal(ertelenebilirKaynakHatasi(hata), true);
+});
+
+test('GERİLEME: srv21 düşüp scp yedeği GEÇTİKTEN sonra gelen gerçek paket RED\'i ERTELENMEZ', async () => {
+  const hata = await kabulHatasi([...KABUL_45477_ONCESI,
+    'echo "[kabul] aktarim: 1276 MB 3539 sn (~360 kB/s, yol=scp), sha256 eslesti 24126395f13cbd93"',
+    'echo "[kabul] RED: pencere acilmadi (938 sn)"',
+    'exit 1', ''].join('\n'));
+  assert.doesNotMatch(hata.message, new RegExp(PROBOOK_KAPISI_ISARETI.replace(/[[\]]/g, '\\$&')));
+  assert.equal(ertelenebilirKaynakHatasi(hata), false, 'yedek yol geçtiyse paket kusuru failed kalmalı');
+});
+
+test('GERİLEME: sha256 uyuşmazlığı ("aktarim dogrulanamadi") ERTELENMEZ — test edilen bayt ≠ yayınlanacak bayt', async () => {
+  const hata = await kabulHatasi('#!/bin/bash\necho "[kabul] RED: aktarim dogrulanamadi (sha256 Mac != ProBook)"\nexit 1\n');
+  assert.equal(ertelenebilirKaynakHatasi(hata), false);
+});
+
 test('GERİLEME: gerçek paket kusuru (pencere içerik taşımıyor) ERTELENEBİLİR SAYILMAZ — K18 hâlâ failed yazmalı', async () => {
   await withFakeKabul(
     `#!/bin/bash\necho "[kabul] [kabul] RED: pencere acildi ama ICERIK YOK (sapma=0.020 koyu=0.00047 renk=10)"\nexit 1\n`,
