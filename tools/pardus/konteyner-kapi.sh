@@ -61,7 +61,11 @@ APPPID=""; WID=""; gecen=0
 while [ $gecen -lt "$BEKLE" ]; do
   sleep 5; gecen=$((gecen+5))
   for pid in $(pgrep -f "$TABAN/" 2>/dev/null); do
-    exe=$(readlink -f /proc/$pid/exe 2>/dev/null) || continue
+    exe=$(readlink -f /proc/$pid/exe 2>/dev/null)
+    # Rosetta (Apple Silicon'da linux/amd64 emulasyonu) altinda /proc/<pid>/exe
+    # COZULEMEZ (27.09 olculdu: readlink bos doner) — kapi acik uygulamayi 240 sn
+    # "hala kuruluyor" sanip RED veriyordu. argv[0]'a dus.
+    [ -n "$exe" ] || exe=$(tr '\0' '\n' < /proc/$pid/cmdline 2>/dev/null | head -1)
     case "$exe" in "$TABAN"/*) ;; *) continue;; esac
     APPPID=$pid; break
   done
