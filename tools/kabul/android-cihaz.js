@@ -21,6 +21,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const O = require('./olcutler');
+const YK = require('./yuk-kapisi');
 
 const YASAK_AVD = 'TCDD_MITM';
 const VARSAYILAN_AVD = 'Pixel_Fold_API_35';
@@ -51,6 +52,13 @@ function aracBul() {
     }
   } catch (_) { /* build-tools yok */ }
   return { adb, emulator, aapt, sdk };
+}
+
+/** Yük kapısı kanıtını (kosum.json) yazar; kanıt dizini yazılamazsa sessiz geçilir. Saf değil (fs). */
+function yukKanitYaz(kanitDizin, veri) {
+  try {
+    fs.writeFileSync(path.join(kanitDizin, 'kosum.json'), JSON.stringify(veri, null, 2));
+  } catch (_) { /* kanıt dizini yazılamadı — kabul sonucu bundan etkilenmez */ }
 }
 
 function kos(komut, argumanlar, secenek = {}) {
@@ -448,15 +456,41 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
  * @param {{apk:string, kanit:string, avd?:string, beklenenKart:number, setMi:boolean,
  *          kitapAdlari?:string[], aktivasyon?:boolean, log?:Function,
  *          bootSn?:number, menuBekleSn?:number, kitapBekleSn?:number,
- *          mevcutSeri?:string, kurulumYok?:boolean}} p
+ *          mevcutSeri?:string, kurulumYok?:boolean,
+ *          yukEsigi?:number, yukAraSn?:number, yukAzamiSn?:number,
+ *          yukOlc?:Function, yukBekle?:Function}} p
  *   `mevcutSeri`: ZATEN koşan emülatörde ölç (başlatma/kapatma yok) — uzaktan güncelleme (G)
  *   gibi cihaz durumunu değiştiren bir adımın ÖNCESİ ve SONRASI aynı ölçütle ölçülsün diye.
  *   `kurulumYok`: paket kurulu kalır (kurma/kaldırma yok); uygulama `am start -S` ile baştan açılır.
+ *   `yukEsigi`/`yukAraSn`/`yukAzamiSn`/`yukOlc`/`yukBekle`: yük kapısı (`yuk-kapisi.js`)
+ *   enjeksiyonu — testte sahte yük/zaman verir, üretimde `undefined` bırakılır (varsayılanlar).
  * @returns {Promise<{durum:string, sebepler:string[], notlar:string[], ...}>}
  */
 async function cihazKabulu(p) {
   const log = p.log || (() => {});
   const sonuc = { durum: O.DURUM.OLCULEMEDI, sebepler: [], notlar: [], sistemDiyaloglari: [] };
+  const kanitDizin = path.join(p.kanit, 'android');
+  fs.mkdirSync(kanitDizin, { recursive: true });
+
+  // YÜK KAPISI — ÖN KAPI (27.09 45482, load avg 138/142/101): emülatör AÇILMADAN önce host
+  // yükü eşiğin altına düşene kadar beklenir; düşmezse emülatör hiç başlatılmadan
+  // ÖLÇÜLEMEDİ ile ertelenir (adb/AVD denetiminden ÖNCE — bu kapı ortam kurulu olsun
+  // olmasın, host meşgulken devreye girer).
+  const onKapi = await YK.onKapiBekle({
+    esik: p.yukEsigi, araSn: p.yukAraSn, azamiSn: p.yukAzamiSn, yukOlc: p.yukOlc, bekle: p.yukBekle, log,
+  });
+  const yukOrnekleri = [...onKapi.ornekler];
+  sonuc.yukKapisi = {
+    esik: onKapi.esik, gecti: onKapi.gecti, sonYuk: onKapi.sonYuk, beklenenSn: onKapi.beklenenSn,
+  };
+  yukKanitYaz(kanitDizin, { yukKapisi: sonuc.yukKapisi, yukOrnekleri });
+  if (!onKapi.gecti) {
+    sonuc.sebepler.push(`makine yükü eşiği aştı (1dk=${onKapi.sonYuk.toFixed(1)} > eşik=${onKapi.esik.toFixed(1)}, `
+      + `${onKapi.beklenenSn} sn beklendi) — emülatör açılmadı, iş ertelenmeli`);
+    sonuc.yukOrnekleri = yukOrnekleri;
+    return sonuc; // durum zaten OLCULEMEDI
+  }
+
   const arac = aracBul();
   if (!arac.adb || !arac.emulator) {
     sonuc.sebepler.push(`Android araçları yok (adb=${arac.adb || '—'}, emulator=${arac.emulator || '—'})`);
@@ -467,8 +501,6 @@ async function cihazKabulu(p) {
     sonuc.sebepler.push(`${YASAK_AVD} başka bir işin AVD'si — kullanılmaz; başka AVD yok`);
     return sonuc;
   }
-  const kanitDizin = path.join(p.kanit, 'android');
-  fs.mkdirSync(kanitDizin, { recursive: true });
 
   let paketBilgi = { paket: null, etkinlik: null };
   if (arac.aapt) paketBilgi = badgingCoz(kos(arac.aapt, ['dump', 'badging', p.apk], { zamanAsimiMs: 60000 }).stdout);
@@ -537,6 +569,7 @@ async function cihazKabulu(p) {
     const tur = emu ? (kos('lsappinfo', ['info', '-only', 'ApplicationType', String(emu.pid)]).stdout || '') : '';
     sonuc.emulator.uygulamaTuru = (/"ApplicationType"="([^"]*)"/.exec(tur) || [])[1] || 'kayıtsız (GUI uygulaması değil)';
     log(`cihaz: açıldı (${bootSn} sn) · emülatör süreç türü ${sonuc.emulator.uygulamaTuru}`);
+    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: açılış (kabul boyunca her aşamada)
     // Ekran uykusu/kilidi ölçümü bozmasın.
     adbKos(arac, seri, ['shell', 'svc', 'power', 'stayon', 'true']);
     adbKos(arac, seri, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
@@ -563,6 +596,7 @@ async function cihazKabulu(p) {
     } else {
       log(`cihaz: kurulu paket kullanılıyor (kurulum/kaldırma yok) — ${paketBilgi.paket}`);
     }
+    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: kurulum/açılış sonrası
     adbKos(arac, seri, ['logcat', '-c']);
     const hedef = paketBilgi.etkinlik ? `${paketBilgi.paket}/${paketBilgi.etkinlik}` : null;
     const bas = hedef
@@ -578,6 +612,7 @@ async function cihazKabulu(p) {
       kanitDizin, ad: 'menu', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
     });
     sonuc.menu = menu;
+    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: menü ölçümü sonrası
     if (p.setMi && menu.kartlar && menu.kartlar.length) {
       const kart = menu.kartlar[0];
       adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
@@ -588,6 +623,7 @@ async function cihazKabulu(p) {
         paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.kitapBekleSn || CIHAZ_KITAP_SN, yeterli: kitapYeterli,
         kanitDizin, ad: 'kitap', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
       });
+      yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: okuyucu ölçümü sonrası
     }
     const lc = adbKos(arac, seri, ['logcat', '-d', '-v', 'time', 'chromium:V', 'Capacitor/Console:V', 'Capacitor:V', 'AndroidRuntime:E', '*:S'],
       { zamanAsimiMs: 30000 });
@@ -640,8 +676,27 @@ async function cihazKabulu(p) {
     for (const d of sonuc.sistemDiyaloglari) {
       sonuc.notlar.push(`sistem diyaloğu (${d.asama}, ${d.sn}. sn): "${d.baslik}" → ${d.dugmeAdi || 'düğme yok'}`);
     }
+
+    // YÜK KAPISI — SON SINIFLANDIRMA (27.09 45482): cihaz katmanının TÜM sebepleri bilinen
+    // altyapı (host yükü) imzalarındaysa VE kabul boyunca örneklenen yük eşiği aştıysa RED
+    // ÖLÇÜLEMEDİ'ye çevrilir — mevcut `ortulen` mekanizması yeniden kullanılır (aşağıdaki
+    // "ortulen && !sebepler" dalı zaten OLCULEMEDI döndürüyor). Yük normalken (72379 dersi:
+    // sahte ÖLÇÜLEMEDİ'ye kaçış da yasak) ya da bilinmeyen bir sebep karışmışsa RED KALIR.
+    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: karar anı
+    sonuc.yukOrnekleri = yukOrnekleri;
+    const yukSiniflandirma = YK.sonSiniflandirma({ sebepler, yukOrnekleri, esik: onKapi.esik });
+    sonuc.yukSiniflandirma = yukSiniflandirma;
+    if (yukSiniflandirma.ortulenMi) {
+      const enYuksek = yukSiniflandirma.enYuksekYuk.toFixed(1);
+      const esikTxt = yukSiniflandirma.esik.toFixed(1);
+      ortulen.push(...sebepler.map((s) => `${s} (host yükü ${enYuksek} > eşik ${esikTxt} sırasında oluştu — altyapı, paket kusuru DEĞİL)`));
+      sebepler.length = 0;
+    }
+    yukKanitYaz(kanitDizin, { yukKapisi: sonuc.yukKapisi, yukOrnekleri, yukSiniflandirma });
+
     if (ortulen.length && !sebepler.length) {
-      // Ekranı başka bir uygulamanın diyaloğu örttüyse paket hakkında hüküm verilemez.
+      // Ekranı başka bir uygulamanın diyaloğu örttüyse ya da yük kapısı devreye girdiyse
+      // paket hakkında hüküm verilemez.
       sonuc.sebepler = ortulen;
       sonuc.durum = O.DURUM.OLCULEMEDI;
       return sonuc;

@@ -11,6 +11,9 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const O = require('./android-cihaz');
 
 // 72379 kanıt dizininden birebir: uiautomator dump crash etti (logcat), dosya hiç yazılmadı.
@@ -107,4 +110,61 @@ test('uiXmlHata alanı: gerçek (büyük) hiyerarşi dökümünde asamaOlc taraf
   // (bkz. android-cihaz.js asamaOlc) — normal ölçümde bu alan hep null olmalı, karar.json'u şişirmesin.
   const buyukGercekXml = `<hierarchy rotation="0">${'<node class="x"/>'.repeat(50)}</hierarchy>`;
   assert.ok(buyukGercekXml.length >= 500 || /<hierarchy\b/i.test(buyukGercekXml));
+});
+
+// --- YÜK KAPISI ÖN KAPI KABLOLAMASI (27.09 45482) ------------------------------------------
+// cihazKabulu'nun GERÇEK exportu çağrılır (mock yok) ama yük hep yüksek/hep düşük olduğu için
+// adb/aapt/emulator'a HİÇ ulaşılmadan (ya da emülatör spawn edilmeden) döner — makineden
+// bağımsız, emülatör/docker KOŞMAZ.
+
+function gecistKanitDizin() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'kabul-yuk-kapisi-test-'));
+}
+
+test('cihazKabulu: yük hep yüksek ve düşmüyor → ÖLÇÜLEMEDİ, emülatör seçimine/adb\'ye HİÇ gidilmedi', async () => {
+  const kanit = gecistKanitDizin();
+  const gunluk = [];
+  const r = await O.cihazKabulu({
+    apk: '/yok/boyle-bir-apk.apk',
+    kanit,
+    beklenenKart: 0,
+    setMi: false,
+    yukEsigi: 48,
+    yukAraSn: 0,
+    yukAzamiSn: 0.05,
+    yukOlc: () => [150],
+    yukBekle: () => Promise.resolve(),
+    log: (s) => gunluk.push(s),
+  });
+  assert.equal(r.durum, 'OLCULEMEDI');
+  assert.equal(r.yukKapisi.gecti, false);
+  assert.ok(r.sebepler.some((s) => /emülatör açılmadı/.test(s)));
+  // Gate'ten sonraki hiçbir alan (arac.adb/emulator seçimi, AVD, paket bilgisi) set EDİLMEMİŞ —
+  // fonksiyon gate'te erken döndü, aşağı hiç inmedi.
+  assert.equal(r.emulator, undefined);
+  assert.equal(r.paket, undefined);
+  assert.ok(fs.existsSync(path.join(kanit, 'android', 'kosum.json')), 'yük kapısı kanıtı (kosum.json) yazılmalı');
+  const kosum = JSON.parse(fs.readFileSync(path.join(kanit, 'android', 'kosum.json'), 'utf8'));
+  assert.equal(kosum.yukKapisi.gecti, false);
+});
+
+test('cihazKabulu (mutasyon): yük başından beri düşük → ön kapı GEÇER, karar gate\'ten SONRAKİ bir sebepten gelir', async () => {
+  // Bu makinede Android SDK kurulu olabilir/olmayabilir — iddia kasıtlı olarak ortamdan
+  // bağımsız: yalnız "gate geçti" ve "emülatör açılmadı sebebi YOK" doğrulanır. Eşik dalı
+  // (yukEsigi/yukAzamiSn kontrolü) kaldırılırsa bu test hep OLCULEMEDI+"emülatör açılmadı"
+  // ile düşer çünkü ön kapı hiç geçmez.
+  const kanit = gecistKanitDizin();
+  const r = await O.cihazKabulu({
+    apk: '/yok/boyle-bir-apk.apk',
+    kanit,
+    beklenenKart: 0,
+    setMi: false,
+    avd: O.YASAK_AVD, // adb/emulator var olsa bile AVD listesi boşalır → emülatör spawn edilmez
+    yukEsigi: 48,
+    yukOlc: () => [1],
+    yukBekle: () => Promise.resolve(),
+  });
+  assert.equal(r.yukKapisi.gecti, true);
+  assert.ok(!r.sebepler.some((s) => /emülatör açılmadı/.test(s)));
+  assert.equal(r.durum, 'OLCULEMEDI'); // TCDD_MITM dışında AVD yok / adb yoksa — ikisi de emülatörsüz sonuç
 });
