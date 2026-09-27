@@ -111,3 +111,11 @@ test('sahte adb: başarılı kurulum sebep üretmez, paket sonda kaldırılır',
     assert.ok(s.cagrilar().some((c) => /uninstall com\.dijitap\.deneme/.test(c)));
   } finally { s.geriAl(); }
 });
+
+// 27.09 45538: yük altında okuyucu ~85 sn'de açıldı; 60 sn'lik sınır sahte RED verdi.
+test('cihaz okuyucu üst sınırı yük payı taşır (≥ 90 sn) ve aşamaya bağlı', () => {
+  const C = require('./android-cihaz');
+  assert.ok(C.CIHAZ_KITAP_SN >= 90, `CIHAZ_KITAP_SN=${C.CIHAZ_KITAP_SN}`);
+  const src = require('fs').readFileSync(require.resolve('./android-cihaz'), 'utf8');
+  assert.match(src, /beklemeSn: p\.kitapBekleSn \|\| CIHAZ_KITAP_SN, yeterli: kitapYeterli/);
+});

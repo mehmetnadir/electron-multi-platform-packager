@@ -231,13 +231,19 @@ function asamaKarari(olcum, beklenti) {
   if (yk.length) {
     sebepler.push(`${olcum.beklenenSn || '?'} sn sonra hâlâ yükleniyor göstergesi: ${yk.slice(0, 3).join(' | ')}`);
   }
+  // Aktivasyon kodlu seri (Nadir kuralı 2026-09-18, ProBook kapısıyla AYNI): motorun kod
+  // diyaloğunu göstermesi motorun çalıştığının kanıtıdır; kitap kod girilmeden açılmaz, yani
+  // sayfa izi aranamaz. Boş/beyaz/yükleniyor ekranı yine RED (yükleniyor + piksel denetimi
+  // aşağıda aynen koşar). 27.09: 45469/45472 android içerik katmanı bu yüzden RED'di.
+  const aktivasyonEkrani = Boolean(beklenti.aktivasyon) && aktivasyonEkraniMi(olcum);
+  if (aktivasyonEkrani) notlar.push('aktivasyon ekranı: motor açıldı ve kod istedi — içerik doğrulanmadı (ProBook ile aynı)');
   // Okuyucu aşaması: renkli bir açılış ekranı (logo) piksel eşiğini tek başına geçebilir;
   // "sayfa çizildi" demek için sayfa görseli / tuval / sayfa arka planı İZİ de aranır.
-  if (beklenti.asama === 'kitap' && sayfaIzi(olcum) === 0) {
+  if (beklenti.asama === 'kitap' && sayfaIzi(olcum) === 0 && !aktivasyonEkrani) {
     sebepler.push('okuyucu sayfa çizmedi (görünür sayfa görseli / tuval yok)');
   }
 
-  if (beklenti.asama === 'kitaplik' && !(olcum.kapaklar || []).length) {
+  if (beklenti.asama === 'kitaplik' && !(olcum.kapaklar || []).length && !aktivasyonEkrani) {
     sebepler.push('okuyucu sayfa çizmedi ve kitap rafında kapak yok');
   }
   const pk = pikselKarari(olcum.piksel, { aktivasyon: beklenti.aktivasyon, sapmaAranmaz: beklenti.asama === 'kitaplik' });
@@ -248,6 +254,14 @@ function asamaKarari(olcum, beklenti) {
     sebepler.push(pk.sebep);
   }
   return { durum: sebepler.length ? DURUM.RED : DURUM.GECTI, sebepler, notlar };
+}
+
+/**
+ * Ekranda motorun aktivasyon kodu diyaloğu mu görünüyor? (görünür metin: "Kitabı görüntülemek
+ * için aktivasyon kodunu giriniz." / "Aktivasyon Kodu" — 45469/45472 kanıtı, 27.09)
+ */
+function aktivasyonEkraniMi(olcum) {
+  return /aktivasyon\s+kod/i.test(String((olcum && olcum.gorunurMetin) || ''));
 }
 
 /** Okuyucunun sayfa çizdiğine dair görünür iz sayısı (sayfa <img> + tuval + sayfa arka planı). */
@@ -328,6 +342,7 @@ module.exports = {
   sayfaIzi,
   asamaKarari,
   genelKarar,
+  aktivasyonEkraniMi,
   odakKarari,
   cikisKodu,
   asnAyikla,

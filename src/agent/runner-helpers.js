@@ -468,8 +468,35 @@ function isTransientNetworkError(err) {
   // kira artık bizde değil, yani sahibi olmadığımız bir kaydı eziyoruz; ve paket
   // sağlam olduğu hâlde partiye sahte bir başarısızlık düşüyor. Doğrusu diğer
   // geçici hatalarla aynı: `failed` YAZMA, satırı normal claim akışına bırak.
-  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|socket hang up|network|fetch failed|lease_not_held|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(raw);
+  // `timeout of Nms exceeded` / ECONNABORTED: axios'un KENDİ zaman aşımı biçimi (ETIMEDOUT
+  // değil). Eksikti → 27.09 gecesi 45100/45449 android paketleyici durum yoklaması
+  // (127.0.0.1:3001, 30 sn) tek seferlik takılınca işler `failed` yazıldı; paketleyici
+  // ikisini de başarıyla bitirmişti. 2026-08-30 45549 mac (ağ kesintisinde presign
+  // 120 sn) aynı sınıftı.
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ECONNABORTED|timeout of \d+ms exceeded|EHOSTUNREACH|ENETUNREACH|EPIPE|socket hang up|network|fetch failed|lease_not_held|complete-multipart failed: HTTP (5\d\d|0)|presign-multipart failed: HTTP 5|could not be uploaded|curl exit (6|7|28|35|52|55|56)\b/i.test(raw);
 }
+
+/**
+ * Paketleyici durum yoklaması (GET /api/package-status, 127.0.0.1:3001) tek isteği düşünce
+ * aynı yoklamada yeniden denenmeli mi? Saf.
+ *
+ * Neden (27.09 gecesi, ölçümle): 45100 ve 45449 android yoklamaları TEK bir 30 sn'lik
+ * zaman aşımıyla düştü ve iş `failed` yazıldı; paketleyici günlüğünde ikisi de
+ * "Paketleme tamamlandı" — APK üretilmişti, yalnız durum cevabı makine yükü altında
+ * geç kaldı. Yoklama idempotent ve ucuz; tek kaçırılan cevap paketi geçersiz kılmaz.
+ * Tavan ardışık hatayı sınırlar: paketleyici gerçekten ölmüşse iş yine düşer (ve
+ * hata geçici sınıfta olduğundan `failed` yazılmaz, kira dolunca yeniden kuyruğa girer).
+ *
+ * @param {*} hata       axios hatası
+ * @param {number} ardisik  bu hata DAHİL ardışık düşen istek sayısı
+ * @param {number} [tavan]
+ * @returns {boolean} true → bekle ve yeniden sor; false → fırlat
+ */
+function yoklamaYenidenDenenir(hata, ardisik, tavan = PAKETLEYICI_YOKLAMA_HATA_TAVANI) {
+  return isTransientNetworkError(hata) && Number(ardisik) < Number(tavan);
+}
+/** Ardışık düşen durum isteği tavanı: 6 × (30 sn + 5 sn) ≈ 3,5 dk takılmaya dayanır. */
+const PAKETLEYICI_YOKLAMA_HATA_TAVANI = Number(process.env.AGENT_PACKAGER_POLL_HATA_TAVANI || 6);
 
 // ---------------------------------------------------------------------------
 // Pardus disk kapısı — BOYUT ORANTILI (2026-09-19, ölçümle).
@@ -1105,6 +1132,8 @@ module.exports = {
   packagerResultOf,
   lruSilinecekler,
   isTransientNetworkError,
+  yoklamaYenidenDenenir,
+  PAKETLEYICI_YOKLAMA_HATA_TAVANI,
   agHatasiOzeti,
   pardusGerekliDiskGb,
   kaynakCacheTavaniGb,

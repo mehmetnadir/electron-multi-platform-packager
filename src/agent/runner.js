@@ -45,7 +45,7 @@ const {
   joinUrl,
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
-  isTransientNetworkError, srcVersionTuret, agHatasiOzeti,
+  isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
@@ -80,6 +80,8 @@ const CONFIG = {
   // Testler CONFIG.heartbeatRetryMs'i 0'a çekip gerçek zaman beklemeden koşabilir.
   heartbeatRetryMs: Number(process.env.AGENT_HEARTBEAT_RETRY_MS || 2500),
   packageTimeoutMs: Number(process.env.AGENT_PACKAGE_TIMEOUT_MS || 20 * 60 * 1000),
+  // Paketleyici durum yoklama aralığı (localhost). Testler 0'a çeker.
+  packagerPollMs: Number(process.env.AGENT_PACKAGER_POLL_MS || 5000),
   // macOS signing (all optional — signing is best-effort).
   signIdentity: process.env.APPLE_SIGN_IDENTITY || '',
   teamId: process.env.APPLE_TEAM_ID || '',
@@ -864,12 +866,26 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
 
 async function packagerPoll(jobId, packagerPlatform) {
   const deadline = Date.now() + CONFIG.packageTimeoutMs;
+  let ardisikHata = 0;
   while (Date.now() < deadline) {
     if (stopping) throw new Error('shutting down');
-    const res = await axios.get(joinUrl(CONFIG.packagerApi, `api/package-status/${jobId}`), {
-      timeout: 30000,
-      validateStatus: () => true,
-    });
+    let res;
+    try {
+      res = await axios.get(joinUrl(CONFIG.packagerApi, `api/package-status/${jobId}`), {
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+      ardisikHata = 0;
+    } catch (e) {
+      // 27.09: tek bir takılan durum cevabı (makine yükü) işi `failed` yazdırıyordu —
+      // paket o sırada başarıyla bitiyordu. Geçici hatada aynı yoklamada yeniden sor.
+      ardisikHata += 1;
+      if (!yoklamaYenidenDenenir(e, ardisikHata)) throw e;
+      warn(`paketleyici durum yoklaması düştü (${ardisikHata}. ardışık, iş ${jobId}) — geçici, yeniden soruluyor:`,
+        agHatasiOzeti(e));
+      await sleep(CONFIG.packagerPollMs);
+      continue;
+    }
     if (res.status === 200) {
       const status = packageStatusOf(res.data);
       if (isTerminalStatus(status)) {
@@ -894,7 +910,7 @@ async function packagerPoll(jobId, packagerPlatform) {
         return (res.data && res.data.job && res.data.job.results) || null; // completed + doğrulandı
       }
     }
-    await sleep(5000);
+    await sleep(CONFIG.packagerPollMs);
   }
   throw new Error('packager job timed out');
 }
@@ -2142,4 +2158,5 @@ module.exports = {
   guncelYetenekler,
   _seritDenetcisiAyarla: (d) => { seritDenetcisi = d; _sonYetenek = ''; },
   packagerStartPackage, postResultSuccess,
+  packagerPoll,
 };

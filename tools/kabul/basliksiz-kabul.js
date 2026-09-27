@@ -47,6 +47,30 @@ const ST = require('./set-guncellik');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
+/**
+ * Aktivasyon kodlu seride motor açılışta kodu SUNUCUYA sorar (HasZKitapKey, kitap başına bir
+ * istek). Ağ kapalı koşumda "Network is offline" ile yükleniyor ekranında kalır — paket kusuru
+ * değil, ölçülemez ortam (27.09 45469/45472: ağ açık K4 koşumunda aynı paket diyaloğu 30 sn'de
+ * gösterdi). Bu durumda içerik koşumu ağ AÇIK ama zip indirmesi kesik YENİDEN koşar (K4 ile aynı);
+ * ağ kapalıyken içerik açılan aktivasyon serisi (45477: raf + okuyucu) ilk koşumla karar alır.
+ * Cihazda diyalog 32 alt kitapta ~93 sn'de geldi (45469; 22'de ~35 sn) → cihaz menü beklemesi.
+ */
+const AKTIVASYON_CIHAZ_MENU_SN = 150;
+function kosumAgi(s, { aktivasyonTuru = false } = {}) {
+  if (s.ag) return { agKapali: false, indirmeKes: false };
+  if (aktivasyonTuru) return { agKapali: false, indirmeKes: true };
+  return { agKapali: true, indirmeKes: false };
+}
+
+/**
+ * Aktivasyon kodlu seride ağ kapalı içerik koşumu RED ve motor "Network is offline" dediyse
+ * ağ açık ikinci koşum gerekir (paket kusuru değil, ölçülemez ortam). Saf.
+ */
+function agAcikYenidenKosulmali({ aktivasyon, ag, karar, kosum }) {
+  if (!aktivasyon || ag || !karar || karar.durum !== O.DURUM.RED) return false;
+  return konsolSatirlari(kosum).some((l) => /Network is offline/i.test(String((l && l.mesaj) || '')));
+}
+
 function argumanCoz(argv) {
   const s = {
     paket: null, platform: null, kitapSayisi: null, kitapId: null, kanit: null, calisma: null,
@@ -266,6 +290,7 @@ async function calis(argv, yazici) {
   };
   let acilis = null;
   let kosumSureci = null;
+  const ekKosumPidleri = [];
   let kosumSonucu = null;
   let calismaZamani = null;
   const k4Acik = K4.k4Etkin({ bayrak: s.k4 });
@@ -335,33 +360,53 @@ async function calis(argv, yazici) {
         if (zaman.uyari) { rapor.uyarilar.push(zaman.uyari); say(zaman.uyari); }
         say(`Electron: paket ${acilis.electronSurumu || '—'} · koşulan ${zaman.surum}${zaman.eslesti ? ' (eşleşti)' : ''}`);
         const toplamSn = s.menuBekle + s.kitapBekle + 60;
-        const girdi = {
-          giris: path.join(acilis.kok, 'index.html'),
-          kanitDizin: kanit,
-          profilDizin: path.join(calisma, 'profil'),
-          sonucYolu: path.join(kanit, 'kosum.json'),
-          setMi: envanter.setMi,
-          beklenenKart,
-          ileriAdim: true,
-          agKapali: !s.ag,
-          menuBekleSn: s.menuBekle,
-          kitapBekleSn: s.kitapBekle,
-          toplamSn,
+        // Tek koşum: girdi yaz → Electron → kosum.json → içerik kararı. Aktivasyon kodlu seride
+        // ağ kapalı koşum "Network is offline" ile yükleniyor ekranında kalırsa İKİNCİ koşum ağ
+        // açık (zip kesik) yapılır; ağ kapalıyken içerik doğrulanabilen seri (45477) etkilenmez.
+        const icerikKos = async (ag, kanitDizini, ek) => {
+          fs.mkdirSync(kanitDizini, { recursive: true });
+          const girdi = {
+            giris: path.join(acilis.kok, 'index.html'),
+            kanitDizin: kanitDizini,
+            profilDizin: path.join(calisma, `profil${ek}`),
+            sonucYolu: path.join(kanitDizini, 'kosum.json'),
+            setMi: envanter.setMi,
+            beklenenKart,
+            ileriAdim: true,
+            ...ag,
+            menuBekleSn: s.menuBekle,
+            kitapBekleSn: s.kitapBekle,
+            toplamSn,
+          };
+          const girdiYolu = path.join(calisma, `kosum-girdi${ek}.json`);
+          fs.mkdirSync(girdi.profilDizin, { recursive: true });
+          fs.writeFileSync(girdiYolu, JSON.stringify(girdi, null, 2));
+          say(`görünmez koşum başlıyor (offscreen, Dock'suz, ağ ${ag.agKapali ? 'kapalı'
+            : `AÇIK${ag.indirmeKes ? ' — aktivasyon kodlu seri, zip indirmesi kesik' : ''}`})`);
+          const surec = await kosumCalistir({
+            ikili: zaman.ikili, girdiYolu, calisma, kanit: kanitDizini, agKapali: ag.agKapali, toplamSn, log: say,
+          });
+          say(`koşum bitti: ${Math.round(surec.sureMs / 1000)} sn, çıkış ${surec.kod}`
+            + `${surec.zamanAsimi ? ' (ZAMAN AŞIMI)' : ''} · süreç türü ${surec.uygulamaTuru || '—'}`);
+          let kosum = null;
+          try { kosum = JSON.parse(fs.readFileSync(girdi.sonucYolu, 'utf8')); } catch (_) { kosum = null; }
+          fs.writeFileSync(path.join(kanitDizini, 'konsol.log'), konsolGunlugu(kosum));
+          return { surec, kosum, k: icerikKarari({ envanter, kosum, beklenenKart, aktivasyon: s.aktivasyon }) };
         };
-        const girdiYolu = path.join(calisma, 'kosum-girdi.json');
-        fs.mkdirSync(girdi.profilDizin, { recursive: true });
-        fs.writeFileSync(girdiYolu, JSON.stringify(girdi, null, 2));
-        say(`görünmez koşum başlıyor (offscreen, Dock'suz, ağ ${s.ag ? 'AÇIK' : 'kapalı'})`);
-        kosumSureci = await kosumCalistir({
-          ikili: zaman.ikili, girdiYolu, calisma, kanit, agKapali: !s.ag, toplamSn, log: say,
-        });
-        say(`koşum bitti: ${Math.round(kosumSureci.sureMs / 1000)} sn, çıkış ${kosumSureci.kod}`
-          + `${kosumSureci.zamanAsimi ? ' (ZAMAN AŞIMI)' : ''} · süreç türü ${kosumSureci.uygulamaTuru || '—'}`);
-        let kosum = null;
-        try { kosum = JSON.parse(fs.readFileSync(girdi.sonucYolu, 'utf8')); } catch (_) { kosum = null; }
+        let tur = await icerikKos(kosumAgi(s), kanit, '');
+        kosumSureci = tur.surec;
+        if (agAcikYenidenKosulmali({ aktivasyon: s.aktivasyon, ag: s.ag, karar: tur.k, kosum: tur.kosum })) {
+          say('aktivasyon kodlu seri: ağ kapalı koşum "Network is offline" ile yükleniyor ekranında kaldı'
+            + ' — ağ AÇIK (zip kesik) yeniden koşuluyor; ağ kapalı kanıt korunur');
+          const ilk = tur;
+          tur = await icerikKos(kosumAgi(s, { aktivasyonTuru: true }), path.join(kanit, 'ag-acik'), '-ag');
+          ekKosumPidleri.push(tur.surec && tur.surec.pid);
+          tur.k.notlar.unshift(`ağ kapalı koşum RED'di (${ilk.k.sebepler.slice(0, 2).join(' | ')}) — `
+            + 'aktivasyon kodlu seri ağ açık koşumla karara bağlandı (kanıt: ag-acik/)');
+        }
+        const kosum = tur.kosum;
         kosumSonucu = kosum;
-        fs.writeFileSync(path.join(kanit, 'konsol.log'), konsolGunlugu(kosum));
-        const k = icerikKarari({ envanter, kosum, beklenenKart, aktivasyon: s.aktivasyon });
+        const { k } = tur;
         const konsol = O.konsolSiniflandir(konsolSatirlari(kosum));
         rapor.katmanlar.icerik = {
           ...k,
@@ -440,6 +485,7 @@ async function calis(argv, yazici) {
         setMi: rapor.envanter ? rapor.envanter.setMi : false,
         kitapAdlari: rapor.envanter ? rapor.envanter.kitapAdlari : [],
         aktivasyon: s.aktivasyon,
+        ...(s.aktivasyon ? { menuBekleSn: AKTIVASYON_CIHAZ_MENU_SN } : {}),
         durumDosyasi: path.join(calisma, 'emulator.json'),
         log: say,
         k4Olc: k4Acik ? (ctx) => K4.cihazK4Olc({ ...ctx, kitapSn: s.kitapBekle }) : undefined,
@@ -466,6 +512,7 @@ async function calis(argv, yazici) {
     const odakSonra = onUygulama();
     const kendiPidler = kosumSureci && kosumSureci.pid ? [kosumSureci.pid] : [];
     if (k4Olcum && k4Olcum.pid) kendiPidler.push(k4Olcum.pid);
+    for (const pid of ekKosumPidleri) if (pid) kendiPidler.push(pid);
     const ok = O.odakKarari({ once: odakOnce, sonra: odakSonra, ornekler: izler.ornekler, kendiPidler });
     const etkinlesme = [...((kosumSonucu && kosumSonucu.etkinlesme) || []), ...((k4Olcum && k4Olcum.etkinlesme) || [])];
     rapor.odak = {
@@ -569,7 +616,10 @@ function ozetle(a) {
   };
 }
 
-module.exports = { argumanCoz, kitapIdTuret, kanitAdi, icerikKarari, calis };
+module.exports = {
+  argumanCoz, kitapIdTuret, kanitAdi, icerikKarari, calis, kosumAgi, agAcikYenidenKosulmali,
+  AKTIVASYON_CIHAZ_MENU_SN,
+};
 
 if (require.main === module) {
   calis(process.argv.slice(2)).then(({ kod }) => process.exit(kod)).catch((e) => {
