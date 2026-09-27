@@ -43,7 +43,19 @@ async function kurulum() {
   return { kok, res, logo, sablon };
 }
 
-test('her yoğunluğa splash.png yazılır ve şablon baytı DEĞİŞİR', async () => {
+// Node test runner'ın ebeveyn-çocuk IPC çerçeveleme hatası (nodejs/node#64061,
+// devamı #66164) stdout'a emoji/çok baytlı UTF-8 yazan console.log/error ile
+// çakışınca aralıklı 'Unable to deserialize cloned data...' hatası üretiyor.
+// setupCapacitorSplash bolca emoji'li log basıyor; test sırasında sustur —
+// bu üretim davranışını DEĞİŞTİRMEZ, yalnız test-runner IPC kanalını korur.
+function konsoluSustur(t) {
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'error', () => {});
+}
+
+test('her yoğunluğa splash.png yazılır ve şablon baytı DEĞİŞİR', async (t) => {
+  konsoluSustur(t);
   const { kok, res, logo, sablon } = await kurulum();
   try {
     await svc.setupCapacitorSplash(kok, logo);
@@ -58,7 +70,8 @@ test('her yoğunluğa splash.png yazılır ve şablon baytı DEĞİŞİR', async
   }
 });
 
-test('yatay ve dikey yoğunluklar farklı en-boy üretir', async () => {
+test('yatay ve dikey yoğunluklar farklı en-boy üretir', async (t) => {
+  konsoluSustur(t);
   const { kok, res, logo } = await kurulum();
   try {
     await svc.setupCapacitorSplash(kok, logo);
@@ -71,7 +84,8 @@ test('yatay ve dikey yoğunluklar farklı en-boy üretir', async () => {
   }
 });
 
-test('logo ortalanır ve zemin beyaz kalır (köşe beyaz, merkez logo rengi)', async () => {
+test('logo ortalanır ve zemin beyaz kalır (köşe beyaz, merkez logo rengi)', async (t) => {
+  konsoluSustur(t);
   const { kok, res, logo } = await kurulum();
   try {
     await svc.setupCapacitorSplash(kok, logo);
@@ -90,7 +104,8 @@ test('logo ortalanır ve zemin beyaz kalır (köşe beyaz, merkez logo rengi)', 
   }
 });
 
-test('geniş logo BOZULMAZ — contain ile yerleştirilir (kare değil kaynakta yayılma yok)', async () => {
+test('geniş logo BOZULMAZ — contain ile yerleştirilir (kare değil kaynakta yayılma yok)', async (t) => {
+  konsoluSustur(t);
   const { kok, res, logo } = await kurulum();
   try {
     await svc.setupCapacitorSplash(kok, logo);
@@ -110,7 +125,8 @@ test('geniş logo BOZULMAZ — contain ile yerleştirilir (kare değil kaynakta 
   }
 });
 
-test('sharp patlarsa paketleme DÜŞMEZ (splash isteğe bağlıdır)', async () => {
+test('sharp patlarsa paketleme DÜŞMEZ (splash isteğe bağlıdır)', async (t) => {
+  konsoluSustur(t);
   const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'empp-splash-hata-'));
   try {
     // Var olmayan logo yolu → sharp hata verir, metod yutmalı.
