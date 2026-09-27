@@ -179,8 +179,15 @@ test('ensureDockerReady: MUTASYON KANITI — hata gerçekten timeout süresine b
       const elapsed = Date.now() - t0;
       // En az bir poll aralığı geçmiş olmalı (yani hemen değil, bekleyerek fail etti)
       assert.ok(elapsed >= 40, `çok hızlı fail etti (${elapsed}ms) — timeout/poll mantığı çalışmıyor olabilir`);
-      // Timeout'un çok üstünde de olmamalı (asılı kalma yok)
-      assert.ok(elapsed < 2000, `çok yavaş (${elapsed}ms) — timeout sınırı işlemiyor`);
+      // Üst sınır: her poll GERÇEK `docker`/`open` spawn'ı yapar (repo stili — mock yok).
+      // Yük altında (paralel test koşusu, ağır iş semaforu) fork/exec gecikmesi tek bir
+      // spawn'ı bile onlarca-yüzlerce ms geciktirebilir; 2026-09-27'de bu yüzden 2057ms'de
+      // düştü (sabit 2000ms eşiği). Eşik artık konfigüre edilen timeout'un büyük bir katı
+      // — yük toleransı geniş ama yine de bir mutasyonu (ör. ms yerine sn kullanımı,
+      // timeout kontrolünün devre dışı bırakılması → ~150000ms'e sıçrama) yakalayacak kadar
+      // anlamlı kalıyor.
+      const ustSinir = Math.max(4000, CONFIG.dockerReadyTimeoutMs * 30);
+      assert.ok(elapsed < ustSinir, `çok yavaş (${elapsed}ms, tavan ${ustSinir}ms) — timeout sınırı işlemiyor olabilir`);
     });
   } finally {
     CONFIG.dockerReadyTimeoutMs = prevTimeout;

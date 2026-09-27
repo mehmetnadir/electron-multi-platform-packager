@@ -60,29 +60,36 @@ test('efekt koşulları DEĞİŞMEZ (logo yüklenmeden geçilmez)', () => {
   assert.match(r.icerik, /\[l,d,o\]/);
 });
 
-test('DAVRANIŞ: yamalı kod LOADED\'a geçer ve yamasızdan ERKEN geçer', async () => {
+test('DAVRANIŞ: yamalı kod LOADED\'a geçer ve yamasızdan ERKEN geçer', (t) => {
+  // 2026-09-27 FLAKE FIX: eskiden gerçek setTimeout(1800ms) x2 duvar-saati beklemesi
+  // vardı — yük altında (paralel test koşusu) event-loop/timer jitter "yamalı gecikme
+  // < 200ms" iddiasını yanlış düşürebiliyordu (gerçek CPU çekişmesi, kod hatası değil).
+  // node:test mock.timers ile sahte saat/zamanlayıcı enjekte edilir: artık gerçek ms
+  // beklenmiyor, saat elle ilerletiliyor — sonuç duvar-saatinden bağımsız, deterministik.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   function kostur(kod) {
-    return new Promise((coz) => {
-      const olaylar = [];
-      const sandbox = {
-        a: { useEffect: (f) => f() },
-        ce: { FR: { IDLE: 'IDLE', LOADED: 'LOADED' } },
-        l: 'IDLE', d: 'loaded', o: true,
-        c: (v) => olaylar.push({ v, t: Date.now() }),
-        setTimeout,
-      };
-      const t0 = Date.now();
-      vm.runInNewContext(kod, sandbox);
-      setTimeout(() => coz({ olaylar, t0 }), 1800);
-    });
+    const olaylar = [];
+    const sandbox = {
+      a: { useEffect: (f) => f() },
+      ce: { FR: { IDLE: 'IDLE', LOADED: 'LOADED' } },
+      l: 'IDLE', d: 'loaded', o: true,
+      c: (v) => olaylar.push({ v, t: Date.now() }),
+      setTimeout,
+    };
+    const t0 = Date.now();
+    vm.runInNewContext(kod, sandbox);
+    return { olaylar, t0 };
   }
-  const yamali = await kostur(m.icerigiDuzelt(GERCEK).icerik);
+
+  const yamali = kostur(m.icerigiDuzelt(GERCEK).icerik);
+  t.mock.timers.tick(0); // yamalı kod }),0) ile zamanlanır — anında ateşlenmeli
   assert.strictEqual(yamali.olaylar.length, 1);
   assert.strictEqual(yamali.olaylar[0].v, 'LOADED');
   const gecikme = yamali.olaylar[0].t - yamali.t0;
   assert.ok(gecikme < 200, `yamalı gecikme ${gecikme} ms — 200'den küçük olmalı`);
 
-  const ham = await kostur(GERCEK);
+  const ham = kostur(GERCEK);
+  t.mock.timers.tick(1500); // yamasız kod hâlâ orijinal 1500 ms ile zamanlanır
   assert.ok(ham.olaylar[0].t - ham.t0 >= 1400, 'yamasız kod ~1500 ms beklemeli (arızanın kanıtı)');
 });
 
