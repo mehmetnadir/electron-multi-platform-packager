@@ -383,12 +383,15 @@ function guncelYetenekler() {
   // Mac'e pardus'u devretse bile (ör. nabız bayat) ProBook'a erişilemiyorsa kabul yine de
   // imkânsızdır — o yüzden son süzgeç burada, şeridin kararının ÜSTÜNE uygulanır.
   const pardusVar = CONFIG.caps.includes('pardus');
-  const probookErisimi = pardusVar ? probookErisimDurumu(probookHostSec(process.env)) : undefined;
+  // Kabul betiği PROBOOK_HOST'u okur; 'yerel' = kabul ProBook'un kendisinde (probookHostSec onu
+  // Tailscale varsayılanına çevirir, o yüzden burada ayrıca korunur).
+  const kabulHost = process.env.PROBOOK_HOST === 'yerel' ? 'yerel' : probookHostSec(process.env);
+  const probookErisimi = pardusVar && kabulHost !== 'yerel' ? probookErisimDurumu(kabulHost) : undefined;
   if (pardusVar) {
     caps = pardusKabulErisimUygula(caps, {
       kabulAcik: CONFIG.pardusKabul,
       kapiAcik: process.env.EMPP_PARDUS_KABUL_ERISIM !== '0', // acil kapatma: EMPP_PARDUS_KABUL_ERISIM=0
-      host: probookHostSec(process.env),
+      host: kabulHost,
       erisilir: probookErisimi,
     });
   }

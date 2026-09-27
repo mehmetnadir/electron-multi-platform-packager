@@ -120,6 +120,24 @@ test('guncelYetenekler: kabul kapalıyken (pardusKabul=false) erişilemezlik par
   }
 });
 
+test('guncelYetenekler: PROBOOK_HOST=yerel iken (kabul ProBook\'un kendisinde) prob sonucu pardus\'u düşürmez', () => {
+  const eskiCaps = runner.CONFIG.caps;
+  const eskiPardusKabul = runner.CONFIG.pardusKabul;
+  const eskiHost = process.env.PROBOOK_HOST;
+  runner.CONFIG.caps = ['android', 'pardus'];
+  runner.CONFIG.pardusKabul = true;
+  process.env.PROBOOK_HOST = 'yerel';
+  try {
+    runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus']);
+  } finally {
+    runner.CONFIG.caps = eskiCaps;
+    runner.CONFIG.pardusKabul = eskiPardusKabul;
+    if (eskiHost === undefined) delete process.env.PROBOOK_HOST; else process.env.PROBOOK_HOST = eskiHost;
+    runner._probookErisimAyarla({ t: 0, erisilir: undefined, suruyor: false });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // (3) Gerçek TCP prob — dinleyen porta erişilir=true, kapalı porta false
 // ---------------------------------------------------------------------------
