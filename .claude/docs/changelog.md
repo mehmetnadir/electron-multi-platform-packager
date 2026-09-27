@@ -1,3 +1,23 @@
+## 2026-09-27 (2) — Gece düşüşleri: android cihaz kabulü, paketleyici yoklaması, ProBook aktarımı
+
+**Kaynak:** 26→27.09 gecesi `failed` yazılan 7 iş (android 45538, 45469, 45472, 45100, 45449;
+pardus 45477). Hiçbiri paket kusuru değildi. Canlı `agent-mode @8be8c10` (27.09 10:48),
+tam takım 927/928 (tek kırmızı `ensureDockerReady` yük zamanlaması, tek başına geçer).
+- **Cihaz okuyucu sınırı 60 → 120 sn** (`tools/kabul/android-cihaz.js`, 8ca4cf4): yük altında
+  emülatör ekranı 60 sn'de okunamıyordu (45538).
+- **Aktivasyon serisinde ağ kapalı RED'i yeniden koşulur** (`basliksiz-kabul.js` `kosumAgi`,
+  `agAcikYenidenKosulmali`, b689ae7): motorun kendi `isOnline` yoklaması ağ kapalıyken
+  "Network is offline" veriyor ve etkinleştirme ekranına geçmiyordu. Yalnız bu imzada, ağ açık
+  ve zip indirmesi kesik ikinci koşu yapılır; `AKTIVASYON_CIHAZ_MENU_SN = 150`.
+- **Paketleyici yoklaması zaman aşımı geçici** (`runner.js` packagerPoll, `runner-helpers.js`,
+  f71f20f): axios `ECONNABORTED`/timeout 6 denemeye kadar tekrar, sonra iş `failed` değil ertelenir.
+- **İki aktarım yolu da düşerse ertele** (`probook-kabul.sh`, `probook-aktarim.sh`, eaa98a1):
+  "RED: ProBook'a aktarim dustu" (ve eski "RED: kopyalanamadi") `probookErisilemezHatasi`
+  sınıfında; `-q` kaldırıldı, ssh stderr `kanıt/aktarim.txt`'ye. Kök: 05:20Z'de Mac uyudu,
+  aktarım yarıda kaldı, iş paket kusuru gibi `failed` yazıldı.
+- Beş android satırı `pipeline-requeue` ile yeniden kuyrukta (10:50). Açık: srv21 aktarım yolu
+  sabah 3 koşuda üst üste düştü (scp yedeği ~340 kB/s) — teşhis ayrı şeritte.
+
 ## 2026-09-27 — Kaynak arşivi: İmpark exe ADI kapısı kaldırıldı
 
 **Karar:** Nadir 27.09 — "v47 → v51 gibi isim güncellemesi metodu çok kırılgan (insanlar
