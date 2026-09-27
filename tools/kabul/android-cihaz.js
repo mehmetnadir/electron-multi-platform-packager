@@ -457,13 +457,16 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
  *          kitapAdlari?:string[], aktivasyon?:boolean, log?:Function,
  *          bootSn?:number, menuBekleSn?:number, kitapBekleSn?:number,
  *          mevcutSeri?:string, kurulumYok?:boolean,
- *          yukEsigi?:number, yukAraSn?:number, yukAzamiSn?:number,
+ *          onKapiEsigi?:number, sonSinifEsigi?:number, yukAraSn?:number, yukAzamiSn?:number,
  *          yukOlc?:Function, yukBekle?:Function}} p
  *   `mevcutSeri`: ZATEN koşan emülatörde ölç (başlatma/kapatma yok) — uzaktan güncelleme (G)
  *   gibi cihaz durumunu değiştiren bir adımın ÖNCESİ ve SONRASI aynı ölçütle ölçülsün diye.
  *   `kurulumYok`: paket kurulu kalır (kurma/kaldırma yok); uygulama `am start -S` ile baştan açılır.
- *   `yukEsigi`/`yukAraSn`/`yukAzamiSn`/`yukOlc`/`yukBekle`: yük kapısı (`yuk-kapisi.js`)
- *   enjeksiyonu — testte sahte yük/zaman verir, üretimde `undefined` bırakılır (varsayılanlar).
+ *   `onKapiEsigi`/`sonSinifEsigi`/`yukAraSn`/`yukAzamiSn`/`yukOlc`/`yukBekle`: yük kapısı
+ *   (`yuk-kapisi.js`) enjeksiyonu — testte sahte yük/zaman verir, üretimde `undefined` bırakılır
+ *   (varsayılanlar: ön kapı çekirdek×12, son sınıflandırma çekirdek×6 — İKİ FARKLI EŞİK,
+ *   27.09 koordinatör düzeltmesi: tek eşik [çekirdek×3] normal-yoğun 100-130 aralığını da
+ *   durdururdu).
  * @returns {Promise<{durum:string, sebepler:string[], notlar:string[], ...}>}
  */
 async function cihazKabulu(p) {
@@ -472,22 +475,33 @@ async function cihazKabulu(p) {
   const kanitDizin = path.join(p.kanit, 'android');
   fs.mkdirSync(kanitDizin, { recursive: true });
 
+  // yükKayit: {asama, yuk} — kosum.json kalibrasyonu için etiketli örnekler (koordinatör
+  // 27.09: "başlangıç, açılış, karar, en yüksek, ortalama"). yukSayilari sonSiniflandirma'ya
+  // giden düz dizi — tek kaynaktan türetilir, ikisi ıraksamaz.
+  const yukKayit = [];
+  const yukOrnekAl = (asama) => { const yuk = YK.birDkYuk(p.yukOlc); yukKayit.push({ asama, yuk }); return yuk; };
+  const yukKanitYazVer = (ek = {}) => {
+    yukKanitYaz(kanitDizin, { yukKapisi: sonuc.yukKapisi, yukOrnekleri: yukKayit, ozet: YK.yukOzeti(yukKayit), ...ek });
+  };
+
   // YÜK KAPISI — ÖN KAPI (27.09 45482, load avg 138/142/101): emülatör AÇILMADAN önce host
   // yükü eşiğin altına düşene kadar beklenir; düşmezse emülatör hiç başlatılmadan
   // ÖLÇÜLEMEDİ ile ertelenir (adb/AVD denetiminden ÖNCE — bu kapı ortam kurulu olsun
-  // olmasın, host meşgulken devreye girer).
+  // olmasın, host meşgulken devreye girer). YÜKSEK eşik (varsayılan çekirdek×12) — yalnız
+  // aşırı uçta durdurur, normal-yoğun dönemi (100-130) engellemez.
   const onKapi = await YK.onKapiBekle({
-    esik: p.yukEsigi, araSn: p.yukAraSn, azamiSn: p.yukAzamiSn, yukOlc: p.yukOlc, bekle: p.yukBekle, log,
+    esik: p.onKapiEsigi, araSn: p.yukAraSn, azamiSn: p.yukAzamiSn, yukOlc: p.yukOlc, bekle: p.yukBekle, log,
   });
-  const yukOrnekleri = [...onKapi.ornekler];
+  for (const yuk of onKapi.ornekler) yukKayit.push({ asama: 'on-kapi', yuk });
+  yukKayit.push({ asama: 'baslangic', yuk: onKapi.sonYuk }); // gate'in geçtiği/son örneklediği yük
   sonuc.yukKapisi = {
     esik: onKapi.esik, gecti: onKapi.gecti, sonYuk: onKapi.sonYuk, beklenenSn: onKapi.beklenenSn,
   };
-  yukKanitYaz(kanitDizin, { yukKapisi: sonuc.yukKapisi, yukOrnekleri });
+  yukKanitYazVer();
   if (!onKapi.gecti) {
     sonuc.sebepler.push(`makine yükü eşiği aştı (1dk=${onKapi.sonYuk.toFixed(1)} > eşik=${onKapi.esik.toFixed(1)}, `
       + `${onKapi.beklenenSn} sn beklendi) — emülatör açılmadı, iş ertelenmeli`);
-    sonuc.yukOrnekleri = yukOrnekleri;
+    sonuc.yukOrnekleri = yukKayit;
     return sonuc; // durum zaten OLCULEMEDI
   }
 
@@ -569,7 +583,7 @@ async function cihazKabulu(p) {
     const tur = emu ? (kos('lsappinfo', ['info', '-only', 'ApplicationType', String(emu.pid)]).stdout || '') : '';
     sonuc.emulator.uygulamaTuru = (/"ApplicationType"="([^"]*)"/.exec(tur) || [])[1] || 'kayıtsız (GUI uygulaması değil)';
     log(`cihaz: açıldı (${bootSn} sn) · emülatör süreç türü ${sonuc.emulator.uygulamaTuru}`);
-    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: açılış (kabul boyunca her aşamada)
+    yukOrnekAl('acilis'); // yük örneği: açılış (kabul boyunca her aşamada)
     // Ekran uykusu/kilidi ölçümü bozmasın.
     adbKos(arac, seri, ['shell', 'svc', 'power', 'stayon', 'true']);
     adbKos(arac, seri, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']);
@@ -596,7 +610,7 @@ async function cihazKabulu(p) {
     } else {
       log(`cihaz: kurulu paket kullanılıyor (kurulum/kaldırma yok) — ${paketBilgi.paket}`);
     }
-    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: kurulum/açılış sonrası
+    yukOrnekAl('kurulum'); // yük örneği: kurulum/açılış sonrası
     adbKos(arac, seri, ['logcat', '-c']);
     const hedef = paketBilgi.etkinlik ? `${paketBilgi.paket}/${paketBilgi.etkinlik}` : null;
     const bas = hedef
@@ -612,7 +626,7 @@ async function cihazKabulu(p) {
       kanitDizin, ad: 'menu', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
     });
     sonuc.menu = menu;
-    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: menü ölçümü sonrası
+    yukOrnekAl('menu'); // yük örneği: menü ölçümü sonrası
     if (p.setMi && menu.kartlar && menu.kartlar.length) {
       const kart = menu.kartlar[0];
       adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
@@ -623,7 +637,7 @@ async function cihazKabulu(p) {
         paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.kitapBekleSn || CIHAZ_KITAP_SN, yeterli: kitapYeterli,
         kanitDizin, ad: 'kitap', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
       });
-      yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: okuyucu ölçümü sonrası
+      yukOrnekAl('okuyucu'); // yük örneği: okuyucu ölçümü sonrası
     }
     const lc = adbKos(arac, seri, ['logcat', '-d', '-v', 'time', 'chromium:V', 'Capacitor/Console:V', 'Capacitor:V', 'AndroidRuntime:E', '*:S'],
       { zamanAsimiMs: 30000 });
@@ -677,14 +691,16 @@ async function cihazKabulu(p) {
       sonuc.notlar.push(`sistem diyaloğu (${d.asama}, ${d.sn}. sn): "${d.baslik}" → ${d.dugmeAdi || 'düğme yok'}`);
     }
 
-    // YÜK KAPISI — SON SINIFLANDIRMA (27.09 45482): cihaz katmanının TÜM sebepleri bilinen
-    // altyapı (host yükü) imzalarındaysa VE kabul boyunca örneklenen yük eşiği aştıysa RED
+    // YÜK KAPISI — SON SINIFLANDIRMA (27.09 45482, koordinatör düzeltmesi 27.09 gece): cihaz
+    // katmanının TÜM sebepleri bilinen altyapı (host yükü) imzalarındaysa VE kabul boyunca
+    // örneklenen yük eşiği (DÜŞÜK tutulan `sonSinifEsigi`, varsayılan çekirdek×6) aştıysa RED
     // ÖLÇÜLEMEDİ'ye çevrilir — mevcut `ortulen` mekanizması yeniden kullanılır (aşağıdaki
     // "ortulen && !sebepler" dalı zaten OLCULEMEDI döndürüyor). Yük normalken (72379 dersi:
     // sahte ÖLÇÜLEMEDİ'ye kaçış da yasak) ya da bilinmeyen bir sebep karışmışsa RED KALIR.
-    yukOrnekleri.push(YK.birDkYuk(p.yukOlc)); // yük örneği: karar anı
-    sonuc.yukOrnekleri = yukOrnekleri;
-    const yukSiniflandirma = YK.sonSiniflandirma({ sebepler, yukOrnekleri, esik: onKapi.esik });
+    const kararYuku = yukOrnekAl('karar'); // yük örneği: karar anı
+    sonuc.yukOrnekleri = yukKayit;
+    const yukSayilari = yukKayit.map((k) => k.yuk);
+    const yukSiniflandirma = YK.sonSiniflandirma({ sebepler, yukOrnekleri: yukSayilari, esik: p.sonSinifEsigi });
     sonuc.yukSiniflandirma = yukSiniflandirma;
     if (yukSiniflandirma.ortulenMi) {
       const enYuksek = yukSiniflandirma.enYuksekYuk.toFixed(1);
@@ -692,7 +708,10 @@ async function cihazKabulu(p) {
       ortulen.push(...sebepler.map((s) => `${s} (host yükü ${enYuksek} > eşik ${esikTxt} sırasında oluştu — altyapı, paket kusuru DEĞİL)`));
       sebepler.length = 0;
     }
-    yukKanitYaz(kanitDizin, { yukKapisi: sonuc.yukKapisi, yukOrnekleri, yukSiniflandirma });
+    const yukOzet = YK.yukOzeti(yukKayit);
+    log(`yük kapısı: karar anı 1dk=${kararYuku.toFixed(1)} · en yüksek=${yukOzet.enYuksek.toFixed(1)}`
+      + ` · ortalama=${yukOzet.ortalama.toFixed(1)} · son sınıf eşiği=${yukSiniflandirma.esik.toFixed(1)}`);
+    yukKanitYazVer({ yukSiniflandirma });
 
     if (ortulen.length && !sebepler.length) {
       // Ekranı başka bir uygulamanın diyaloğu örttüyse ya da yük kapısı devreye girdiyse

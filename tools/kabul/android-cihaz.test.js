@@ -121,7 +121,7 @@ function gecistKanitDizin() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'kabul-yuk-kapisi-test-'));
 }
 
-test('cihazKabulu: yük hep yüksek ve düşmüyor → ÖLÇÜLEMEDİ, emülatör seçimine/adb\'ye HİÇ gidilmedi', async () => {
+test('cihazKabulu: yük hep yüksek (140, 45482 aralığı) ve düşmüyor → ÖLÇÜLEMEDİ, emülatör seçimine/adb\'ye HİÇ gidilmedi', async () => {
   const kanit = gecistKanitDizin();
   const gunluk = [];
   const r = await O.cihazKabulu({
@@ -129,10 +129,10 @@ test('cihazKabulu: yük hep yüksek ve düşmüyor → ÖLÇÜLEMEDİ, emülatö
     kanit,
     beklenenKart: 0,
     setMi: false,
-    yukEsigi: 48,
+    onKapiEsigi: 120,
     yukAraSn: 0,
     yukAzamiSn: 0.05,
-    yukOlc: () => [150],
+    yukOlc: () => [140],
     yukBekle: () => Promise.resolve(),
     log: (s) => gunluk.push(s),
   });
@@ -146,12 +146,34 @@ test('cihazKabulu: yük hep yüksek ve düşmüyor → ÖLÇÜLEMEDİ, emülatö
   assert.ok(fs.existsSync(path.join(kanit, 'android', 'kosum.json')), 'yük kapısı kanıtı (kosum.json) yazılmalı');
   const kosum = JSON.parse(fs.readFileSync(path.join(kanit, 'android', 'kosum.json'), 'utf8'));
   assert.equal(kosum.yukKapisi.gecti, false);
+  assert.ok(kosum.yukOrnekleri.some((o) => o.asama === 'baslangic'), 'kosum.json etiketli örnek taşımalı (başlangıç)');
+  assert.equal(kosum.ozet.enYuksek, 140);
+});
+
+test('cihazKabulu: yük 100 (normal-yoğun, gerçek GEÇTİ aralığı 100-130) → ön kapı VARSAYILAN eşikte (çekirdek×12) HEMEN geçer', async () => {
+  // onKapiEsigi enjekte EDİLMEDİ — gerçek varsayılan (os.cpus().length×12) kullanılıyor.
+  // Bu makinede (10 çekirdek → eşik 120) 100 hemen geçmeli; koordinatörün ölçtüğü 10 android
+  // kabulünün GEÇTİ olduğu aralığın (100-130) altında/ortasında kalan bir değer.
+  const kanit = gecistKanitDizin();
+  let bekleCagrisi = 0;
+  const r = await O.cihazKabulu({
+    apk: '/yok/boyle-bir-apk.apk',
+    kanit,
+    beklenenKart: 0,
+    setMi: false,
+    avd: O.YASAK_AVD, // gate geçtikten sonra emülatör spawn edilmesin
+    yukOlc: () => [100],
+    yukBekle: () => { bekleCagrisi += 1; return Promise.resolve(); },
+  });
+  assert.equal(r.yukKapisi.gecti, true);
+  assert.equal(bekleCagrisi, 0); // hiç beklemeden geçti
+  assert.ok(!r.sebepler.some((s) => /emülatör açılmadı/.test(s)));
 });
 
 test('cihazKabulu (mutasyon): yük başından beri düşük → ön kapı GEÇER, karar gate\'ten SONRAKİ bir sebepten gelir', async () => {
   // Bu makinede Android SDK kurulu olabilir/olmayabilir — iddia kasıtlı olarak ortamdan
   // bağımsız: yalnız "gate geçti" ve "emülatör açılmadı sebebi YOK" doğrulanır. Eşik dalı
-  // (yukEsigi/yukAzamiSn kontrolü) kaldırılırsa bu test hep OLCULEMEDI+"emülatör açılmadı"
+  // (onKapiEsigi/yukAzamiSn kontrolü) kaldırılırsa bu test hep OLCULEMEDI+"emülatör açılmadı"
   // ile düşer çünkü ön kapı hiç geçmez.
   const kanit = gecistKanitDizin();
   const r = await O.cihazKabulu({
@@ -160,7 +182,7 @@ test('cihazKabulu (mutasyon): yük başından beri düşük → ön kapı GEÇER
     beklenenKart: 0,
     setMi: false,
     avd: O.YASAK_AVD, // adb/emulator var olsa bile AVD listesi boşalır → emülatör spawn edilmez
-    yukEsigi: 48,
+    onKapiEsigi: 48,
     yukOlc: () => [1],
     yukBekle: () => Promise.resolve(),
   });
