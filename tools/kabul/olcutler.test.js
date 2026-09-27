@@ -312,3 +312,54 @@ test('asamaKarari aktivasyon (mutasyon): diyalog yoksa, yükleniyorsa ya da ekra
   // metin var ama hâlâ yükleniyor göstergesi → RED
   assert.equal(O.asamaKarari({ ...iyi, yukleniyor: ['seçici:.lds-ellipsis'] }, b).durum, 'RED');
 });
+
+// --- Review bulgusu 27.09 (b689ae7 sonrası): eski regex /aktivasyon\s+kod/i "Aktivasyon kodu
+// geçersiz." gibi bir HATA ekranını da diyalog sayıyordu, asamaKarari sayfa izi/kapak
+// denetimini atlayıp bozuk paketi GEÇTİ verebiliyordu. Aşağıdaki testler dar eşleşmeyi kilitler.
+
+/** HTML kanıt dosyasından script/style dışlanmış, etiketsiz, boşluğu sıkıştırılmış görünür metin
+ * (dom-yoklama.js'teki `document.body.innerText` yaklaşıklaması — tahmin değil). */
+function kanitGorunurMetni(dosyaYolu) {
+  const html = fs.readFileSync(dosyaYolu, 'utf8');
+  const scriptsiz = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ');
+  return scriptsiz.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const KANIT_DOSYALARI = [
+  path.join(process.env.HOME || '', '.empp-agent', 'kabul-kanit', '45469-android-20260927-052532', 'k4', 'kitap-cdp.dom.html'),
+  path.join(process.env.HOME || '', '.empp-agent', 'kabul-kanit', '45472-android-20260927-072720', 'k4', 'kitap-cdp.dom.html'),
+];
+
+test('aktivasyonEkraniMi: iki gerçek kanıt dosyasının (45469, 45472) görünür metni → true', (t) => {
+  let bulunan = 0;
+  for (const yol of KANIT_DOSYALARI) {
+    if (!fs.existsSync(yol)) continue;
+    bulunan += 1;
+    const metin = kanitGorunurMetni(yol);
+    assert.match(metin, /aktivasyon\s+kodunu\s+giriniz/i, `kanıt metninde istem cümlesi yok: ${yol}`);
+    assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: metin }), true, `${yol} diyalog sayılmadı`);
+    // hata muafiyeti kanıt metninde YOK — regresyon testi geçerli olsun diye doğrula
+    assert.doesNotMatch(metin, O.AKTIVASYON_HATA_DESENI, `kanıt metninde beklenmedik hata sözcüğü: ${yol}`);
+  }
+  if (bulunan === 0) t.skip('kanıt dosyaları bu makinede yok (~/.empp-agent/kabul-kanit)');
+});
+
+test('aktivasyonEkraniMi: hata varyantları (aynı "aktivasyon kod" izini taşır) diyalog SAYILMAZ', () => {
+  // Eski regex /aktivasyon\s+kod/i üçünde de true dönerdi (review bulgusu, 27.09).
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: 'Aktivasyon kodu geçersiz.' }), false);
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: 'Aktivasyon kodu servisine ulaşılamıyor, tekrar deneyin.' }), false);
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: 'Aktivasyon kodunu giriniz. Kod hatalı.' }), false);
+});
+
+test('asamaKarari aktivasyon: hata ekranı metni artık diyalog SAYILMAZ → sayfa izi aranır → RED', () => {
+  const b = { asama: 'kitap', setMi: false, beklenenKart: 0, aktivasyon: true };
+  const hataOlcum = { baslik: 'x', kartSayisi: 0, yukleniyor: [], piksel: AKT_DIYALOG_PIKSEL,
+    gorunurMetin: 'Aktivasyon kodu geçersiz.' };
+  const k = O.asamaKarari(hataOlcum, b);
+  assert.equal(k.durum, 'RED', k.sebepler.join(' | '));
+  assert.match(k.sebepler.join(' '), /okuyucu sayfa çizmedi/);
+  // aynı ölçüm gerçek diyalog metniyle → RED değil (mevcut davranış korunur, ProBook ile aynı)
+  const iyiOlcum = { ...hataOlcum, gorunurMetin: AKT_METIN };
+  assert.notEqual(O.asamaKarari(iyiOlcum, b).durum, 'RED');
+});

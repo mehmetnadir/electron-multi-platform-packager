@@ -259,9 +259,23 @@ function asamaKarari(olcum, beklenti) {
 /**
  * Ekranda motorun aktivasyon kodu diyaloğu mu görünüyor? (görünür metin: "Kitabı görüntülemek
  * için aktivasyon kodunu giriniz." / "Aktivasyon Kodu" — 45469/45472 kanıtı, 27.09)
+ *
+ * DAR TUTULUR (review bulgusu 27.09, b689ae7 sonrası): eski regex `/aktivasyon\s+kod/i` görünür
+ * metindeki HERHANGİ bir "aktivasyon kod…" geçişini diyalog sayıyordu — "Aktivasyon kodu
+ * geçersiz." ya da "aktivasyon kodu servisine ulaşılamıyor" gibi bir HATA ekranı da eşleşiyor,
+ * `asamaKarari` bu durumda "okuyucu sayfa çizmedi" / "rafta kapak yok" denetimini atlayıp bozuk
+ * paketi GEÇTİ sayabiliyordu. Artık yalnız diyaloğun kendi istem cümlesi ("…aktivasyon kodunu
+ * giriniz", 45469/45472 kanıtındaki gerçek metin) aranır VE aynı görünür metinde bilinen bir hata
+ * sözcüğü geçiyorsa (geçersiz/hatalı/başarısız/ulaşılamıyor/bağlanılamıyor/doğrulanamadı/yanlış/
+ * "tekrar deneyin") diyalog SAYILMAZ — yalnız "Aktivasyon Kodu" etiketi TEK BAŞINA da yetmez.
  */
+const AKTIVASYON_ISTEM_DESENI = /aktivasyon\s+kodunu\s+giriniz/i;
+const AKTIVASYON_HATA_DESENI = /geçersiz|gecersiz|hatalı|hatali|başarısız|basarisiz|ulaşılam|ulasilam|bağlanılam|baglanilam|doğrulanamad|dogrulanamad|yanlış|yanlis|tekrar\s+deneyin/i;
 function aktivasyonEkraniMi(olcum) {
-  return /aktivasyon\s+kod/i.test(String((olcum && olcum.gorunurMetin) || ''));
+  const metin = String((olcum && olcum.gorunurMetin) || '');
+  if (!AKTIVASYON_ISTEM_DESENI.test(metin)) return false;
+  if (AKTIVASYON_HATA_DESENI.test(metin)) return false;
+  return true;
 }
 
 /** Okuyucunun sayfa çizdiğine dair görünür iz sayısı (sayfa <img> + tuval + sayfa arka planı). */
@@ -343,6 +357,7 @@ module.exports = {
   asamaKarari,
   genelKarar,
   aktivasyonEkraniMi,
+  AKTIVASYON_HATA_DESENI,
   odakKarari,
   cikisKodu,
   asnAyikla,
