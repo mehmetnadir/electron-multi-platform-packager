@@ -1,3 +1,27 @@
+## 2026-09-27 (4) — Android cihaz katmanı: emülatörün KENDİ sistem ANR'si RED değil ÖLÇÜLEMEDİ
+
+**Kanıt:** 72379 android başsız kabul 13:45–13:51Z RED aldı ("cihaz okuyucu: ekranda WebView
+yok"), host aynı anda Rosetta altında Docker Electron + tam test takımıyla aşırı yüklüydü.
+`android/logcat.txt`: `uiautomator dump` UiAutomation'a bağlanamadı (`FATAL EXCEPTION` +
+"Timeout while connecting UiAutomation" — bu, system_server'ın kendisinin yanıt vermediğinin
+kanıtı). `/sdcard/empp-kabul-ui.xml` hiç yazılmadı, `android/menu-ui.xml` 58 bayt "cat: …
+No such file or directory" — düğüm sayısı 0 çıktı, mevcut `sistemDiyalogu` (aerr_* düğüm
+taraması) hiçbir şey göremedi. `android/menu.png` ekranı ise "Process system isn't responding /
+Close app / Wait" sistem diyaloğunu gösteriyordu — paket sağlamdı (cikarma/icerik/odak/guncellik
+katmanları GEÇTİ), altyapı arızasıydı.
+
+**Fix (`tools/kabul/android-cihaz.js`):** yeni saf tanıyıcı `sistemAnrMi({uiXml, logcat,
+gorunurMetin})` — dump BAŞARISIZ olduğunda (kısa, `<hierarchy>` içermeyen metin) logcat'teki
+"Timeout while connecting UiAutomation" imzasıyla birleştirip sistem ANR'sini tanır; UYGULAMANIN
+KENDİ ANR'si ("<uygulama> isn't responding") eşleşmez, RED kalır. `asamaOlc` artık kısa/hatalı
+dump metnini `son.uiXmlHata`'da saklıyor (gerçek büyük hiyerarşi dökümleri hiç dokunulmaz).
+Yeni saf yardımcı `webViewYokKarari(ad, o, logcat)` `!o.webView` kararını RED/ÖLÇÜLEMEDİ arasında
+ayırır ve mevcut `ortulen` mekanizmasına (emülatörün başka bir uygulamasının diyaloğuyla aynı yol)
+katılır — genel karar `O.genelKarar` üzerinden zaten ÖLÇÜLEMEDİ'yi RED'e sıçratmıyor.
+Testler: `tools/kabul/android-cihaz.test.js` (11, yeni dosya) — 72379 kanıtından birebir satırlar,
+uygulamanın kendi ANR'si negatifi, dump-başarılı negatifi, mutasyon (logcat imzası kalkınca
+RED'e döner), karar-birleştirme (cihaz ÖLÇÜLEMEDİ + diğerleri GEÇTİ → genel ÖLÇÜLEMEDİ).
+
 ## 2026-09-27 (3) — Süreli konteyner yedek kabul: ProBook elektrik kesintisiyle kapalıyken Docker fallback
 
 **Karar:** Nadir 27.09 — ProBook elektrik kesintisiyle kapandı, ofise gidene kadar açılamıyor;

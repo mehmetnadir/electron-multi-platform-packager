@@ -177,6 +177,45 @@ function sistemDiyalogu(dugumler, etiket) {
   };
 }
 
+/**
+ * `sistemDiyalogu` UI dökümündeki `aerr_*` düğümlerine dayanır — dökümün KENDİSİ hiç
+ * çıkmadıysa (27.09 72379: host aşırı yüklüyken `uiautomator dump` UiAutomation'a
+ * bağlanamadı, `/sdcard/empp-kabul-ui.xml` hiç yazılmadı, `cat` "No such file or
+ * directory" döndürdü, düğüm sayısı 0) o fonksiyon hiçbir şey görmez ve ölçüm
+ * "ekranda WebView yok" ile RED verir — ekranda asıl "Process system isn't responding /
+ * Close app / Wait" sistem ANR diyaloğu vardı (menu.png). Bu, dökümün BAŞARISIZ OLDUĞU
+ * durumda devreye giren yedek tanıyıcı: paket kusuru değil, altyapı arızası (ÖLÇÜLEMEDİ).
+ * UYGULAMANIN KENDİ ANR'si ("<uygulama adı> isn't responding") EŞLEŞMEZ — yalnız özne
+ * "system"/"system ui"/"system_server" olan diyaloglar (logcat'teki
+ * "Timeout while connecting UiAutomation" de aynı kökten: UiAutomation, system_server'daki
+ * AccessibilityManager'a bağlanamıyor — bu da system_server'ın yanıt vermediğinin kanıtı).
+ * `gorunurMetin` şu an cihaz katmanında üretilmiyor (OCR yok, tek kanıt ham ekran görüntüsü);
+ * parametre yalnız ileride bir metin çıkarma eklenirse diye — bugün her zaman undefined. Saf.
+ * @returns {boolean}
+ */
+function sistemAnrMi({ uiXml, logcat, gorunurMetin } = {}) {
+  const SISTEM_METIN = /\bsystem[\s_]?(ui|server)?\b[^.\n]{0,40}isn'?t\s+responding|\bprocess\s+system\s+isn'?t\s+responding/i;
+  if (SISTEM_METIN.test(String(gorunurMetin || ''))) return true;
+  if (SISTEM_METIN.test(String(uiXml || ''))) return true;
+  const dokumBasarisiz = Boolean(uiXml) && !/<hierarchy\b/i.test(String(uiXml));
+  const logcatSistemAnr = /Timeout while connecting UiAutomation|ANR in system(_server)?\b|system_server[^\n]{0,60}(isn'?t\s+responding|not\s+responding)/i
+    .test(String(logcat || ''));
+  return dokumBasarisiz && logcatSistemAnr;
+}
+
+/**
+ * `!o.webView` (ekranda WebView yok) sonucunu RED / ÖLÇÜLEMEDİ arasında ayırır:
+ * `sistemAnrMi` sistem ANR'si bulursa ekran örtülü sayılır (ortulen → ÖLÇÜLEMEDİ),
+ * bulamazsa gerçek "ekranda WebView yok" RED'i kalır (27.09 72379). Saf.
+ * @returns {{ortulen:boolean, mesaj:string}}
+ */
+function webViewYokKarari(ad, o, lcMetin) {
+  if (sistemAnrMi({ uiXml: o && o.uiXmlHata, logcat: lcMetin })) {
+    return { ortulen: true, mesaj: `${ad}: emülatör sistem ANR'si ("Process system isn't responding") ekranı örttü — altyapı, paket kusuru değil` };
+  }
+  return { ortulen: false, mesaj: `${ad}: ekranda WebView yok` };
+}
+
 /** UI ağacında görünür yükleniyor metni. Saf. */
 function cihazYukleniyor(dugumler) {
   const desen = /^(yükleniyor|loading|kitap açılıyor|açılıyor|güncelleniyor)/i;
@@ -397,6 +436,10 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
   son.beklenenSn = Math.round((Date.now() - bas) / 1000);
   son.ekran = pngKaydet(arac, seri, path.join(kanitDizin, `${ad}.png`), ekranId);
   if (son.xml) fs.writeFileSync(path.join(kanitDizin, `${ad}-ui.xml`), son.xml);
+  // Normal döküm binlerce baytlık gerçek hiyerarşidir (buraya taşınmaz); dump BAŞARISIZ olup
+  // kısa bir kabuk hatası döndüyse ("cat: … No such file or directory") sistemAnrMi bunu
+  // görsün diye küçük halde saklanır (27.09 72379).
+  son.uiXmlHata = son.xml && son.xml.length < 500 && !/<hierarchy\b/i.test(son.xml) ? son.xml.trim().slice(0, 300) : null;
   delete son.xml;
   return son;
 }
@@ -579,7 +622,12 @@ async function cihazKabulu(p) {
       }
       if (o.diyalog) { ortulen.push(`${ad}: "${o.diyalog.baslik}" (emülatörün kendi uygulaması) ekranı örttü, kapatılamadı`); return; }
       if (!o.surecCanli) sebepler.push(`${ad}: uygulama süreci kapandı`);
-      if (!o.webView) sebepler.push(`${ad}: ekranda WebView yok`);
+      if (!o.webView) {
+        // UI dökümü hiç çıkmadığı için `sistemDiyalogu` diyaloğu göremedi — logcat'teki
+        // UiAutomation zaman aşımı (system_server yanıt vermiyor) yedek kanıt olarak kontrol edilir.
+        const k = webViewYokKarari(ad, o, lcMetin);
+        if (k.ortulen) ortulen.push(k.mesaj); else sebepler.push(k.mesaj);
+      }
       if (setMenu && o.kartSayisi !== p.beklenenKart) sebepler.push(`${ad}: menü kartı ${o.kartSayisi} ≠ beklenen ${p.beklenenKart}`);
       if (o.yukleniyor && o.yukleniyor.length) sebepler.push(`${ad}: ${o.beklenenSn} sn sonra hâlâ yükleniyor (${o.yukleniyor.join(', ')})`);
       const pk = O.pikselKarari(o.piksel, { aktivasyon: p.aktivasyon });
@@ -650,6 +698,8 @@ module.exports = {
   bosPortSec,
   uiDugumleri,
   sistemDiyalogu,
+  sistemAnrMi,
+  webViewYokKarari,
   webViewSiniri,
   cihazKartlari,
   cihazYukleniyor,
