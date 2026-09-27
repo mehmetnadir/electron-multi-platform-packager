@@ -17,6 +17,12 @@ tam takım 927/928 (tek kırmızı `ensureDockerReady` yük zamanlaması, tek ba
   aktarım yarıda kaldı, iş paket kusuru gibi `failed` yazıldı.
 - Beş android satırı `pipeline-requeue` ile yeniden kuyrukta (10:50). Açık: srv21 aktarım yolu
   sabah 3 koşuda üst üste düştü (scp yedeği ~340 kB/s) — teşhis ayrı şeritte.
+- **Pardus kabul erişim kapısı** (`runner.js` `probookErisimDurumu`/`guncelYetenekler`,
+  `runner-helpers.js` `pardusKabulErisimUygula`): ProBook 11:10Z'den beri kapalıyken (Tailscale,
+  60014 11:51→12:00 boşa derledi) her pardus işi kabul betiğinde (`probook-kabul.sh` `ssh …
+  'echo hazir'`) RED verip 30 dk kirayla aynı döngüyü tekrarlıyordu — Windows imza yuvası
+  kapısıyla (`imzaYuvasiDurumu`) birebir kalıp: TCP 22 60 sn önbellekle arka planda ölçülür,
+  erişilemezse Mac heartbeat'te `pardus`u ilan etmez. Acil kapatma: `EMPP_PARDUS_KABUL_ERISIM=0`.
 
 ## 2026-09-27 — Kaynak arşivi: İmpark exe ADI kapısı kaldırıldı
 

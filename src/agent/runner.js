@@ -44,7 +44,7 @@ const {
   artifactExtension,
   joinUrl,
   pickLogoId, asciiAppName,
-  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, agGecidiAyikla, dusukVeriAyristir,
+  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
@@ -332,6 +332,32 @@ function imzaYuvasiDurumu() {
   return _imzaYuvasi.erisilir;
 }
 
+// PARDUS KABUL ERİŞİM KAPISI (2026-09-27): ProBook TCP 22'de yanıt veriyor mu? — imza yuvası
+// ölçümüyle (imzaYuvasiDurumu) BİREBİR aynı kalıp: 60 sn önbellek, arka planda ölçülür, tek
+// uçuş (`suruyor`), heartbeat'i BEKLETMEZ (senkron son değeri döner). Çocuk süreç (ssh/nc)
+// KULLANILMAZ — yalnız `net.connect` + zaman aşımı. İlk çağrıda (henüz ölçülmedi) `undefined`
+// döner; `pardusKabulErisimUygula` bunu "engelleme yok, bugünkü davranış" sayar.
+let _probookErisim = { t: 0, erisilir: undefined, suruyor: false };
+function probookErisimDurumu(host, port = 22) {
+  if (!_probookErisim.suruyor && Date.now() - _probookErisim.t >= 60000) {
+    _probookErisim.suruyor = true;
+    const net = require('net');
+    const gercekHost = String(host || '').split('@').pop();
+    const soket = net.connect({ host: gercekHost, port, timeout: 5000 });
+    let karar = false;
+    const bitir = (erisilir) => {
+      if (karar) return;
+      karar = true;
+      _probookErisim = { t: Date.now(), erisilir, suruyor: false };
+      try { soket.destroy(); } catch (_) { /* zaten kapalı */ }
+    };
+    soket.once('connect', () => bitir(true));
+    soket.once('timeout', () => bitir(false));
+    soket.once('error', () => bitir(false));
+  }
+  return _probookErisim.erisilir;
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   let caps = etkinYetenekler(CONFIG.caps, {
@@ -351,11 +377,27 @@ function guncelYetenekler() {
     seritDenetcisi.tazele().catch(() => {}); // kendini 60 sn'de bir kısar; beklenmez
     caps = seritDenetcisi.uygula(caps);
   }
+  // PARDUS KABUL ERİŞİM KAPISI (2026-09-27): şerit denetçisinden SONRA çalışır — o ProBook'un
+  // NABIZ sağlığına bakıp "pardus'u Mac mi alsın ProBook mi üretsin" kararını verir; bu kapı
+  // ise ayrı bir soruyu cevaplar: "kabul betiği (ssh) ProBook'a şu an ULAŞABİLİYOR mu". Şerit
+  // Mac'e pardus'u devretse bile (ör. nabız bayat) ProBook'a erişilemiyorsa kabul yine de
+  // imkânsızdır — o yüzden son süzgeç burada, şeridin kararının ÜSTÜNE uygulanır.
+  const pardusVar = CONFIG.caps.includes('pardus');
+  const probookErisimi = pardusVar ? probookErisimDurumu(probookHostSec(process.env)) : undefined;
+  if (pardusVar) {
+    caps = pardusKabulErisimUygula(caps, {
+      kabulAcik: CONFIG.pardusKabul,
+      kapiAcik: process.env.EMPP_PARDUS_KABUL_ERISIM !== '0', // acil kapatma: EMPP_PARDUS_KABUL_ERISIM=0
+      host: probookHostSec(process.env),
+      erisilir: probookErisimi,
+    });
+  }
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
     log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,
       '| macAraç=' + (_macArac.saglam === null ? 'ölçülmedi' : (_macArac.saglam ? 'sağlam' : 'BOZUK')),
       ...(seritDenetcisi ? ['| pardus şeridi=' + seritDenetcisi.ozet()] : []),
+      ...(pardusVar ? ['| probook=' + (probookErisimi === true ? 'erişilir' : (probookErisimi === false ? 'ERİŞİLEMEZ' : 'ölçülmedi'))] : []),
       '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
@@ -2192,6 +2234,10 @@ module.exports = {
   // ProBook şeridi (2026-09-26) — testler denetçiyi değiştirip yetenek kararını ölçer.
   guncelYetenekler,
   _seritDenetcisiAyarla: (d) => { seritDenetcisi = d; _sonYetenek = ''; },
+  // Pardus kabul erişim kapısı (2026-09-27) — testler prob sonucunu doğrudan enjekte eder
+  // ya da gerçek TCP ile (özel port) probookErisimDurumu'nu doğrudan çağırır.
+  probookErisimDurumu,
+  _probookErisimAyarla: (d) => { _probookErisim = d; _sonYetenek = ''; },
   packagerStartPackage, postResultSuccess,
   packagerPoll,
 };

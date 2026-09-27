@@ -207,6 +207,32 @@ function etkinYetenekler(caps, durum) {
   return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows'));
 }
 
+/**
+ * PARDUS KABUL ERİŞİM KAPISI (2026-09-27): ProBook'a (kabul betiğinin GERÇEKTEN ssh ile
+ * bağlanacağı host) erişilemiyorken Mac `pardus` yeteneğini heartbeat'ten düşürür.
+ *
+ * NEDEN: kabul kapısı açıkken (`EMPP_PARDUS_KABUL=1`) her pardus işi 1,5–10 dk derleniyor,
+ * sonra `tools/pardus/probook-kabul.sh` `ssh … 'echo hazir'` ile düşüp "RED: ProBook'a
+ * baglanilamadi" veriyor — iş ertelenebilir sayılıp 30 dk kirada aynı döngü tekrarlanıyor
+ * (27.09, ProBook 11:10Z'den beri kapalı: 60014 11:51→12:00 boşa derledi). Windows imza
+ * yuvası için aynı sınıf `imzaYuvasiDurumu` ile önceden çözüldü — burada birebir kalıp.
+ *
+ * Saf: env okumaz, ssh/prob çağrısı YAPMAZ — sonucu çağıran (probookErisimDurumu) sağlar.
+ * Girdi dizisi mutasyona UĞRAMAZ.
+ * @param {string[]} caps
+ * @param {{kabulAcik:boolean, kapiAcik:boolean, host:string, erisilir:(boolean|null|undefined)}} d
+ * @returns {string[]}
+ */
+function pardusKabulErisimUygula(caps, d) {
+  const durum = d || {};
+  if (!Array.isArray(caps) || !caps.includes('pardus')) return caps; // pardus caps'te yok
+  if (!durum.kabulAcik) return caps; // kabul kapısı kapalı → ProBook hiç gerekmiyor
+  if (durum.kapiAcik === false) return caps; // acil kapatma: EMPP_PARDUS_KABUL_ERISIM=0
+  if (durum.host === 'yerel') return caps; // kabul ProBook'un kendisinde koşuyor
+  if (durum.erisilir === false) return caps.filter((c) => c !== 'pardus');
+  return caps; // true/undefined/null (henüz ölçülmedi) — bugünkü davranış korunur
+}
+
 /** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */
 /**
  * `dusuk-veri` ikilisinin çıktısını yorumlar (Nadir kuralı 2026-09-13): WiFi Düşük Veri Modu
@@ -1123,6 +1149,7 @@ module.exports = {
   PARDUS_G_ENV,
   pauseRequested,
   etkinYetenekler,
+  pardusKabulErisimUygula,
   srcVersionTuret,
   agGecidiAyikla,
   dusukVeriAyristir,
