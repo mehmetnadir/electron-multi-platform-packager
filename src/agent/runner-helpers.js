@@ -708,6 +708,14 @@ function noterHatasi(asama, res) {
  * uykuda), 12:50'de AYNI IP (etapadmin@192.168.1.55, script varsayılanıyla birebir)
  * ile GEÇTİ — IP/config hatası değil, o anki erişilebilirlik.
  *
+ * AKTARIM DÜŞÜŞÜ de bu sınıftadır (2026-09-27, ölçümle): 45477 pardus'ta paket Mac'ten
+ * ProBook'a giderken srv21 atlaması 6 dk sonra düştü, scp yedeği 600/1277 MB'ta kaldı
+ * (Mac kapak kapalı pilde 05:20Z'de uyudu, Wi-Fi 05:30–06:02Z yok) → "RED: kopyalanamadi"
+ * ile `failed` yazıldı; AYNI paket 06:02'de yeniden kiralandı. Kopyalanamamak paketin
+ * içeriğiyle ilgisizdir. Kapı: "RED: ProBook'a aktarim dustu" (PROBOOK_AKTARIM dolu) ve
+ * eski tek-scp yolunun "RED: kopyalanamadi" satırı. sha256 UYUŞMAZLIĞI bu sınıfa GİRMEZ
+ * ("aktarim dogrulanamadi") — test edilen bayt ≠ yayınlanacak bayt, RED kalır.
+ *
  * Paketin AÇILAMAMASI, penceresinin içerik taşımaması veya kapanması bu sınıfa
  * GİRMEZ — o gerçek paket kusurudur (K18), `failed` yazılması doğrudur.
  *
@@ -715,10 +723,12 @@ function noterHatasi(asama, res) {
  * @param {boolean} [timedOut] kapı betiği kendi üst sınırında bitmediyse true
  * @returns {boolean}
  */
+const PROBOOK_AKTARIM_DUSUSU_RE = /RED: ProBook'a aktarim dustu|RED: kopyalanamadi\b/;
 function probookErisilemezHatasi(cikti, timedOut = false) {
   if (timedOut) return true;
   const raw = typeof cikti === 'string' ? cikti : '';
-  return /ProBook'a baglanilamadi/.test(raw) || /ProBook diskinde yer yok/.test(raw);
+  return /ProBook'a baglanilamadi/.test(raw) || /ProBook diskinde yer yok/.test(raw)
+    || PROBOOK_AKTARIM_DUSUSU_RE.test(raw);
 }
 
 /**
