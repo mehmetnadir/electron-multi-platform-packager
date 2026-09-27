@@ -38,6 +38,20 @@ const URETILEN_MENU = `${MENU_ISARETI}\n<!doctype html><html><head>`
   + '<script src="empp-fs-shim.js"></script></head><body>'
   + '<a class="kart" href="book1/index.html">Kitap 1</a></body></html>';
 
+/**
+ * Üretim Masası'nın (WebZTemaUretici) Web-Z kabuğu — panel tarzı SET menüsü. K17 imzası
+ * (`MENU_ISARETI`) TAŞIMAZ; kendi imzası `scripts/language-set.js` referansıdır
+ * (2026-09-27, 60015 pardus — konteyner kabulünden GEÇTİ, ekranda geçerli SET menüsü
+ * vardı: YABANCI DİL / 3.SINIF sekmeleri + kitap kapakları).
+ */
+const WEB_Z_KABUK = '<!doctype html><html><head>'
+  + '<script src="empp-fs-shim.js"></script>'
+  + '<script src="scripts/language-set.js"></script>'
+  + '<link rel="stylesheet" href="config/settings.json"></head><body>'
+  + '<div class="sekme">YABANCI DİL / 3.SINIF</div>'
+  + '<div class="kapak"><a href="book1/index.html">Sonic and Monic Reader 2-1</a></div>'
+  + '</body></html>';
+
 function paketleyiciEnjekteEt(html) {
   return html.replace('<head>', '<head><script src="empp-fs-shim.js"></script>'
     + '<script src="empp-ag-politikasi.js"></script>');
@@ -99,6 +113,36 @@ test('GERİLEME (4): yalnız shim satırı eklenmiş kök → sadik', () => {
   const guncel = paketleyiciEnjekteEt(MOTOR_KOPYASI);
   const r = karsilastir(MOTOR_KOPYASI, guncel);
   assert.strictEqual(r.sonuc, 'sadik');
+});
+
+// ────── karsilastir — panel SET menüsü (Web-Z kabuk) yanlış-pozitifi (2026-09-27, 60015) ──────
+//
+// Belirti: 72380/72378/45487 (android) ve 60015 (pardus) için "ezilmis" uyarısı çıktı ama
+// 60015 pardus paketi konteyner kabulünden GEÇTİ — ekranda geçerli panel SET menüsü vardı
+// (YABANCI DİL / 3.SINIF sekmeleri, kitap kapakları). Kök neden: denetim yalnız K17'nin
+// kendi imzasını (`MENU_ISARETI`) tanıyordu, Üretim Masası'nın Web-Z kabuğunu (kendi
+// imzası `scripts/language-set.js`) tanımıyordu.
+
+test('GERİLEME (5a): motor kopyası kaynak + Web-Z kabuk (panel SET menüsü) güncel → uretilen-menu-beklenir (ARIZA ÖNCESİ: ezilmis)', () => {
+  const r = karsilastir(MOTOR_KOPYASI, WEB_Z_KABUK);
+  assert.strictEqual(r.sonuc, 'uretilen-menu-beklenir', `beklenmedik: ${r.sonuc} — ${r.detay}`);
+});
+
+test('GERİLEME (5b): kaynakta kök index yok + Web-Z kabuk (panel SET menüsü) güncel → uretilen-menu-beklenir', () => {
+  const r = karsilastir(null, WEB_Z_KABUK);
+  assert.strictEqual(r.sonuc, 'uretilen-menu-beklenir', `beklenmedik: ${r.sonuc} — ${r.detay}`);
+});
+
+test('GERİLEME (5c) KONTROL: motor kopyası/yok kaynak + Web-Z kabuk İMZASI OLMAYAN yabancı kök → hâlâ ezilmis (gerçek ezilme yakalanmalı)', () => {
+  const r = karsilastir(MOTOR_KOPYASI, '<html><body><div class="sekme">sahte menü ama imzasız</div></body></html>');
+  assert.strictEqual(r.sonuc, 'ezilmis', `beklenmedik: ${r.sonuc} — ${r.detay}`);
+});
+
+test('GERİLEME (5d) KONTROL: yayıncının kendi özel kök menüsü Web-Z kabuğuna ezilirse hâlâ ezilmis (K17 dışı senaryo dokunulmaz)', () => {
+  // Kaynakta yayıncının kendi (motor kopyası OLMAYAN) menüsü vardı — bu dal kaynakUretilenMenuBekler
+  // dalına HİÇ girmez, Web-Z kabuk istisnası burada uygulanmaz; sessiz değişim yine ezilmis olmalı.
+  const r = karsilastir(YAYINCI_MENUSU, WEB_Z_KABUK);
+  assert.strictEqual(r.sonuc, 'ezilmis', `beklenmedik: ${r.sonuc} — ${r.detay}`);
 });
 
 // ─────────────────────────── karsilastir — ek uç durumlar ───────────────────────────

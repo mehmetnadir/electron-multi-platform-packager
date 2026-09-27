@@ -15,13 +15,19 @@
  *
  * BU MODÜLÜN ÖLÇTÜĞÜ: paketin kök `index.html`'i, build zip kökündeki (yamalardan ÖNCEKİ)
  * kök `index.html` ile — paketleyicinin BİLEREK enjekte ettiği `<script>` satırları
- * (`empp-fs-shim.js`, `empp-ag-politikasi.js` vb.) dışında — AYNI OLMALI. İki İSTİSNA:
+ * (`empp-fs-shim.js`, `empp-ag-politikasi.js` vb.) dışında — AYNI OLMALI. Kaynak
+ * kök YOKTU/MOTOR KOPYASIYDI durumunda İKİ geçerli üretilen-menü İSTİSNASI var:
  *   1. Kaynağın kök `index.html`'i YOKTU → kök hiç yoktan üretildi, sorun değil.
  *   2. Kaynağın kök `index.html`'i MOTOR KOPYASIYDI (`set-menu.js`'in `motorKopyasiMi`
  *      imzası — K17'nin tam sorun tespit ettiği durum) → K17'nin ürettiği menü
- *      (`MENU_ISARETI` işaretli) pakette olması BEKLENEN ve DOĞRU davranıştır.
+ *      (`MENU_ISARETI` işaretli) PAKETTE olması BEKLENEN ve DOĞRU davranıştır.
+ *   3. (2026-09-27, 60015 pardus — panel yanlış-pozitifi) Pakette K17 imzası YOK ama
+ *      Üretim Masası'nın (WebZTemaUretici) ürettiği Web-Z kabuğu (`set-menu-bicim.js`'in
+ *      `webZKabukIndexiMi` imzası, `scripts/language-set.js` referansı) var — bu da K17
+ *      dışı ama MEŞRU bir "panel SET menüsü" üreticisi, ezilme SAYILMAZ.
  * Bunların DIŞINDA bir fark varsa (yayıncının/Nadir'in kendi özel menüsü sessizce
- * değişmiş/kaybolmuşsa) KÖK EZİLMİŞ demektir — iş HATA ile düşer, paket yüklenmez.
+ * değişmiş/kaybolmuşsa, ya da hiçbir tanınan imza taşımayan yabancı içerik varsa)
+ * KÖK EZİLMİŞ demektir — iş HATA ile düşer, paket yüklenmez.
  * `harf-kapisi.js`'teki `mod=dusur` ilkesiyle aynı: yutma, yukarı taşı.
  *
  * NEREYE BAĞLI: `packagingService.js` içinde, set-menu (K17) adımından SONRA ve platform
@@ -39,7 +45,7 @@
 
 const fs = require('fs').promises;
 const path = require('path');
-const { motorKopyasiMi, MENU_ISARETI } = require('./set-menu');
+const { motorKopyasiMi, MENU_ISARETI, webZKabukIndexiMi } = require('./set-menu');
 
 /**
  * Paketleyicinin köke bilerek enjekte ettiği `<script src="empp-*.js"></script>` etiketleri.
@@ -120,10 +126,23 @@ function karsilastir(kaynakHtml, guncelHtml) {
           : 'kaynağın kökü motorun tek-kitap sayfasının kopyasıydı; K17 tarafından üretilen SET menüsü kabul edildi',
       };
     }
+    // Panel tarzı SET menüsü: Üretim Masası'nın (WebZTemaUretici) ürettiği Web-Z kabuğu —
+    // K17 (set-menu.js) BUNA dokunmaz (`custom-menu-kept, kabuk: 'webz'`), kendi imzasını
+    // (`scripts/language-set.js` referansı, `webZKabukIndexiMi`) taşır. Yayıncı güncellemesi
+    // bu kabuğu meşru biçimde YENİDEN üretebilir (sekme/kapak tazeleme) — bu bir ezilme
+    // DEĞİLDİR (2026-09-27, 60015 pardus: konteyner kabulünden GEÇTİ, ekranda geçerli SET
+    // menüsü vardı ama denetim bu menü türünü tanımadığı için yanlış alarm verdi).
+    if (gNorm !== null && webZKabukIndexiMi(guncelHtml)) {
+      return {
+        sonuc: 'uretilen-menu-beklenir',
+        detay: 'kaynak kök yok/motor kopyasıydı; pakette Üretim Masası\'nın Web-Z kabuğu '
+          + '(panel SET menüsü, scripts/language-set.js imzalı) bulundu — kabul edildi',
+      };
+    }
     return {
       sonuc: 'ezilmis',
       detay: 'kaynak kök yok/motor kopyasıydı ama pakette ne kaynakla aynı ne K17 imzalı (' +
-        `${MENU_ISARETI}) bir menü var — beklenmeyen kök içeriği`,
+        `${MENU_ISARETI}) ne de Web-Z kabuk imzalı bir menü var — beklenmeyen kök içeriği`,
     };
   }
 
