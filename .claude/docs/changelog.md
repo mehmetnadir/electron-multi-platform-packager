@@ -1,3 +1,19 @@
+## 2026-09-27 — Kaynak arşivi: İmpark exe ADI kapısı kaldırıldı
+
+**Karar:** Nadir 27.09 — "v47 → v51 gibi isim güncellemesi metodu çok kırılgan (insanlar
+unutabiliyor), kullanmak istemiyorum." 26.09 "bayat arşiv kapısı" (`kaynak-arsivi.js`) arşivdeki
+`impark_kaynagi` exe adını işin exe adıyla kıyaslayıp farkta işi düşürüyordu. Ölçüm: ad İmpark
+`S_TestKitaplar.Adi`'dan gelir ("ShallWe8-v51", elle), aktivasyon/lisans değişikliğinde içerik
+değişmeden de artar; gece 45482 android bu kapıda düştü, merdiven aynı işte içeriği zaten
+güncelliyordu.
+- `impark_kaynagi` yalnız BİLGİ: ad farklıysa tek log satırı, iş sürer; alan yok/bozuk hata değil;
+  arşiv özetine (ProBook şeridi) girmez. Zip/boyut/md5 denetimleri aynen.
+- Güncellik yalnız içerik sürümünden: ZipVersiyon (+ZKitapFileSize) → merdiven S0/S1 → kabul
+  E7/K4/SET_TUM. Merdiven kapalıyken de ad kıyası yok (ad içeriği ölçmez; kabul yakalar).
+- Nöbetçi: `kaynak-arsivi.test.js` "AD SÜRÜMÜ KARAR DEĞİL" — test dışı kodda ad sürümü güncellik
+  kararına girmez (grep + mutasyonla doğrulandı). `runner-arsiv-bayat.test.js` →
+  `runner-arsiv-ad-bilgi.test.js`.
+
 ## 2026-09-26 (7) — Akşam canlıya alma: G kanalı, Windows şeridi, içerik kapıları, kabul E6/E7/E8
 
 **Yetki:** Nadir 26.09 ~18:45 — "karar aldığımız her şey canlıda olana kadar devam, testler dahil".

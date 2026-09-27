@@ -1,13 +1,15 @@
 'use strict';
 
 /**
- * Runner × kaynak arşivi — BAYAT ARŞİV KAPISI (2026-09-26).
+ * Runner × kaynak arşivi — İMPARK EXE ADI YALNIZ BİLGİ (Nadir 27.09).
  *
- * Nadir'in şartı: "İmpark'ta bir kitaba güncelleme atınca sistem otomatik o kitabın
- * paketlerini güncellemeli." srv21 `publisher-version-refresh.ts` İmpark sürümü artınca
- * kitabı yeniden kuyruğa alır. Arşivli sette runner bu işi ESKİ zip'ten üretirse güncelleme
- * sessizce kaybolur. Kapı: kaynak.json `impark_kaynagi` ≠ işin güncel İmpark kimliği
- * (`srcVersionTuret(job.downloadUrl)`) → iş görünür hatayla düşer, paketleyiciye gidilmez.
+ * 26.09'daki "bayat arşiv kapısı" kaynak.json `impark_kaynagi` ≠ işin exe adı
+ * (`srcVersionTuret(job.downloadUrl)`) olunca işi düşürüyordu. Nadir 27.09: "v47 → v51 gibi isim
+ * güncellemesi metodu çok kırılgan (insanlar unutabiliyor), kullanmak istemiyorum." Ad İmpark
+ * `S_TestKitaplar.Adi` alanından gelir (elle yazılır, aktivasyon/lisans değişikliğinde de artar);
+ * 45482 android bu kapıda düştü, oysa içerik merdiveni aynı işte alt kitapları zaten güncelliyordu.
+ * Artık: ad farkı tek BİLGİ satırıdır, iş SÜRER; güncellik içerik merdiveni S0/S1 ve kabul
+ * K4/SET_TUM'dan ölçülür. Merdiven KAPALIYKEN de ad kıyası yoktur (gerekçe kaynak-arsivi.js).
  *
  * Testler gerçek `processJob`'u koşturur. Paketleyici (3001) yerine yerel sahte bir HTTP
  * sunucusu kullanılır; canlı paketleyiciye asla istek gitmez.
@@ -24,10 +26,7 @@ const AdmZip = require('adm-zip');
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const { CONFIG, processJob } = require('./runner.js');
-const { arsivKaynagi } = require('./kaynak-arsivi');
-const {
-  ertelenebilirKaynakHatasi, isTransientNetworkError, srcVersionTuret,
-} = require('./runner-helpers');
+const { srcVersionTuret } = require('./runner-helpers');
 
 const AYRAC = '// ---------------------------------------------------------------------------\n';
 const PROCESS_JOB = SRC.slice(
@@ -47,7 +46,7 @@ function kopruUrl(bookId, ad) {
  * düz bir metin dosyası artık (haklı olarak) [kaynak-iceriksiz] ile RED verir.
  */
 function arsivKur(bookId, kayitEk = {}) {
-  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'arsiv-bayat-'));
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'arsiv-ad-bilgi-'));
   const dizin = path.join(kok, String(bookId));
   fs.mkdirSync(dizin);
   const zip = new AdmZip();
@@ -79,18 +78,20 @@ async function sahtePaketleyici() {
 }
 
 /** processJob'u yalıtılmış ortamda koşturur; console çıktısını ve paketleyici isteklerini döner. */
-async function isKostur({ kok, bookId, kaynakAdi }) {
+async function isKostur({ kok, bookId, kaynakAdi, merdiven = '0' }) {
   const paketleyici = await sahtePaketleyici();
   const eski = {
     arsiv: process.env.EMPP_KAYNAK_ARSIVI,
     cache: process.env.EMPP_SOURCE_CACHE,
+    merdiven: process.env.EMPP_ARSIV_MERDIVEN,
     packagerApi: CONFIG.packagerApi,
   };
   const loglar = [];
   const orjLog = console.log;
   const orjWarn = console.warn;
   process.env.EMPP_KAYNAK_ARSIVI = kok;
-  process.env.EMPP_SOURCE_CACHE = fs.mkdtempSync(path.join(os.tmpdir(), 'arsiv-bayat-cache-'));
+  process.env.EMPP_SOURCE_CACHE = fs.mkdtempSync(path.join(os.tmpdir(), 'arsiv-ad-bilgi-cache-'));
+  process.env.EMPP_ARSIV_MERDIVEN = merdiven;
   CONFIG.packagerApi = paketleyici.url;
   console.log = (...a) => loglar.push(a.join(' '));
   console.warn = (...a) => loglar.push(a.join(' '));
@@ -106,7 +107,8 @@ async function isKostur({ kok, bookId, kaynakAdi }) {
     console.log = orjLog;
     console.warn = orjWarn;
     CONFIG.packagerApi = eski.packagerApi;
-    for (const [k, v] of [['EMPP_KAYNAK_ARSIVI', eski.arsiv], ['EMPP_SOURCE_CACHE', eski.cache]]) {
+    for (const [k, v] of [['EMPP_KAYNAK_ARSIVI', eski.arsiv], ['EMPP_SOURCE_CACHE', eski.cache],
+      ['EMPP_ARSIV_MERDIVEN', eski.merdiven]]) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
     paketleyici.kapat();
@@ -115,53 +117,43 @@ async function isKostur({ kok, bookId, kaynakAdi }) {
 }
 
 // ---------------------------------------------------------------------------
-// Davranış — gerçek processJob
+// Davranış — gerçek processJob (merdiven KAPALI: ad kıyası yine yok, arşiv olduğu gibi gider)
 // ---------------------------------------------------------------------------
 
-test('processJob: İmpark kaynağı değiştiyse BAYAT hatası, paketleyiciye HİÇ gidilmez', async () => {
+const AD_NOTU = 'kaynak arşivi 45482: İmpark exe adı değişti (bilgi) — ShallWe8-v47.exe → '
+  + 'ShallWe8-v51.exe; güncellik içerik merdiveninden ölçülür';
+
+test('processJob: exe adı değişti (v47 → v51) — iş DÜŞMEZ, bilgi satırı + arşiv paketleyiciye gider', async () => {
   const { kok } = arsivKur(45482, { impark_kaynagi: 'ShallWe8-v47.exe' });
-  const r = await isKostur({ kok, bookId: 45482, kaynakAdi: 'ShallWe8-v48.exe' });
-  assert.ok(r.hata, 'iş düşmeliydi');
-  assert.ok(r.hata.message.startsWith('kaynak arşivi BAYAT: İmpark kaynağı ShallWe8-v47.exe → '
-    + 'ShallWe8-v48.exe; build zip yeniden üretilmeli'), r.hata.message);
-  assert.deepEqual(r.istekler, [], 'bayat arşivden paket üretilmemeli');
-  assert.doesNotMatch(r.loglar, /kaynak ARŞİVDEN/);
-  assert.doesNotMatch(r.loglar, /downloading source exe/, 'İmpark exe\'sine sessizce düşülmemeli');
+  const r = await isKostur({ kok, bookId: 45482, kaynakAdi: 'ShallWe8-v51.exe' });
+  assert.ok(r.loglar.includes(AD_NOTU), r.loglar);
+  assert.match(r.loglar, /kaynak ARŞİVDEN/);
+  assert.doesNotMatch(r.loglar, /downloading source exe/, 'İmpark exe\'si indirilmemeli');
+  assert.deepEqual(r.istekler, ['/api/upload-build'], 'arşiv zip\'i paketleyiciye gitmeli');
+  assert.match(r.hata.message, /packager upload-build failed: HTTP 500/, 'yalnız sahte paketleyici 500');
+  assert.doesNotMatch(r.hata.message, /BAYAT|yeniden üretilmeli/);
 });
 
-test('processJob: İmpark kaynağı aynıysa arşiv kullanılır, exe indirilmez', async () => {
+test('processJob: exe adı aynıysa bilgi satırı yok, arşiv kullanılır', async () => {
   const { kok } = arsivKur(45482, { impark_kaynagi: 'ShallWe8-v47.exe' });
   const r = await isKostur({ kok, bookId: 45482, kaynakAdi: 'ShallWe8-v47.exe' });
   assert.match(r.loglar, /kaynak ARŞİVDEN/);
-  assert.doesNotMatch(r.loglar, /downloading source exe/);
-  assert.deepEqual(r.istekler, ['/api/upload-build'], 'arşiv zip\'i paketleyiciye gitmeli');
-  assert.match(r.hata.message, /packager upload-build failed: HTTP 500/, 'sahte paketleyici 500');
+  assert.doesNotMatch(r.loglar, /exe adı değişti/);
+  assert.deepEqual(r.istekler, ['/api/upload-build']);
 });
 
-test('processJob: kayıtta alan yoksa bugünkü davranış + tek uyarı', async () => {
+test('processJob: kayıtta alan yoksa uyarı/not yok, arşiv kullanılır', async () => {
   const { kok } = arsivKur(45483);
   const r = await isKostur({ kok, bookId: 45483, kaynakAdi: 'ShallWe9-v10.exe' });
-  assert.match(r.loglar, /45483 kaydında impark_kaynagi yok/);
+  assert.doesNotMatch(r.loglar, /impark_kaynagi|exe adı değişti|ALGILANAMAZ/);
   assert.match(r.loglar, /kaynak ARŞİVDEN/);
   assert.deepEqual(r.istekler, ['/api/upload-build']);
-  const r2 = await isKostur({ kok, bookId: 45483, kaynakAdi: 'ShallWe9-v10.exe' });
-  assert.doesNotMatch(r2.loglar, /impark_kaynagi yok/, 'uyarı süreçte bir kez');
 });
 
 // ---------------------------------------------------------------------------
-// Hata yolu — BAYAT hatası 'failed' + bildirim yoluna gider, ertelenmez
+// Hata yolu — düşen iş (içerik güncelliği: kabul "güncel değil", merdiven "ÖLÇÜLEMEDİ" dahil)
+// önce bildirim, sonra `failed`. 26.09 BAYAT testlerinden devralındı; kapıdan bağımsız pin.
 // ---------------------------------------------------------------------------
-
-test('BAYAT hatası ertelenebilir ya da geçici SAYILMAZ (sessiz kira dönüşü yok)', async () => {
-  const { kok } = arsivKur(45482, { impark_kaynagi: 'ShallWe8-v47.exe' });
-  let hata = null;
-  try {
-    await arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v48.exe', uyar: () => {} });
-  } catch (e) { hata = e; }
-  assert.ok(hata);
-  assert.equal(ertelenebilirKaynakHatasi(hata), false);
-  assert.equal(isTransientNetworkError(hata), false);
-});
 
 test('ana döngü: düşen iş önce bildirim, sonra failed sonucu yazar', () => {
   const dongu = SRC.slice(SRC.indexOf('await processJob(auth, job);'));
@@ -179,25 +171,25 @@ test('bildirGonder: başarısızlık `bildir paket … -p yuksek -e warning` ür
 });
 
 // ---------------------------------------------------------------------------
-// Kaynak metni — kıyas her iş için ve her şeyden önce yapılır
+// Kaynak metni — exe adı yalnız bilgi için arşive verilir; kaynak seçimi değişmedi
 // ---------------------------------------------------------------------------
 
-test('processJob: güncel İmpark kimliği = srcVersionTuret(job.downloadUrl), kıyasa verilir', () => {
+test('processJob: exe kimliği = srcVersionTuret(job.downloadUrl), arşive YALNIZ bilgi için verilir', () => {
   assert.match(PROCESS_JOB, /const imparkSrcVersion = srcVersionTuret\(job\.downloadUrl\);/);
   assert.match(PROCESS_JOB,
     new RegExp('const arsiv = await arsivKaynagi\\(job\\.bookId, '
-      + '\\{ imparkKaynagi: imparkSrcVersion, uyar: warn \\}\\);'));
+      + '\\{ imparkKaynagi: imparkSrcVersion, bilgi: log \\}\\);'));
   assert.match(PROCESS_JOB, /const srcVersion = arsiv \? arsiv\.srcVersion : imparkSrcVersion;/);
 });
 
-test('processJob: arşiv kıyası indirme/devir/kopyalamadan ÖNCE', () => {
-  const kiyas = PROCESS_JOB.indexOf('await arsivKaynagi(');
-  assert.ok(kiyas > 0);
+test('processJob: arşiv okuması indirme/devir/kopyalamadan ÖNCE', () => {
+  const okuma = PROCESS_JOB.indexOf('await arsivKaynagi(');
+  assert.ok(okuma > 0);
   const sonrakiler = ['hazirPardusPaketi(', 'kaynakBoyutuTahmin(', 'fsp.copyFile(arsiv.zip',
     'downloadFile('];
   for (const sonra of sonrakiler) {
     const i = PROCESS_JOB.indexOf(sonra);
-    assert.ok(i > kiyas, `${sonra} arşiv kıyasından sonra gelmeli`);
+    assert.ok(i > okuma, `${sonra} arşiv okumasından sonra gelmeli`);
   }
 });
 

@@ -18,26 +18,28 @@
  * exe'sine düşmek eski arayüzü yayınlamak demektir (bugünkü arızanın kendisi). md5 her
  * (boyut, mtime) için bir kez hesaplanır, sonucu `.md5-dogrulandi` damgasında durur.
  *
- * BAYAT ARŞİV KAPISI (2026-09-26, Nadir: "İmpark'ta güncelleme atınca paketler otomatik
- * güncellenmeli"). srv21 `publisher-version-refresh.ts` İmpark sürümü artınca (v64→v65)
- * kitabı yeniden kuyruğa alır; arşivli sette runner bu işi ESKİ zip'ten üretirse
- * güncelleme sessizce kaybolur. Bu yüzden kayıt, arşivlendiği andaki İmpark kaynak
- * kimliğini taşır:
- *   "impark_kaynagi": "<exe adı>"   ör. "ShallWe8-v47.exe"
- *   "impark_kaynagi": ["MP11-v48.exe", "MP11-v47.exe"]   (liste: arşivin KAPSADIĞI kaynaklar)
- * Liste, köprünün İmpark'ın gerisinde kaldığı durum içindir (ölçüm 26.09, 45792: zip İmpark
- * v48'den üretildi, köprü hâlâ v47 veriyor). İlk öğe zip'in üretildiği kaynaktır.
- * Kimlik = runner'ın kaynak önbelleğinde ve hazır pardus paketinde kullandığı
- * `srcVersionTuret(job.downloadUrl)` — köprü (R2 akillitahtalar/<id>/) anahtarının adı.
- * Presigned imza/sorgu atılır; aynı dosya yeniden imzalansa da kimlik değişmez.
- * Kıyas EŞİTLİKtir, sıralama değil ("farklıysa bayat"): ad değiştiyse — yükselme, geri
- * dönüş ya da el ile atanmış /sources/ kaynağı — arşiv o kaynağı temsil etmez.
- *   - farklı  → HATA `kaynak arşivi BAYAT: İmpark kaynağı X → Y; build zip yeniden
- *               üretilmeli`. Eski zip'ten üretilmez, İmpark exe'sine de düşülmez.
- *               (Hata runner'ın genel başarısızlık yolundan `bildir paket … -p yuksek
- *               -e warning` ile telefona gider ve satıra last_error olarak yazılır.)
- *   - alan yok → bugünkü davranış sürer; kitap başına süreçte BİR KEZ uyarı loglanır.
- * Kıyas zip/md5 denetiminden ÖNCE yapılır: bayat arşivin 1,5 GB'ı boşuna okunmaz.
+ * İMPARK EXE ADI YALNIZ BİLGİDİR — "ad kapısı" KALDIRILDI (Nadir 27.09: "v47 → v51 gibi isim
+ * güncellemesi metodu çok kırılgan (insanlar unutabiliyor), kullanmak istemiyorum").
+ * 26.09'daki "bayat arşiv kapısı" kayıttaki `impark_kaynagi`yı (arşivlendiği andaki köprü exe adı,
+ * ör. "ShallWe8-v47.exe", ya da kapsanan adlar listesi) işin güncel exe adıyla
+ * (`srcVersionTuret(job.downloadUrl)`) kıyaslıyor, farkta işi "build zip yeniden üretilmeli" diye
+ * düşürüyordu. Ad içerik sürümü DEĞİLDİR (ölçüm 27.09):
+ *   - ad, İmpark set kaydının `S_TestKitaplar.Adi` alanından gelir ("ShallWe8-v51") — insanın elle
+ *     yazdığı AD; unutulabilir, içerik değişmeden de artar (aktivasyon/lisans değişikliği);
+ *   - 45482 android bu kapıda düştü, oysa içerik merdiveni aynı işte alt kitapları İmpark'ın
+ *     ZipVersiyon'una göre zaten güncelliyordu.
+ * Güncellik YALNIZ İÇERİK sürümüyle ölçülür:
+ *   kaynak           alt kitap başına ZipVersiyon (+ZKitapFileSize), `GetKitapGuncellemeBilgi`;
+ *   üretimde         içerik merdiveni S0/S1 (icerik-merdiven.js, `EMPP_ARSIV_MERDIVEN=1`);
+ *   yüklemeden önce  kabul E7/K4/SET_TUM (`KABUL_K4`, `KABUL_SET_TUM`; Pardus K18 rc 3).
+ * `impark_kaynagi` kayıtta BİLGİ olarak kalır: ad farklıysa iş başına tek log satırı
+ * ("İmpark exe adı değişti (bilgi) — güncellik içerik merdiveninden ölçülür"), iş SÜRER. Alan
+ * yok ya da bozuk da yalnız bilgidir (karar yok → hata yok). Zip/boyut/md5 denetimleri AYNEN.
+ * MERDİVEN KAPALIYKEN (EMPP_ARSIV_MERDIVEN≠1) de ad kıyası YOK: ad içerik hakkında hiçbir şey
+ * ölçmediği için kapalı merdivenin yerini tutamaz (içerik aynıyken yanlış alarm verir, ad
+ * değişmeden gelen ZipVersiyon güncellemesini kaçırır). Arşiv zip'i olduğu gibi paketlenir; geride
+ * içerik yüklemeden önce kabul K4/SET_TUM'da (GÜNCEL-DEĞİL rc 3 → yükleme yok, `failed`) ya da
+ * Pardus K18'de yakalanır. Nöbetçi: kaynak-arsivi.test.js "AD SÜRÜMÜ KARAR DEĞİL".
  */
 
 const fs = require('fs');
@@ -67,56 +69,48 @@ function imparkKimligi(deger) {
 }
 
 /**
- * `impark_kaynagi` alanını kimlik listesine çevirir. Alan yoksa null; bozuksa HATA.
- * @param {unknown} alan dize ya da boş olmayan dize listesi
+ * `impark_kaynagi` BİLGİ alanını kimlik listesine çevirir. Karar VERMEZ, hata FIRLATMAZ: alan yok
+ * ya da biçimi bozuksa null (27.09'dan beri yalnız bilgidir, başlık yorumu).
+ * @param {unknown} alan dize ya da dize listesi
  * @returns {string[]|null}
  */
-function kayitliKimlikler(alan) {
+function imparkKaynagiBilgisi(alan) {
   if (alan === undefined || alan === null) return null;
   const liste = Array.isArray(alan) ? alan : [alan];
-  if (liste.length === 0 || liste.some((d) => typeof d !== 'string' || !d.trim())) {
-    throw new Error('kaynak arşivi: impark_kaynagi alanı geçersiz '
-      + '(boş olmayan dize ya da dize listesi olmalı)');
-  }
+  if (liste.length === 0 || liste.some((d) => typeof d !== 'string' || !d.trim())) return null;
   return liste.map((d) => imparkKimligi(d.trim()));
 }
 
 /**
- * Arşivin İmpark kimliği ile işin güncel İmpark kimliğini kıyaslar. SAF — I/O yok.
- *
- * @param {unknown} kayitli  kaynak.json `impark_kaynagi` alanı: dize ya da dize listesi
- *                           (yoksa undefined)
- * @param {string} guncel    işin kaynak kimliği — `srcVersionTuret(job.downloadUrl)`
- * @returns {{ durum: 'ayni'|'bayat'|'alan-yok', kayitli: string[]|null, guncel: string }}
+ * Bilgi notu: kayıttaki İmpark exe adı işin exe adından farklıysa tek satır, değilse null.
+ * SAF — I/O yok, KARAR YOK: dönüş yalnız loglanır, iş her durumda sürer.
+ * @param {unknown} kayitli  kaynak.json `impark_kaynagi` (dize, liste ya da yok)
+ * @param {unknown} guncel   işin exe kimliği — `srcVersionTuret(job.downloadUrl)`
+ * @returns {string|null}
  */
-function imparkKaynagiKiyasla(kayitli, guncel) {
+function imparkAdiNotu(kayitli, guncel) {
   const g = String(guncel == null ? '' : guncel).trim();
-  if (!g) {
-    throw new Error('kaynak arşivi: güncel İmpark kaynağı bilinmiyor — arşiv tazeliği ölçülemedi');
-  }
+  const kk = imparkKaynagiBilgisi(kayitli);
+  if (!g || !kk) return null;
   const gk = imparkKimligi(g);
-  const kk = kayitliKimlikler(kayitli);
-  if (kk === null) return { durum: 'alan-yok', kayitli: null, guncel: gk };
-  return { durum: kk.includes(gk) ? 'ayni' : 'bayat', kayitli: kk, guncel: gk };
+  if (kk.includes(gk)) return null;
+  return `İmpark exe adı değişti (bilgi) — ${kk.join(' | ')} → ${gk}; `
+    + 'güncellik içerik merdiveninden ölçülür';
 }
-
-/** Alanı olmayan kayıt için süreç başına tek uyarı (kök + kitap). */
-const alanYokUyarilanlar = new Set();
 
 /**
  * @param {number|string} bookId
- * @param {{ kok?: string, imparkKaynagi?: string, uyar?: (m: string) => void }} [secenekler]
- *   imparkKaynagi: işin güncel İmpark kaynak kimliği
- *   (runner: `srcVersionTuret(job.downloadUrl)`).
- *   Verilmezse tazelik kıyası yapılmaz (yalnız eski çağıranlar/testler için).
+ * @param {{ kok?: string, imparkKaynagi?: string, bilgi?: (m: string) => void }} [secenekler]
+ *   imparkKaynagi: işin İmpark exe kimliği (runner: `srcVersionTuret(job.downloadUrl)`) —
+ *   YALNIZ bilgi notu için; güncellik kararı vermez.
  * @returns {Promise<null | { zip: string, md5: string, boyut: number, etiket: string,
  *   srcVersion: string, imparkKaynagi: string[]|null }>}
- *   Kayıt yoksa null; kayıt bozuk ya da BAYAT ise hata.
+ *   Kayıt yoksa null; kayıt bozuksa (JSON/md5/dosya/boyut) hata.
  */
 async function arsivKaynagi(bookId, {
   kok = arsivKoku(),
   imparkKaynagi,
-  uyar = (m) => console.warn(m),
+  bilgi = (m) => console.log(m),
 } = {}) {
   const dizin = path.join(kok, String(bookId));
   const kayitYolu = path.join(dizin, 'kaynak.json');
@@ -128,24 +122,6 @@ async function arsivKaynagi(bookId, {
   let kayit;
   try { kayit = JSON.parse(ham); } catch (e) {
     throw new Error(`kaynak arşivi: ${kayitYolu} okunamadı (JSON): ${e.message}`);
-  }
-  if (imparkKaynagi !== undefined) {
-    const k = imparkKaynagiKiyasla(kayit.impark_kaynagi, imparkKaynagi);
-    if (k.durum === 'bayat') {
-      throw new Error(
-        `kaynak arşivi BAYAT: İmpark kaynağı ${k.kayitli.join(' | ')} → ${k.guncel}; `
-        + `build zip yeniden üretilmeli (kitap ${bookId}, ${kayitYolu})`,
-      );
-    }
-    if (k.durum === 'alan-yok') {
-      const anahtar = `${kok}::${bookId}`;
-      if (!alanYokUyarilanlar.has(anahtar)) {
-        alanYokUyarilanlar.add(anahtar);
-        uyar(`kaynak arşivi: ${bookId} kaydında impark_kaynagi yok — İmpark `
-          + `güncellemesi bu kitapta ALGILANAMAZ (güncel kaynak ${k.guncel}); `
-          + `${kayitYolu} dosyasına eklenmeli`);
-      }
-    }
   }
   const md5 = String(kayit.md5 || '').toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(md5)) throw new Error(`kaynak arşivi: ${kayitYolu} md5 alanı geçersiz`);
@@ -169,25 +145,25 @@ async function arsivKaynagi(bookId, {
     if (gercek !== md5) throw new Error(`kaynak arşivi: ${bookId} md5 tutmuyor (${gercek} != ${md5})`);
     try { await fsp.writeFile(damga, damgaDegeri + '\n'); } catch (_) { /* damga yazılamazsa her iş yeniden hesaplar */ }
   }
+  const adNotu = imparkAdiNotu(kayit.impark_kaynagi, imparkKaynagi);
+  if (adNotu) bilgi(`kaynak arşivi ${bookId}: ${adNotu}`);
   return {
     zip,
     md5,
     boyut: st.size,
     etiket: String(kayit.etiket || ''),
     srcVersion: `arsiv-${md5.slice(0, 12)}`,
-    imparkKaynagi: kayitliKimlikler(kayit.impark_kaynagi),
+    imparkKaynagi: imparkKaynagiBilgisi(kayit.impark_kaynagi),
   };
 }
 
 /**
- * Arşivin KİMLİK özeti (2026-09-26, ProBook şeridi): `<id> <md5> <boyut>[ <impark_kaynagi>]`
- * satırları sıralı, sha256'nın ilk 16 hanesi. Zip OKUNMAZ — yalnız kaynak.json kayıtları (ucuz,
- * her nabızda). İki makinenin özeti eşitse aynı kitaplar aynı zip'ten, aynı İmpark kaynağına
- * karşı üretilir. `impark_kaynagi` (bayat arşiv kapısı) satıra kimlik listesi olarak (`|` ile,
- * sıra korunur) girer: zip aynı ama impark_kaynagi farklıysa bir makine işi BAYAT diye
- * düşürürken öteki üretir — özet farkı bunu şerit kararına taşır. Alan yoksa satır eski
- * biçimdedir (alanı olmayan arşivde özet değişmez). Kayıt ya da impark_kaynagi bozuksa satır
- * `<id> BOZUK` olur (fark görünür kalsın, sessizce düşmesin). Kök yoksa/boşsa: 'bos'.
+ * Arşivin KİMLİK özeti (2026-09-26, ProBook şeridi): `<id> <md5> <boyut>` satırları sıralı,
+ * sha256'nın ilk 16 hanesi. Zip OKUNMAZ — yalnız kaynak.json kayıtları (ucuz, her nabızda). İki
+ * makinenin özeti eşitse aynı kitaplar aynı zip'ten üretilir. `impark_kaynagi` 27.09'dan beri
+ * özete GİRMEZ: yalnız bilgidir, üretimi değiştirmez; ad farkı şerit kararına (ProBook'u
+ * duraklatmaya) taşınmaz. Kayıt bozuksa (JSON) satır `<id> BOZUK` olur (fark görünür kalsın,
+ * sessizce düşmesin). Kök yoksa/boşsa: 'bos'.
  * @param {string} [kok]
  * @returns {{ ozet: string, adet: number, kitaplar: string[] }}
  */
@@ -200,9 +176,7 @@ function arsivOzeti(kok = arsivKoku()) {
     try { ham = fs.readFileSync(path.join(kok, ad, 'kaynak.json'), 'utf8'); } catch (_) { continue; } // kayıt yok = arşivde değil
     try {
       const k = JSON.parse(ham);
-      const impark = kayitliKimlikler(k.impark_kaynagi); // bozuksa atar → BOZUK
-      const ek = impark ? ` ${impark.join('|')}` : '';
-      satirlar.push(`${ad} ${String(k.md5 || '').toLowerCase()} ${Number(k.boyut) || 0}${ek}`);
+      satirlar.push(`${ad} ${String(k.md5 || '').toLowerCase()} ${Number(k.boyut) || 0}`);
     } catch (_) {
       satirlar.push(`${ad} BOZUK`);
     }
@@ -212,4 +186,6 @@ function arsivOzeti(kok = arsivKoku()) {
   return { ozet, adet: satirlar.length, kitaplar: satirlar.map((l) => l.split(' ')[0]) };
 }
 
-module.exports = { arsivKaynagi, arsivKoku, md5Hesapla, imparkKaynagiKiyasla, arsivOzeti };
+module.exports = {
+  arsivKaynagi, arsivKoku, md5Hesapla, imparkAdiNotu, imparkKaynagiBilgisi, arsivOzeti,
+};

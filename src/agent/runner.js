@@ -1728,13 +1728,13 @@ async function processJob(auth, job) {
     // KAYNAK ARŞİVİ (2026-09-26, Nadir: "yeni arayüzle üret"): onaylı build zip varsa kaynak
     // odur — İmpark exe'si indirilmez, yayıncı güncellemesi uygulanmaz, şerit paketi
     // devralınmaz. Kayıt bozuksa arsivKaynagi hata fırlatır: eski kaynağa sessizce inilmez.
-    // BAYAT ARŞİV (2026-09-26): kayıttaki `impark_kaynagi` işin güncel İmpark kimliğiyle
-    // (aşağıdaki imparkSrcVersion — köprü exe'sinin adı) tutmazsa İmpark güncellenmiştir:
-    // arsivKaynagi "kaynak arşivi BAYAT: …" fırlatır, iş genel başarısızlık yolundan
-    // düşer (last_error + `bildir paket … -p yuksek -e warning`). Eski zip'ten üretilmez,
-    // İmpark exe'sine de sessizce düşülmez.
+    // İMPARK EXE ADI YALNIZ BİLGİ (Nadir 27.09 — 26.09 "bayat arşiv" ad kapısı KALDIRILDI):
+    // kayıttaki `impark_kaynagi` işin exe adından (imparkSrcVersion) farklıysa tek bilgi satırı
+    // loglanır, iş SÜRER. Ad (İmpark `S_TestKitaplar.Adi`, elle yazılır) içerik sürümü değildir;
+    // güncellik içerik merdiveninden (S0/S1, aşağıda) ve kabul K4/SET_TUM'dan ölçülür — merdiven
+    // kapalıyken de ad kıyası yok (gerekçe: kaynak-arsivi.js başlığı).
     const imparkSrcVersion = srcVersionTuret(job.downloadUrl);
-    const arsiv = await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, uyar: warn });
+    const arsiv = await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
     const srcVersion = arsiv ? arsiv.srcVersion : imparkSrcVersion;
     const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
     const zipPath = path.join(work, 'build.zip');

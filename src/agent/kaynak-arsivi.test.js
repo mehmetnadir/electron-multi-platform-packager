@@ -6,7 +6,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { arsivKaynagi, arsivKoku, imparkKaynagiKiyasla } = require('./kaynak-arsivi');
+const {
+  arsivKaynagi, arsivKoku, arsivOzeti, imparkAdiNotu, imparkKaynagiBilgisi,
+} = require('./kaynak-arsivi');
 const { srcVersionTuret } = require('./runner-helpers');
 
 function kur(icerik = 'zip-icerigi', kayitEk = {}) {
@@ -73,8 +75,10 @@ test('arsivKoku: EMPP_KAYNAK_ARSIVI önceliklidir', () => {
 });
 
 // ---------------------------------------------------------------------------
-// BAYAT ARŞİV KAPISI (2026-09-26) — İmpark kaynağı arşivden sonra değiştiyse iş düşer.
-// Güncel kimlik runner'da `srcVersionTuret(job.downloadUrl)`: köprü presigned URL'si.
+// İMPARK EXE ADI YALNIZ BİLGİ (Nadir 27.09 — 26.09 "bayat arşiv" ad kapısı KALDIRILDI).
+// Ad (İmpark `S_TestKitaplar.Adi`, elle yazılır; aktivasyon/lisans değişikliğinde de artar)
+// içerik sürümü değildir: ad farkı işi DÜŞÜRMEZ, tek bilgi satırı yazılır. Güncellik içerik
+// merdiveni S0/S1 ve kabul K4/SET_TUM'dan ölçülür. Bütünlük (zip/boyut/md5) denetimleri aynen.
 // ---------------------------------------------------------------------------
 
 /** Runner'ın next-job'dan aldığı biçim: köprü anahtarı + her seferinde değişen imza. */
@@ -84,141 +88,235 @@ function kopruUrl(ad, imza = 'a1b2c3') {
     + `&X-Amz-Date=20260926T120000Z&X-Amz-Expires=21600&X-Amz-Signature=${imza}`;
 }
 
-const BAYAT_MESAJI = 'kaynak arşivi BAYAT: İmpark kaynağı ShallWe8-v47.exe → ShallWe8-v48.exe; '
-  + 'build zip yeniden üretilmeli';
+const AD_NOTU = 'kaynak arşivi 45482: İmpark exe adı değişti (bilgi) — ShallWe8-v47.exe → '
+  + 'ShallWe8-v51.exe; güncellik içerik merdiveninden ölçülür';
 
-test('BAYAT: İmpark kaynağı değiştiyse HATA — eski zip kullanılmaz, md5 okunmaz', async () => {
-  const { kok, dizin } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
-  const guncel = srcVersionTuret(kopruUrl('ShallWe8-v48.exe'));
-  await assert.rejects(
-    () => arsivKaynagi(45482, { kok, imparkKaynagi: guncel, uyar: () => {} }),
-    (e) => e.message.startsWith(BAYAT_MESAJI),
-  );
-  assert.ok(!fs.existsSync(path.join(dizin, '.md5-dogrulandi')),
-    'kıyas zip/md5 denetiminden ÖNCE yapılmalı');
+test('ad değişti (v47 → v51, 45482 27.09): HATA YOK — arşiv döner, tek bilgi satırı', async () => {
+  const { kok, dizin, md5 } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
+  const notlar = [];
+  const r = await arsivKaynagi(45482, {
+    kok, imparkKaynagi: srcVersionTuret(kopruUrl('ShallWe8-v51.exe')), bilgi: (m) => notlar.push(m),
+  });
+  assert.equal(r.md5, md5);
+  assert.equal(r.srcVersion, `arsiv-${md5.slice(0, 12)}`);
+  assert.deepEqual(r.imparkKaynagi, ['ShallWe8-v47.exe'], 'alan bilgi olarak döner');
+  assert.deepEqual(notlar, [AD_NOTU]);
+  assert.ok(fs.existsSync(path.join(dizin, '.md5-dogrulandi')), 'md5 denetimi aynen koşmalı');
 });
 
-test('aynı İmpark kaynağı: imza farklı olsa da BAYAT sayılmaz, arşiv döner', async () => {
+test('ad farkı bütünlük hatasını ÖRTMEZ: boyut/md5 tutmuyorsa yine HATA, not yazılmaz', async () => {
+  const { kok, dizin } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
+  fs.writeFileSync(path.join(dizin, 'build.zip'), 'xyz'); // aynı boyut, farklı içerik
+  const notlar = [];
+  await assert.rejects(
+    () => arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v51.exe', bilgi: (m) => notlar.push(m) }),
+    /md5 tutmuyor/,
+  );
+  fs.writeFileSync(path.join(dizin, 'build.zip'), 'abcd');
+  await assert.rejects(
+    () => arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v51.exe', bilgi: (m) => notlar.push(m) }),
+    /boyut tutmuyor/,
+  );
+  assert.deepEqual(notlar, []);
+});
+
+test('aynı ad (imza her seferinde farklı): bilgi satırı yok', async () => {
   const { kok, md5 } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
-  const uyarilar = [];
+  const notlar = [];
   for (const imza of ['imza-1', 'imza-2']) {
     const r = await arsivKaynagi(45482, {
-      kok,
-      imparkKaynagi: srcVersionTuret(kopruUrl('ShallWe8-v47.exe', imza)),
-      uyar: (m) => uyarilar.push(m),
+      kok, imparkKaynagi: srcVersionTuret(kopruUrl('ShallWe8-v47.exe', imza)), bilgi: (m) => notlar.push(m),
     });
     assert.equal(r.md5, md5);
+  }
+  assert.deepEqual(notlar, []);
+});
+
+test('geri dönüş, yeniden adlandırma, liste dışı ad: hepsi yalnız bilgi — iş sürer', async () => {
+  const cases = [
+    ['ShallWe8-v47.exe', 'ShallWe8-v46.exe'],
+    ['ShallWe8-v47.exe', 'SW8-26-2.exe'],
+    [['MP11-v48.exe', 'MP11-v47.exe'], 'MP11-v49.exe'],
+  ];
+  for (const [kayitli, guncel] of cases) {
+    const { kok, md5 } = kur('abc', { impark_kaynagi: kayitli });
+    const notlar = [];
+    const r = await arsivKaynagi(45482, { kok, imparkKaynagi: guncel, bilgi: (m) => notlar.push(m) });
+    assert.equal(r.md5, md5, guncel);
+    assert.equal(notlar.length, 1, guncel);
+    assert.match(notlar[0], /İmpark exe adı değişti \(bilgi\) — .* → .*; güncellik içerik merdiveninden ölçülür$/);
+  }
+});
+
+test('alan yok ya da biçimi bozuk: yalnız bilgi alanı — HATA ve not yok, arşiv döner', async () => {
+  for (const alan of [undefined, '', '   ', 47, {}, true, [], ['MP11-v48.exe', ''], ['MP11-v48.exe', 3]]) {
+    const { kok, md5 } = kur('abc', alan === undefined ? {} : { impark_kaynagi: alan });
+    const notlar = [];
+    const r = await arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v51.exe', bilgi: (m) => notlar.push(m) });
+    assert.equal(r.md5, md5, JSON.stringify(alan));
+    assert.equal(r.imparkKaynagi, null, JSON.stringify(alan));
+    assert.deepEqual(notlar, [], JSON.stringify(alan));
+  }
+});
+
+test('çağıran exe kimliği vermez ya da boş verirse: not yok, HATA yok', async () => {
+  const { kok } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
+  for (const imparkKaynagi of [undefined, '', '   ']) {
+    const notlar = [];
+    const r = await arsivKaynagi(45482, { kok, imparkKaynagi, bilgi: (m) => notlar.push(m) });
     assert.deepEqual(r.imparkKaynagi, ['ShallWe8-v47.exe']);
-  }
-  assert.deepEqual(uyarilar, []);
-});
-
-test('kıyas EŞİTLİKtir: geri dönüş ya da yeniden adlandırma da BAYAT (sıralama yok)', async () => {
-  for (const guncel of ['ShallWe8-v46.exe', 'ShallWe8-v47-yeni.exe', 'SW8-26-2.exe']) {
-    const { kok } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
-    await assert.rejects(
-      () => arsivKaynagi(45482, { kok, imparkKaynagi: guncel, uyar: () => {} }),
-      /kaynak arşivi BAYAT: İmpark kaynağı ShallWe8-v47\.exe → /,
-      guncel,
-    );
+    assert.deepEqual(notlar, []);
   }
 });
 
-test('alan yoksa bugünkü davranış sürer ve kitap başına BİR KEZ uyarılır', async () => {
-  const { kok, md5 } = kur('abc');
-  const uyarilar = [];
-  const uyar = (m) => uyarilar.push(m);
-  const r1 = await arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v48.exe', uyar });
-  const r2 = await arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v49.exe', uyar });
-  assert.equal(r1.md5, md5);
-  assert.equal(r2.md5, md5);
-  assert.equal(r1.imparkKaynagi, null);
-  assert.equal(uyarilar.length, 1, 'ikinci işte uyarı tekrarlanmamalı');
-  assert.match(uyarilar[0], /45482 kaydında impark_kaynagi yok/);
-  assert.match(uyarilar[0], /ALGILANAMAZ \(güncel kaynak ShallWe8-v48\.exe\)/);
-});
-
-test('çağıran güncel kimlik vermezse kıyas ve uyarı yapılmaz (eski çağıranlar)', async () => {
-  const { kok } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
-  const uyarilar = [];
-  const r = await arsivKaynagi(45482, { kok, uyar: (m) => uyarilar.push(m) });
-  assert.deepEqual(r.imparkKaynagi, ['ShallWe8-v47.exe']);
-  assert.deepEqual(uyarilar, []);
-});
-
-test('güncel kimlik boş verilirse HATA — tazelik ölçülemedi, sessiz geçiş yok', async () => {
-  const { kok } = kur('abc', { impark_kaynagi: 'ShallWe8-v47.exe' });
-  await assert.rejects(
-    () => arsivKaynagi(45482, { kok, imparkKaynagi: '', uyar: () => {} }),
-    /güncel İmpark kaynağı bilinmiyor/,
-  );
-});
-
-test('impark_kaynagi alanı boş/dize değilse HATA', async () => {
-  for (const bozuk of ['', '   ', 47, {}, true, [], ['MP11-v48.exe', ''], ['MP11-v48.exe', 3]]) {
-    const { kok } = kur('abc', { impark_kaynagi: bozuk });
-    await assert.rejects(
-      () => arsivKaynagi(45482, { kok, imparkKaynagi: 'ShallWe8-v47.exe', uyar: () => {} }),
-      /impark_kaynagi alanı geçersiz/,
-      JSON.stringify(bozuk),
-    );
-  }
-});
-
-test('imparkKaynagiKiyasla: kayıt tam URL de olabilir, kimlik runner ile aynı türetilir', () => {
-  const statik = 'https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45482/'
-    + 'ShallWe8-v47.exe';
-  assert.deepEqual(imparkKaynagiKiyasla(statik, 'ShallWe8-v47.exe'),
-    { durum: 'ayni', kayitli: ['ShallWe8-v47.exe'], guncel: 'ShallWe8-v47.exe' });
-  const yeni = srcVersionTuret(kopruUrl('ShallWe8-v48.exe'));
-  assert.equal(imparkKaynagiKiyasla('ShallWe8-v47.exe', yeni).durum, 'bayat');
-  assert.equal(imparkKaynagiKiyasla(undefined, 'ShallWe8-v47.exe').durum, 'alan-yok');
-  assert.equal(imparkKaynagiKiyasla(null, 'ShallWe8-v47.exe').durum, 'alan-yok');
-});
-
-test('liste: köprü İmpark\'ın gerisindeyken arşiv kapsadığı her kaynakta kullanılır (45792)', async () => {
-  // Ölçüm 26.09: 45792 zip'i İmpark MP11-v48'den üretildi; köprü 23.09'da hâlâ v47 veriyordu.
-  const kapsam = ['MP11-v48.exe', 'MP11-v47.exe'];
-  for (const guncel of ['MP11-v47.exe', 'MP11-v48.exe']) {
-    const { kok } = kur('abc', { impark_kaynagi: kapsam });
-    const r = await arsivKaynagi(45482, { kok, imparkKaynagi: guncel, uyar: () => {} });
-    assert.deepEqual(r.imparkKaynagi, kapsam, guncel);
-  }
-  const { kok } = kur('abc', { impark_kaynagi: kapsam });
-  await assert.rejects(
-    () => arsivKaynagi(45482, { kok, imparkKaynagi: 'MP11-v49.exe', uyar: () => {} }),
-    (e) => e.message.startsWith('kaynak arşivi BAYAT: İmpark kaynağı MP11-v48.exe | MP11-v47.exe'
-      + ' → MP11-v49.exe; build zip yeniden üretilmeli'),
-  );
+test('imparkAdiNotu / imparkKaynagiBilgisi: SAF; tam URL ve liste runner kimliğiyle türetilir', () => {
+  const statik = 'https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45482/ShallWe8-v47.exe';
+  assert.deepEqual(imparkKaynagiBilgisi(statik), ['ShallWe8-v47.exe']);
+  assert.deepEqual(imparkKaynagiBilgisi(kopruUrl('ShallWe8-v47.exe')), ['ShallWe8-v47.exe']);
+  assert.equal(imparkKaynagiBilgisi(''), null);
+  assert.equal(imparkKaynagiBilgisi(undefined), null);
+  assert.equal(imparkAdiNotu(statik, 'ShallWe8-v47.exe'), null);
+  const liste = ['MP11-v48.exe', 'MP11-v47.exe'];
+  assert.equal(imparkAdiNotu(liste, 'MP11-v47.exe'), null);
+  assert.equal(imparkAdiNotu(liste, 'MP11-v49.exe'),
+    'İmpark exe adı değişti (bilgi) — MP11-v48.exe | MP11-v47.exe → MP11-v49.exe; '
+    + 'güncellik içerik merdiveninden ölçülür');
+  assert.equal(imparkAdiNotu(undefined, 'ShallWe8-v47.exe'), null);
+  assert.equal(imparkAdiNotu('ShallWe8-v47.exe', ''), null);
 });
 
 // ---------------------------------------------------------------------------
-// arsivOzeti × impark_kaynagi (birleştirme 26.09: probook-serit + bayat arşiv kapısı).
-// ProBook şeridi iki makinenin arşiv özetini kıyaslar. Özet yalnız md5+boyut taşısaydı zip
-// aynı, impark_kaynagi farklıyken "eşit" derdi: bir makine işi BAYAT diye düşürür, öteki üretirdi.
+// arsivOzeti (ProBook şeridi iki makinenin arşiv özetini kıyaslar). 27.09'dan beri
+// `impark_kaynagi` özete GİRMEZ: yalnız bilgidir, üretimi değiştirmez → ad farkı şeridi
+// (ProBook'u duraklatmayı) tetiklemez. Özet = `<id> <md5> <boyut>`.
 // ---------------------------------------------------------------------------
-const { arsivOzeti } = require('./kaynak-arsivi');
 
-test('arsivOzeti: zip aynı, impark_kaynagi farklı → özet FARKLI', () => {
-  const mac = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v48.exe' });
-  const pb = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v47.exe' });
-  assert.notEqual(arsivOzeti(mac.kok).ozet, arsivOzeti(pb.kok).ozet);
-  const kapsayan = kur('ayni-zip', { impark_kaynagi: ['ShallWe8-v48.exe', 'ShallWe8-v47.exe'] });
-  assert.notEqual(arsivOzeti(kapsayan.kok).ozet, arsivOzeti(mac.kok).ozet,
-    'kapsanan kaynak listesi de özete girer (v47 işinde biri üretir, öteki BAYAT der)');
+function ozetBekle(satir) {
+  return crypto.createHash('sha256').update(satir).digest('hex').slice(0, 16);
+}
+
+test('arsivOzeti: zip aynıysa impark_kaynagi farkı (ad, liste, yok, bozuk) özeti DEĞİŞTİRMEZ', () => {
+  const mac = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v51.exe' });
+  const digerleri = [
+    kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v47.exe' }),
+    kur('ayni-zip', { impark_kaynagi: ['ShallWe8-v48.exe', 'ShallWe8-v47.exe'] }),
+    kur('ayni-zip'),
+    kur('ayni-zip', { impark_kaynagi: '' }),
+  ];
+  const beklenen = ozetBekle(`45482 ${mac.md5} ${Buffer.byteLength('ayni-zip')}`);
+  assert.equal(arsivOzeti(mac.kok).ozet, beklenen);
+  for (const d of digerleri) assert.equal(arsivOzeti(d.kok).ozet, beklenen);
 });
 
-test('arsivOzeti: aynı İmpark kimliği (ad ya da imzalı köprü URL\'si) → özet EŞİT', () => {
-  const a = kur('ayni-zip', { impark_kaynagi: 'ShallWe8-v48.exe' });
-  const b = kur('ayni-zip', { impark_kaynagi: kopruUrl('ShallWe8-v48.exe', 'baska-imza') });
-  assert.equal(arsivOzeti(a.kok).ozet, arsivOzeti(b.kok).ozet);
+test('arsivOzeti: zip farklıysa özet FARKLI; JSON bozuksa satır BOZUK', () => {
+  assert.notEqual(arsivOzeti(kur('zip-a').kok).ozet, arsivOzeti(kur('zip-b').kok).ozet);
+  const { kok, dizin } = kur('z');
+  fs.writeFileSync(path.join(dizin, 'kaynak.json'), '{bozuk');
+  assert.deepEqual(arsivOzeti(kok), { ozet: ozetBekle('45482 BOZUK'), adet: 1, kitaplar: ['45482'] });
 });
 
-test('arsivOzeti: alan yoksa satır eski biçimde (özet değişmez); alan bozuksa BOZUK', () => {
-  const { kok, md5 } = kur('z');
-  const eski = crypto.createHash('sha256').update(`45482 ${md5} 1`).digest('hex').slice(0, 16);
-  assert.equal(arsivOzeti(kok).ozet, eski);
-  const bozuk = kur('z', { impark_kaynagi: '' });
-  const beklenen = crypto.createHash('sha256').update('45482 BOZUK').digest('hex').slice(0, 16);
-  assert.deepEqual(arsivOzeti(bozuk.kok), { ozet: beklenen, adet: 1, kitaplar: ['45482'] });
+// ---------------------------------------------------------------------------
+// NÖBETÇİ — AD SÜRÜMÜ KARAR DEĞİL (Nadir 27.09: "isim güncellemesi metodu çok kırılgan").
+// Depoda TEST DIŞI kodda (src/ scripts/ tools/; *.test.* ve test/fikstür dizinleri hariç, yorumlar
+// atılarak) İmpark exe ADI güncellik kararına girmez:
+//   A) eski kapının izleri ("arşivi BAYAT", "build zip yeniden üretilmeli", imparkKaynagiKiyasla)
+//      ve exe adından sürüm ayrıştırma kalıbı (`-v(\d`, `-v\d`, `-v[0-9]`) hiçbir dosyada yok;
+//   B) `impark_kaynagi` / `imparkKaynagi` yalnız kaynak-arsivi.js ve runner.js'te geçer;
+//   C) runner.js'te `imparkKaynagi` yalnız arsivKaynagi çağrısında (bilgi için) geçer — dönen
+//      `arsiv.imparkKaynagi` hiçbir yerde okunmaz; `impark_kaynagi` hiç geçmez;
+//   D) kaynak-arsivi.js'te `impark_kaynagi` yalnız bilgi yardımcılarına argümandır ve o
+//      yardımcılar hata fırlatmaz.
+// MUTASYON (27.09 elle doğrulandı; her biri bu bölümü kırar): kaynak-arsivi.js'e ad farkında
+// `throw new Error('kaynak arşivi BAYAT: …')` (A) · runner.js'e
+// `if (!arsiv.imparkKaynagi.includes(imparkSrcVersion)) throw …` (C) · tools/ altındaki bir
+// betikte `kayit.impark_kaynagi` okumak (B) · src/ altında `/-v(\d+)\.exe/` ile ad sürümü
+// ayrıştırmak (A) · imparkAdiNotu içine `throw` (D).
+// ---------------------------------------------------------------------------
+
+const DEPO = path.join(__dirname, '..', '..');
+const TARAMA_KOKLERI = ['src', 'scripts', 'tools'];
+const ATLA_DIZIN = new Set(['node_modules', 'tests', 'test', '__tests__', 'fixtures', 'fikstur',
+  'dist', 'build', 'out']);
+const IZINLI = new Set(['src/agent/kaynak-arsivi.js', 'src/agent/runner.js']);
+
+function testDisiKaynaklar() {
+  const sonuc = [];
+  const yuru = (dizin) => {
+    let girdiler;
+    try { girdiler = fs.readdirSync(dizin, { withFileTypes: true }); } catch (_) { return; }
+    for (const g of girdiler) {
+      const tam = path.join(dizin, g.name);
+      if (g.isDirectory()) {
+        if (!ATLA_DIZIN.has(g.name) && !g.name.startsWith('.')) yuru(tam);
+      } else if (g.isFile() && /\.(c|m)?js$|\.ts$|\.sh$|\.py$/.test(g.name)
+        && !/\.test\.(c|m)?(js|ts|sh)$/.test(g.name)) {
+        sonuc.push(tam);
+      }
+    }
+  };
+  for (const k of TARAMA_KOKLERI) yuru(path.join(DEPO, k));
+  return sonuc;
+}
+
+/** Yorumları atar: JS blok + satır sonu yorumları; sh/py `#` satırları. */
+function yorumsuz(metin, dosya) {
+  if (/\.(sh|py)$/.test(dosya)) return metin.replace(/^\s*#.*$/gm, '');
+  return metin.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+}
+
+const KAYNAKLAR = testDisiKaynaklar().map((tam) => ({
+  goreli: path.relative(DEPO, tam).split(path.sep).join('/'),
+  kod: yorumsuz(fs.readFileSync(tam, 'utf8'), tam),
+}));
+
+test('nöbetçi: tarama gerçekten depoyu görüyor (boş tarama yeşil vermez)', () => {
+  const adlar = new Set(KAYNAKLAR.map((k) => k.goreli));
+  for (const zorunlu of [...IZINLI, 'src/agent/icerik-merdiven.js', 'tools/kabul/k4-guncellik.js']) {
+    assert.ok(adlar.has(zorunlu), `taranmadı: ${zorunlu}`);
+  }
+  assert.ok(KAYNAKLAR.length > 100, `yalnız ${KAYNAKLAR.length} dosya tarandı`);
+});
+
+test('nöbetçi A: eski ad kapısının izi ve exe adından sürüm ayrıştırma yok', () => {
+  const yasak = [
+    /arşivi BAYAT/, /build zip yeniden üretilmeli/, /imparkKaynagiKiyasla/,
+    /-v\(\\d|-v\\d|-v\[0-9\]/,
+  ];
+  const ihlal = [];
+  for (const { goreli, kod } of KAYNAKLAR) {
+    for (const d of yasak) if (d.test(kod)) ihlal.push(`${goreli}: ${d}`);
+  }
+  assert.deepEqual(ihlal, []);
+});
+
+test('nöbetçi B: impark_kaynagi / imparkKaynagi yalnız kaynak-arsivi.js + runner.js', () => {
+  const ihlal = KAYNAKLAR
+    .filter(({ goreli, kod }) => /impark_kaynagi|imparkKaynagi/.test(kod) && !IZINLI.has(goreli))
+    .map(({ goreli }) => goreli);
+  assert.deepEqual(ihlal, []);
+});
+
+test('nöbetçi C: runner.js exe adını yalnız bilgi için arsivKaynagi\'ye verir, sonucu okumaz', () => {
+  const { kod } = KAYNAKLAR.find((k) => k.goreli === 'src/agent/runner.js');
+  assert.equal((kod.match(/imparkKaynagi/g) || []).length, 1, 'imparkKaynagi yalnız çağrıda geçmeli');
+  assert.match(kod,
+    /const arsiv = await arsivKaynagi\(job\.bookId, \{ imparkKaynagi: imparkSrcVersion, bilgi: log \}\);/);
+  assert.doesNotMatch(kod, /impark_kaynagi/);
+});
+
+test('nöbetçi D: kaynak-arsivi.js alanı yalnız bilgi yardımcılarına verir; yardımcılar atmaz', () => {
+  const { kod } = KAYNAKLAR.find((k) => k.goreli === 'src/agent/kaynak-arsivi.js');
+  const kullanimlar = [...kod.matchAll(/impark_kaynagi/g)];
+  assert.ok(kullanimlar.length >= 1);
+  for (const m of kullanimlar) {
+    const once = kod.slice(Math.max(0, m.index - 40), m.index);
+    assert.match(once, /(imparkAdiNotu|imparkKaynagiBilgisi)\(kayit\.$/, `bilgi dışı kullanım: …${once}`);
+  }
+  for (const fn of ['imparkKaynagiBilgisi', 'imparkAdiNotu']) {
+    const bas = kod.indexOf(`function ${fn}(`);
+    assert.ok(bas >= 0, fn);
+    const govde = kod.slice(bas, kod.indexOf('\n}\n', bas));
+    assert.doesNotMatch(govde, /\bthrow\b/, `${fn} karar vermez, hata fırlatmaz`);
+  }
+  assert.match(kod, /if \(adNotu\) bilgi\(/, 'ad notu yalnız bilgi olarak loglanır');
 });

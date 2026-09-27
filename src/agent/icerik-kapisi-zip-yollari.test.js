@@ -185,7 +185,7 @@ async function sahtePaketleyici() {
   return { istekler, url, kapat: () => sunucu.close() };
 }
 
-/** Arşiv kökü + gerçek zip buffer'lı kitap kaydı kurar (BAYAT gate: impark_kaynagi verilmez). */
+/** Arşiv kökü + gerçek zip buffer'lı kitap kaydı kurar (impark_kaynagi yalnız bilgi; verilmez). */
 function arsivKur(bookId, zipDosyaYolu) {
   const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-zip-arsiv-'));
   const dizin = path.join(kok, String(bookId));

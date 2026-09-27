@@ -232,30 +232,37 @@ test('denetçi: zorla çağrısı uçuştaki ESKİ okumayı paylaşmaz, bitmesin
   assert.equal(d.karar().probookSaglikli, true);
 });
 
-test('birleştirme 26.09: zip aynı, impark_kaynagi farklı → bayat kararı ayrışırdı, Mac alır', async () => {
+// 27.09 (Nadir: exe ADI kırılgan, ad kapısı kaldırıldı): `impark_kaynagi` yalnız bilgidir, iki
+// makine aynı zip'ten aynı şeyi üretir → özet EŞİT, ad farkı ProBook'u duraklatmaz. 26.09'da bu
+// test "ProBook aynı zip'i BAYAT diye düşürür, Mac alır" diyordu.
+test('27.09: zip aynı, impark_kaynagi farklı → ikisi de arşivden üretir, özet eşit, ProBook seçilebilir', async () => {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
   const crypto = require('crypto');
   const { arsivOzeti, arsivKaynagi } = require('./kaynak-arsivi');
-  const arsiv = (impark) => {
+  const arsiv = (impark, icerik = 'ayni-zip') => {
     const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'serit-arsiv-'));
     fs.mkdirSync(path.join(kok, '45482'));
-    fs.writeFileSync(path.join(kok, '45482', 'build.zip'), 'ayni-zip');
-    const md5 = crypto.createHash('md5').update('ayni-zip').digest('hex');
+    fs.writeFileSync(path.join(kok, '45482', 'build.zip'), icerik);
+    const md5 = crypto.createHash('md5').update(icerik).digest('hex');
     fs.writeFileSync(path.join(kok, '45482', 'kaynak.json'),
-      JSON.stringify({ dosya: 'build.zip', md5, boyut: 8, impark_kaynagi: impark }));
+      JSON.stringify({ dosya: 'build.zip', md5, boyut: Buffer.byteLength(icerik), impark_kaynagi: impark }));
     return kok;
   };
-  const mac = arsiv('ShallWe8-v48.exe');
+  const mac = arsiv('ShallWe8-v51.exe');
   const pb = arsiv('ShallWe8-v47.exe');
-  // Güncel iş v48: Mac arşivden üretir, ProBook aynı zip'i BAYAT diye düşürür.
-  const s = { imparkKaynagi: 'ShallWe8-v48.exe', uyar: () => {} };
-  assert.ok(await arsivKaynagi(45482, { kok: mac, ...s }));
-  await assert.rejects(() => arsivKaynagi(45482, { kok: pb, ...s }), /BAYAT/);
+  const s = { imparkKaynagi: 'ShallWe8-v51.exe', bilgi: () => {} };
+  const rMac = await arsivKaynagi(45482, { kok: mac, ...s });
+  const rPb = await arsivKaynagi(45482, { kok: pb, ...s });
+  assert.equal(rPb.srcVersion, rMac.srcVersion, 'aynı zip → aynı kaynak kimliği, BAYAT yok');
   const k = seritKarari({ nabiz: nabiz({ arsivOzeti: arsivOzeti(pb).ozet }), simdi: T, arsivOzeti: arsivOzeti(mac).ozet });
-  assert.equal(k.macPardusAlsin, true);
-  assert.match(k.sebep, /kaynak arşivi farklı/);
+  assert.equal(k.probookSaglikli, true, k.sebep);
+  // Zip gerçekten farklıysa (bütünlük/içerik) şerit ayrışması yine yakalanır.
+  const farkliZip = arsiv('ShallWe8-v51.exe', 'baska-zi');
+  const k2 = seritKarari({ nabiz: nabiz({ arsivOzeti: arsivOzeti(farkliZip).ozet }), simdi: T, arsivOzeti: arsivOzeti(mac).ozet });
+  assert.equal(k2.macPardusAlsin, true);
+  assert.match(k2.sebep, /kaynak arşivi farklı/);
 });
 
 // ALTINCI KOŞUL — motor eşit (2026-09-26, E3): iki şeridin 43e23 kanoniği farklıysa ProBook seçilmez.

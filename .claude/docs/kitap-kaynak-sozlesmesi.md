@@ -107,10 +107,16 @@ bir aktivasyonlu set (45480).
 
 **Merdiven S0+S1 (26.09):** `src/agent/icerik-merdiven.js`, `EMPP_ARSIV_MERDIVEN=1` (varsayılan KAPALI) — arşiv ve exe yolunda iş kopyasına: menü sürümü İmpark'a sorulur, geride olan ZKitapZipH (önbellek `<ID>-<Vs>`) thumbs kimliğiyle doğrulanıp `bookN/assets/<ID>`'ye yazılır, kök dokunulmaz, ölçülemezse iş düşer; S2/S3 yok.
 
-**Bayat arşiv kapısı (26.09):** `kaynak.json` `impark_kaynagi` = arşivin kapsadığı İmpark kaynak kimliği (dize ya da
-liste; ilk öğe zip'in üretildiği kaynak). Kimlik = runner'ın `srcVersionTuret(job.downloadUrl)` değeri, yani köprü
-exe'sinin adı (ör. `ShallWe8-v47.exe`). İşin kimliği listede yoksa iş `kaynak arşivi BAYAT: İmpark kaynağı X → Y;
-build zip yeniden üretilmeli` hatasıyla düşer (last_error + `bildir paket … -p yuksek -e warning`); eski zip'ten
-üretilmez, İmpark exe'sine düşülmez. Kıyas eşitliktir, sıralama değil. Alan yoksa bugünkü davranış + süreçte tek
-uyarı. Kör nokta: köprü İmpark'ın gerisinde kalırsa (45792: İmpark v48, köprü v47) güncelleme görünmez; next-job
-yükü İmpark statik adını taşımıyor. Setin yan girdileri (tek-kitap exe'leri) de kıyasa girmiyor.
+**Bayat arşiv (exe ADI) kapısı — KALDIRILDI (Nadir 27.09, ad kırılgan; güncellik içerik sürümünden).** 26.09'da
+`kaynak.json` `impark_kaynagi` (arşivin kapsadığı köprü exe adı, ör. `ShallWe8-v47.exe`) işin exe adıyla
+(`srcVersionTuret(job.downloadUrl)`) kıyaslanıyor, farkta iş `kaynak arşivi BAYAT … build zip yeniden üretilmeli` diye
+düşüyordu. Nadir 27.09: "v47 → v51 gibi isim güncellemesi metodu çok kırılgan (insanlar unutabiliyor), kullanmak
+istemiyorum." Ölçüm: ad İmpark `S_TestKitaplar.Adi` alanından gelir ("ShallWe8-v51", elle yazılır), aktivasyon/lisans
+değişikliğinde içerik değişmeden de artar; 45482 android bu kapıda düştü, oysa merdiven aynı işte alt kitapları
+ZipVersiyon'a göre zaten güncelliyordu. Şimdi: `impark_kaynagi` kayıtta yalnız BİLGİ — ad farklıysa iş başına tek log
+satırı (`İmpark exe adı değişti (bilgi) — güncellik içerik merdiveninden ölçülür`), iş sürer; alan yok/bozuk da karar
+değil. Arşiv özetine (ProBook şeridi) girmez. Zip/boyut/md5 denetimleri aynen. Güncellik YALNIZ içerik sürümüyle
+ölçülür: kaynakta alt kitap başına ZipVersiyon (+ZKitapFileSize), üretimde merdiven S0/S1, yüklemeden önce kabul
+E7/K4/SET_TUM. Merdiven kapalıyken (`EMPP_ARSIV_MERDIVEN≠1`) de ad kıyası yok: ad içeriği ölçmez; geride içerik
+kabul K4/SET_TUM ya da Pardus K18'de (GÜNCEL-DEĞİL rc 3 → yükleme yok) yakalanır. Nöbetçi test:
+`src/agent/kaynak-arsivi.test.js` "AD SÜRÜMÜ KARAR DEĞİL" (depoda test dışı kodda ad sürümü güncellik kararına girmez).

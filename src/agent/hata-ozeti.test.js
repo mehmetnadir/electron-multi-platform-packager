@@ -46,8 +46,10 @@ test('gerçek agent.log örneği (11845 pardus, 26.09): "RED:" sebebi kesilmez',
   assert.ok(ozet.length <= 600);
 });
 
+// BAYAT örneği: 26.09 arşiv ad kapısının "kaynak arşivi BAYAT" mesajıydı; kapı 27.09'da kaldırıldı
+// (Nadir: ad kırılgan). İşaret sınıfı sürer (probook-kilit.sh "BAYAT KILIT", izleyici kalbi).
 test('BAYAT / HATA / Error işaretleri de kök satırı sayılır', () => {
-  for (const kok of ['kaynak arşivi BAYAT: kayıtlı v49 → güncel v50', 'odak: HATA: kapı öne geçti',
+  for (const kok of ['BAYAT KILIT kenara alindi (sahibi pid 999999 olu)', 'odak: HATA: kapı öne geçti',
     'Error: ENOSPC no space left on device']) {
     const ozet = hataOzeti(`${'B'.repeat(700)}\n${kok}\nson bilgi satırı`);
     assert.ok(ozet.startsWith(kok), ozet);
