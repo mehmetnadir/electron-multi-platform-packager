@@ -587,7 +587,9 @@ test('kabul kapısı: GERÇEK timeout — asılı kalan betik SIGKILL edilir (sp
 test('GERİLEME: kapı spawn\'ın gerçek `timeout` seçeneğini kullanır, `timeoutMs` DEĞİL', () => {
   const bas = SRC.indexOf('async function pardusKabulKapisi');
   assert.notEqual(bas, -1, 'kabul kapısı fonksiyonu runner.js\'te olmalı');
-  const blok = SRC.slice(bas, bas + 2600);
+  // Fonksiyon sonuna kadar (bir sonraki fonksiyon tanımına kadar) al — sabit karakter
+  // sayısı SÜRELİ KONTEYNER YEDEK KABUL eklemesiyle (2026-09-27) kırılgan çıktı.
+  const blok = SRC.slice(bas, SRC.indexOf('async function konteynerKabulKapisi'));
   assert.match(blok, /runKabulBetigi\(/);
   assert.doesNotMatch(blok, /timeoutMs: CONFIG\.pardusKabulTimeoutMs/, 'spawn `timeoutMs` diye bir seçenek bilmez — sessizce yok sayılır');
   assert.match(blok, /throw new Error\(`pardus paketi ProBook kabul kapısından geçemedi/);

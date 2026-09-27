@@ -1,3 +1,20 @@
+## 2026-09-27 (3) — Süreli konteyner yedek kabul: ProBook elektrik kesintisiyle kapalıyken Docker fallback
+
+**Karar:** Nadir 27.09 — ProBook elektrik kesintisiyle kapandı, ofise gidene kadar açılamıyor;
+"yarına kadar fallback'i devreye al, bu bilgisayardaki docker üzerinden". Süreli bayrak
+(`~/.empp-agent/pardus-konteyner-kabul.istek`, ilk satır bitiş ISO zaman damgası) AKTİFKEN VE
+ProBook'a erişilemezken `src/agent/runner.js` `pardusKabulKapisi` ProBook betiğini hiç çağırmadan
+bu Mac'teki Docker konteyner kapısına (`tools/pardus/konteyner-kabul.sh` → mevcut `konteyner-kapi.sh`,
+imaj `pardus-kapi:3`) düşer; `pardusKabulErisimUygula`'ya eklenen `yedekAktif` alanı aynı süre
+boyunca `pardus` yeteneğinin heartbeat'ten düşürülmesini de engeller. Süresi dolan bayrak silinmez,
+yalnız yok sayılır — bayrak yokken davranış BİREBİR eskisiyle aynıdır. Sonuçlar (GEÇTİ/RED/
+ÖLÇÜLEMEDİ) `~/.empp-agent/pardus-konteyner-kabul.log`'a TSV kaydı olarak eklenir — ProBook dönünce
+hangi kitapların yeniden ProBook'ta kabul edilmesi gerektiğini bulmak için. Detay ve kapsam dışı
+bırakılanlar (K4/E6-E7-E8 güncellik, SET_TUM, gerçek FUSE/AppRun yolu): `.claude/docs/gotchas.md`.
+Testler: `src/agent/runner-pardus-yedek.test.js` (20), `tools/pardus/konteyner-kabul.test.js` (9);
+mutasyon kanıtı elle doğrulandı (bypass koşulu geçici devre dışı bırakılıp entegrasyon testi
+kırıldı, sonra geri alındı).
+
 ## 2026-09-27 (2) — Gece düşüşleri: android cihaz kabulü, paketleyici yoklaması, ProBook aktarımı
 
 **Kaynak:** 26→27.09 gecesi `failed` yazılan 7 iş (android 45538, 45469, 45472, 45100, 45449;

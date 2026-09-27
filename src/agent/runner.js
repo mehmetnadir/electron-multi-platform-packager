@@ -49,7 +49,7 @@ const {
   pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
-  pardusBetikEnv, claimGSurumu,
+  pardusBetikEnv, claimGSurumu, pardusYedekKabulDurumu,
 } = require('./runner-helpers');
 // Kalıcı kabul kanıtı kökü — başsız (android/mac/windows) kapı AYNI kökü kullanır
 // (tools/kabul/basliksiz-kabul.js); Pardus da aynı adlandırma+kökle yazar (bkz. §DÜZELTME 2).
@@ -118,6 +118,20 @@ const CONFIG = {
   pardusKabulScript: process.env.PARDUS_KABUL_SCRIPT
     || path.join(__dirname, '..', '..', 'tools', 'pardus', 'probook-kabul.sh'),
   pardusKabulTimeoutMs: Number(process.env.AGENT_PARDUS_KABUL_TIMEOUT_MS || 8 * 60 * 1000),
+  // SÜRELİ KONTEYNER YEDEK KABUL (2026-09-27, Nadir: "ProBook elektrik kesintisiyle kapalı,
+  // yarına kadar bu Mac'teki docker üzerinden fallback'i devreye al"). Bayrak dosyasının ilk
+  // boş olmayan satırı bitiş ISO zaman damgasıdır — aktifken VE ProBook'a erişilemezken kabul
+  // ProBook betiği yerine BU Mac'teki Docker konteyner kapısından (tools/pardus/konteyner-kabul.sh
+  // → konteyner-kapi.sh, imaj pardus-kapi:3) yapılır. Süresi dolan bayrak SİLİNMEZ, yok sayılır;
+  // yoksa davranış eskisiyle BİREBİR aynıdır.
+  pardusYedekKabulFlag: process.env.EMPP_PARDUS_YEDEK_KABUL_BAYRAK
+    || path.join(os.homedir(), '.empp-agent', 'pardus-konteyner-kabul.istek'),
+  pardusKonteynerKabulScript: process.env.PARDUS_KONTEYNER_KABUL_SCRIPT
+    || path.join(__dirname, '..', '..', 'tools', 'pardus', 'konteyner-kabul.sh'),
+  // Konteyner kabul sonuçlarının (GECTI/RED/OLCULEMEDI) TSV kaydı — ProBook dönünce hangi
+  // kitapların yeniden ProBook'ta kabul edilmesi gerektiğini bulmak için kullanılacak liste.
+  pardusYedekKabulKayit: process.env.EMPP_PARDUS_YEDEK_KABUL_KAYIT
+    || path.join(os.homedir(), '.empp-agent', 'pardus-konteyner-kabul.log'),
   // İşler arasında okunur; varsa runner temiz çıkar, launchd yeni kodla açar (bkz. restartRequested).
   restartFlag: process.env.AGENT_RESTART_FLAG || path.join(os.homedir(), '.empp-agent', 'yeniden-baslat.istek'),
   // Dosya durdukça yeni iş alınmaz (aynı anda tek build; harici üretim koşarken). Kaldıran çağırandır.
@@ -364,6 +378,26 @@ function pardusKabulHostu() {
   return process.env.PROBOOK_HOST === 'yerel' ? 'yerel' : probookHostSec(process.env);
 }
 
+// SÜRELİ KONTEYNER YEDEK KABUL (2026-09-27) — bayrak dosyasını her çağrıda senkron ve ucuz
+// okur (restart gerekmez); yorum saf fonksiyonda (pardusYedekKabulDurumu). Durum değiştiğinde
+// (aktif↔pasif) TEK satır log atar, her çağrıda atmaz — başlangıç durumu 'pasif' varsayılır ki
+// bayrak hiç kurulmamışken (yaygın durum) açılışta gereksiz log basılmasın.
+let _yedekAktifSon = false;
+function pardusYedekKabul() {
+  let icerik = '';
+  try { icerik = fs.readFileSync(CONFIG.pardusYedekKabulFlag, 'utf8'); } catch (_) { icerik = ''; }
+  const durum = pardusYedekKabulDurumu(icerik, Date.now());
+  if (durum.aktif !== _yedekAktifSon) {
+    _yedekAktifSon = durum.aktif;
+    if (durum.aktif) {
+      log(`pardus: KONTEYNER YEDEK KABUL AKTİF — ${durum.bitis}'e kadar ProBook erişilemezse kabul bu Mac'teki Docker konteyner kapısından yapılır`);
+    } else {
+      log('pardus: konteyner yedek kabulü pasif' + (durum.sebep === 'suresi-doldu' ? ` (süresi doldu: ${durum.bitis})` : ''));
+    }
+  }
+  return durum;
+}
+
 // Açılışta ilk ölçümü bekler (en çok sinirMs): ilk next-job 'ölçülmedi' ile pardus kiralamasın
 // (27.09 12:34: açılıştan 1,4 sn sonra 60014 pardus kiralandı; ERİŞİLEMEZ kararı ancak 16 sn sonraki heartbeat'te devreye girdi).
 async function probookErisimIlkOlcum(host, { sinirMs = 6000, port = 22 } = {}) {
@@ -404,12 +438,15 @@ function guncelYetenekler() {
   const pardusVar = CONFIG.caps.includes('pardus');
   const kabulHost = pardusKabulHostu();
   const probookErisimi = pardusVar && kabulHost !== 'yerel' ? probookErisimDurumu(kabulHost) : undefined;
+  // KONTEYNER YEDEK KABUL (2026-09-27): pardusVar dışında hesaplamaya gerek yok.
+  const yedek = pardusVar ? pardusYedekKabul() : { aktif: false };
   if (pardusVar) {
     caps = pardusKabulErisimUygula(caps, {
       kabulAcik: CONFIG.pardusKabul,
       kapiAcik: process.env.EMPP_PARDUS_KABUL_ERISIM !== '0', // acil kapatma: EMPP_PARDUS_KABUL_ERISIM=0
       host: kabulHost,
       erisilir: probookErisimi,
+      yedekAktif: yedek.aktif,
     });
   }
   const imza = caps.join(',');
@@ -418,6 +455,7 @@ function guncelYetenekler() {
       '| macAraç=' + (_macArac.saglam === null ? 'ölçülmedi' : (_macArac.saglam ? 'sağlam' : 'BOZUK')),
       ...(seritDenetcisi ? ['| pardus şeridi=' + seritDenetcisi.ozet()] : []),
       ...(pardusVar ? ['| probook=' + (probookErisimi === true ? 'erişilir' : (probookErisimi === false ? 'ERİŞİLEMEZ' : 'ölçülmedi'))] : []),
+      ...(pardusVar && yedek.aktif && caps.includes('pardus') ? ['| yedek=konteyner(' + yedek.bitis + ')'] : []),
       '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
@@ -1642,6 +1680,19 @@ async function pardusKanitiKaliciyaKopyala(kanitDir, bookId) {
 async function pardusKabulKapisi(artifactPath, outDir, bookTitle, bookId) {
   if (!CONFIG.pardusKabul) return;
   const aktivasyon = aktivasyonBeklenir(bookTitle);
+  const yedek = pardusYedekKabul();
+  const kabulHost = pardusKabulHostu();
+  // SÜRELİ KONTEYNER YEDEK KABUL (2026-09-27): yedek aktif VE ProBook'a erişilemez ÖLÇÜLDÜyse
+  // ProBook betiğini HİÇ çağırma — doğrudan konteyner kapısına git. host==='yerel' iken (kabul
+  // ProBook'un kendisinde koşuyor) erişilemezlik ölçümü anlamsızdır, yedek devreye GİRMEZ.
+  if (yedek.aktif && kabulHost !== 'yerel') {
+    const erisilir = await probookErisimIlkOlcum(kabulHost);
+    if (erisilir === false) {
+      log(`pardus: ProBook erişilemez (yedek ${yedek.bitis}'e kadar aktif) — ProBook betiği ATLANDI, KONTEYNER kapısına gidiliyor`);
+      await konteynerKabulKapisi(artifactPath, outDir, aktivasyon, bookId, bookTitle, yedek);
+      return;
+    }
+  }
   log('pardus: ProBook kabul kapısı başlıyor —', CONFIG.pardusKabulScript,
       aktivasyon ? '(aktivasyon kodlu seri — renk eşiği aranmaz)' : '');
   const kanitDir = path.join(outDir, 'probook-kabul');
@@ -1672,6 +1723,14 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle, bookId) {
       throw new Error(`${PROBOOK_KAPISI_ISARETI} ProBook kabulü ÖLÇÜLEMEDİ (rc=4): ${sinif.sebep} — paket kusuru DEĞİL, iş ertelenmeli`);
     }
     if (probookErisilemezHatasi(cikti, kabul.timedOut)) {
+      // SÜRELİ KONTEYNER YEDEK KABUL (2026-09-27): ProBook ölçümde erişilir görünmüş olsa
+      // bile betik erişilemezlikle düşebilir (kısa kesinti, ölçüm-koşum arası yarış).
+      // Yedek aktifken bu ERTELENMEZ — hemen konteyner kapısına düşülür.
+      if (yedek.aktif && kabulHost !== 'yerel') {
+        log(`pardus: ProBook'a erişilemedi (rc=${kabul.code}) — KONTEYNER yedek kabulüne düşülüyor (yedek ${yedek.bitis}'e kadar aktif)`);
+        await konteynerKabulKapisi(artifactPath, outDir, aktivasyon, bookId, bookTitle, yedek);
+        return;
+      }
       throw new Error(
         `${PROBOOK_KAPISI_ISARETI} ProBook'a erişilemedi (rc=${kabul.code}): ${sebep} `
         + `— paket kusuru DEĞİL, iş ertelenmeli`,
@@ -1680,6 +1739,66 @@ async function pardusKabulKapisi(artifactPath, outDir, bookTitle, bookId) {
     throw new Error(`pardus paketi ProBook kabul kapısından geçemedi (rc=${kabul.code}): ${sebep}`);
   }
   log('pardus: ProBook kabul kapısı GEÇTİ — kanıt:', kanitDir);
+}
+
+/**
+ * SÜRELİ KONTEYNER YEDEK KABUL — kapı (2026-09-27, Nadir: "ProBook yarına kadar kapalı,
+ * yedeği bu Mac'teki docker üzerinden devreye al"). ProBook'un YERİNE GEÇMEZ, geçici köprüdür:
+ * `pardusKabulKapisi` yalnız yedek bayrağı AKTİFKEN ve ProBook'a erişilemediğinde buraya düşer.
+ * Ölçütler ProBook kapısıyla BİREBİR aynıdır (tools/pardus/konteyner-kapi.sh, probook-kabul.sh
+ * ile aynı eşikler) — konteyner-kabul.sh yalnız docker'ı sarmalar (docker info/imaj kapısı).
+ *
+ * Kod eşlemesi (konteyner-kabul.sh → konteyner-kapi.sh, tier-1):
+ *   0 GEÇTİ         → yükle, TSV kaydına 'GECTI' yazılır.
+ *   1 RED           → paket kusuru, `failed` YAZILIR (throw işaretsiz).
+ *   2 / timeout     → kapı kusuru (docker yok/kapalı, imaj yok, betik asılı kaldı) — paket
+ *                     kusuru DEĞİL, `PROBOOK_KAPISI_ISARETI` ile ertelenebilir sınıfa düşer.
+ * Her sonuç `CONFIG.pardusYedekKabulKayit` dosyasına TSV satırı olarak eklenir — ProBook dönünce
+ * hangi kitapların yeniden ProBook'ta kabul edilmesi gerektiğini bulmak için (yazma hatası işi
+ * DÜŞÜRMEZ, yalnız uyarı loglanır).
+ */
+async function konteynerKabulKapisi(artifactPath, outDir, aktivasyon, bookId, bookTitle, yedek) {
+  const kanitDir = path.join(outDir, 'konteyner-kabul');
+  log('pardus: KONTEYNER yedek kabul kapısı başlıyor —', CONFIG.pardusKonteynerKabulScript,
+      aktivasyon ? '(aktivasyon kodlu seri — renk eşiği aranmaz)' : '');
+  const kabul = await runKabulBetigi([CONFIG.pardusKonteynerKabulScript, artifactPath, kanitDir],
+    { KAPI_AKTIVASYON: aktivasyon ? '1' : '0' });
+  for (const satir of String(kabul.stdout || '').split('\n').filter(Boolean)) log('  [kkabul]', satir);
+  await pardusKanitiKaliciyaKopyala(kanitDir, bookId);
+  const kaliciKanit = path.join(kanitKoku(), kanitAdi(bookId || 'bilinmiyor', 'pardus'));
+  const zaman = new Date().toISOString();
+  const paketAdi = path.basename(artifactPath);
+  const kaydet = (sonuc) => pardusKonteynerKayitYaz([zaman, bookId || '', bookTitle || '', paketAdi, sonuc, kaliciKanit]);
+
+  if (kabul.timedOut || kabul.code === 2) {
+    const cikti = String(kabul.stdout || kabul.stderr || '');
+    const sebep = kabul.timedOut
+      ? `kapı ${Math.round(CONFIG.pardusKabulTimeoutMs / 60000)} dk içinde bitmedi`
+      : cikti.split('\n').filter(Boolean).slice(-2).join(' | ');
+    await kaydet('OLCULEMEDI');
+    throw new Error(
+      `${PROBOOK_KAPISI_ISARETI} konteyner kabulü ÖLÇÜLEMEDİ (rc=${kabul.timedOut ? 'timeout' : kabul.code}): `
+      + `${sebep} — paket kusuru DEĞİL, iş ertelenmeli`,
+    );
+  }
+  if (kabul.code !== 0) {
+    const cikti = String(kabul.stdout || kabul.stderr || '');
+    const sebep = cikti.split('\n').filter(Boolean).slice(-2).join(' | ');
+    await kaydet('RED');
+    throw new Error(`pardus paketi KONTEYNER kabul kapısından geçemedi (rc=${kabul.code}): ${sebep}`);
+  }
+  await kaydet('GECTI');
+  log(`pardus: KONTEYNER yedek kabulü GEÇTİ (ProBook yerine; yedek ${yedek.bitis}'e kadar) — kanıt: ${kanitDir}`);
+}
+
+/** Konteyner yedek kabul sonucunu TSV satırı olarak ekler; yazma hatası işi DÜŞÜRMEZ. */
+async function pardusKonteynerKayitYaz(parcalar) {
+  try {
+    await fsp.mkdir(path.dirname(CONFIG.pardusYedekKabulKayit), { recursive: true });
+    await fsp.appendFile(CONFIG.pardusYedekKabulKayit, `${parcalar.join('\t')}\n`);
+  } catch (e) {
+    warn('pardus: konteyner yedek kabul kaydı yazılamadı —', (e && e.message) || e);
+  }
 }
 
 /**
@@ -2264,6 +2383,11 @@ module.exports = {
   probookErisimDurumu,
   probookErisimIlkOlcum,
   _probookErisimAyarla: (d) => { _probookErisim = d; _sonYetenek = ''; },
+  // Süreli konteyner yedek kabul (2026-09-27) — testler bayrak dosyasını değiştirip
+  // pardusYedekKabul() üzerinden okur; konteynerKabulKapisi ayrı test edilmek istenirse dışa açık.
+  pardusYedekKabul,
+  konteynerKabulKapisi,
+  _yedekLogSifirla: () => { _yedekAktifSon = false; },
   packagerStartPackage, postResultSuccess,
   packagerPoll,
 };

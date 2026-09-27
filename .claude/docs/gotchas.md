@@ -137,3 +137,26 @@
   yüzünden ağ hatasına çevirir — emülatörde denendi, İŞE YARAMAZ. Electron `webSecurity:false`
   (CORS/CORP yok) → 403 çözülür, masaüstü etkilenmez. Kapı `EMPP_ANDROID_CEVRIMICI=1` (varsayılan
   KAPALI): shim yalnız bu yoklamayı yerel CapacitorHttp eklentisine GET (başlıksız) olarak sorar.
+
+- **Süreli konteyner yedek kabul — ProBook erişilemezken (2026-09-27, Nadir: "ProBook elektrik
+  kesintisiyle kapandı, yarına kadar bu Mac'teki docker üzerinden fallback'i devreye al"):**
+  bayrak dosyası `~/.empp-agent/pardus-konteyner-kabul.istek` (ilk boş olmayan satır = bitiş ISO
+  zaman damgası, `EMPP_PARDUS_YEDEK_KABUL_BAYRAK` ile değiştirilebilir) AKTİFKEN VE ProBook'a
+  erişilemezken `src/agent/runner.js` `pardusKabulKapisi` ProBook betiğini (`probook-kabul.sh`)
+  hiç çağırmadan bu Mac'teki Docker konteyner kapısına (`tools/pardus/konteyner-kabul.sh` →
+  `konteyner-kapi.sh`, imaj `pardus-kapi:3`) düşer — ProBook ölçümde erişilir görünüp betik yine
+  de "ProBook'a baglanilamadi" ile düşerse de AYNI yola düşülür (ertelemek yerine). Süresi dolan
+  bayrak SİLİNMEZ, yalnız yok sayılır — davranış BİREBİR eskisine döner. Sonuçlar (GECTI/RED/
+  OLCULEMEDI) `~/.empp-agent/pardus-konteyner-kabul.log`'a TSV olarak eklenir (ProBook dönünce
+  hangi kitapların yeniden ProBook'ta kabul edilmesi gerektiğini bulmak için). **Kapsam DIŞI**
+  (yalnız açılış + piksel içeriği ölçer): ProBook'un kapsadığı K4 güncellik (CDP E6/E7/E8), SET
+  alt kitap sürüm ölçümleri (`SET_TUM`) ve gerçek FUSE/AppRun kurulum yolu — konteynerde FUSE
+  genelde yok, `--appimage-extract-and-run` ile mount katmanı ATLANARAK açılır; bu üçü konteyner
+  yedeğiyle DOĞRULANMAZ, ProBook döner dönmez TSV listesindeki kitaplar yeniden ProBook'ta
+  kabul edilmelidir. İki dal aynı gün konteyner kapısı üzerinde çalıştı — çakışma NOTU:
+  1. Konteyner kapısı (`konteyner-kapi.sh`) Rosetta altında (`--platform linux/amd64`, Apple
+     Silicon) koşar; `/proc/<pid>/exe` çözülmediği için süreç tespiti argv[0]'a düşer
+     (dal `fix/konteyner-kapi-rosetta-20260927`, commit `f4b31c1` — bu dal `konteyner-kapi.sh`'a
+     DOKUNMADI, iki dal ayrı birleştirilecek).
+  2. Kitap güncelleme diyaloğu ("Kitap Güncelleniyor %x") açıkken de ölçüm İÇERİK görür — ProBook
+     kapısındaki davranışla aynı (piksel eşiği diyalog metnini de "içerik" sayar).

@@ -219,8 +219,14 @@ function etkinYetenekler(caps, durum) {
  *
  * Saf: env okumaz, ssh/prob çağrısı YAPMAZ — sonucu çağıran (probookErisimDurumu) sağlar.
  * Girdi dizisi mutasyona UĞRAMAZ.
+ *
+ * `yedekAktif` (2026-09-27, SÜRELİ KONTEYNER YEDEK KABUL): Nadir'in bayrağıyla açılan geçici
+ * mod — ProBook elektrik kesintisi gibi bir sebeple erişilemezken kabul bu Mac'teki Docker
+ * konteyner kapısından (tools/pardus/konteyner-kapi.sh) yapılır. true iken ProBook
+ * erişilemezliği pardus'u heartbeat'ten DÜŞÜRMEZ — iş yine kiralanır, kabul konteyner
+ * yoluna düşer (pardusKabulKapisi, runner.js).
  * @param {string[]} caps
- * @param {{kabulAcik:boolean, kapiAcik:boolean, host:string, erisilir:(boolean|null|undefined)}} d
+ * @param {{kabulAcik:boolean, kapiAcik:boolean, host:string, erisilir:(boolean|null|undefined), yedekAktif?:boolean}} d
  * @returns {string[]}
  */
 function pardusKabulErisimUygula(caps, d) {
@@ -229,8 +235,34 @@ function pardusKabulErisimUygula(caps, d) {
   if (!durum.kabulAcik) return caps; // kabul kapısı kapalı → ProBook hiç gerekmiyor
   if (durum.kapiAcik === false) return caps; // acil kapatma: EMPP_PARDUS_KABUL_ERISIM=0
   if (durum.host === 'yerel') return caps; // kabul ProBook'un kendisinde koşuyor
+  if (durum.yedekAktif) return caps; // süreli konteyner yedek kabulü açık — erişilemezlik düşürmez
   if (durum.erisilir === false) return caps.filter((c) => c !== 'pardus');
   return caps; // true/undefined/null (henüz ölçülmedi) — bugünkü davranış korunur
+}
+
+/**
+ * SÜRELİ KONTEYNER YEDEK KABUL BAYRAĞI (2026-09-27, Nadir: "ProBook yarına kadar kapalı,
+ * bu Mac'teki docker üzerinden fallback'i devreye al"). Bayrak dosyasının içeriğini yorumlar —
+ * saf fonksiyon, dosya İŞLEMİ YAPMAZ (okuma çağıran tarafta, bkz. runner.js `pardusYedekKabul`).
+ *
+ * İlk boş olmayan satır bitiş ISO zaman damgasıdır. Süresi dolan bayrak SİLİNMEZ, yalnız
+ * yok sayılır (bir sonraki okuyucu `suresi-doldu` sebebiyle pasif görür).
+ *
+ * @param {string} icerik bayrak dosyasının ham metni (yoksa çağıran '' geçer)
+ * @param {number} [simdiMs] test için enjekte edilebilir "şimdi" (varsayılan Date.now())
+ * @returns {{aktif:true, bitis:string}|{aktif:false, bitis?:string, sebep:'suresi-doldu'|'gecersiz'}}
+ */
+function pardusYedekKabulDurumu(icerik, simdiMs) {
+  const simdi = typeof simdiMs === 'number' ? simdiMs : Date.now();
+  const satir = String(icerik == null ? '' : icerik)
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .find((s) => s.length > 0);
+  if (!satir) return { aktif: false, sebep: 'gecersiz' };
+  const zaman = Date.parse(satir);
+  if (Number.isNaN(zaman)) return { aktif: false, sebep: 'gecersiz' };
+  if (zaman > simdi) return { aktif: true, bitis: satir };
+  return { aktif: false, bitis: satir, sebep: 'suresi-doldu' };
 }
 
 /** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */
@@ -1150,6 +1182,7 @@ module.exports = {
   pauseRequested,
   etkinYetenekler,
   pardusKabulErisimUygula,
+  pardusYedekKabulDurumu,
   srcVersionTuret,
   agGecidiAyikla,
   dusukVeriAyristir,
