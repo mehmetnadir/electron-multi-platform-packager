@@ -345,6 +345,12 @@ test('aktivasyonEkraniMi: iki gerçek kanıt dosyasının (45469, 45472) görün
   if (bulunan === 0) t.skip('kanıt dosyaları bu makinede yok (~/.empp-agent/kabul-kanit)');
 });
 
+test('aktivasyonEkraniMi: kanıttan çıkarılmış gerçek diyalog metni (satır içi, makineden bağımsız) → true', () => {
+  // 45469/45472 kitap-cdp.dom.html görünür metni (27.09); yukarıdaki dosya testi kanıt yoksa atlanır.
+  const gercek = 'Aktivasyon Kitabı görüntülemek için aktivasyon kodunu giriniz. Aktivasyon Kodu AKTIVE ET';
+  assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: gercek }), true);
+});
+
 test('aktivasyonEkraniMi: hata varyantları (aynı "aktivasyon kod" izini taşır) diyalog SAYILMAZ', () => {
   // Eski regex /aktivasyon\s+kod/i üçünde de true dönerdi (review bulgusu, 27.09).
   assert.equal(O.aktivasyonEkraniMi({ gorunurMetin: 'Aktivasyon kodu geçersiz.' }), false);
