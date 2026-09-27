@@ -143,12 +143,14 @@ function bosSatirlariSadelestir(html) {
 }
 
 /**
- * `packagingService.js`'in android paketlemede köke bilerek uyguladığı BEŞ yamayı
- * (ön-getirme betiği, fullscreen CSS/JS, cordova script, viewport yeniden yazımı,
- * icons.js sorgu dizesi, kurumLogo.png harf farkı) metinden çıkarır/normalize eder.
- * Kaynakta bu yamalar hiç yoktur; pakette varsa İÇERİK farkı SAYILMAZ. Saf.
+ * `packagingService.js`'in köke bilerek uyguladığı BEŞ yamayı metinden çıkarır/normalize
+ * eder: `sayfa-on-getirme.js`'in ön-getirme betiği TÜM platformlarda (pardus dahil,
+ * platform fan-out'undan ÖNCE) çalışır; fullscreen CSS/JS, cordova script, viewport
+ * yeniden yazımı, icons.js sorgu dizesi ve kurumLogo.png harf farkı YALNIZ android'de
+ * (`enableAndroidFullscreen()`) eklenir. Kaynakta bu yamalar hiç yoktur; pakette varsa
+ * İÇERİK farkı SAYILMAZ. Saf.
  */
-function androidYamalariniCikar(html) {
+function bilinenPaketlemeYamalariniCikar(html) {
   if (typeof html !== 'string') return html;
   return bosSatirlariSadelestir(
     html
@@ -171,7 +173,7 @@ const KAYNAK_KOK_INDEX_MARKER = '.empp-kaynak-kok-index.html';
  */
 function normalle(html) {
   if (html === null || html === undefined) return null;
-  return androidYamalariniCikar(
+  return bilinenPaketlemeYamalariniCikar(
     anaDosyaReferanslariniNormallestir(enjekteSatirlariCikar(String(html))),
   ).replace(/\r\n/g, '\n').trim();
 }
@@ -341,7 +343,7 @@ module.exports = {
   enjekteSatirlariCikar,
   ANA_DOSYA_HASH_DESENI,
   anaDosyaReferanslariniNormallestir,
-  androidYamalariniCikar,
+  bilinenPaketlemeYamalariniCikar,
   KAYNAK_KOK_INDEX_MARKER,
   normalle,
   karsilastir,

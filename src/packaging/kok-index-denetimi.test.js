@@ -19,7 +19,7 @@ const path = require('node:path');
 const {
   enjekteSatirlariCikar, normalle, karsilastir, modOku, acikMi, denetle,
   kokIndexOku, paketeUygula, anaDosyaReferanslariniNormallestir,
-  androidYamalariniCikar,
+  bilinenPaketlemeYamalariniCikar,
   KAYNAK_KOK_INDEX_MARKER, kaynakSnapshotAl,
 } = require('./kok-index-denetimi');
 const { MENU_ISARETI } = require('./set-menu');
@@ -214,7 +214,7 @@ test('GERİLEME (6a): birleşik-SPA kaynak + android yamaları (viewport/icons.j
 });
 
 test('GERİLEME (6b) KONTROL: android yamaları ÜSTÜNE gerçek yabancı içerik eklenirse '
-  + 'yine ezilmis (androidYamalariniCikar aşırı geniş normalize ETMİYOR)', () => {
+  + 'yine ezilmis (bilinenPaketlemeYamalariniCikar aşırı geniş normalize ETMİYOR)', () => {
   const yabanciIcerikli = PAKET_ANDROID_YAMALI.replace(
     '</body>', '<div id="yabanci-menu">beklenmeyen menü</div></body>',
   );
@@ -222,9 +222,9 @@ test('GERİLEME (6b) KONTROL: android yamaları ÜSTÜNE gerçek yabancı içeri
   assert.strictEqual(r.sonuc, 'ezilmis');
 });
 
-test('androidYamalariniCikar: EMPP_ON_GETIRME/fullscreen/cordova bloklarını çıkarır, '
+test('bilinenPaketlemeYamalariniCikar: EMPP_ON_GETIRME/fullscreen/cordova bloklarını çıkarır, '
   + 'viewport+icons.js+kurumLogo case normalize eder', () => {
-  const temiz = androidYamalariniCikar(PAKET_ANDROID_YAMALI);
+  const temiz = bilinenPaketlemeYamalariniCikar(PAKET_ANDROID_YAMALI);
   assert.ok(!temiz.includes('EMPP_ON_GETIRME'));
   assert.ok(!temiz.includes('Android Fullscreen Support'));
   assert.ok(!temiz.includes('cordova.js'));
