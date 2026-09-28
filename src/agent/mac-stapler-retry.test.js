@@ -20,11 +20,16 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js).
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
 
 const {
   CONFIG,
@@ -33,6 +38,9 @@ const {
   agStapleCikti,
 } = require('./runner.js');
 const { ertelenebilirKaynakHatasi } = require('./runner-helpers');
+
+YALITIM.configUygula(CONFIG);
+after(() => YALITIM.temizle());
 
 async function withFakeBin(scripts, fn) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fake-bin-'));

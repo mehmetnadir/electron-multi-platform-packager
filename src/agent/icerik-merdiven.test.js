@@ -13,6 +13,7 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,6 +21,14 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js). Bu dosya
+// `runner.js`'i tek bir test içinde GECİKMELİ require ediyor (aşağıda ~494. satır) — env'i
+// modül başında set etmek yine de yeterli (require ne zaman çağrılırsa çağrılsın CONFIG o
+// anki env'i okur).
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
+after(() => YALITIM.temizle());
 
 const ig = require('../runtime/icerik-guncelleme');
 const M = require('./icerik-merdiven');
@@ -492,6 +501,7 @@ async function sahtePaketleyici() {
 
 async function runnerKostur({ zip, acik }) {
   const { CONFIG, processJob } = require('./runner.js');
+  YALITIM.configUygula(CONFIG);
   const kok = tmp('arsiv');
   fs.mkdirSync(path.join(kok, '45482'));
   fs.copyFileSync(zip, path.join(kok, '45482', 'build.zip'));

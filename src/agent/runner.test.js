@@ -1,9 +1,17 @@
 'use strict';
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js). Bu dosya
+// runner.js'i yalnız saf doğrulayıcılar (looksLikeRealApk/isValidArchiveOutput) için gecikmeli
+// require ediyor — bugün risk yok, ama gelecekte riskli bir test eklenirse diye önden kapatılır.
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
+after(() => YALITIM.temizle());
 
 /**
  * Source sentinels for the runner's result-upload flow. The end-to-end path does

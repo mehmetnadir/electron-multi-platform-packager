@@ -12,22 +12,20 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 
-// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928): SÜRELİ KONTEYNER YEDEK KABUL
-// (b7015b5, 2026-09-27) `CONFIG.pardusYedekKabulFlag` varsayılanı GERÇEK bir makine dosyasına
-// bakıyor (`~/.empp-agent/pardus-konteyner-kabul.istek`) — bu dosya Nadir'in gerçek bir ProBook
-// kesintisinde bıraktığı GERÇEK operasyonel bir bayrak olabilir (27.09'da tam olarak öyleydi,
-// 28.09 12:00'ye kadar geçerli). Bu dosya yazan Mac'te bu test dosyası, tesadüfen aktif olan bu
-// bayrağı okuyup ProBook kabul kapısını (bu dosyanın konusu) sessizce KONTEYNER yedek yoluna
-// (runner-pardus-yedek.test.js'in konusu) yönlendiriyordu — 16 testin ortak kök nedeni buydu.
-// Doğrudan ProBook yolunu makineden bağımsız test etmek için bayrağı KESİN var olmayan bir yola
-// sabitliyoruz (require('./runner.js') ÖNCESİ — CONFIG bunu modül yüklenirken bir kez okur).
-process.env.EMPP_PARDUS_YEDEK_KABUL_BAYRAK = path.join(os.tmpdir(), 'yok-boyle-bir-yedek-bayragi-runner-pardus-test');
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — ortak yardımcıya taşındı; önceki
+// tek-alanlık ad-hoc düzeltme (yalnız EMPP_PARDUS_YEDEK_KABUL_BAYRAK) buradaydı, artık
+// src/agent/test-yalitim.js TÜM riskli CONFIG alanlarını kapsıyor). Kök neden: bu dosyanın
+// `pardusKabulKapisi` testleri CONFIG'in GERÇEK ~/.empp-agent/* yollarını (yedek bayrağı +
+// kabul kanıtı kalıcı kök dahil) hiç değiştirmiyordu — bkz. test-yalitim.js başlık yorumu.
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const {
@@ -38,6 +36,9 @@ const {
 } = require('./runner.js');
 const { ertelenebilirKaynakHatasi, PROBOOK_KAPISI_ISARETI } = require('./runner-helpers');
 const { mapPlatform, artifactExtension } = require('./runner-helpers');
+
+YALITIM.configUygula(CONFIG);
+after(() => YALITIM.temizle());
 
 // ---------------------------------------------------------------------------
 // Kaynak-sentinel: processJob pardus'ta HTTP packager'ı hiç çağırmaz.

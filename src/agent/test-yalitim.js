@@ -1,0 +1,160 @@
+'use strict';
+
+/**
+ * ORTAK TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — kök neden kapatma).
+ *
+ * Kök neden: src/agent/*.test.js dosyalarının çoğu `runner.js`'i require ederken CONFIG'in
+ * gerçek `~/.empp-agent/*` yollarını hiç değiştirmiyordu — testler GERÇEK üretim dosyalarını
+ * okuyor/yazıyordu. Kanıt (2026-09-28, aynı gece): `pardus-konteyner-kabul.log`'un 245
+ * satırının 169'u (%69) test verisiyle kirlenmişti; bunlardan biri gerçek bir kitap ID'siyle
+ * (45704) çakışıp `pardus-yeniden-kabul-kuyrugu.sh`'ın dry-run listesine YANLIŞ POZİTİF olarak
+ * girdi (bkz. `~/.empp-agent/arastirma/probook-donus-plani-20260928.md`). Bu, aynı gece 16
+ * kırmızı testin kök nedeniyle (gerçek `~/.empp-agent/pardus-konteyner-kabul.istek` bayrağının
+ * test sürecine sızması) AYNI SINIFIN ikinci örneğiydi.
+ *
+ * Kullanım — HER test dosyasının EN BAŞINDA, `require('./runner')`'dan ÖNCE:
+ *
+ *   const { izoleOrtam } = require('./test-yalitim');
+ *   const YALITIM = izoleOrtam();                 // env değişkenlerini SET EDER
+ *   const runner = require('./runner.js');        // (veya: const { CONFIG, ... } = require(...))
+ *   YALITIM.configUygula(runner.CONFIG);           // env'i OLMAYAN 3 alanı mutasyonla izole eder
+ *   const { after } = require('node:test');
+ *   after(() => YALITIM.temizle());                // env'i geri al + geçici dizini sil
+ *
+ * `izoleOrtam()` HER ÇAĞRIDA yeni bir geçici dizin açar ve şu env değişkenlerini ORAYA
+ * yönlendirir (hepsi runner.js'in CONFIG'inde `process.env.X || <gerçek-yol>` biçiminde
+ * ZATEN env-override edilebilir — runner.js'e dokunulmadı):
+ *
+ *   AGENT_TOKEN_FILE               ← CONFIG.tokenFile               (~/.empp-agent/token.json)
+ *   EMPP_PARDUS_YEDEK_KABUL_BAYRAK ← CONFIG.pardusYedekKabulFlag     (…/pardus-konteyner-kabul.istek)
+ *   EMPP_PARDUS_YEDEK_KABUL_KAYIT  ← CONFIG.pardusYedekKabulKayit    (…/pardus-konteyner-kabul.log)
+ *   AGENT_RESTART_FLAG             ← CONFIG.restartFlag              (…/yeniden-baslat.istek)
+ *   AGENT_PAUSE_FLAG               ← CONFIG.pauseFlag                (…/duraklat.istek)
+ *   AGENT_LOWDATA_BIN              ← CONFIG.dusukVeriIkili           (…/dusuk-veri, ikili yolu)
+ *   EMPP_KABUL_KANIT_KOK           ← tools/kabul/basliksiz-kabul.js `kanitKoku()` (…/kabul-kanit/)
+ *   EMPP_BILDIR_IKILI              ← gerçek push bildirimi atan ikili (~/.local/bin/bildir)
+ *   IMPARK_BUTUNLUK_PY             ← CONFIG.imparkButunlukPy (salt-okuma script yolu, yine de izole)
+ *
+ * `configUygula(CONFIG)`: `macSerbestFlag`, `macDurdurFlag`, `dusukVeriYoksayFlag` alanlarının
+ * CONFIG'te env-override'ı YOK (runner.js'te hardcoded `path.join(os.homedir(), ...)`) — bu
+ * yüzden yalnız require SONRASI CONFIG nesnesi üzerinde MUTASYONLA izole edilebilirler.
+ * runner.js zaten CONFIG'i module-level bir singleton olarak dışa veriyor ve başka testler de
+ * (ör. `CONFIG.caps = [...]`) onu böyle mutasyona uğratıyor — aynı, zaten var olan kalıp.
+ *
+ * `temizle()`: env değişkenlerini ÖNCEKİ değerlerine döndürür (yoksa siler) ve geçici dizini
+ * `fs.rmSync(..., {recursive:true, force:true})` ile kaldırır — bu SADECE bu fonksiyonun kendi
+ * `mkdtemp` ile açtığı, `os.tmpdir()` altındaki İZOLE geçici dizindir; gerçek `~/.empp-agent`
+ * hiçbir zaman silinmez/dokunulmaz.
+ */
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const ENV_ESLEME = {
+  AGENT_TOKEN_FILE: 'token.json',
+  EMPP_PARDUS_YEDEK_KABUL_BAYRAK: 'pardus-konteyner-kabul.istek',
+  EMPP_PARDUS_YEDEK_KABUL_KAYIT: 'pardus-konteyner-kabul.log',
+  AGENT_RESTART_FLAG: 'yeniden-baslat.istek',
+  AGENT_PAUSE_FLAG: 'duraklat.istek',
+  AGENT_LOWDATA_BIN: 'dusuk-veri-yok-boyle-bir-ikili',
+  EMPP_KABUL_KANIT_KOK: 'kabul-kanit',
+  EMPP_BILDIR_IKILI: 'yok-boyle-bir-bildir-ikili',
+  IMPARK_BUTUNLUK_PY: 'yok-boyle-bir-impark-butunluk.py',
+};
+
+/**
+ * @returns {{dir:string, configUygula:(CONFIG:object)=>void, temizle:()=>void}}
+ */
+function izoleOrtam() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-test-yalitim-'));
+  const eskiEnv = {};
+  for (const [env, dosyaAdi] of Object.entries(ENV_ESLEME)) {
+    eskiEnv[env] = process.env[env];
+    process.env[env] = path.join(dir, dosyaAdi);
+  }
+
+  let configUygulandi = null;
+  return {
+    dir,
+    configUygula(CONFIG) {
+      if (!CONFIG || typeof CONFIG !== 'object') return;
+      configUygulandi = {
+        macSerbestFlag: CONFIG.macSerbestFlag,
+        macDurdurFlag: CONFIG.macDurdurFlag,
+        dusukVeriYoksayFlag: CONFIG.dusukVeriYoksayFlag,
+      };
+      CONFIG.macSerbestFlag = path.join(dir, 'macos-serbest.istek');
+      CONFIG.macDurdurFlag = path.join(dir, 'macos-durdur.istek');
+      CONFIG.dusukVeriYoksayFlag = path.join(dir, 'dusuk-veri-yoksay.istek');
+    },
+    temizle() {
+      for (const [env, eski] of Object.entries(eskiEnv)) {
+        if (eski === undefined) delete process.env[env]; else process.env[env] = eski;
+      }
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* zaten yok */ }
+      configUygulandi = null;
+    },
+  };
+}
+
+/**
+ * NÖBETÇİ ALTYAPISI — GERÇEK `~/.empp-agent` yollarının anlık görüntüsü.
+ *
+ * `izoleOrtam()` env değişkenlerini geçici dizine yönlendirdiği için normal koşuda gerçek
+ * yollara hiç dokunulmaz. Ama bu, yalıtımın KENDİSİNİN doğru çalıştığı varsayımına dayanır —
+ * yeni bir test dosyası `izoleOrtam()`'ı çağırmayı UNUTURSA yalıtım sessizce devre dışı kalır.
+ * `gercekYolYakala()` / `gercekYolFarkiVarMi()` bu varsayıma bağımlı OLMAYAN, bağımsız bir
+ * güvenlik ağıdır: gerçek dosyaların mtime+boyutunu (ve kabul-kanit/ dizin giriş sayısını)
+ * doğrudan `os.homedir()` üzerinden okur — hangi env değişkeninin kime yönlendirildiğinden
+ * bağımsızdır. `test-yalitim-nobetci.test.js` bunu tüm takımın ÖNCESİ/SONRASI için kullanır.
+ */
+const GERCEK_KABUL_KANIT_DIR = path.join(os.homedir(), '.empp-agent', 'kabul-kanit');
+const GERCEK_YOLLAR = {
+  tokenFile: path.join(os.homedir(), '.empp-agent', 'token.json'),
+  pardusYedekKabulFlag: path.join(os.homedir(), '.empp-agent', 'pardus-konteyner-kabul.istek'),
+  pardusYedekKabulKayit: path.join(os.homedir(), '.empp-agent', 'pardus-konteyner-kabul.log'),
+  restartFlag: path.join(os.homedir(), '.empp-agent', 'yeniden-baslat.istek'),
+  pauseFlag: path.join(os.homedir(), '.empp-agent', 'duraklat.istek'),
+  macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
+  macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
+  dusukVeriYoksayFlag: path.join(os.homedir(), '.empp-agent', 'dusuk-veri-yoksay.istek'),
+};
+
+function dosyaImzasi(p) {
+  try {
+    const st = fs.statSync(p);
+    return { var: true, mtimeMs: st.mtimeMs, size: st.size };
+  } catch (_) {
+    return { var: false };
+  }
+}
+
+/** @returns {object} her gerçek yol + kabul-kanit giriş sayısı için anlık görüntü. */
+function gercekYolYakala() {
+  const goruntu = {};
+  for (const [ad, p] of Object.entries(GERCEK_YOLLAR)) goruntu[ad] = dosyaImzasi(p);
+  try {
+    goruntu.kabulKanitGirisSayisi = fs.readdirSync(GERCEK_KABUL_KANIT_DIR).length;
+  } catch (_) {
+    goruntu.kabulKanitGirisSayisi = -1; // dizin yok
+  }
+  return goruntu;
+}
+
+/**
+ * @param {object} once - gercekYolYakala() çıktısı
+ * @param {object} sonra - gercekYolYakala() çıktısı
+ * @returns {string[]} değişen alanların adları (boşsa fark yok)
+ */
+function gercekYolFarki(once, sonra) {
+  const farklar = [];
+  for (const ad of Object.keys(GERCEK_YOLLAR)) {
+    const a = once[ad]; const b = sonra[ad];
+    if (a.var !== b.var || a.mtimeMs !== b.mtimeMs || a.size !== b.size) farklar.push(ad);
+  }
+  if (once.kabulKanitGirisSayisi !== sonra.kabulKanitGirisSayisi) farklar.push('kabulKanitGirisSayisi');
+  return farklar;
+}
+
+module.exports = { izoleOrtam, ENV_ESLEME, GERCEK_YOLLAR, gercekYolYakala, gercekYolFarki };

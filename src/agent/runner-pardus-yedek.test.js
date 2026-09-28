@@ -13,11 +13,21 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — ortak yardımcı, bkz. test-yalitim.js).
+// Bu dosyanın kendi `bayrakla()`/`betiklerle()` yardımcıları pardusYedekKabulFlag/Kayit ve
+// EMPP_KABUL_KANIT_KOK'u ZATEN test-başı izole ediyordu; global YALITIM bunu bir üst katmanda
+// güvenceye alır (varsayılan artık gerçek yol değil, temp — bayrakla/betiklerle hâlâ kendi
+// per-test temp'ine geçip DOĞRU geri dönüyor). Asıl kapattığı boşluk: `guncelYetenekler()`
+// çağıran testlerin macSerbestFlag/macDurdurFlag için hiç izolasyonu YOKTU.
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
 
 const runner = require('./runner.js');
 const {
@@ -26,6 +36,9 @@ const {
 const {
   pardusYedekKabulDurumu, pardusKabulErisimUygula, ertelenebilirKaynakHatasi, PROBOOK_KAPISI_ISARETI,
 } = require('./runner-helpers');
+
+YALITIM.configUygula(CONFIG);
+after(() => YALITIM.temizle());
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 

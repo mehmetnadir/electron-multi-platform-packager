@@ -8,10 +8,19 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const axios = require('axios');
+
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js).
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
+
 const runner = require('./runner');
 const { isTransientNetworkError, yoklamaYenidenDenenir } = require('./runner-helpers');
+
+YALITIM.configUygula(runner.CONFIG);
+after(() => YALITIM.temizle());
 
 const TAMAM = {
   status: 200,

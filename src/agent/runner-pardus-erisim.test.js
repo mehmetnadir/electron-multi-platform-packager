@@ -14,24 +14,23 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 
-// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928): SÜRELİ KONTEYNER YEDEK KABUL
-// (b7015b5, 2026-09-27) `CONFIG.pardusYedekKabulFlag` varsayılanı GERÇEK bir makine dosyasına
-// bakıyor (`~/.empp-agent/pardus-konteyner-kabul.istek`) — Nadir'in gerçek bir ProBook
-// kesintisinde bıraktığı GERÇEK operasyonel bir bayrak olabilir (27.09'da tam olarak öyleydi,
-// 28.09 12:00'ye kadar geçerli). Aktifken `guncelYetenekler()` ProBook erişilemez olsa bile
-// `pardus`u KASITLI olarak düşürmüyor (konteyner yedeği üzerinden iş almaya devam) — bu dosyanın
-// testi ise dar kapsamlı "yedeksiz doğrudan erişim kapısı" senaryosunu (erişilemez→düşer)
-// hedefliyor. Bayrağı makineden bağımsız KESİN var olmayan bir yola sabitliyoruz
-// (require('./runner.js') ÖNCESİ — CONFIG bunu modül yüklenirken bir kez okur).
-process.env.EMPP_PARDUS_YEDEK_KABUL_BAYRAK = path.join(__dirname, '.yok-boyle-bir-yedek-bayragi-erisim-test');
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — ortak yardımcıya taşındı). Kök neden:
+// `guncelYetenekler()` bu dosyada GERÇEK ~/.empp-agent/pardus-konteyner-kabul.istek,
+// macos-serbest.istek, macos-durdur.istek dosyalarını okuyordu — bkz. test-yalitim.js.
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
 
 const { pardusKabulErisimUygula } = require('./runner-helpers');
 const runner = require('./runner.js');
+
+YALITIM.configUygula(runner.CONFIG);
+after(() => YALITIM.temizle());
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const bekle = (ms) => new Promise((r) => setTimeout(r, ms));

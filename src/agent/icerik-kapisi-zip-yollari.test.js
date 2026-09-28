@@ -11,6 +11,7 @@
  */
 
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -19,8 +20,15 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const AdmZip = require('adm-zip');
 
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js).
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
+
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const { CONFIG, processJob } = require('./runner.js');
+
+YALITIM.configUygula(CONFIG);
+after(() => YALITIM.temizle());
 const {
   yolListesiTara, girisListesindenDegerlendir, zipGirisAdlariniOku, icerikKapisiDenetleZip,
 } = require('./icerik-kapisi');

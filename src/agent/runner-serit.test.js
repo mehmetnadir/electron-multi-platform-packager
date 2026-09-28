@@ -5,13 +5,23 @@
  * gönderdiği yetenek listesi (`guncelYetenekler`) ProBook sağlığına göre `pardus` düşürüyor mu.
  */
 const test = require('node:test');
+const { after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js). Bu dosya
+// `runner.guncelYetenekler()`i 3 kez çağırıyor; hiçbiri macSerbestFlag/macDurdurFlag/
+// pardusYedekKabulFlag için izolasyon yapmıyordu — GERÇEK ~/.empp-agent/* dosyaları okunuyordu.
+const { izoleOrtam } = require('./test-yalitim');
+const YALITIM = izoleOrtam();
+
 const runner = require('./runner.js');
 const { seritDenetcisiKur } = require('./serit-secimi');
+
+YALITIM.configUygula(runner.CONFIG);
+after(() => YALITIM.temizle());
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 
