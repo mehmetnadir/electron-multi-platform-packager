@@ -28,6 +28,7 @@ const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 const ilkSayfa = require('./acilis-ilk-sayfa');
 const splashBeklemesi = require('./acilis-splash-beklemesi');
 const acilisGostergesi = require('./acilis-gostergesi');
+const { insaHataMesaji } = require('./insaHataMesaji');
 const paketManifesti = require('./paket-manifesti');
 const motorSurumu = require('./motor-surumu');
 const okuyucuKabugu = require('./okuyucu-kabugu');
@@ -4350,7 +4351,7 @@ if (!window.cordova) {
             }
           }
           console.error('❌ Tam hata çıktısı:', errorOutput || output);
-          reject(new Error(`Electron Builder ${platform} build failed (exit code ${code})`));
+          reject(new Error(insaHataMesaji(platform, code, errorOutput, output)));
         }
       });
     });
