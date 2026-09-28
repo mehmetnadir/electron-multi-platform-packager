@@ -151,6 +151,66 @@ async function betiklerle({ probook, konteyner, acik = true } = {}, fn) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// (3a) guncelYetenekler + GERÇEK bayrak dosyası (2026-09-28, agent-test-borcu-20260928)
+//
+// Önceki test turunda bulunan gözlem: yukarıdaki (2)'deki `pardusKabulErisimUygula` saf
+// fonksiyon testleri `yedekAktif` parametresini ELLE true/false geçiyor — `guncelYetenekler()`
+// entegrasyonunun GERÇEK bayrak dosyasını (`pardusYedekKabul()` → `CONFIG.pardusYedekKabulFlag`)
+// okuyup bu parametreyi doğru ürettiğini uçtan uca sınayan bir çalışma-zamanı testi YOKTU
+// (yalnız satır 328'deki kaynak-sentinel metin arıyordu, davranışı ÇALIŞTIRMIYORDU). runner.js'e
+// dokunulmadı — `bayrakla()` (yukarıda, satır 104) zaten bu iş için var, CONFIG.pardusYedekKabulFlag'i
+// geçici bir dosyaya yönlendiriyor.
+test('guncelYetenekler: bayrak GEÇERLİ (gelecek tarih) + ProBook erişilemez → pardus YETENEKTE KALIR', async () => {
+  const gelecek = new Date(Date.now() + 3600000).toISOString();
+  const eskiCaps = runner.CONFIG.caps;
+  const eskiPardusKabul = runner.CONFIG.pardusKabul;
+  const eskiEnvErisim = process.env.EMPP_PARDUS_KABUL_ERISIM;
+  await bayrakla(gelecek, async () => {
+    runner.CONFIG.caps = ['android', 'pardus'];
+    runner.CONFIG.pardusKabul = true;
+    delete process.env.EMPP_PARDUS_KABUL_ERISIM;
+    try {
+      runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
+      assert.deepEqual(
+        runner.guncelYetenekler(),
+        ['android', 'pardus'],
+        'bayrak geçerliyken (süresi dolmamış) ProBook erişilemez olsa da konteyner yedeği pardus\'u korur',
+      );
+    } finally {
+      runner.CONFIG.caps = eskiCaps;
+      runner.CONFIG.pardusKabul = eskiPardusKabul;
+      if (eskiEnvErisim === undefined) delete process.env.EMPP_PARDUS_KABUL_ERISIM; else process.env.EMPP_PARDUS_KABUL_ERISIM = eskiEnvErisim;
+      runner._probookErisimAyarla({ t: 0, erisilir: undefined, suruyor: false });
+    }
+  });
+});
+
+test('guncelYetenekler: bayrak SÜRESİ DOLMUŞ (geçmiş tarih) + ProBook erişilemez → pardus DÜŞER (yedeksiz davranışla aynı)', async () => {
+  const gecmis = new Date(Date.now() - 3600000).toISOString();
+  const eskiCaps = runner.CONFIG.caps;
+  const eskiPardusKabul = runner.CONFIG.pardusKabul;
+  const eskiEnvErisim = process.env.EMPP_PARDUS_KABUL_ERISIM;
+  await bayrakla(gecmis, async () => {
+    runner.CONFIG.caps = ['android', 'pardus'];
+    runner.CONFIG.pardusKabul = true;
+    delete process.env.EMPP_PARDUS_KABUL_ERISIM;
+    try {
+      runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
+      assert.deepEqual(
+        runner.guncelYetenekler(),
+        ['android'],
+        'bayrak süresi dolunca (dosya SİLİNMEDİ, yalnız yok sayıldı) yedek pasif sayılır — davranış "hiç bayrak yokmuş" ile AYNI: erişilemez → pardus düşer',
+      );
+    } finally {
+      runner.CONFIG.caps = eskiCaps;
+      runner.CONFIG.pardusKabul = eskiPardusKabul;
+      if (eskiEnvErisim === undefined) delete process.env.EMPP_PARDUS_KABUL_ERISIM; else process.env.EMPP_PARDUS_KABUL_ERISIM = eskiEnvErisim;
+      runner._probookErisimAyarla({ t: 0, erisilir: undefined, suruyor: false });
+    }
+  });
+});
+
 test('pardusKabulKapisi: yedek aktif + ProBook erişilemez ÖLÇÜLDÜ → ProBook betiği HİÇ ÇAĞRILMAZ, konteyner GEÇTİ', async () => {
   const gelecek = new Date(Date.now() + 3600000).toISOString();
   await bayrakla(gelecek, async () => {
