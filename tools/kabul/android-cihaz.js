@@ -198,7 +198,19 @@ function sistemDiyalogu(dugumler, etiket) {
  * "Timeout while connecting UiAutomation" de aynı kökten: UiAutomation, system_server'daki
  * AccessibilityManager'a bağlanamıyor — bu da system_server'ın yanıt vermediğinin kanıtı).
  * `gorunurMetin` şu an cihaz katmanında üretilmiyor (OCR yok, tek kanıt ham ekran görüntüsü);
- * parametre yalnız ileride bir metin çıkarma eklenirse diye — bugün her zaman undefined. Saf.
+ * parametre yalnız ileride bir metin çıkarma eklenirse diye — bugün her zaman undefined.
+ *
+ * GENİŞLEME (28.09 45482): host aşırı yüklüyken system_server TAMAMEN ölebilir —
+ * uiautomator dump bu kez BAŞARILI döner (reboot sonrası launcher hiyerarşisi, `<hierarchy>`
+ * var, `dokumBasarisiz` false) ama ekranda "isn't responding" diyaloğu da YOKTUR (sistem
+ * yeniden başlamış, düğüm sayısı > 0 ama bizim uygulamamız hiç yaşamadı). Kanıt: logcat'te
+ * 14 farklı sistem sürecinin (systemui, gms, vending, launcher, bizim paketimiz dahil) aynı
+ * 1.5 sn içinde `DeadSystemException: The system died` ile FATAL EXCEPTION vermesi, ardından
+ * tek bir "beginning of main" (reboot). `sistemOlduMu` bunu döküm durumundan BAĞIMSIZ yakalar
+ * — yanlış pozitife karşı tek başına bizim paketimizdeki bir istisna YETMEZ (normal bir
+ * TypeError/çökme tek süreçte tek `FATAL EXCEPTION` üretir, bu asla `DeadSystemException`
+ * DEĞİLDİR ve zaten eşleşmez); ölçüt en az 2 FARKLI sürecin aynı imzayla çökmesi YA DA
+ * system_server/system_process/systemui'nin bizzat listede olmasıdır.
  * @returns {boolean}
  */
 function sistemAnrMi({ uiXml, logcat, gorunurMetin } = {}) {
@@ -208,7 +220,49 @@ function sistemAnrMi({ uiXml, logcat, gorunurMetin } = {}) {
   const dokumBasarisiz = Boolean(uiXml) && !/<hierarchy\b/i.test(String(uiXml));
   const logcatSistemAnr = /Timeout while connecting UiAutomation|ANR in system(_server)?\b|system_server[^\n]{0,60}(isn'?t\s+responding|not\s+responding)/i
     .test(String(logcat || ''));
-  return dokumBasarisiz && logcatSistemAnr;
+  if (dokumBasarisiz && logcatSistemAnr) return true;
+  return sistemOlduMu(logcat);
+}
+
+/**
+ * `DeadSystemException` / "The system died" — system_server'ın kendisi ölmüş (host aşırı
+ * yüklüyken OOM-kill ya da benzeri). Android çerçevesi bunu HER canlı uygulama sürecine
+ * (bizimki dahil) aynı istisnayla yansıtır; bu yüzden dump'ın başarılı/başarısız olması
+ * ÖNEMLİ DEĞİL — `sistemAnrMi`'nin asıl `dokumBasarisiz` dalından bağımsız ikinci bir kapı.
+ * Yanlış pozitife karşı: yalnız bizim uygulamamızda görülen TEK bir `DeadSystemException`
+ * yeterli sayılmaz (28.09 45482 tasarımı) — ölçüt en az 2 FARKLI sürecin aynı imzayla
+ * çökmesi YA DA çöken sürecin bizzat system_server/system_process/systemui olmasıdır. Saf.
+ * @returns {boolean}
+ */
+function sistemOlduMu(logcat) {
+  const metin = String(logcat || '');
+  if (!/DeadSystemException|\bThe system died\b/i.test(metin)) return false;
+  const satirlar = metin.split('\n');
+  const surecler = new Set();
+  for (let i = 0; i < satirlar.length; i += 1) {
+    const m = /Process:\s*(\S+?),\s*PID:\s*(\d+)/.exec(satirlar[i]);
+    if (!m) continue;
+    // DeadSystemException/"The system died" satırı aynı çökme bloğunda birkaç satır sonra gelir.
+    const pencere = satirlar.slice(i, i + 6).join('\n');
+    if (/DeadSystemException|\bThe system died\b/i.test(pencere)) surecler.add(m[1]);
+  }
+  if (surecler.size >= 2) return true;
+  if (surecler.size === 1) {
+    const [tek] = surecler;
+    return /system_server|system_process|systemui|com\.android\.systemui/i.test(tek);
+  }
+  return false;
+}
+
+/**
+ * `am start` çıktısında sistemin uygulamayı hiç BAŞLATAMADIĞININ kanıtı — WebView hiç
+ * kurulmadı, süreç hiç yaşamadı (28.09 45482: "cmd: Failure calling service activity:
+ * Broken pipe (32)" — ActivityManager servisine soket koptu, system_server'ın kendisi o an
+ * ölüydü). "Can't find service: activity" da aynı köktendir (servis kaydı kayboldu). Saf.
+ * @returns {boolean}
+ */
+function amBaslatSistemOlduMu(baslatCiktisi) {
+  return /Failure calling service activity:\s*Broken pipe|Can't find service:\s*activity/i.test(String(baslatCiktisi || ''));
 }
 
 /**
@@ -218,6 +272,9 @@ function sistemAnrMi({ uiXml, logcat, gorunurMetin } = {}) {
  * @returns {{ortulen:boolean, mesaj:string}}
  */
 function webViewYokKarari(ad, o, lcMetin) {
+  if (sistemOlduMu(lcMetin)) {
+    return { ortulen: true, mesaj: `${ad}: emülatör/sistem çöktü ("DeadSystemException"/"The system died") ekranı örttü — altyapı, paket kusuru değil` };
+  }
   if (sistemAnrMi({ uiXml: o && o.uiXmlHata, logcat: lcMetin })) {
     return { ortulen: true, mesaj: `${ad}: emülatör sistem ANR'si ("Process system isn't responding") ekranı örttü — altyapı, paket kusuru değil` };
   }
@@ -671,6 +728,16 @@ async function cihazKabulu(p) {
         return;
       }
       if (o.diyalog) { ortulen.push(`${ad}: "${o.diyalog.baslik}" (emülatörün kendi uygulaması) ekranı örttü, kapatılamadı`); return; }
+      // Sistemin KENDİSİ öldüyse (28.09 45482: DeadSystemException 14 sistem sürecinde birden,
+      // ya da am start "Broken pipe"/"Can't find service") bu aşamanın TÜM belirtileri
+      // (süreç kapandı, WebView yok, kart sayısı 0) aynı köke bağlanır — tek tek sebep
+      // yazmak yerine hepsi ÖRTÜLEN sayılır (RED değil, ÖLÇÜLEMEDİ).
+      const amBozuldu = amBaslatSistemOlduMu(sonuc.baslat);
+      if (sistemAnrMi({ uiXml: o.uiXmlHata, logcat: lcMetin }) || amBozuldu) {
+        const ekKanit = amBozuldu ? ' + am start ("Failure calling service activity: Broken pipe" / "Can\'t find service: activity")' : '';
+        ortulen.push(`${ad}: emülatör/sistem çöktü ("DeadSystemException"/"The system died"${ekKanit}) — altyapı, paket kusuru değil`);
+        return;
+      }
       if (!o.surecCanli) sebepler.push(`${ad}: uygulama süreci kapandı`);
       if (!o.webView) {
         // UI dökümü hiç çıkmadığı için `sistemDiyalogu` diyaloğu göremedi — logcat'teki
@@ -773,6 +840,8 @@ module.exports = {
   uiDugumleri,
   sistemDiyalogu,
   sistemAnrMi,
+  sistemOlduMu,
+  amBaslatSistemOlduMu,
   webViewYokKarari,
   webViewSiniri,
   cihazKartlari,

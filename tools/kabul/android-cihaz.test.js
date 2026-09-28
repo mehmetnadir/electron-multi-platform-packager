@@ -190,3 +190,110 @@ test('cihazKabulu (mutasyon): yük başından beri düşük → ön kapı GEÇER
   assert.ok(!r.sebepler.some((s) => /emülatör açılmadı/.test(s)));
   assert.equal(r.durum, 'OLCULEMEDI'); // TCDD_MITM dışında AVD yok / adb yoksa — ikisi de emülatörsüz sonuç
 });
+
+// --- SİSTEM ÖLDÜ (DeadSystemException) — 28.09 45482 --------------------------------------
+// Kanıt dizininden BİREBİR: /Users/nadir/.empp-agent/kabul-kanit/45482-android-20260928-032454/
+//   android/logcat.txt — 21 "DeadSystemException: The system died" satırı, 14 farklı süreçte
+//   (systemui, gms, vending, launcher, bizim com.dijitap.shallwe8set dahil), tek bir
+//   "beginning of main" (reboot) ile kapanıyor. karar.json → cihaz.baslat:
+//   "cmd: Failure calling service activity: Broken pipe (32)".
+
+// logcat.txt'ten BİREBİR (satır 1-9, 30-35, 53-56, 63-65) — çoklu süreç, systemui dahil.
+const KANIT_45482_LOGCAT = [
+  '--------- beginning of crash',
+  '09-28 03:27:42.280 E/AndroidRuntime( 3185): FATAL EXCEPTION: GoogleApiHandler',
+  '09-28 03:27:42.280 E/AndroidRuntime( 3185): Process: com.google.android.gms.ui, PID: 3185',
+  '09-28 03:27:42.280 E/AndroidRuntime( 3185): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '09-28 03:27:42.537 E/AndroidRuntime( 1042): FATAL EXCEPTION: main',
+  '09-28 03:27:42.537 E/AndroidRuntime( 1042): Process: com.google.android.gms.persistent, PID: 1042',
+  '09-28 03:27:42.537 E/AndroidRuntime( 1042): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '09-28 03:27:43.531 E/AndroidRuntime( 2446): Process: com.google.android.deskclock, PID: 2446',
+  '09-28 03:27:43.531 E/AndroidRuntime( 2446): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '09-28 03:27:43.541 E/AndroidRuntime( 3718): FATAL EXCEPTION: main',
+  '09-28 03:27:43.541 E/AndroidRuntime( 3718): Process: com.dijitap.shallwe8set, PID: 3718',
+  '09-28 03:27:43.541 E/AndroidRuntime( 3718): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '09-28 03:27:43.623 E/AndroidRuntime(  818): FATAL EXCEPTION: main',
+  '09-28 03:27:43.623 E/AndroidRuntime(  818): Process: com.android.systemui, PID: 818',
+  '09-28 03:27:43.623 E/AndroidRuntime(  818): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '09-28 03:27:43.677 E/AndroidRuntime( 2549): Process: com.android.vending:background, PID: 2549',
+  '09-28 03:27:43.677 E/AndroidRuntime( 2549): DeadSystemException: The system died; earlier logs will point to the root cause',
+  '--------- beginning of main',
+].join('\n');
+// karar.json cihaz.baslat alanından BİREBİR.
+const KANIT_45482_BASLAT = 'Starting: Intent { cmp=com.dijitap.shallwe8set/.MainActivity } | '
+  + 'cmd: Failure calling service activity: Broken pipe (32)';
+
+test('sistemOlduMu: 45482 kanıtı (14 sistem sürecinde DeadSystemException, systemui dahil) → true', () => {
+  assert.equal(O.sistemOlduMu(KANIT_45482_LOGCAT), true);
+});
+
+test('sistemAnrMi: 45482 kanıtı — dump BAŞARILI olsa bile (döküm başarısız değil) sistem ölümünü yakalar', () => {
+  // 72379'un aksine burada uiXml gerçek bir hiyerarşi (reboot sonrası launcher, döküm başarılı) —
+  // eski `dokumBasarisiz && logcatSistemAnr` dalı BURADA false döner, yeni `sistemOlduMu` dalı yakalar.
+  const gercekXml = '<hierarchy rotation="0"><node index="0" class="android.widget.FrameLayout"/></hierarchy>';
+  assert.equal(O.sistemAnrMi({ uiXml: gercekXml, logcat: KANIT_45482_LOGCAT }), true);
+});
+
+test('amBaslatSistemOlduMu: 45482 kanıtı ("Failure calling service activity: Broken pipe") → true', () => {
+  assert.equal(O.amBaslatSistemOlduMu(KANIT_45482_BASLAT), true);
+});
+
+test('amBaslatSistemOlduMu: "Can\'t find service: activity" de aynı köktendir → true', () => {
+  assert.equal(O.amBaslatSistemOlduMu('Starting: Intent { ... } | cmd: Can\'t find service: activity'), true);
+});
+
+test('webViewYokKarari: 45482 kanıtıyla ÖRTÜLEN sayılır — uiXmlHata YOK (dump başarılı) olsa bile', () => {
+  // 45482'de gerçek uiXmlHata null'dı (dump başarılıydı) — webViewYokKarari'nin eski davranışı
+  // (satır ~232 testi: "uiXmlHata yoksa her zaman RED") artık sistemOlduMu ile GEÇERSİZ kılınır
+  // çünkü sistemAnrMi artık dump durumundan bağımsız da true dönebiliyor.
+  const o = { uiXmlHata: null };
+  const k = O.webViewYokKarari('cihaz menü', o, KANIT_45482_LOGCAT);
+  assert.equal(k.ortulen, true);
+  assert.match(k.mesaj, /DeadSystemException|The system died/);
+});
+
+test('sistemOlduMu (mutasyon — yanlış pozitif freni): YALNIZ bizim uygulamamızda TEK bir DeadSystemException → false', () => {
+  // Ölçüt: en az 2 farklı süreç YA DA system_server/systemui bizzat listede. Tek başımıza,
+  // tek seferlik bir DeadSystemException (ör. flaky bir ölçüm) sistem ölümü SAYILMAMALI.
+  const tekSurec = [
+    '09-28 04:05:00.000 E/AndroidRuntime( 6000): FATAL EXCEPTION: main',
+    '09-28 04:05:00.000 E/AndroidRuntime( 6000): Process: com.dijitap.shallwe8set, PID: 6000',
+    '09-28 04:05:00.000 E/AndroidRuntime( 6000): DeadSystemException: The system died; earlier logs will point to the root cause',
+  ].join('\n');
+  assert.equal(O.sistemOlduMu(tekSurec), false);
+  assert.equal(O.sistemAnrMi({ logcat: tekSurec }), false);
+});
+
+test('sistemOlduMu (mutasyon): tek süreç ama system_server/systemui BİZZAT o ise yine true', () => {
+  const sistemSureci = [
+    '09-28 04:05:00.000 E/AndroidRuntime(  818): FATAL EXCEPTION: main',
+    '09-28 04:05:00.000 E/AndroidRuntime(  818): Process: com.android.systemui, PID: 818',
+    '09-28 04:05:00.000 E/AndroidRuntime(  818): DeadSystemException: The system died; earlier logs will point to the root cause',
+  ].join('\n');
+  assert.equal(O.sistemOlduMu(sistemSureci), true);
+});
+
+test('sistemOlduMu (negatif — olumsuz vaka): yalnız bizim uygulamamızda TEK bir FATAL EXCEPTION (TypeError), sistem ayakta → false (RED kalmalı)', () => {
+  // DeadSystemException/"The system died" imzası HİÇ yok — normal bir uygulama çökmesi.
+  const normalCokme = [
+    '09-28 04:10:00.000 E/AndroidRuntime( 7000): FATAL EXCEPTION: main',
+    '09-28 04:10:00.000 E/AndroidRuntime( 7000): Process: com.dijitap.shallwe8set, PID: 7000',
+    "09-28 04:10:00.000 E/AndroidRuntime( 7000): java.lang.TypeError: Cannot read properties of undefined (reading 'foo')",
+    '09-28 04:10:00.000 E/AndroidRuntime( 7000): \tat com.dijitap.shallwe8set.MainActivity.onCreate(MainActivity.java:42)',
+  ].join('\n');
+  assert.equal(O.sistemOlduMu(normalCokme), false);
+  assert.equal(O.sistemAnrMi({ logcat: normalCokme }), false);
+  assert.equal(O.amBaslatSistemOlduMu('Starting: Intent { cmp=com.dijitap.shallwe8set/.MainActivity } | Status: ok | Activity: com.dijitap.shallwe8set/.MainActivity | TotalTime: 812 | WaitTime: 820 | Complete'), false);
+});
+
+test('sistemOlduMu (negatif — 45478 türü): süreç canlı, beyaz ekran/yükleniyor kapanmıyor, logcat temiz → false (RED kalmalı)', () => {
+  // Kanıt dizininden BİREBİR: /Users/nadir/.empp-agent/kabul-kanit/45478-android-20260927-113551/
+  //   karar.json cihaz.baslat = "TotalTime: 11803 | WaitTime: 11812 | Complete" (normal am start,
+  //   Broken pipe YOK), logcat.txt'te DeadSystemException/"The system died" HİÇ yok (grep -c 0),
+  //   surecCanli:true, webView dolu, ama piksel "beyaz/yükleniyor ekranı" ile RED aldı.
+  const kanit45478Baslat = 'TotalTime: 11803 | WaitTime: 11812 | Complete';
+  const kanit45478LogcatTemiz = '09-27 11:36:40.123 I/chromium( 4021): [normal log satırı, ANR/DeadSystem yok]';
+  assert.equal(O.amBaslatSistemOlduMu(kanit45478Baslat), false);
+  assert.equal(O.sistemOlduMu(kanit45478LogcatTemiz), false);
+  assert.equal(O.sistemAnrMi({ logcat: kanit45478LogcatTemiz }), false);
+});
