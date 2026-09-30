@@ -462,13 +462,46 @@ function guncelYetenekler() {
   return caps;
 }
 
+// YETİM KİRA (2026-09-30, 45482/android 12:17Z): next-job 30 sn'de zaman aşımına uğrarsa
+// sunucu satırı ÇOKTAN kiralamış olabilir. Her mantıksal istek bir `X-Istek-Id` taşır;
+// yanıt ALINAMAZSA (ağ hatası/zaman aşımı/5xx) kimlik korunur ve sonraki deneme AYNI
+// kimlikle sorar → sunucu aynı işi geri verir, yeni satır kiralamaz. Yalnız 200/204 alınınca
+// kimlik tüketilir. Eski sunucu başlığı yok sayar (davranış eskisi gibi).
+let _bekleyenIstekId = null;
+
 async function fetchNextJob(auth) {
+  if (!_bekleyenIstekId) _bekleyenIstekId = require('crypto').randomUUID();
   const res = await axios.get(joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/next-job`), {
-    headers: agentHeaders(auth),
+    headers: { ...agentHeaders(auth), 'X-Istek-Id': _bekleyenIstekId },
     timeout: 30000,
     validateStatus: () => true,
   });
+  if (res.status === 200 || res.status === 204) _bekleyenIstekId = null;
   return parseNextJob(res.status, res.data);
+}
+
+/**
+ * ERTELEME = KİRAYI AÇIKÇA BIRAK (2026-09-30). Ertelenebilir hatada (disk kapısı, başsız kabul
+ * ÖLÇÜLEMEDİ, noter/ProBook geçici sınıfı) 'failed' YAZILMAZ; eskiden kira da bırakılmıyordu →
+ * iş 30 dk kira dolana kadar asılı kalıyordu. Sunucu işi kuyruğun sonuna koyar, bu ajana bir
+ * süre vermez, başka ajan hemen alabilir. FIRLATMAZ: eski sunucu (404) / ağ hatası → false,
+ * kira eskisi gibi süre dolunca döner.
+ * @returns {Promise<boolean>} kira bırakıldı mı
+ */
+async function releaseJob(auth, job, sebep) {
+  try {
+    const res = await axios.post(
+      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/release`),
+      { bookId: job.bookId, platform: job.platform, sebep: String(sebep || '').slice(0, 300) },
+      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true },
+    );
+    if (res.status === 200) return true;
+    warn('kira bırakılamadı (HTTP', res.status + '), kira dolunca kuyruğa döner:', job.bookId, job.platform);
+    return false;
+  } catch (e) {
+    warn('kira bırakılamadı (ağ):', job.bookId, job.platform, '-', agHatasiOzeti(e));
+    return false;
+  }
 }
 
 /**
@@ -2318,12 +2351,17 @@ async function main() {
       await processJob(auth, job);
     } catch (e) {
       if (ertelenebilirKaynakHatasi(e)) {
-        // Disk darlığı PAKET KUSURU DEĞİLDİR: 'failed' YAZMA. Kira dolunca satır
-        // kuyruğa döner; bu arada ajan beklemeden sıradaki işe geçer (android/mac
+        // Disk darlığı PAKET KUSURU DEĞİLDİR: 'failed' YAZMA. Kira AÇIKÇA bırakılır
+        // (releaseJob, 2026-09-30 — eskiden kira dolana kadar 30 dk asılı kalıyordu; eski
+        // sunucuda uç yoksa yine öyle); bu arada ajan beklemeden sıradaki işe geçer (android/mac
         // işleri aynı diske sığabilir, pardus sırası srv21 şeridinde üretilir).
         // Eski davranış satıra 'failed' yazıyordu — panelde "PARDUS HATALI" görünen
         // 8 iş (2026-09-19) bozuk paket değil, dolu diskti (Nadir tespiti).
-        warn('job ertelendi (failed YAZILMADI, kira dolunca kuyruğa döner):', job.bookId, job.platform, '-', agHatasiOzeti(e));
+        const birakildi = await releaseJob(auth, job, agHatasiOzeti(e));
+        warn(birakildi
+          ? 'job ertelendi (failed YAZILMADI, kira BIRAKILDI — kuyruğun sonunda, başka ajan alabilir):'
+          : 'job ertelendi (failed YAZILMADI, kira dolunca kuyruğa döner):',
+        job.bookId, job.platform, '-', agHatasiOzeti(e));
         await sleep(15000);
         continue;
       }
@@ -2416,4 +2454,6 @@ module.exports = {
   _yedekLogSifirla: () => { _yedekAktifSon = false; },
   packagerStartPackage, postResultSuccess,
   packagerPoll,
+  // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
+  fetchNextJob, releaseJob,
 };

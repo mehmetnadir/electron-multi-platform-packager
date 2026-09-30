@@ -1,3 +1,14 @@
+## 2026-09-30 — Ajan kirası: erteleme kirayı bırakır + yetim kira istek kimliği (dal `kira-birak-20260930`)
+
+- `fetchNextJob` her mantıksal istek için `X-Istek-Id` (UUID) gönderir; yanıt alınamazsa (ağ/zaman
+  aşımı/5xx) kimlik korunur, sonraki deneme aynı kimlikle sorar → sunucu aynı işi döndürür (45482/android
+  yetim kirası, 30.09 12:17Z). Yalnız 200/204 kimliği tüketir.
+- Ertelenebilir dal (disk kapısı, başsız kabul ÖLÇÜLEMEDİ, noter/ProBook) artık `releaseJob` ile
+  `POST /agents/:id/release` çağırır: iş kuyruğun sonuna gider, bu ajana 10 dk verilmez, başka ajan alır.
+  Eski sunucu (404) / ağ hatası FIRLATMAZ — kira eskisi gibi 30 dk sonra döner.
+- Sunucu tarafı: book-update dal `kira-birak-20260930`. Canlıya sıra: önce API, sonra runner restart.
+- Test: `src/agent/runner-kira-birak.test.js` (5, sahte API); 4 mutasyonun hepsi yakalandı.
+
 ## 2026-09-30 — İmza sözleşmesi Windows paketleme sözleşmesine taşındı
 
 Nadir: "exe imzalama sözleşmesini exe üretim sözleşmesinin içine ekle; birden fazla yerde imza süreci
