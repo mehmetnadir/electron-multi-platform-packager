@@ -369,3 +369,117 @@ test('CDP acik + acikca KABUL_AYRI_EV=0: gercek HOME ile acilir, UYARI + hangi e
   assert.match(r.stdout, /UYARI: KABUL_AYRI_EV=0 — uygulama GERCEK HOME ile acilacak; E7 guvenilmez, karar OLCULEMEDI olur/);
   assert.match(fs.readFileSync(path.join(kanit, 'ortam.txt'), 'utf8'), /EV_KULLANILAN=.* \(GERCEK HOME\)/);
 });
+
+// ---------------------------------------------------------------------------
+// ADAY LİSTESİ TESTLERİ (2026-09-30)
+// PROBOOK_HOST / PROBOOK_HOSTS ortam değişkenleri ve çoklu aday denetimi.
+// ---------------------------------------------------------------------------
+function uzakStubOrtam() {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'kabul-uzak-'));
+  const home = path.join(kok, 'home');
+  const bin = path.join(kok, 'bin');
+  const iz = path.join(kok, 'uzak-cagri.iz');
+  const cfg = path.join(kok, 'ssh-stub.json');
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(bin);
+
+  const sshScript = `#!/bin/bash
+echo "ssh $*" >> "${iz}"
+CFG="${cfg}"
+CMD="\${*: -1}"
+
+HOST=""
+for arg in "$@"; do
+  if [[ "$arg" == etapadmin@* ]]; then
+    HOST="$arg"
+  fi
+done
+
+if [ "$CMD" = "echo hazir" ]; then
+  if grep -q "\\"fail\\": *\\"\$HOST\\"" "$CFG" 2>/dev/null; then
+    exit 255
+  fi
+  if grep -q "\\"fail_all\\": *true" "$CFG" 2>/dev/null; then
+    exit 255
+  fi
+  echo hazir
+  exit 0
+fi
+
+if [[ "$CMD" == *"probook-kilit.sh"* ]] || [[ "$CMD" == *"bash -s"* ]]; then
+  echo "KILIT_ALINDI"
+  exit 0
+fi
+
+if [[ "$CMD" == *"df -Pk"* ]]; then
+  echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+  echo "/dev/sda1 100000000 10000 99990000 1% /home/etapadmin"
+  exit 0
+fi
+
+exit 0
+`;
+  fs.writeFileSync(path.join(bin, 'ssh'), sshScript, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'scp'), `#!/bin/bash\necho "scp $*" >> "${iz}"\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'setsid'), '#!/bin/bash\nexec "$@"\n', { mode: 0o755 });
+
+  const paket = path.join(kok, 'out', 'Deneme-1.0.0.impark');
+  fs.mkdirSync(path.dirname(paket));
+  fs.writeFileSync(paket, '#!/bin/bash\nsleep 1\n', { mode: 0o755 });
+
+  const env = {
+    ...process.env,
+    HOME: home,
+    PATH: `${bin}:${process.env.PATH}`,
+    PROBOOK_BEKLE: '1',
+    PROBOOK_BEKLE_TABAN: '0',
+    KABUL_BOSLUK_TAVAN: '1',
+    KABUL_BOSLUK_ARALIK: '1',
+  };
+  delete env.PROBOOK_HOST;
+  delete env.PROBOOK_HOSTS;
+
+  return { kok, home, bin, iz, cfg, paket, env };
+}
+
+test('aday listesi: ilk aday düşer ikinci cevap verir -> kabul o host ile ilerler ve log satırı', () => {
+  const o = uzakStubOrtam();
+  fs.writeFileSync(o.cfg, JSON.stringify({ fail: 'etapadmin@192.168.1.55' }));
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: o.env, timeout: 30000,
+  });
+  assert.match(r.stdout, /ProBook: etapadmin@100\.73\.161\.76 \(denenen: etapadmin@192\.168\.1\.55, etapadmin@100\.73\.161\.76\)/);
+  const calls = fs.readFileSync(o.iz, 'utf8');
+  assert.match(calls, /ssh .* etapadmin@192\.168\.1\.55 echo hazir/);
+  assert.match(calls, /ssh .* etapadmin@100\.73\.161\.76 echo hazir/);
+});
+
+test('aday listesi: hepsi düşer -> RED metni iki host da içinde, rc=1', () => {
+  const o = uzakStubOrtam();
+  fs.writeFileSync(o.cfg, JSON.stringify({ fail_all: true }));
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: o.env, timeout: 30000,
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /RED: ProBook'a baglanilamadi \(etapadmin@192\.168\.1\.55, etapadmin@100\.73\.161\.76\)/);
+});
+
+test('aday listesi: PROBOOK_HOST=yerel -> ssh hic cagrilmaz', () => {
+  const o = uzakStubOrtam();
+  fs.writeFileSync(o.cfg, JSON.stringify({}));
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, PROBOOK_HOST: 'yerel' }, timeout: 30000,
+  });
+  assert.equal(fs.existsSync(o.iz), false, 'yerel kipte ssh çağrılmamalı');
+});
+
+test('aday listesi: PROBOOK_HOST verilmis ve cevap veriyor -> baska aday denenmez', () => {
+  const o = uzakStubOrtam();
+  fs.writeFileSync(o.cfg, JSON.stringify({}));
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, PROBOOK_HOST: 'etapadmin@100.73.161.76' }, timeout: 30000,
+  });
+  assert.match(r.stdout, /ProBook: etapadmin@100\.73\.161\.76 \(denenen: etapadmin@100\.73\.161\.76\)/);
+  const calls = fs.readFileSync(o.iz, 'utf8');
+  assert.doesNotMatch(calls, /etapadmin@192\.168\.1\.55/);
+});

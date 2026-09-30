@@ -78,12 +78,17 @@ AKTIVASYON="${EMPP_AKTIVASYON_BEKLENIR:-0}"
 # PROBOOK_HOST=yerel verilir -> ssh yerine `bash -c`, scp yok, paket yerinde açılır
 # (kopyalanmaz, temizlikte SİLİNMEZ — yükleme adımı ona hâlâ muhtaç). Uzak davranış AYNEN.
 YEREL=0
-if [ "$HOST" = "yerel" ]; then
-  YEREL=1
-  SSH=(bash -c)
-else
-  SSH=(ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$HOST")
-fi
+ssh_kur(){
+  HOST="$1"
+  if [ "$HOST" = "yerel" ]; then
+    YEREL=1
+    SSH=(bash -c)
+  else
+    YEREL=0
+    SSH=(ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$HOST")
+  fi
+}
+ssh_kur "$HOST"
 # Uzak dosyayi (ya da yerel kipte yerel dosyayi) kanit dizinine alir.
 kanit_al(){
   if [ "$YEREL" = "1" ]; then cp -f "$1" "$2" 2>/dev/null
@@ -309,7 +314,48 @@ if [ "$YEREL" = "1" ]; then
   [ "$OLCEKLI" -gt "$BEKLE" ] && { say "acilis ust siniri buyutuldu: ${BEKLE} -> ${OLCEKLI} sn"; BEKLE="$OLCEKLI"; }
 else
   command -v ssh >/dev/null || { say "RED: ssh yok"; exit 1; }
-  "${SSH[@]}" 'echo hazir' >/dev/null 2>&1 || { say "RED: ProBook'a baglanilamadi ($HOST)"; exit 1; }
+  ADAYLAR=()
+  ekle_aday() {
+    local a="$1"
+    [ -z "$a" ] && return 0
+    for x in "${ADAYLAR[@]+"${ADAYLAR[@]}"}"; do
+      [ "$x" = "$a" ] && return 0
+    done
+    ADAYLAR+=("$a")
+  }
+  if [ -n "${PROBOOK_HOST:-}" ] && [ "${PROBOOK_HOST}" != "yerel" ]; then
+    ekle_aday "$PROBOOK_HOST"
+  fi
+  for a in ${PROBOOK_HOSTS:-etapadmin@192.168.1.55 etapadmin@100.73.161.76}; do
+    ekle_aday "$a"
+  done
+
+  DENENEN=()
+  SECILEN_HOST=""
+  for aday in "${ADAYLAR[@]}"; do
+    DENENEN+=("$aday")
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$KEY" "$aday" 'echo hazir' >/dev/null 2>&1; then
+      SECILEN_HOST="$aday"
+      break
+    fi
+  done
+
+  DENENEN_STR=""
+  for d in "${DENENEN[@]}"; do
+    if [ -z "$DENENEN_STR" ]; then
+      DENENEN_STR="$d"
+    else
+      DENENEN_STR="$DENENEN_STR, $d"
+    fi
+  done
+
+  if [ -z "$SECILEN_HOST" ]; then
+    say "RED: ProBook'a baglanilamadi ($DENENEN_STR)"
+    exit 1
+  fi
+
+  ssh_kur "$SECILEN_HOST"
+  say "ProBook: $HOST (denenen: $DENENEN_STR)"
   BEKLENEN=0
   until C=$(kilit al); do
     [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: kabul kilidi ${C##*KILIT_MESGUL }"; exit 1; }
