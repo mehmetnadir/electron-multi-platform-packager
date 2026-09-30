@@ -85,6 +85,40 @@ test('(A) 5xx kimliği korur (sunucu kiralamış olabilir), 204 tüketir', async
   });
 });
 
+test('(A) sınır: aynı kimlik en çok 3 denemede kullanılır, 4. deneme YENİ kimlik taşır', async () => {
+  await sahteApi((k, res) => { res.writeHead(502); res.end('bad gateway'); }, async (istekler) => {
+    for (let i = 0; i < 7; i++) await fetchNextJob(AUTH);
+    const k = istekler.map((i) => i.headers['x-istek-id']);
+    assert.deepStrictEqual([k[1], k[2]], [k[0], k[0]]);
+    assert.notStrictEqual(k[3], k[0]);
+    assert.deepStrictEqual([k[4], k[5]], [k[3], k[3]]);
+    assert.notStrictEqual(k[6], k[3]);
+  });
+  // Sonraki testlere taşınmasın: 204 kimliği tüketir.
+  await sahteApi((k, res) => { res.writeHead(204); res.end(); }, () => fetchNextJob(AUTH));
+});
+
+test('(A) sınır: ilk kullanımdan 5 dk sonra kimlik yenilenir (deneme sayısı dolmasa da)', async () => {
+  const gercek = Date.now;
+  let simdi = gercek();
+  Date.now = () => simdi;
+  try {
+    await sahteApi((k, res) => { res.writeHead(502); res.end('x'); }, async (istekler) => {
+      await fetchNextJob(AUTH);
+      simdi += 5 * 60 * 1000;
+      await fetchNextJob(AUTH);
+      simdi += 1;
+      await fetchNextJob(AUTH);
+      const k = istekler.map((i) => i.headers['x-istek-id']);
+      assert.strictEqual(k[1], k[0], 'tam 5 dk: hâlâ aynı kimlik');
+      assert.notStrictEqual(k[2], k[0], '5 dk + 1 ms: yeni kimlik');
+    });
+    await sahteApi((k, res) => { res.writeHead(204); res.end(); }, () => fetchNextJob(AUTH));
+  } finally {
+    Date.now = gercek;
+  }
+});
+
 test('(B) releaseJob /release ucuna işi ve sebebi yollar, 200 → true', async () => {
   await sahteApi((k, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });

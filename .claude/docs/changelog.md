@@ -8,6 +8,9 @@
   Eski sunucu (404) / ağ hatası FIRLATMAZ — kira eskisi gibi 30 dk sonra döner.
 - Sunucu tarafı: book-update dal `kira-birak-20260930`. Canlıya sıra: önce API, sonra runner restart.
 - Test: `src/agent/runner-kira-birak.test.js` (5, sahte API); 4 mutasyonun hepsi yakalandı.
+- İnceleme düzeltmesi (01.10): aynı `X-Istek-Id` en çok 3 denemede ya da ilk kullanımdan 5 dk sonra
+  yenilenir (sunucu da kaydı 5 dk'dan sonra kabul etmez) — yavaş sunucu yolu ajanı tek işe kilitleyemez.
+  Test 7; 7 mutasyonun hepsi yakalandı.
 
 ## 2026-09-30 — İmza sözleşmesi Windows paketleme sözleşmesine taşındı
 

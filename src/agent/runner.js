@@ -467,10 +467,23 @@ function guncelYetenekler() {
 // yanıt ALINAMAZSA (ağ hatası/zaman aşımı/5xx) kimlik korunur ve sonraki deneme AYNI
 // kimlikle sorar → sunucu aynı işi geri verir, yeni satır kiralamaz. Yalnız 200/204 alınınca
 // kimlik tüketilir. Eski sunucu başlığı yok sayar (davranış eskisi gibi).
+// SINIR (inceleme 30.09): sunucunun yavaş yolu her seferinde 30 sn'yi aşarsa aynı kimlik ajanı
+// tek işe kilitlemesin — kimlik en çok ISTEK_KIMLIGI_DENEME denemede ya da ilk kullanımdan
+// ISTEK_KIMLIGI_OMUR_MS sonra yenilenir (sunucu da kaydı 5 dk'dan sonra kabul etmez).
+const ISTEK_KIMLIGI_DENEME = 3;
+const ISTEK_KIMLIGI_OMUR_MS = 5 * 60 * 1000;
 let _bekleyenIstekId = null;
+let _istekDeneme = 0;
+let _istekIlkMs = 0;
 
 async function fetchNextJob(auth) {
-  if (!_bekleyenIstekId) _bekleyenIstekId = require('crypto').randomUUID();
+  if (!_bekleyenIstekId || _istekDeneme >= ISTEK_KIMLIGI_DENEME
+    || Date.now() - _istekIlkMs > ISTEK_KIMLIGI_OMUR_MS) {
+    _bekleyenIstekId = require('crypto').randomUUID();
+    _istekDeneme = 0;
+    _istekIlkMs = Date.now();
+  }
+  _istekDeneme += 1;
   const res = await axios.get(joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/next-job`), {
     headers: { ...agentHeaders(auth), 'X-Istek-Id': _bekleyenIstekId },
     timeout: 30000,
