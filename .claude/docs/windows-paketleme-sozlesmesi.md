@@ -44,10 +44,33 @@ Güncellenen dosyalar SET kabuk beyaz listesiyle sınırlı (`src/packaging/set-
 ## Teslim ve yedek — KARARLANDI (Nadir, 2026-09-25)
 Windows için müşteri TEK indirme görür (`/go/<kod>/windows`). Arkada iki kaynak vardır:
 bizim NSIS paketimiz **varsa ve sağlamsa** o verilir; yoksa ya da sorunluysa İmpark'ın exe'si verilir.
-"Sağlam" = kapı 0 FAIL + imzalı + geri alma işareti yok. İmza gelene kadar (Certum başvurusu ertelendi,
-yayımcı adı sonra) bizim paket imzayı İmpark imza yuvasından (66902, ofiste, `scripts/imza-yuva-smb.sh`)
-alır; imzasız paket indirmeye çıkmaz, o sürede indirme İmpark exe'sidir. Panelde tek "Windows" satırı;
+"Sağlam" = kapı 0 FAIL + imzalı + geri alma işareti yok. İmzanın yolu ve kuralları aşağıdaki
+**İmza (Authenticode)** bölümündedir; imzasız paket indirmeye çıkmaz, o sürede indirme İmpark exe'sidir. Panelde tek "Windows" satırı;
 hangi kaynağın verildiği ayrı alanda tutulur (`build_method`: `passthrough` | `build`).
+
+## İmza (Authenticode) — TEK KAYNAK
+> Nadir 30.09: imza sözleşmesi exe üretim sözleşmesinin içinde durur. Bu bölüm Windows imzası için tek
+> kaynaktır; skill `windows-imzalama`, `scripts/OKU-imza-yuva-smb.md` ve diğer belgeler buraya bağlanır,
+> ayrı kural yazmaz. Bölümdeki kararlar tarihleriyle önceki onaylardan taşındı; yeni karar eklenmedi.
+
+**Yol (tek canlı yol):** Kendi kod imzalama sertifikamız YOK. Paket, İmpark'ın panel imza kuyruğunda
+imzalanır. Kuyruk dosyanın içine değil yoluna bakar: `…/Uploads/KitapTekExe/66902/windows.exe` o an ne ise
+onu imzalar. Yuvayı Mac besler — İmpark VPN + Storage7 SMB üzerinden `scripts/imza-yuva-smb.sh`
+(`hazirla` · `bekle-ve-tak` · `hizli-kontrol` · `toplu`; 92 test, gerçek yuvaya dokunmaz). Yuva kimliği
+(66902) ve canlı tetik betikte SABİTTİR; başka kitabın yuvasına asla yazılmaz. İmpark'ın kendi exe'si
+(passthrough) aynı kuyrukta imzalı gelir; `yayincilikadm` imzasız exe'yi R2'ye koymaz (`pe_is_signed`).
+
+**İmza kimliği (ölçüldü 25-26.09):** DigiCert Trusted G4 Code Signing RSA4096 SHA384 · imzacı
+`O=İm Park Bilişim … LTD. ŞTİ., C=TR` · DigiCert RSA4096 SHA256 zaman damgası (sertifika bitişi
+**2027-07-03**; zaman damgası sayesinde imza bitişten sonra da geçerli kalır). Kullanıcı yayımcı olarak
+"İm Park Bilişim" görür. İmza bloğu ≈ 10,4 KB.
+
+**Ön koşullar (her koşudan önce ölçülür):** (1) İmpark VPN açık — `ping 172.17.2.21`; açıksa tünele
+dokunulmaz. (2) Storage7 bağlı (`~/Impark/Storage7/vhosts/akillitahta.ydspublishing.com/httpdocs/Uploads/KitapTekExe`
+okunur). (3) Tetik Mac'te: `yayincilikadm book exe-create 66902 --wait 0`; yuvayı boşaltma
+`yayincilikadm book exe-remove 66902 --yes` (silme sunucuda olur). Tetik ve gözcü ayrı süreçtir.
+(4) Canlı tetik İmpark'ın canlı hattına dokunur: Nadir'in o iş için onayı olmadan koşulmaz; kuru prova
+(`KURU=1`) serbest.
 
 **İmza bekleme kuralı — KARARLANDI (Nadir, 2026-09-26):** İmpark imza kuyruğunun süresi onların yüküne
 bağlıdır; tek ölçüm (26.09: tetikten imzaya ~6 dk) norm DEĞİLDİR, plan ve raporda "bu koşuda" diye geçer.
@@ -72,6 +95,28 @@ paralel işlerle doldurulur.
    CRL) ve başsız kabul yeniden koşar. İkisi de geçmeden paket yayına çıkmaz.
 5. **Yayınla:** R2'ye yüklenir, kayıtta `build_method=build`; önceki İmpark exe'si yedek olarak kalır.
 Bu koşuda ölçülen (26.09, 715 MB): hazırlık 7 dk 42 sn, tetikten imzaya ~6 dk — norm değil.
+
+**Doğrulama kapısı (yayın öncesi, hepsi):** `hizli-kontrol` → imzalı ve BİZİM (Authenticode özetini
+doğrulamaz, ön kontroldür) · indirilen kopyada `osslsigncode verify` Succeeded (imzacı İm Park Bilişim,
+zincir + CRL, zaman damgası) · `pe_is_signed` (sertifika dizini dolu; `yayincilikadm r2_publish` ile aynı
+ölçüt) · başsız kabul yeniden GEÇER. İmzalı boyut ≈ özgün + ~10,4 KB yalnız ipucudur; çıkış kodu kanıt
+değildir. Teslim klasörüne kanıt yazılır (imzacı, zaman damgası, sha256, bu koşudaki süre).
+
+**Ne imzalanır — açık risk (ÖLÇÜLMEDİ):** yuva yalnız tek dosyayı, dış `<Ad>-<sürüm>-Setup.exe`'yi imzalar.
+Kurulan uygulama exe'si ve kaldırıcı (`Uninstall …exe`) imzasız kalır. Windows 11 Smart App Control açık
+makinede imzasız iç exe'yi engelleyebilir; gerçek makinede ölçülene kadar risk olarak durur
+(`windows-uretim-metodu-karar-2026-09-25.md` §3).
+
+**Yayın ön şartı:** srv21 işçisinin `build_method=build` satırını tanıması (açık iş 9) ve runner Windows
+şeridinin açılması (`EMPP_RUNNER_WINDOWS`, açık iş 11). İkisi de ayrı onaydır.
+
+**Kullanılmayan / ölü yollar (yeniden önerilmez):**
+| Yol | Durum |
+|---|---|
+| RDS1 ajanıyla yuvaya yazma (`yayincilikadm ajan yaz`, eski `exe-imzalama` skill'i) | ÖLÜ — RDS1 2026-09-19'da kalıcı kapandı; açılan iş sonsuz `pending` kalır. Yerine bu bölümdeki SMB yolu |
+| Kendi sertifikamız (Certum Standard Cloud · DigiCert OV + KeyLocker, jsign ile Mac'ten) | ERTELENDİ (Nadir, 26.09; yayımcı adı sonra). Seçenek ve maliyet: `windows-uretim-metodu-karar-2026-09-25.md` §3 |
+| SignPath OSS başvurusu (kökte `SIGNPATH_*.md`) | Kullanılmıyor; bu repoda gönderim kaydı yok |
+| electron-builder `signtoolOptions.publisherName` | Yalnız ad yazar, sertifika yok — imza üretmez |
 
 ## Kimlik ve kitap türü — KARARLANDI (Nadir, 2026-09-25)
 Kimlik = setin/kitabın kendi `book_id`'si; elle girilen alan YOK. Tür **deterministik** türetilir:

@@ -1,6 +1,9 @@
 # imza-yuva-smb.sh — 66902 imza yuvasını Mac'ten SMB ile besleme
 
-RDS1 ajanı kapandığı için (`exe-imzalama` skill'i) yuvaya yazma işi artık Mac'ten, İmpark
+> Kurallar (onay, bekleme, doğrulama, ölü yollar) tek kaynak: `.claude/docs/windows-paketleme-sozlesmesi.md`
+> → İmza (Authenticode). Bu dosya yalnız aracın kullanımını anlatır.
+
+RDS1 ajanı 19.09'da kapandığı için (eski `exe-imzalama` yolu ÖLÜ) yuvaya yazma işi artık Mac'ten, İmpark
 VPN'i ve bağlı Storage7 SMB diski üzerinden yapılır. İmza kuyruğu dosyaya bakmaz, **yola**
 bakar: `…/Uploads/KitapTekExe/66902/windows.exe`. Yuva kimliği ve CANLI tetik komutu betikte
 **sabittir**.

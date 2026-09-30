@@ -59,6 +59,7 @@
 ## Aktif Çalışma (2026-09-26 akşam canlıya alma — özet, detay `.claude/docs/gotchas.md` + `.claude/docs/karar-defteri-2026-09-26.md`)
 - G kanalı canlıya alındı: mac/Pardus/Windows/Android istemci; Android EKLEME g-yayin kapısında bilinçli RED.
 - Windows şeridi: imza yuvası + Authenticode + R2; kapı bayrağı `EMPP_RUNNER_WINDOWS` (`~/.empp-agent/run-agent.sh`).
+  İmza kuralları tek kaynak: `windows-paketleme-sozlesmesi.md` → İmza (Authenticode).
 - İmpark içerik merdiveni S0/S1 → `EMPP_ARSIV_MERDIVEN`; kabul E6/E7/E8 (`KABUL_CDP`) — ayrı HOME şart, gerçek ev eski paketi de GEÇTİ sayıyor (bilinen sınırlama).
 - Motor kanonik + WebP içerik önbelleği: kod varsayılanı AÇIK, run-agent.sh'ta bilerek YOK.
 - D-2: eski G üreticisi karantinaya alındı (`_graveyard/2026-09-26-g-eski-uretici/`); yeni G yolu manifesti runner/build tarafında YAZMAZ.

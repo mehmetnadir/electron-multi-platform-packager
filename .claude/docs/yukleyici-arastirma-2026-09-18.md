@@ -111,7 +111,8 @@ sorunu bugün de yok; kazanılacak olan **görsel kalite ve mesajlaşma**.
   ([ToDesktop](https://www.todesktop.com/blog/posts/windows-apps-psa-ev-certs-do-not-grant-immediate-reputation-anymore),
   [DigiCert](https://knowledge.digicert.com/alerts/ev-signed-application-showing-microsoft-defender-smartscreen-warnings))
 - Yapılacak: **sabit imza kimliği** + her sürümde zaman damgası + önce küçük gruba dağıtım.
-  Bizde imza yolu hazır: **66902 yuvası** (`~/.claude/skills/exe-imzalama`).
+  Bizde imza yolu hazır: **66902 yuvası** (SMB ile, skill `windows-imzalama`; kurallar
+  `windows-paketleme-sozlesmesi.md` → İmza (Authenticode)).
 - **Antivirüs yanlış pozitifi NSIS'te toplu olabiliyor** (aynı stub'la üretilen tüm
   kurulumlar birden işaretlenebiliyor — [NSIS resmi sayfa](https://nsis.sourceforge.io/NSIS_False_Positives)).
   Rutin: her sürüm öncesi VirusTotal kontrolü.
