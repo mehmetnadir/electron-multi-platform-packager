@@ -160,3 +160,34 @@
      DOKUNMADI, iki dal ayrı birleştirilecek).
   2. Kitap güncelleme diyaloğu ("Kitap Güncelleniyor %x") açıkken de ölçüm İÇERİK görür — ProBook
      kapısındaki davranışla aynı (piksel eşiği diyalog metnini de "içerik" sayar).
+
+- **WebZKitap okuyucusu boş/404 XML'de çöker — dönüş ŞİFRELİ olmalı (araştırma notu 28.09, Silinecekler'de):**
+  `bd0c1a4f650802c98ebf.main.js`'in özel XML ayrıştırıcısı (`_parseFromString`), `<` ile başlamayan bir
+  yanıt (404 sayfası gibi) aldığında boş `r` dizisinin son elemanına (`r[r.length-1].value`) yazmaya
+  çalışıp `undefined.value` ile çöker. `Focus.xml`/`Show.xml` için en küçük geçerli gövde `<root></root>`
+  — ama istemci bu dosyaları `encrypted:true` (256−byte ters çevirme) beklediğinden düz metin dönülürse
+  şifre çözme sonrası yine bozulup çöker; fallback **şifrelenmiş** `<root></root>` baytıyla dönülmelidir.
+
+- **0 bayt `flexibleItems.json` macOS universal build'inde ENOENT verir (araştırma notu 28.09, Silinecekler'de):**
+  bazı SET kaynaklarında kök dosya 0 bayt (geçerlisi `[]`, 2 bayt) kalıyor; Android/Pardus bundan etkilenmiyor
+  (asar `asar-app-2` ikinci mimari geçici kopyalama adımı yok) ama macOS universal (`x64`+`arm64`) derlemesinde
+  ikinci mimari kopyalama adımında dosya kaybolup `ENOENT open '.../asar-app-2/.../flexibleItems.json'` ile
+  düşüyor. Onarım `bos-json-onarim.js` (`bosJsonOnar`) — kök index denetiminden sonra, platform fan-out'tan
+  ÖNCE çağrılır; 0 baytlık dosyaları `[]` ile değiştirir. **`bos-flexibleitems` dalında, agent-mode'a HENÜZ merge edilmedi** (doğrulandı: commit agent-mode'un atası değil).
+
+- **Varsayılan `main.js` şablonunda `\n` kaçışı + `companyName` ham gömme (araştırma notu 28.09, Silinecekler'de):**
+  `packagingService.js`'teki varsayılan `main.js` şablonunda ham `\n` fiziksel satır sonu üretip üretilen
+  dosyada `SyntaxError: Invalid or unexpected token` veriyordu (düzeltme: `\\n`); `companyName` de
+  interpolation dışında ham kod bırakılmıştı, `JSON.stringify` ile sabit olarak gömülmesi gerekiyor.
+  Kalıcı kapı önerisi: `main.js` üretildikten, tüm yamalar uygulandıktan SONRA `electron-builder`'dan ÖNCE
+  `new vm.Script(kaynak)` ile derleyip `SyntaxError`'da paketlemeyi durdurmak (`mainjs-sozdizimi.js`).
+  **NOT — doğrulandı: bu düzeltme `canli-aday-20260928` dalında duruyor, `mainjs-sablon-sozdizimi` dalının
+  commit'i agent-mode'un atası DEĞİL (agent-mode'a merge edilmemiş).**
+
+- **"SET kökü ezildi" teşhisi YANLIŞ ÇERÇEVE (araştırma notu 26.09, Silinecekler'de):** 11845/45551 RED'lerinde
+  paketleyici hiçbir menünün üstüne yazmadı — kaynağın kendisi İmpark'ın ince, SET içeriği taşımayan tek-motor
+  exe'siydi (`bookN` 0, `assets/` yok). Gerçek kök neden: kaynak seçimi/zamanlaması ve runner'ın anlık görüntüyü
+  publisher-update'ten SONRA alması (`kok-index-denetimi.js` kendi hedef sınıfını göremiyor). Önerilen kalıcı
+  düzeltme "içeriksiz kaynak kapısı" (kökte `assets/` yok VE `setKitapDizinleri` boşsa iş paketlemeye
+  girmeden `failed` olur) henüz KOD DEĞİL — teşhis raporu, `dusur` kipine geçiş için erken (yanlış-pozitif riski
+  yüksek, bkz. rapor §"dusur kipine geçişin yanlış-pozitif riski").
