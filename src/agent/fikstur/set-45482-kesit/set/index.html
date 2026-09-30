@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shall We 8 Set</title>
+    <link rel="stylesheet" href="styles/language-set.css?v=20250921">
+    <link rel="stylesheet" href="styles/language-animations.css?v=20250921">
+    <link rel="stylesheet" href="styles/cevrimdisi.css">
+</head>
+<body>
+    <!-- Üst Orta Logo -->
+    <div class="top-logo" role="img" aria-label="Yayınevi Logosu">
+        <img src="images/logo.png" alt="Logo" />
+    </div>
+
+    <!-- Hamburger Menü Butonları (Mobil için bağımsız) -->
+    <button class="menu-toggle left-toggle" id="leftMenuToggle">
+        <i class="fas fa-bars"></i>
+    </button>
+    <button class="menu-toggle right-toggle" id="rightMenuToggle">
+        <i class="fas fa-bars"></i>
+    </button>
+
+    <!-- Sol Sandviç Menü -->
+    <div class="sidebar-menu left" id="leftSidebar">
+        <div class="menu-content">
+            <div class="menu-header">
+                <h3>Kitaplar & Üniteler</h3>
+                <button class="menu-close" id="leftMenuClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="menu-body" id="leftMenuBody">
+                <!-- Accordion menü buraya eklenecek -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Sağ Sandviç Menü -->
+    <div class="sidebar-menu right" id="rightSidebar">
+        <div class="menu-content">
+            <div class="menu-header">
+                <h3>Kitaplar & Üniteler</h3>
+                <button class="menu-close" id="rightMenuClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="menu-body" id="rightMenuBody">
+                <!-- Accordion menü buraya eklenecek -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Dil Seçici -->
+    <div class="language-selector">
+        <button class="language-btn" id="languageBtn" title="Dil değiştir">
+            <i class="fas fa-globe"></i>
+            <span id="languageText">TR</span>
+        </button>
+    </div>
+
+    <!-- Ana Container -->
+    <div class="app-container">
+        <!-- Kitap Seti Container -->
+        <div class="book-set-container" id="bookSetContainer">
+            <!-- Kitaplar dinamik olarak buraya eklenecek -->
+        </div>
+
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="loading-content">
+                <div class="loading-spinner">
+                    <i class="fas fa-book-open spinning"></i>
+                </div>
+                <h3 class="loading-title">Açılıyor...</h3>
+                <p class="loading-subtitle" id="loadingText">Lütfen bekleyin</p>
+            </div>
+        </div>
+
+        <!-- Ünite Seçim Modal -->
+        <div class="modal-overlay" id="unitModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="modal-book-info">
+                        <div class="modal-book-cover" id="modalBookCover"></div>
+                        <div class="modal-book-details">
+                            <h2 id="modalTitle">Ünite Seçin</h2>
+                            <p id="modalSubtitle">Açmak istediğiniz üniteyi seçin</p>
+                        </div>
+                    </div>
+                    <button class="modal-close" id="modalClose">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="units-list" id="unitsList">
+                        <!-- Üniteler dinamik olarak buraya eklenecek -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Özellikler Dock (sağ taraf) -->
+    <div class="features-dock" id="featuresDock" aria-label="Özellikler"></div>
+
+    <!-- Feature Modal -->
+    <div class="feature-modal-overlay" id="featureModal" aria-hidden="true">
+        <div class="feature-modal-content" role="dialog" aria-modal="true">
+            <div class="feature-modal-header">
+                <h3 id="featureModalTitle">Özellik</h3>
+                <button class="feature-modal-close" id="featureModalClose" aria-label="Kapat">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="feature-modal-body" id="featureModalBody">
+                <!-- İçerik yüklenecek -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Aktivasyon anahtarı rozeti (set-geneli anahtar varsa) -->
+    <div id="setKeyBadge" class="set-key-badge" style="display:none;">
+        <button type="button" class="set-key-badge-btn" id="setKeyBadgeBtn" aria-expanded="false">
+            <span class="set-key-dot"></span>Anahtar doğrulandı
+        </button>
+        <div class="set-key-panel" id="setKeyPanel" hidden>
+            <div class="set-key-panel-title">Bu set için aktivasyon anahtarı</div>
+            <div class="set-key-masked" id="setKeyMasked"></div>
+            <p class="set-key-note">Aynı setteki anahtar isteyen tüm kitaplarda kullanılır. Yalnızca bu tarayıcıda saklanır.</p>
+            <button type="button" class="set-key-revoke" id="setKeyRevoke">Bu set için doğrulamayı iptal et</button>
+        </div>
+    </div>
+
+    <!-- PWA Yükleme Banner'ı -->
+    <div id="pwaInstallBanner" style="display:none;" class="pwa-install-banner">
+        <svg class="book-group-ring pwa-ring" viewBox="0 0 440 76" preserveAspectRatio="none" aria-hidden="true"><rect x="2" y="2" width="436" height="72" rx="18" ry="18" /></svg>
+        <div class="pwa-install-content">
+            <img src="images/logo.png" alt="Logo" class="pwa-install-icon" />
+            <div class="pwa-install-text">
+                <strong>Kısayolu masaüstüne eklemek ister misiniz?</strong>
+                <p>Hızlı erişim için uygulamayı yükleyin</p>
+            </div>
+            <button id="pwaInstallBtn" class="pwa-install-btn">Yükle</button>
+            <button id="pwaInstallDismiss" class="pwa-install-dismiss">&#x2715;</button>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="scripts/language-loader.js"></script>
+    <script src="scripts/xmlParser.js"></script>
+    <script src="scripts/language-animations.js"></script>
+    <script src="scripts/book-preloader.js"></script>
+    <script src="scripts/onboarding.js"></script>
+    <script src="scripts/cevrimdisi-yama.js"></script>
+    <script src="scripts/language-set.js"></script>
+
+    <!-- PWA/Service Worker bloğu çevrimdışı pakette KALDIRILDI (file: kökeninde kayıt olmaz). -->
+</body>
+</html>

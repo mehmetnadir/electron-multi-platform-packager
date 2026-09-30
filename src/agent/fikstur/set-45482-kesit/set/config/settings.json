@@ -1,0 +1,97 @@
+{
+  "bookCount" : 4,
+  "books" : {
+    "book1" : {
+      "assetId" : "44187",
+      "contentType" : "book",
+      "coverUrl" : "images\/book1.png",
+      "displayOrder" : 0,
+      "title" : "Reference Book"
+    },
+    "book2" : {
+      "assetId" : "25772",
+      "contentType" : "book",
+      "coverUrl" : "images\/book2.png",
+      "displayOrder" : 1,
+      "title" : "Workbook"
+    },
+    "book3" : {
+      "assetId" : "44579",
+      "contentType" : "book",
+      "coverUrl" : "images\/book3.png",
+      "displayOrder" : 2,
+      "title" : "Key Words"
+    },
+    "book4" : {
+      "assetId" : "Grade-8-Games",
+      "contentType" : "book",
+      "coverUrl" : "images\/book4.png",
+      "displayOrder" : 3,
+      "title" : "Games"
+    }
+  },
+  "contentVersion" : null,
+  "extraMaterials" : [
+
+  ],
+  "features" : [
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/mobile-friendly.html",
+      "id" : "mobile-friendly",
+      "title" : "Mobil Uyumlu"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/interactive.html",
+      "id" : "interactive",
+      "title" : "Etkileşimli İçerikler"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/voiced.html",
+      "id" : "voiced",
+      "title" : "Seslendirilmiş"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/curriculum-aligned.html",
+      "id" : "curriculum-aligned",
+      "title" : "Müfredat Uyumlu"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/mobile-optic.html",
+      "id" : "mobile-optic",
+      "title" : "Mobil Optik"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/extra-materials.html",
+      "id" : "extra-materials",
+      "title" : "Ekstra Materyaller"
+    },
+    {
+      "clickable" : true,
+      "contentUrl" : "features\/live-test.html",
+      "id" : "live-test",
+      "title" : "Canlı Test"
+    },
+    {
+      "clickable" : true,
+      "id" : "updates",
+      "title" : "Güncellemeler"
+    }
+  ],
+  "materials" : {
+    "audio" : false,
+    "extra-materials" : false,
+    "games" : false,
+    "videos" : false
+  },
+  "publisherName" : "",
+  "setTitle" : "Shall We 8 Set",
+  "updates" : {
+    "enabled" : false
+  }
+}

@@ -1,0 +1,92 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=0.9"/><script src="app.config.js"></script><script src="icons.js"></script><script src="images.js"></script><script src="tour.js"></script><script src="i18n/tr.js"></script><script src="43e23fce2b7009474555a77.js" async></script><title>Akıllı Tahta Uygulaması</title><style>/*LOADER*/
+        #root {
+            display: none;
+        }
+
+        #loader-root {
+            display: none;
+            position: relative;
+        }
+
+        #loader-root .loader {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: black;
+            height: 100vh;
+            overflow: hidden;
+            position: absolute;
+            width: 100vw;
+            z-index: 9999;
+        }
+
+        .loading {
+            display: block !important
+        }
+
+        .lds-ellipsis {
+            display: inline-block;
+            position: relative;
+            width: 80px;
+            height: 80px
+        }
+
+        .lds-ellipsis div {
+            position: absolute;
+            top: 33px;
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            background: #000;
+            animation-timing-function: cubic-bezier(0, 1, 1, 0)
+        }
+
+        .lds-ellipsis div:nth-child(1) {
+            left: 8px;
+            animation: lds-ellipsis1 .6s infinite
+        }
+
+        .lds-ellipsis div:nth-child(2) {
+            left: 8px;
+            animation: lds-ellipsis2 .6s infinite
+        }
+
+        .lds-ellipsis div:nth-child(3) {
+            left: 32px;
+            animation: lds-ellipsis2 .6s infinite
+        }
+
+        .lds-ellipsis div:nth-child(4) {
+            left: 56px;
+            animation: lds-ellipsis3 .6s infinite
+        }
+
+        @keyframes lds-ellipsis1 {
+            0% {
+                transform: scale(0)
+            }
+
+            100% {
+                transform: scale(1)
+            }
+        }
+
+        @keyframes lds-ellipsis3 {
+            0% {
+                transform: scale(1)
+            }
+
+            100% {
+                transform: scale(0)
+            }
+        }
+
+        @keyframes lds-ellipsis2 {
+            0% {
+                transform: translate(0, 0)
+            }
+
+            100% {
+                transform: translate(24px, 0)
+            }
+        }</style><link rel="icon" href="./favicon.ico"><script defer="defer" src="./95bccb6f7a1e66da0ab8.main.js"></script><link href="./b9ea95bc3dffcbc36a58.main.css" rel="stylesheet"></head><body><div id="loader-root" class="loading"><div class="loader"><div class="lds-ellipsis"><div></div><div></div><div></div><div></div></div></div></div><div id="root"></div><img src="./core/kurumLogo.png" style="display: none;"> <span id="imcursor"></span></body></html>

@@ -529,6 +529,7 @@ const { KAYNAK_KOK_INDEX_MARKER: KOK_INDEX_KAYNAK_MARKER } = require('../packagi
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
 // yolu tek fonksiyondan (EMPP_ARSIV_MERDIVEN=1, varsayılan kapalı). Ayrıntı: icerik-merdiven.js.
 const { icerikMerdiveni, merdivenAcik } = require('./icerik-merdiven');
+const setEk = require('./set-uyelik-ek');
 /**
  * Önbellekteki build.zip'in yayıncı güncellemesi eskimiş mi? (kurum.txt + version.txt zip'ten
  * okunur; daha yeni yerel güncelleme varsa cache MISS sayılır → yeniden çıkarılıp uygulanır.)
@@ -1978,7 +1979,10 @@ async function processJob(auth, job) {
     // Merdiven açıkken hazır paket DEVRALINMAZ: o paket srcVersion'la (exe adı) anahtarlı, içerik
     // sürümünü taşımıyor — İmpark ZipVersiyon'u exe değişmeden artınca (45549: 3/3 kitap geride)
     // eski içerikli paketi yayınlardık. Kaynak her işte S0'dan geçer.
-    const hazirDevir = packagerPlatform === 'pardus' && !arsiv && !merdivenAcik()
+    // Set üyeliği eki açık VE bu işin set listesi varsa da devralınmaz: hazır paket exe'nin
+    // bileşimini taşır, panelde sonradan eklenen kitap olmadan yayınlanırdı (2026-09-30).
+    const setEkBekliyor = setEk.ekAcik() && !!setEk.setListesiCoz({ job });
+    const hazirDevir = packagerPlatform === 'pardus' && !arsiv && !merdivenAcik() && !setEkBekliyor
       ? await hazirPardusPaketi({ bookId: job.bookId, srcVersion })
       : null;
     if (hazirDevir) log('pardus: HAZIR paket bulundu — kaynak indirme ATLANIYOR:', hazirDevir.impark || hazirDevir);
@@ -2127,6 +2131,28 @@ async function processJob(auth, job) {
       await icerikMerdiveni({
         zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
       });
+    }
+    // SET ÜYELİĞİ bookN EKİ (2026-09-30, sözleşme "Yeni kurulumda eksik set kitabı"): panelde sete
+    // eklenmiş ama İmpark exe'sinde olmayan kitap ZKitapZipH'den bookN olarak iş kopyasına girer,
+    // Web-Z menüsü panel listesinden yazılır. Merdivenden SONRA (eski kitaplar tazelenmiş), üç
+    // platformun paketleyicisinden ÖNCE. Hiçbir hata paketi DURDURMAZ (eksik-set-kitabi raporu);
+    // iş kopyası ya kapıdan geçmiş yeni hâli ya aynen eskisidir (aday kopya + rename).
+    if (!hazirDevir && setEk.ekAcik()) {
+      const setListesi = setEk.setListesiCoz({ job });
+      // else dalı BİLEREK yok: runner-pardus nöbetçisi processJob'daki ilk else'i pardus dalı sayar.
+      if (!setListesi) {
+        log(`${setEk.ISARET} set listesi yok (claim setListesi / EMPP_SET_LISTESI_DIZINI) — atlandı`);
+      }
+      if (setListesi) {
+        try {
+          await setEk.setUyelikEki({
+            zip: zipPath, calisma: work, liste: setListesi.ham, listeKaynagi: setListesi.kaynak,
+            bookId: job.bookId, platform: job.platform, log, warn,
+          });
+        } catch (e) {
+          warn(`${setEk.ISARET} beklenmeyen hata, paket mevcut bileşimle: ${agHatasiOzeti(e)}`);
+        }
+      }
     }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten

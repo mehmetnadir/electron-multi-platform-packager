@@ -310,3 +310,62 @@ Kanıt: `tools/g-uctan-uca/kos.js` 11 senaryo (her ikisi de `--kip yerinde` ve `
   `android/dosya/<yol>` sha256'larının manifestle tuttuğunu denetler. Uçtan uca kanıt:
   `tools/g-yayin/android-uctan-uca.test.js` — GERÇEK `empp-g-istemci.js`'i gerçek g-yayin üretimiyle besler
   (kabul + yabancı-set-RET + eski-sürüm-RET).
+
+## Yeni kurulumda eksik set kitabı (bookN eki) — 2026-09-30, dal `set-uyelik-bookn-20260930`
+
+> Plan: `~/.empp-agent/arastirma/set-uyelik-offline-plan-20260929.md` iş sırası 1. Nadir 29.09
+> (bağlayıcı): **yeni kurulum tam seti alır** (3) · **kitap açılışı hiçbir koşulda engellenmez** (5).
+> G (kurulu taban) bu bölümün konusu DEĞİL; bu bölüm yalnız YENİ üretilen paketin bileşimidir.
+
+**Ne:** set kitabının offline paketi (mac / pardus / android — build yolu, `hazirDevir` değil)
+üretilirken panelde sete eklenmiş ama İmpark set exe'sinde OLMAYAN kitap `ZKitapZipH`'den bir
+sonraki `bookN` olarak eklenir; menü panelin set listesinden (sıra + ad) yazılır.
+Kod: `src/agent/set-uyelik-ek.js` (runner, iş kopyası `build.zip` üstünde; içerik merdiveninden
+SONRA, paketleyiciye yüklemeden ÖNCE — üç platform aynı zip'i paketler).
+
+**Girdi:**
+1. *Panel set listesi* — `pipeline_platform_summaries` `platform='web-stream'` satırının
+   `proxy_asset_id`'si (`assetId | başlık | kapak | contentType | grup`, satır başına bir; ayrıştırma
+   book-update `parseProxyBookList` ile BİREBİR). Runner'a taşıyıcı: claim `setListesi` (API işi,
+   henüz YOK) > `EMPP_SET_LISTESI_DIZINI/<bookId>.txt` (elle/pilot). İkisi de yoksa ek YAPILMAZ
+   (bugünkü davranış, log satırı).
+2. *Eksik kitabın içeriği* — `ZKitapZipH/<ID>-<Vs>.zip`; adres İmpark'a motorun kendi sorusuyla
+   (`GetKitapGuncellemeBilgi?id=<ID>&setMi=0&versiyon=0`, şablonu kalıp kitabın `app.config.js`
+   `updateBookEndPoint`'i) sorulur, indirme + önbellek içerik merdiveninin yoludur
+   (`icerikZipiGetir`, `<ID>-<Vs>` anahtarlı). Yeni indirme yolu YOK.
+3. *Okuyucu kabuğu* — kalıp = sette menüsü İmpark kimliği taşıyan en küçük numaralı `bookN`;
+   `assets/**` ve `classlibraries/**` HARİÇ her dosya kopyalanır (`ImWin32_sifresiz.xml` taşınmaz).
+
+**Eşleme (liste ↔ exe):** önce assetId (kitabın `ImWin32.dll` kapak `ID`'si); tutmazsa AYNI ad
+(Web-Z menü başlığı) taşıyan eşlenmemiş TEK kitap (`ad-eslesmesi` diye raporlanır — 45482'de
+`66905 Games` ↔ `book4 Grade-8-Games`). `link:` satırları çevrimdışında eklenmez (rapor).
+Listede olmayan exe kitabı SİLİNMEZ, menüde listenin arkasında kalır (rapor `listede-yok`).
+
+**Çıktı:** yeni `bookN/` (N = mevcut en büyük + 1, liste sırasıyla) = kalıp kabuk +
+`classlibraries/ImWin32.dll` (kalıbın menüsü, tek kapak: `ID/etkID/etkAdi`=ID, `version`=Vs,
+`URL`=ZKitapZipH adresi, `actName`=ad, `imageURL`=`assets/<ID>/thumbs/1.jpg`; kalıbın kodlama
+biçimi, deterministik dolgu) + `assets/<ID>/` (arşiv olduğu gibi). Menü: Web-Z
+(`scripts/cevrimdisi-yama.js` + `config/settings.json` + varsa `set-menu.json`) — `books` kayıtları
+listenin sırasıyla `displayOrder` 0..n, ad = liste adı (boşsa mevcut menü adı). Rapor alanı
+`eksikSetKitabi[]` (eklenemeyen) + `eklenen[]` + `eslesme[]` iş kanıtına (`merdiven-kanit` dizini,
+`<bookId>-<platform>-set-ek-<damga>.json`) ve agent.log'a yazılır.
+
+**Kapılar (paket üretiminde, kodda):**
+- `bookN` sayısı = eşlenen + eklenebilen kitap sayısı (+ listede olmayan korunan).
+- Menü adları listeyle aynı (liste adı boş değilse); menüdeki her `bookN` diskte, her yeni kitap menüde.
+- Yeni kitapta `assets/<ID>/data/BookContent.xml` + ilk sayfa (`pages/1.{png,jpg,webp}`) + `thumbs/1.jpg`.
+- Eski `bookN/**` ve menü dışı kök dosyaları bayt-aynı (zip merkez dizini CRC + boyut, önce/sonra).
+
+**Başarısızlıkta:** kitap başına — İmpark cevabı yok/404/Data boş, indirme hatası, arşiv düzeni
+bozuk, kapı RED → o kitap EKLENMEZ, menüye GİRMEZ; `[set-ek] EKSİK SET KİTABI <ID> (<ad>): <sebep>`
+satırı + `eksikSetKitabi[]`. Paket yine üretilir. Menü biçimi tanınmazsa (Web-Z değil) ya da
+kalıp kitap yoksa hiçbir ekleme yapılmaz, tüm eksikler rapora girer. Yazım iş kopyasının KLONU
+(`COPYFILE_FICLONE`; APFS'te bedava, yoksa tam kopya) üstünde yapılır, kapı klonu ölçer, GEÇTİ ise
+tek `rename`; düşerse klon atılır, iş kopyası HİÇ değişmemiş olur. (Sert bağ yedeği ÇALIŞMAZ —
+ölçüldü 30.09: Info-ZIP bağ sayısı >1 olan arşivi rename etmez, yerinde kopyalar; yedek de değişir.)
+
+**Anahtar:** `EMPP_SET_UYELIK_EK=1` (varsayılan KAPALI; canlıya alma Şef'te).
+**Pardus hazır paket devri:** anahtar açık ve işin listesi varsa `hazirDevir` YAPILMAZ (hazır
+paket exe bileşimini taşır; merdivenle aynı kural).
+**Kapsam dışı:** Windows passthrough (İmpark exe olduğu gibi — ayrı iş), kurulu taban (G),
+Android G ekleme (A/B kararı), yayıncı tasarımlı (`assets2` düğmeli) ve K17 menü biçimleri.

@@ -790,6 +790,8 @@ module.exports = {
   menuKonumlari, ucSablonu, teklifUrl, teklifYorumla, imparkKimligiMi, kimlikKarari, ornekAdlari,
   yazmaIzinliMi, kokKorumaIhlalleri, zipDizini, zipGirdiOku, satirMetni, varsayilanGetir,
   icerikOnbellekKoku, kanitKoku,
+  // set-uyelik-ek.js (2026-09-30) eksik set kitabını AYNI indirme/önbellek yolundan alır.
+  icerikZipiGetir, varsayilanIndir, komut, SIKISIK_UZANTILAR,
 };
 
 // CLI (salt okuma S0 kuru koşusu): node src/agent/icerik-merdiven.js s0 <build.zip>

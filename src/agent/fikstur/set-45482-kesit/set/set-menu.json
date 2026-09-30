@@ -1,0 +1,49 @@
+{
+  "arkaPlanVarMi" : false,
+  "kitaplar" : [
+    {
+      "ad" : "Reference Book",
+      "assetId" : "44187",
+      "dugmeGorseliVarMi" : false,
+      "grup" : "",
+      "id" : "D9FC1CD6-F825-4B12-B328-15D972291300",
+      "kapakVarMi" : true,
+      "klasor" : "book1",
+      "klasorElleYazildi" : false
+    },
+    {
+      "ad" : "Workbook",
+      "assetId" : "25772",
+      "dugmeGorseliVarMi" : false,
+      "grup" : "",
+      "id" : "B0738AE7-86E7-4A1C-9C85-3B88C221A1D6",
+      "kapakVarMi" : true,
+      "klasor" : "book2",
+      "klasorElleYazildi" : false
+    },
+    {
+      "ad" : "Key Words",
+      "assetId" : "44579",
+      "dugmeGorseliVarMi" : false,
+      "grup" : "",
+      "id" : "27A8F41A-3812-47DF-A546-EE98D88225B9",
+      "kapakVarMi" : true,
+      "klasor" : "book3",
+      "klasorElleYazildi" : false
+    },
+    {
+      "ad" : "Games",
+      "assetId" : "Grade-8-Games",
+      "dugmeGorseliVarMi" : false,
+      "grup" : "",
+      "id" : "C4528095-E233-4FAE-973D-6D546AC45862",
+      "kapakVarMi" : true,
+      "klasor" : "book4",
+      "klasorElleYazildi" : false
+    }
+  ],
+  "kunye" : "© Tüm hakları saklıdır. Impark dijital hizmetler birimi tarafından hazırlanmıştır.",
+  "logoVarMi" : false,
+  "setAdi" : "Shall We 8 Set",
+  "tema" : "webZSf425"
+}
