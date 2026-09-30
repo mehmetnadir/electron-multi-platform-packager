@@ -135,7 +135,8 @@ function webViewSiniri(dugumler) {
 
 /**
  * Menü kartlarını UI ağacında sayar: Web-Z kartının erişilebilirlik adı "<ad> kitabını aç",
- * sade/yayıncı menüsünde bağlantı metni kitap adı. Kitap adları set-menu.json'dan gelir.
+ * sade/yayıncı menüsünde bağlantı metni kitap adı (set-menu.json), İmpark yol şablonunda
+ * (30.09) düğüm adı "bookN-button" (örn. "book1-button" → anahtar "book1").
  * Saf. @returns {Array<{anahtar:string, x:number, y:number}>}
  */
 function cihazKartlari(dugumler, kitapAdlari = []) {
@@ -150,6 +151,10 @@ function cihazKartlari(dugumler, kitapAdlari = []) {
     const acMi = /(.+?)\s+kitabını aç$/i.exec(etiket);
     if (acMi) anahtar = acMi[1].trim().toLocaleLowerCase('tr');
     else if (adlar.includes(kucuk)) anahtar = kucuk;
+    else {
+      const btnMi = /^book(\d+)-button$/i.exec(etiket);
+      if (btnMi) anahtar = `book${btnMi[1]}`;
+    }
     if (!anahtar || bulunan.has(anahtar)) continue;
     bulunan.set(anahtar, {
       anahtar,
