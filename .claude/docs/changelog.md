@@ -1,3 +1,14 @@
+## 2026-09-30 — İmza sözleşmesi Windows paketleme sözleşmesine taşındı
+
+Nadir: "exe imzalama sözleşmesini exe üretim sözleşmesinin içine ekle; birden fazla yerde imza süreci
+varsa güncel bilgiyle değiştir". `windows-paketleme-sozlesmesi.md`'ye **İmza (Authenticode) — TEK
+KAYNAK** bölümü: yol (İmpark 66902 yuvası, SMB), imza kimliği (DigiCert G4, İm Park Bilişim, bitiş
+2027-07-03), ön koşullar, bekleme kuralı + toplu akış (26.09 kararları taşındı), doğrulama kapısı, iç
+exe imzasız riski (ölçülmedi), ölü yollar (RDS1 `exe-imzalama`, Certum/DigiCert ertelendi, SignPath).
+Bayat atıflar düzeltildi: karar belgesi 25.09, yükleyici araştırması, tek-kabuk planı, `sozlesme.md`
+(70 kuru test / canlı koşu yok → 92 test / 26.09 canlı), uçtan uca sağlık, `OKU-imza-yuva-smb.md`,
+CLAUDE.md. Kod değişikliği yok.
+
 ## 2026-09-27 (4) — Android cihaz katmanı: emülatörün KENDİ sistem ANR'si RED değil ÖLÇÜLEMEDİ
 
 **Kanıt:** 72379 android başsız kabul 13:45–13:51Z RED aldı ("cihaz okuyucu: ekranda WebView

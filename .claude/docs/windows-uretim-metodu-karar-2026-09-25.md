@@ -3,6 +3,10 @@
 `[KARAR: BEKLİYOR — Nadir]` · Kod/config değişikliği YOK; yalnız ölçüm + seçenek. Üç karar birbirine
 bağlı: Windows'un nasıl üretildiği, mac/android/pardus'un **KAYNAĞINI** da belirliyor (§4).
 
+> **İmza için GÜNCEL durum (30.09):** yol A uygulandı — İmpark 66902 yuvası, RDS1 yerine Mac'ten SMB ile
+> beslenir; 26.09 gerçek koşuda 715 MB paket imzalandı. Kendi sertifikamız (C/E) ertelendi. §1'deki
+> "ÖLÜ" satırı ve `exe-imzalama` atıfları 25.09 durumudur. Tek kaynak: `windows-paketleme-sozlesmesi.md` → İmza (Authenticode).
+
 ## 1. Bugün ne var / ne yok (ölçüldü)
 | Konu | Durum | Kanıt |
 |---|---|---|

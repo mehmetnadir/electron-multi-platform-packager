@@ -154,4 +154,5 @@ Açık: 73768 1.0.2 canlıya yükleme kararı (Nadir; Pardus kabul edildi, Mac i
 - **Windows:** NSIS test paketi üretildi (SM2, 807 MB, kapı 8 PASS/2 FAIL: version.txt 4 parça,
   set kanalı kapalı), Nadir Windows'ta deniyor. İmza: Certum OV bulut (€209) alınacak + İmpark yuvası
   SMB ile (aynı paylaşımda mv 0,15-0,18 sn, kopya 4,5 MB/s, Mac→Storage7 17 MB/s) yedek yol;
-  gözcü betiği `scripts/imza-yuva-smb.sh` (kuru koşu testli).
+  gözcü betiği `scripts/imza-yuva-smb.sh` (kuru koşu testli). **30.09 güncel:** Certum ertelendi,
+  tek yol İmpark yuvası (26.09 gerçek koşu imzaladı) — `windows-paketleme-sozlesmesi.md` → İmza (Authenticode).

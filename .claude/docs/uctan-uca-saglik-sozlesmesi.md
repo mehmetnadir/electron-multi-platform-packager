@@ -67,7 +67,8 @@ Demo SET (set bileşimi, index ile kitap ekle/çıkar) 2. aşama — açık kara
 ProBook kayıt sırrı.
 
 ## Açık kararlar (Nadir, tek tek)
-1. **Windows'ta açma testi (K3-K4) nerede?** Öneri: ofisteki imzalama Windows makinesinde başsız koşucu; yoksa statik K1-K2 + imza.
+1. **Windows'ta açma testi (K3-K4) nerede?** Öneri: ofisteki bir Windows makinesinde başsız koşucu (imza için makine gerekmez — İmpark
+   kuyruğu, `windows-paketleme-sozlesmesi.md` → İmza (Authenticode)); yoksa statik K1-K2 + imza.
 2. **Gece koşu saati?** Öneri: 22:00 başlat, 07:30 doğrula (cron 06:20'den sonra).
 3. **Demo SET?** Öneri: 2. aşamada 74390'dan tek kitaplık demo set; index ile kitap ekle/çıkar ve 43e23 yönetimi o testte.
 4. **Gece G testi her gece yeni üretim-imzalı sürüm yayınlasın mı?** Öneri: evet, yalnız 74390 (beyaz liste); sürüm 2.p.s artar,
