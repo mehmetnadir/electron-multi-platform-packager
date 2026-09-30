@@ -369,3 +369,19 @@ tek `rename`; düşerse klon atılır, iş kopyası HİÇ değişmemiş olur. (S
 paket exe bileşimini taşır; merdivenle aynı kural).
 **Kapsam dışı:** Windows passthrough (İmpark exe olduğu gibi — ayrı iş), kurulu taban (G),
 Android G ekleme (A/B kararı), yayıncı tasarımlı (`assets2` düğmeli) ve K17 menü biçimleri.
+
+## ProBook ölçümleri — G yayınının etki alanı ve izole test yöntemi (araştırma notu 28.09, Silinecekler'de)
+
+**UYARI — G yayını TÜM müşterileri etkiler:** G (kabuk/motor öz-güncellemesi) üretim manifestini ezer;
+kanal genel (müşteri/cihaz bazlı değil). Canlıya bir G yayını çıkmadan önce bunun bilinmesi gerekir —
+"tek cihazda dene" diye üretim manifestine yazmak TÜM kuruluları etkiler.
+
+**İzole ölçüm yöntemi VAR — üretime dokunmadan:** istemci `EMPP_GUNCELLEME_TABANI` env değişkenini
+destekliyor; imzalı manifest üretim anahtarıyla üretilip canlı S3/R2'ye YÜKLENMEDEN yerel bir dizine
+(`python3 -m http.server`, port 3000 DEĞİL) kopyalanır, istemci bu env ile o yerel adrese zorlanır.
+Doğrulama `md5sum`/`etkin.json` ile güncellenen nesnenin hash'i karşılaştırılarak yapılır; geri alma
+sunucuyu durdurup örtü (`empp-guncelleme`) dizinini kaldırmaktır — istemci örtüsüz/erişilemez durumda
+sessizce `atlandi` der ve taban sürümde kalır (üretime hiç dokunulmaz).
+ProBook'ta gerçek koşuyla doğrulandı (GEÇTİ): 2.90.1 → 2.90.2, motor dosyası md5 değişti, rollback'te
+istemci `ECONNREFUSED` alıp sessizce eski sürümde kaldı. Pardus/Android K3 profili (`/home/ogretmen`)
+oturum kapanınca silinmiyor — bu izole testte kalıntı bırakmamak operatör sorumluluğunda.

@@ -120,3 +120,16 @@ değil. Arşiv özetine (ProBook şeridi) girmez. Zip/boyut/md5 denetimleri ayne
 E7/K4/SET_TUM. Merdiven kapalıyken (`EMPP_ARSIV_MERDIVEN≠1`) de ad kıyası yok: ad içeriği ölçmez; geride içerik
 kabul K4/SET_TUM ya da Pardus K18'de (GÜNCEL-DEĞİL rc 3 → yükleme yok) yakalanır. Nöbetçi test:
 `src/agent/kaynak-arsivi.test.js` "AD SÜRÜMÜ KARAR DEĞİL" (depoda test dışı kodda ad sürümü güncellik kararına girmez).
+
+**İmpark-dışı yayınevi savunma kapısı (araştırma notu 28.09, Silinecekler'de):** iş nesnesinde
+`job.publisherName`/`job.publisherId` taşınır (`runner-helpers.js parseNextJob`); `imparkKaynakliMi(job,
+job.downloadUrl)` Cambridge gibi İmpark-dışı yayınevleri için İmpark kaynağından indirmeyi (ve
+publisher-update uygulanmasını) reddeder. **NOT — doğrulandı: yalnız `cambridge-kapi-runner` dalında,
+agent-mode'un atası DEĞİL (agent-mode'a merge edilmemiş).**
+
+**S1 kimlik kontrolüne görsel benzerlik + yer tutucu toleransı (araştırma notu 28.09, Silinecekler'de):**
+S1'in İmpark/kaynak kimlik doğrulaması md5 tam eşleşmesine ek olarak `sharp` ile 32×40 gri-seviye piksel
+farkı (`GORSEL_BENZERLIK_ESIGI=12.0` — JPEG yeniden sıkıştırma farkı ölçülen ~1.04, farklı kitap farkı
+~46.01) ve beyaz/boş yer tutucu tespiti (`YER_TUTUCU_STDDEV_ESIGI=5.0`, gerçek kapakta stddev 20-60) kazandı;
+yer tutucu kapakta karar en az 3 iç sayfanın eşleşmesine bağlanır. **NOT — doğrulandı: yalnız
+`s1-kimlik-tolerans` dalında, agent-mode'un atası DEĞİL (agent-mode'a merge edilmemiş).**
