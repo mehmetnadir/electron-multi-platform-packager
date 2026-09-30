@@ -297,3 +297,48 @@ test('sistemOlduMu (negatif — 45478 türü): süreç canlı, beyaz ekran/yükl
   assert.equal(O.sistemOlduMu(kanit45478LogcatTemiz), false);
   assert.equal(O.sistemAnrMi({ logcat: kanit45478LogcatTemiz }), false);
 });
+
+// --- CİHAZ KARTLARI / İMPARK YOL ŞABLONU (30.09) -------------------------------------------
+
+test('cihazKartlari: 74430 İmpark yol şablonu fikstürü (74430-yol-menu-ui.xml) → tam 2 kart (book1, book2)', () => {
+  const xml = fs.readFileSync(path.join(__dirname, 'fikstur', '74430-yol-menu-ui.xml'), 'utf8');
+  const dugumler = O.uiDugumleri(xml);
+  const kartlar = O.cihazKartlari(dugumler);
+  assert.equal(kartlar.length, 2);
+  assert.equal(kartlar[0].anahtar, 'book1');
+  assert.equal(typeof kartlar[0].x, 'number');
+  assert.equal(typeof kartlar[0].y, 'number');
+  assert.equal(kartlar[1].anahtar, 'book2');
+  assert.equal(typeof kartlar[1].x, 'number');
+  assert.equal(typeof kartlar[1].y, 'number');
+});
+
+test('cihazKartlari: yalnız düğmesiz "book3" kapak görseli → 0 kart', () => {
+  const dugumler = [
+    { sinif: 'android.widget.Image', metin: 'book3', aciklama: '', sinir: { x1: 992, y1: 1099, x2: 992, y2: 1144 } },
+  ];
+  const kartlar = O.cihazKartlari(dugumler);
+  assert.equal(kartlar.length, 0);
+});
+
+test('cihazKartlari: aynı "book1-button" iki düğümde → 1 kart (tekil anahtar)', () => {
+  const dugumler = [
+    { sinif: 'android.widget.Image', metin: 'book1-button', aciklama: '', sinir: { x1: 86, y1: 987, x2: 798, y2: 1107 } },
+    { sinif: 'android.widget.Image', metin: 'book1-button', aciklama: '', sinir: { x1: 86, y1: 1141, x2: 798, y2: 1265 } },
+  ];
+  const kartlar = O.cihazKartlari(dugumler);
+  assert.equal(kartlar.length, 1);
+  assert.equal(kartlar[0].anahtar, 'book1');
+});
+
+test('cihazKartlari: Web-Z "<ad> kitabını aç" ve kitap adı eşleşmesi mevcut desenleri korur', () => {
+  const dugumler = [
+    { sinif: 'android.view.View', metin: 'Matematik 4 kitabını aç', aciklama: '', sinir: { x1: 10, y1: 10, x2: 100, y2: 100 } },
+    { sinif: 'android.view.View', metin: 'Türkçe 4', aciklama: '', sinir: { x1: 10, y1: 110, x2: 100, y2: 200 } },
+  ];
+  const kartlar = O.cihazKartlari(dugumler, ['Türkçe 4']);
+  assert.equal(kartlar.length, 2);
+  assert.equal(kartlar[0].anahtar, 'matematik 4');
+  assert.equal(kartlar[1].anahtar, 'türkçe 4');
+});
+
