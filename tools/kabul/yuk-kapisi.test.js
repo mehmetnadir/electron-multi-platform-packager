@@ -242,3 +242,85 @@ test('yukOzeti: boş dizi → null değerler, adet=0', () => {
 test('birDkYuk: os.loadavg şeklinde dizi döndüren enjeksiyonun ilk elemanını alır', () => {
   assert.equal(YK.birDkYuk(() => [42, 30, 20]), 42);
 });
+
+// --- SON SINIFLANDIRMA — ORTALAMA (30.09, "tepe örneğini de değerlendir, ortalama VE tepe") ---
+// Tek bir örnek (tepe) hiçbir zaman eşiği aşmadan da, ÖRNEKLERİN ORTALAMASI sürekli yüksek
+// kalabilir (sustained ama spike yapmayan yük). `sonSinifOrtalamaEsigiHesapla` (varsayılan
+// çekirdek×4, tepenin ×6'sından DÜŞÜK) bu sınıfı yakalar.
+
+test('sonSinifOrtalamaEsigiHesapla: varsayılan çekirdek×4 (10 çekirdekte 40) — tepe eşiğinden (×6) DÜŞÜK', () => {
+  assert.equal(YK.sonSinifOrtalamaEsigiHesapla(10), 40);
+  assert.ok(YK.sonSinifOrtalamaEsigiHesapla(10) < YK.sonSinifEsigiHesapla(10));
+});
+
+test('sonSinifOrtalamaEsigiHesapla: EMPP_KABUL_YUK_ESIGI_ORTALAMA env ile ezilebilir', () => {
+  const onceki = process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA;
+  process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA = '15';
+  try {
+    assert.equal(YK.sonSinifOrtalamaEsigiHesapla(10), 15);
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA;
+    else process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA = onceki;
+  }
+});
+
+test('sonSiniflandirma (d): TEPE eşiği (60) AŞILMADI ama ORTALAMA eşiği (40) AŞILDI (sürekli 38-46 arası) → ÖLÇÜLEMEDİ', () => {
+  // Hiçbir tekil örnek 46'yı geçmiyor (tepe eşiği 60'ın altında) ama 6 örneğin ortalaması 42 —
+  // eski kod (yalnız tepe bakan) bunu RED bırakırdı; bu, dersin (d) senaryosudur.
+  const yukOrnekleri = [38, 40, 42, 44, 46, 42];
+  const r = YK.sonSiniflandirma({
+    sebepler: ['cihaz okuyucu: uygulama süreci kapandı'],
+    yukOrnekleri,
+    esik: 60,
+    ortalamaEsik: 40,
+  });
+  assert.equal(r.tepeAsildiMi, false);
+  assert.equal(r.ortalamaAsildiMi, true);
+  assert.equal(r.esikAsildiMi, true);
+  assert.equal(r.ortulenMi, true);
+  assert.equal(r.ortalamaYuk, 42);
+});
+
+test('sonSiniflandirma (mutasyon): AYNI dizi ama ORTALAMA eşiği YÜKSELTİLİRSE (50) → artık aşılmaz, ortulenMi=false', () => {
+  // (d) testinin mutasyonu: ortalamaEsik'i 42'nin üstüne çekince pozitif kaybolmalı — yalnız
+  // "esikAsildiMi = tepeAsildiMi || ortalamaAsildiMi" satırı kaldırılırsa YAKALANAMAYACAK bir
+  // regresyonu (ortalama dalının HİÇ hesaba katılmaması) da dolaylı doğrular (bkz üstteki test).
+  const r = YK.sonSiniflandirma({
+    sebepler: ['cihaz okuyucu: uygulama süreci kapandı'],
+    yukOrnekleri: [38, 40, 42, 44, 46, 42],
+    esik: 60,
+    ortalamaEsik: 50,
+  });
+  assert.equal(r.ortalamaAsildiMi, false);
+  assert.equal(r.tepeAsildiMi, false);
+  assert.equal(r.ortulenMi, false);
+});
+
+test('sonSiniflandirma: TEPE tek başına aşarsa (ORTALAMA düşük olsa da) hâlâ ÖLÇÜLEMEDİ (geriye dönük uyum)', () => {
+  // Eski davranış: yalnız tepe bakılıyordu. Bu test o davranışın YENİ koddan kaybolmadığını kilitler.
+  const r = YK.sonSiniflandirma({
+    sebepler: ['cihaz okuyucu: uygulama süreci kapandı'],
+    yukOrnekleri: [10, 12, 142, 11], // tek bir tepe (142) → ortalama düşük (43.75) ama ortalamaEsik 60 verildi
+    esik: 60,
+    ortalamaEsik: 60,
+  });
+  assert.equal(r.tepeAsildiMi, true);
+  assert.equal(r.ortalamaAsildiMi, false);
+  assert.equal(r.ortulenMi, true);
+});
+
+test('sonSiniflandirma: ortalamaEsik verilmezse sonSinifOrtalamaEsigiHesapla (çekirdek×4) kullanılır (env)', () => {
+  const onceki = process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA;
+  process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA = '20';
+  try {
+    const r = YK.sonSiniflandirma({
+      sebepler: ['cihaz okuyucu: uygulama süreci kapandı'], yukOrnekleri: [25], esik: 999,
+    });
+    assert.equal(r.ortalamaEsik, 20);
+    assert.equal(r.ortalamaAsildiMi, true);
+    assert.equal(r.ortulenMi, true);
+  } finally {
+    if (onceki === undefined) delete process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA;
+    else process.env.EMPP_KABUL_YUK_ESIGI_ORTALAMA = onceki;
+  }
+});

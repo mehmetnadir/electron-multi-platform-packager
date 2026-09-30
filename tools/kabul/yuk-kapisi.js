@@ -42,6 +42,17 @@ const ON_KAPI_ENV = 'EMPP_KABUL_ON_KAPI_ESIGI';
 const ON_KAPI_KAT = 12;
 const SON_SINIF_ENV = 'EMPP_KABUL_YUK_ESIGI';
 const SON_SINIF_KAT = 6;
+/**
+ * ORTALAMA eşiği (30.09, koordinatör isteği: "tepe örneğini de değerlendir, ortalama VE
+ * tepe"). `sonSiniflandirma` eskiden yalnız TEK bir örneğin (en yüksek/tepe) eşiği aşmasına
+ * bakıyordu — sürekli-ama-tepe-yapmayan bir yük (ör. 6 örneğin hepsi 35-59 aralığında,
+ * hiçbiri tek başına tepe eşiğini (varsayılan ×6) aşmıyor ama ORTALAMA sürekli yüksek)
+ * yakalanamazdı. DÜŞÜK tutulur (varsayılan ×4, tepe ×6'dan küçük) — ortalamanın tepeyi
+ * AŞAMAYACAĞI matematiksel gerçeği nedeniyle (ortalama ≤ tepe, her zaman) ortalama eşiği
+ * tepe eşiğine eşit ya da yüksek olsaydı bu kontrol hiçbir zaman EK bir pozitif üretmezdi.
+ */
+const SON_SINIF_ORTALAMA_ENV = 'EMPP_KABUL_YUK_ESIGI_ORTALAMA';
+const SON_SINIF_ORTALAMA_KAT = 4;
 
 /** Cihaz katmanının bilinen "altyapı" (host yükü) RED imzaları. Saf. */
 const ALTYAPI_IMZALARI = [
@@ -62,6 +73,9 @@ function onKapiEsigiHesapla(cpuSayisi) { return esikOku(ON_KAPI_ENV, ON_KAPI_KAT
 
 /** Son sınıflandırma eşiği: `EMPP_KABUL_YUK_ESIGI` (varsayılan çekirdek×6 — düşük, güvenli). Saf. */
 function sonSinifEsigiHesapla(cpuSayisi) { return esikOku(SON_SINIF_ENV, SON_SINIF_KAT, cpuSayisi); }
+
+/** Son sınıflandırma ORTALAMA eşiği: `EMPP_KABUL_YUK_ESIGI_ORTALAMA` (varsayılan çekirdek×4). Saf. */
+function sonSinifOrtalamaEsigiHesapla(cpuSayisi) { return esikOku(SON_SINIF_ORTALAMA_ENV, SON_SINIF_ORTALAMA_KAT, cpuSayisi); }
 
 /** 1 dakikalık yük ortalaması. `yukOlc` testte sahte diziler döner (varsayılan `os.loadavg`). */
 function birDkYuk(yukOlc) {
@@ -109,20 +123,39 @@ function altyapiImzasiMi(sebep) {
 
 /**
  * SON SINIFLANDIRMA: cihaz katmanı sebeplerini kabul boyunca örneklenen yük dizisine göre
- * yeniden değerlendirir. Saf.
- * @param {{sebepler?:string[], yukOrnekleri?:number[], esik?:number}} p
- *   `esik` verilmezse `sonSinifEsigiHesapla()` kullanılır.
- * @returns {{ortulenMi:boolean, esikAsildiMi:boolean, enYuksekYuk:number|null, esik:number}}
+ * yeniden değerlendirir. İKİ ayrı kriter değerlendirilir (30.09: "ortalama VE tepe") —
+ * TEPE (`enYuksekYuk`, tek örneğin en yükseği, eşik `esik`) YA DA ORTALAMA (`ortalamaYuk`,
+ * eşik `ortalamaEsik`, varsayılan daha düşük) eşiği aşarsa `esikAsildiMi` true olur; ikisi de
+ * mevcut `hepsiAltyapi` şartıyla birlikte değerlendirilir — davranış/isimler geriye dönük
+ * uyumlu (`esikAsildiMi`/`enYuksekYuk`/`esik` aynı anlamda kalır), yalnız EK alanlar eklendi. Saf.
+ * @param {{sebepler?:string[], yukOrnekleri?:number[], esik?:number, ortalamaEsik?:number}} p
+ *   `esik` verilmezse `sonSinifEsigiHesapla()`, `ortalamaEsik` verilmezse
+ *   `sonSinifOrtalamaEsigiHesapla()` kullanılır.
+ * @returns {{ortulenMi:boolean, esikAsildiMi:boolean, tepeAsildiMi:boolean, ortalamaAsildiMi:boolean,
+ *            enYuksekYuk:number|null, ortalamaYuk:number|null, esik:number, ortalamaEsik:number}}
  */
 function sonSiniflandirma(p = {}) {
   const sebepler = p.sebepler || [];
   const yukOrnekleri = p.yukOrnekleri || [];
   const esik = p.esik === undefined || p.esik === null ? sonSinifEsigiHesapla() : p.esik;
+  const ortalamaEsik = p.ortalamaEsik === undefined || p.ortalamaEsik === null
+    ? sonSinifOrtalamaEsigiHesapla() : p.ortalamaEsik;
   const enYuksek = yukOrnekleri.length ? Math.max(...yukOrnekleri) : null;
-  const esikAsildiMi = enYuksek !== null && enYuksek > esik;
+  const ortalama = yukOrnekleri.length
+    ? Number((yukOrnekleri.reduce((a, b) => a + b, 0) / yukOrnekleri.length).toFixed(2)) : null;
+  const tepeAsildiMi = enYuksek !== null && enYuksek > esik;
+  const ortalamaAsildiMi = ortalama !== null && ortalama > ortalamaEsik;
+  const esikAsildiMi = tepeAsildiMi || ortalamaAsildiMi;
   const hepsiAltyapi = sebepler.length > 0 && sebepler.every(altyapiImzasiMi);
   return {
-    ortulenMi: esikAsildiMi && hepsiAltyapi, esikAsildiMi, enYuksekYuk: enYuksek, esik,
+    ortulenMi: esikAsildiMi && hepsiAltyapi,
+    esikAsildiMi,
+    tepeAsildiMi,
+    ortalamaAsildiMi,
+    enYuksekYuk: enYuksek,
+    ortalamaYuk: ortalama,
+    esik,
+    ortalamaEsik,
   };
 }
 
@@ -151,10 +184,13 @@ module.exports = {
   ON_KAPI_KAT,
   SON_SINIF_ENV,
   SON_SINIF_KAT,
+  SON_SINIF_ORTALAMA_ENV,
+  SON_SINIF_ORTALAMA_KAT,
   ALTYAPI_IMZALARI,
   esikOku,
   onKapiEsigiHesapla,
   sonSinifEsigiHesapla,
+  sonSinifOrtalamaEsigiHesapla,
   birDkYuk,
   onKapiBekle,
   altyapiImzasiMi,
