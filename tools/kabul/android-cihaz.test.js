@@ -342,3 +342,126 @@ test('cihazKartlari: Web-Z "<ad> kitabını aç" ve kitap adı eşleşmesi mevcu
   assert.equal(kartlar[1].anahtar, 'türkçe 4');
 });
 
+// --- PENCERE ÖRTÜŞMESİ (30.09 73768) --------------------------------------------------------
+// Kanıt: ~/.empp-agent/kabul-kanit/73768-android-20260930-075433/ — "menu" aşamasında
+// 28/38/45/51/59. saniyelerde 5 kez yabancı "System UI isn't responding" (aerr_close ile
+// kapatıldı), son ölçüm turu diyalogsuz bitti (kosum.json: menu.beklenenSn=73,
+// karar.json cihaz.menu.diyalog=null, kartSayisi=0, yukSiniflandirma.enYuksekYuk=37.6<eşik 60)
+// → eski kod bunu RED ("menü kartı 0 ≠ beklenen 3") sayıyordu; host yükü normaldi, CPU tabanlı
+// yük kapısı bu sınıfı yakalayamaz. `yabanciAnrOrtusmesi` / `asamaKarari` bu dersi kapatır.
+
+test("yabanciAnrOrtusmesi: 73768 kanıtı BİREBİR (5 kez 28-59. sn, pencere 73 sn) → ortuldu=true (~%42)", () => {
+  const diyaloglar = [28, 38, 45, 51, 59].map((sn) => ({ asama: 'menu', sn, kendi: false }));
+  const r = O.yabanciAnrOrtusmesi(diyaloglar, 'menu', 73);
+  assert.equal(r.sayi, 5);
+  assert.equal(r.kapaliSn, 31);
+  assert.ok(Math.abs(r.oran - 31 / 73) < 1e-9);
+  assert.ok(r.oran >= O.YABANCI_ANR_ORTULME_ORAN_ESIGI);
+  assert.equal(r.ortuldu, true);
+});
+
+test('yabanciAnrOrtusmesi (mutasyon): TEK yabancı ANR (72379 sınıfı) → MIN_SAYI eşiğinde ortuldu=false', () => {
+  // 72379'da tek bir yabancı sistem ANR'si vardı ve o dosya HİÇ dump veremedi — o vaka zaten
+  // ayrı bir mekanizmadan (sistemAnrMi/webViewYokKarari) örtülen sayılıyor; bu fonksiyon SADECE
+  // dump başarılı + ANR aralıklarla tekrarlanan sınıfı hedefler, tek diyalog paketi ÖRTMEMELİ.
+  const r = O.yabanciAnrOrtusmesi([{ asama: 'menu', sn: 30, kendi: false }], 'menu', 60);
+  assert.equal(r.sayi, 1);
+  assert.equal(r.ortuldu, false);
+});
+
+test('yabanciAnrOrtusmesi (mutasyon): 2 yabancı ANR ama pencerenin küçük dilimi (%3) → ortuldu=false', () => {
+  const r = O.yabanciAnrOrtusmesi([
+    { asama: 'menu', sn: 10, kendi: false },
+    { asama: 'menu', sn: 13, kendi: false },
+  ], 'menu', 100);
+  assert.ok(r.oran < O.YABANCI_ANR_ORTULME_ORAN_ESIGI);
+  assert.equal(r.ortuldu, false);
+});
+
+test('yabanciAnrOrtusmesi: yalnız hedef aşamanın (icAd) diyalogları sayılır, diğer aşama karışmaz', () => {
+  const diyaloglar = [
+    { asama: 'kitap', sn: 5, kendi: false },
+    { asama: 'kitap', sn: 50, kendi: false },
+    { asama: 'menu', sn: 10, kendi: false },
+  ];
+  const r = O.yabanciAnrOrtusmesi(diyaloglar, 'menu', 60);
+  assert.equal(r.sayi, 1); // yalnız 'menu' olan tek diyalog
+  assert.equal(r.ortuldu, false);
+});
+
+test('yabanciAnrOrtusmesi: KENDİ (kendi:true) diyaloglar hiç sayılmaz — RED sınıfı bununla örtülmez', () => {
+  const diyaloglar = [
+    { asama: 'menu', sn: 5, kendi: true },
+    { asama: 'menu', sn: 55, kendi: true },
+  ];
+  const r = O.yabanciAnrOrtusmesi(diyaloglar, 'menu', 60);
+  assert.equal(r.sayi, 0);
+  assert.equal(r.ortuldu, false);
+});
+
+test('yabanciAnrOrtusmesi: beklenenSn=0/eksik → bölme hatası yok, ortuldu=false', () => {
+  const diyaloglar = [{ asama: 'menu', sn: 1, kendi: false }, { asama: 'menu', sn: 2, kendi: false }];
+  assert.equal(O.yabanciAnrOrtusmesi(diyaloglar, 'menu', 0).ortuldu, false);
+  assert.equal(O.yabanciAnrOrtusmesi(diyaloglar, 'menu', undefined).ortuldu, false);
+});
+
+// piksel: 73768 "menu" ölçümünden (sapma/koyu/renk hepsi eşiği geçer — pk.gecti=true, tek
+// sebep kart sayısı olsun diye başka bir piksel sebebi karışmasın).
+const GECERLI_PIKSEL = { sapma: 0.23, koyu: 0.96, renk: 179306 };
+
+test('asamaKarari (a): 6/15 döngüde yabancı ANR + son tur temiz + 0 kart → ÖLÇÜLEMEDİ (73768 dersi)', () => {
+  // 15 döngü × 3 sn ≈ 45 sn'lik bir pencerede 6 döngüde ("her 3 turda bir" yaklaşık) yabancı
+  // ANR çıktı, son ölçüm turu diyalogsuz (o.diyalog=null) ama içerik hâlâ 0 kart.
+  const diyaloglar = [3, 9, 15, 21, 27, 33].map((sn) => ({ asama: 'menu', sn, kendi: false }));
+  const o = {
+    diyalog: null, surecCanli: true, webView: { x1: 0, y1: 0, x2: 100, y2: 100 },
+    kartSayisi: 0, yukleniyor: [], piksel: GECERLI_PIKSEL, uiXmlHata: null, beklenenSn: 45,
+  };
+  const r = O.asamaKarari({
+    ad: 'cihaz menü', icAd: 'menu', o, setMenu: true, beklenenKart: 3, diyaloglar, logcat: '', baslatCiktisi: '',
+  });
+  assert.deepEqual(r.sebepler, []);
+  assert.equal(r.ortulen.length, 1);
+  assert.match(r.ortulen[0], /menü kartı 0 ≠ beklenen 3/);
+  assert.match(r.ortulen[0], /yabancı sistem ANR/);
+});
+
+test("asamaKarari (b) (mutasyon): AYNI 0 kart ama yabancı ANR YOK → RED kalır (sahte ÖLÇÜLEMEDİ'ye kaçış yasak)", () => {
+  // (a) testinin `diyaloglar: []` mutasyonu — bu, `ortusme.ortuldu` dalı kaldırılırsa (a) ile
+  // AYNI sonucu (ÖLÇÜLEMEDİ) üretecek bir düzenlemeyi de yakalar: gerçek RED'in hâlâ
+  // üretilebildiğini kanıtlıyoruz.
+  const o = {
+    diyalog: null, surecCanli: true, webView: { x1: 0, y1: 0, x2: 100, y2: 100 },
+    kartSayisi: 0, yukleniyor: [], piksel: GECERLI_PIKSEL, uiXmlHata: null, beklenenSn: 45,
+  };
+  const r = O.asamaKarari({
+    ad: 'cihaz menü', icAd: 'menu', o, setMenu: true, beklenenKart: 3, diyaloglar: [], logcat: '', baslatCiktisi: '',
+  });
+  assert.equal(r.ortulen.length, 0);
+  assert.equal(r.sebepler.length, 1);
+  assert.match(r.sebepler[0], /menü kartı 0 ≠ beklenen 3/);
+});
+
+test('asamaKarari (c): KENDİ uygulamanın ANR\'si (o.diyalog.kendi=true) → RED, pencere örtüşmesi ne olursa olsun bozulmaz', () => {
+  const diyaloglar = [3, 9, 15, 21, 27, 33].map((sn) => ({ asama: 'menu', sn, kendi: false })); // yüksek örtüşme de olsa
+  const o = {
+    diyalog: { baslik: "Lingoland Grade 3 isn't responding", kendi: true }, beklenenSn: 60,
+  };
+  const r = O.asamaKarari({
+    ad: 'cihaz menü', icAd: 'menu', o, setMenu: true, beklenenKart: 3, diyaloglar, logcat: '', baslatCiktisi: '',
+  });
+  assert.equal(r.ortulen.length, 0);
+  assert.equal(r.sebepler.length, 1);
+  assert.match(r.sebepler[0], /uygulama yanıt vermiyor/);
+});
+
+test('asamaKarari: yabancı diyalog (kendi:false) SON ölçüm anında hâlâ ekranda ise (kapatılamadı) → ÖRTÜLEN, örtüşme oranı hesaplanmaz', () => {
+  const o = { diyalog: { baslik: "System UI isn't responding", kendi: false }, beklenenSn: 60 };
+  const r = O.asamaKarari({
+    ad: 'cihaz menü', icAd: 'menu', o, setMenu: true, beklenenKart: 3, diyaloglar: [], logcat: '', baslatCiktisi: '',
+  });
+  assert.equal(r.sebepler.length, 0);
+  assert.equal(r.ortulen.length, 1);
+  assert.match(r.ortulen[0], /kapatılamadı/);
+});
+

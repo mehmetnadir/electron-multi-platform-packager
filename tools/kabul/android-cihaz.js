@@ -26,6 +26,16 @@ const YK = require('./yuk-kapisi');
 const YASAK_AVD = 'TCDD_MITM';
 const VARSAYILAN_AVD = 'Pixel_Fold_API_35';
 /**
+ * PENCERE ÖRTÜŞMESİ eşikleri (30.09 73768, bkz `yabanciAnrOrtusmesi`). MIN_SAYI: tek bir
+ * yabancı ANR pencerenin ihmal edilebilir bir dilimini kapladıysa paket kusurunu ÖRTMEMELİ
+ * (72379 dersi: sahte ÖLÇÜLEMEDİ'ye kaçış da yasak — bkz webViewYokKarari/sistemAnrMi zaten
+ * o durumu ayrıca yakalıyor, bu eşik SADECE "dump başarılı, diyalog aralıklarla tekrarlanan"
+ * sınıfı hedefler). ORAN_ESIGI=%40: 73768 kanıtındaki gerçek oran (31/73 ≈ %42) ile TEK
+ * diyalogun kapladığı ihmal edilebilir dilim (oran≈0) arasında güvenli bir ara nokta.
+ */
+const YABANCI_ANR_ORTULME_MIN_SAYI = 2;
+const YABANCI_ANR_ORTULME_ORAN_ESIGI = 0.4;
+/**
  * Cihaz okuyucu aşaması üst sınırı (sn). Aşama iki ardışık yeterli ölçümde ERKEN biter;
  * sağlam pakette maliyeti yoktur. 27.09 45538 (English Up 5 Set): makine yükü ~100 iken
  * (kurulum 372 sn ≈ 3×, emülatörde 3 kez "System UI isn't responding") okuyucu ~85 sn'de
@@ -286,6 +296,105 @@ function webViewYokKarari(ad, o, lcMetin) {
   return { ortulen: false, mesaj: `${ad}: ekranda WebView yok` };
 }
 
+/**
+ * PENCERE ÖRTÜŞMESİ (30.09 73768): `sistemDiyalogu`/`o.diyalog` yalnız aşamanın SON ölçüm
+ * anındaki diyaloğa bakar (`asamaOlc`'un o turdaki tekil sonucu) — yabancı (kendi:false) bir
+ * ANR arada "Close app" ile kapatılıp birkaç saniye sonra YENİDEN açılabiliyor. Kanıt (73768
+ * android, ~/.empp-agent/kabul-kanit/73768-android-20260930-075433): "menu" aşamasında
+ * 28/38/45/51/59. saniyelerde 5 kez "System UI isn't responding", her seferinde `aerr_close`
+ * ile kapatıldı; SON ölçüm turu diyalogsuz bitti (`o.diyalog === null`) ama içerik hiçbir
+ * zaman render OLAMADI: menü kartı 0 ≠ beklenen 3 → sahte RED. Aynı pencerede host yükü
+ * normaldi (1dk ortalama en yüksek 37.6 < eşik 60) — `yuk-kapisi.js`'nin CPU tabanlı
+ * ölçütü bu sınıfı YAKALAMAZ, çünkü sorun CPU değil, ekranı tekrar tekrar kapatan yabancı
+ * uygulamanın kendisi.
+ *
+ * Bu fonksiyon aşama boyunca (SON turla sınırlı kalmadan) kaydedilen TÜM yabancı diyalog
+ * anlarını toplar; ilk-son arası süre / aşamanın toplam süresi oranı eşiği aşarsa pencere
+ * "örtülü" sayılır — `asamaSebep` bu aşamanın içerik sebeplerini (kart sayısı, WebView yok,
+ * piksel, yükleniyor) o zaman RED değil ÖRTÜLEN (ÖLÇÜLEMEDİ) sınıfına yönlendirir.
+ * `YABANCI_ANR_ORTULME_MIN_SAYI`/`YABANCI_ANR_ORTULME_ORAN_ESIGI`: yukarıda tanımlı. Saf.
+ * @param {Array<{asama:string, sn:number, kendi:boolean}>} diyaloglar
+ * @param {string} icAd aşamanın DAHİLİ adı ('menu'|'kitap' — `asamaOlc`'a verilen `ad`)
+ * @param {number} beklenenSn aşamanın toplam ölçüm süresi (`o.beklenenSn`)
+ * @returns {{sayi:number, kapaliSn:number, oran:number, ortuldu:boolean}}
+ */
+function yabanciAnrOrtusmesi(diyaloglar, icAd, beklenenSn) {
+  const yabanci = (diyaloglar || []).filter((d) => d && d.asama === icAd && d.kendi === false);
+  if (yabanci.length < YABANCI_ANR_ORTULME_MIN_SAYI || !(beklenenSn > 0)) {
+    return { sayi: yabanci.length, kapaliSn: 0, oran: 0, ortuldu: false };
+  }
+  const snler = yabanci.map((d) => d.sn);
+  const kapaliSn = Math.max(...snler) - Math.min(...snler);
+  const oran = kapaliSn / beklenenSn;
+  return { sayi: yabanci.length, kapaliSn, oran, ortuldu: oran >= YABANCI_ANR_ORTULME_ORAN_ESIGI };
+}
+
+/**
+ * Bir aşamanın (menü/kitap) TÜM RED/ÖRTÜLEN sınıflandırması — `cihazKabulu`'nun `asamaSebep`
+ * closure'ının SAF çekirdeği (30.09 çıkarıldı, testte doğrudan çağrılabilir). Sıra ÖNEMLİ:
+ * (1) KENDİ uygulamanın ANR'si (kendi:true) her zaman RED — bozulmaz. (2) Yabancı uygulamanın
+ * SON ölçüm anında hâlâ ekranda olan diyaloğu → ÖRTÜLEN (kapatılamadı). (3) Sistemin kendisi
+ * öldüyse (DeadSystemException / am start Broken pipe) → ÖRTÜLEN. (4) `yabanciAnrOrtusmesi`:
+ * pencere boyunca yabancı ANR tekrarı örtüşme eşiğini aştıysa bu aşamanın içerik sebepleri
+ * (süreç/webView/kart sayısı/yükleniyor/piksel) RED değil ÖRTÜLEN. Saf.
+ * @param {{ad:string, icAd:string, o:object, setMenu:boolean, beklenenKart:number,
+ *          aktivasyon?:boolean, baslatCiktisi?:string, logcat?:string,
+ *          diyaloglar?:Array<{asama:string,sn:number,kendi:boolean}>}} p
+ * @returns {{sebepler:string[], ortulen:string[]}}
+ */
+function asamaKarari(p) {
+  const { ad, icAd, o, setMenu, beklenenKart, aktivasyon, baslatCiktisi, logcat, diyaloglar } = p;
+  const sebepler = [];
+  const ortulen = [];
+  if (!o) return { sebepler, ortulen };
+  if (o.diyalog && o.diyalog.kendi) {
+    sebepler.push(`${ad}: uygulama yanıt vermiyor — sistem diyaloğu "${o.diyalog.baslik}" ${o.beklenenSn} sn sonra hâlâ ekranda`);
+    return { sebepler, ortulen };
+  }
+  if (o.diyalog) {
+    ortulen.push(`${ad}: "${o.diyalog.baslik}" (emülatörün kendi uygulaması) ekranı örttü, kapatılamadı`);
+    return { sebepler, ortulen };
+  }
+  // Sistemin KENDİSİ öldüyse (28.09 45482: DeadSystemException 14 sistem sürecinde birden,
+  // ya da am start "Broken pipe"/"Can't find service") bu aşamanın TÜM belirtileri
+  // (süreç kapandı, WebView yok, kart sayısı 0) aynı köke bağlanır — tek tek sebep
+  // yazmak yerine hepsi ÖRTÜLEN sayılır (RED değil, ÖLÇÜLEMEDİ).
+  const amBozuldu = amBaslatSistemOlduMu(baslatCiktisi);
+  if (sistemAnrMi({ uiXml: o.uiXmlHata, logcat }) || amBozuldu) {
+    const ekKanit = amBozuldu ? ' + am start ("Failure calling service activity: Broken pipe" / "Can\'t find service: activity")' : '';
+    ortulen.push(`${ad}: emülatör/sistem çöktü ("DeadSystemException"/"The system died"${ekKanit}) — altyapı, paket kusuru değil`);
+    return { sebepler, ortulen };
+  }
+  // PENCERE ÖRTÜŞMESİ (30.09 73768): SON ölçüm turu diyalogsuz bitmiş olsa bile, aşama
+  // boyunca yabancı sistem ANR'si pencerenin anlamlı bir kısmını (≥%40, ≥2 tekrar)
+  // kapladıysa içerik hiç render OLAMAMIŞ olabilir — bu aşamanın TÜM içerik sebepleri
+  // (aşağıda toplanır) RED değil ÖRTÜLEN sayılır. Bkz `yabanciAnrOrtusmesi`.
+  const ortusme = yabanciAnrOrtusmesi(diyaloglar, icAd, o.beklenenSn);
+  const stajSebepleri = [];
+  if (!o.surecCanli) stajSebepleri.push(`${ad}: uygulama süreci kapandı`);
+  if (!o.webView) {
+    // UI dökümü hiç çıkmadığı için `sistemDiyalogu` diyaloğu göremedi — logcat'teki
+    // UiAutomation zaman aşımı (system_server yanıt vermiyor) yedek kanıt olarak kontrol edilir.
+    const k = webViewYokKarari(ad, o, logcat);
+    if (k.ortulen) ortulen.push(k.mesaj); else stajSebepleri.push(k.mesaj);
+  }
+  if (setMenu && o.kartSayisi !== beklenenKart) stajSebepleri.push(`${ad}: menü kartı ${o.kartSayisi} ≠ beklenen ${beklenenKart}`);
+  if (o.yukleniyor && o.yukleniyor.length) stajSebepleri.push(`${ad}: ${o.beklenenSn} sn sonra hâlâ yükleniyor (${o.yukleniyor.join(', ')})`);
+  const pk = O.pikselKarari(o.piksel, { aktivasyon });
+  if (pk.olculemedi) stajSebepleri.push(`${ad}: ekran görüntüsü alınamadı`);
+  else if (!pk.gecti) stajSebepleri.push(`${ad}: ${pk.sebep}`);
+
+  if (stajSebepleri.length && ortusme.ortuldu) {
+    const oranTxt = `${Math.round(ortusme.oran * 100)}%`;
+    const esikTxt = `${Math.round(YABANCI_ANR_ORTULME_ORAN_ESIGI * 100)}%`;
+    ortulen.push(...stajSebepleri.map((s) => `${s} (pencerede ${ortusme.sayi} kez yabancı sistem ANR'si tekrarlandı, `
+      + `örtüşme ${oranTxt} ≥ eşik ${esikTxt} — altyapı, paket kusuru değil)`));
+  } else {
+    sebepler.push(...stajSebepleri);
+  }
+  return { sebepler, ortulen };
+}
+
 /** UI ağacında görünür yükleniyor metni. Saf. */
 function cihazYukleniyor(dugumler) {
   const desen = /^(yükleniyor|loading|kitap açılıyor|açılıyor|güncelleniyor)/i;
@@ -519,16 +628,18 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
  *          kitapAdlari?:string[], aktivasyon?:boolean, log?:Function,
  *          bootSn?:number, menuBekleSn?:number, kitapBekleSn?:number,
  *          mevcutSeri?:string, kurulumYok?:boolean,
- *          onKapiEsigi?:number, sonSinifEsigi?:number, yukAraSn?:number, yukAzamiSn?:number,
+ *          onKapiEsigi?:number, sonSinifEsigi?:number, sonSinifOrtalamaEsigi?:number,
+ *          yukAraSn?:number, yukAzamiSn?:number,
  *          yukOlc?:Function, yukBekle?:Function}} p
  *   `mevcutSeri`: ZATEN koşan emülatörde ölç (başlatma/kapatma yok) — uzaktan güncelleme (G)
  *   gibi cihaz durumunu değiştiren bir adımın ÖNCESİ ve SONRASI aynı ölçütle ölçülsün diye.
  *   `kurulumYok`: paket kurulu kalır (kurma/kaldırma yok); uygulama `am start -S` ile baştan açılır.
- *   `onKapiEsigi`/`sonSinifEsigi`/`yukAraSn`/`yukAzamiSn`/`yukOlc`/`yukBekle`: yük kapısı
- *   (`yuk-kapisi.js`) enjeksiyonu — testte sahte yük/zaman verir, üretimde `undefined` bırakılır
- *   (varsayılanlar: ön kapı çekirdek×12, son sınıflandırma çekirdek×6 — İKİ FARKLI EŞİK,
- *   27.09 koordinatör düzeltmesi: tek eşik [çekirdek×3] normal-yoğun 100-130 aralığını da
- *   durdururdu).
+ *   `onKapiEsigi`/`sonSinifEsigi`/`sonSinifOrtalamaEsigi`/`yukAraSn`/`yukAzamiSn`/`yukOlc`/
+ *   `yukBekle`: yük kapısı (`yuk-kapisi.js`) enjeksiyonu — testte sahte yük/zaman verir,
+ *   üretimde `undefined` bırakılır (varsayılanlar: ön kapı çekirdek×12, son sınıflandırma TEPE
+ *   çekirdek×6 + ORTALAMA çekirdek×4 — 27.09 koordinatör düzeltmesi: tek eşik [çekirdek×3]
+ *   normal-yoğun 100-130 aralığını da durdururdu; 30.09 ORTALAMA eklendi — tepe yapmayan ama
+ *   sürekli yüksek kalan yük de yakalansın diye, bkz `yuk-kapisi.js` `sonSiniflandirma`).
  * @returns {Promise<{durum:string, sebepler:string[], notlar:string[], ...}>}
  */
 async function cihazKabulu(p) {
@@ -726,38 +837,16 @@ async function cihazKabulu(p) {
     // Karar (Electron katmanıyla aynı ölçüt kümesi, cihazda görülebilen kadarı).
     const sebepler = [];
     const ortulen = [];
-    const asamaSebep = (ad, o, setMenu) => {
-      if (!o) return;
-      if (o.diyalog && o.diyalog.kendi) {
-        sebepler.push(`${ad}: uygulama yanıt vermiyor — sistem diyaloğu "${o.diyalog.baslik}" ${o.beklenenSn} sn sonra hâlâ ekranda`);
-        return;
-      }
-      if (o.diyalog) { ortulen.push(`${ad}: "${o.diyalog.baslik}" (emülatörün kendi uygulaması) ekranı örttü, kapatılamadı`); return; }
-      // Sistemin KENDİSİ öldüyse (28.09 45482: DeadSystemException 14 sistem sürecinde birden,
-      // ya da am start "Broken pipe"/"Can't find service") bu aşamanın TÜM belirtileri
-      // (süreç kapandı, WebView yok, kart sayısı 0) aynı köke bağlanır — tek tek sebep
-      // yazmak yerine hepsi ÖRTÜLEN sayılır (RED değil, ÖLÇÜLEMEDİ).
-      const amBozuldu = amBaslatSistemOlduMu(sonuc.baslat);
-      if (sistemAnrMi({ uiXml: o.uiXmlHata, logcat: lcMetin }) || amBozuldu) {
-        const ekKanit = amBozuldu ? ' + am start ("Failure calling service activity: Broken pipe" / "Can\'t find service: activity")' : '';
-        ortulen.push(`${ad}: emülatör/sistem çöktü ("DeadSystemException"/"The system died"${ekKanit}) — altyapı, paket kusuru değil`);
-        return;
-      }
-      if (!o.surecCanli) sebepler.push(`${ad}: uygulama süreci kapandı`);
-      if (!o.webView) {
-        // UI dökümü hiç çıkmadığı için `sistemDiyalogu` diyaloğu göremedi — logcat'teki
-        // UiAutomation zaman aşımı (system_server yanıt vermiyor) yedek kanıt olarak kontrol edilir.
-        const k = webViewYokKarari(ad, o, lcMetin);
-        if (k.ortulen) ortulen.push(k.mesaj); else sebepler.push(k.mesaj);
-      }
-      if (setMenu && o.kartSayisi !== p.beklenenKart) sebepler.push(`${ad}: menü kartı ${o.kartSayisi} ≠ beklenen ${p.beklenenKart}`);
-      if (o.yukleniyor && o.yukleniyor.length) sebepler.push(`${ad}: ${o.beklenenSn} sn sonra hâlâ yükleniyor (${o.yukleniyor.join(', ')})`);
-      const pk = O.pikselKarari(o.piksel, { aktivasyon: p.aktivasyon });
-      if (pk.olculemedi) sebepler.push(`${ad}: ekran görüntüsü alınamadı`);
-      else if (!pk.gecti) sebepler.push(`${ad}: ${pk.sebep}`);
+    const asamaSebep = (ad, o, setMenu, icAd) => {
+      const r = asamaKarari({
+        ad, icAd, o, setMenu, beklenenKart: p.beklenenKart, aktivasyon: p.aktivasyon,
+        baslatCiktisi: sonuc.baslat, logcat: lcMetin, diyaloglar: sonuc.sistemDiyaloglari,
+      });
+      sebepler.push(...r.sebepler);
+      ortulen.push(...r.ortulen);
     };
-    asamaSebep(p.setMi ? 'cihaz menü' : 'cihaz okuyucu', menu, p.setMi);
-    if (p.setMi && menu.kartlar && menu.kartlar.length) asamaSebep('cihaz okuyucu', sonuc.kitap, false);
+    asamaSebep(p.setMi ? 'cihaz menü' : 'cihaz okuyucu', menu, p.setMi, 'menu');
+    if (p.setMi && menu.kartlar && menu.kartlar.length) asamaSebep('cihaz okuyucu', sonuc.kitap, false, 'kitap');
     for (const r of konsol.redImzalari) sebepler.push(`cihaz konsol: ${r}`);
     for (const d of sonuc.sistemDiyaloglari) {
       sonuc.notlar.push(`sistem diyaloğu (${d.asama}, ${d.sn}. sn): "${d.baslik}" → ${d.dugmeAdi || 'düğme yok'}`);
@@ -772,17 +861,28 @@ async function cihazKabulu(p) {
     const kararYuku = yukOrnekAl('karar'); // yük örneği: karar anı
     sonuc.yukOrnekleri = yukKayit;
     const yukSayilari = yukKayit.map((k) => k.yuk);
-    const yukSiniflandirma = YK.sonSiniflandirma({ sebepler, yukOrnekleri: yukSayilari, esik: p.sonSinifEsigi });
+    const yukSiniflandirma = YK.sonSiniflandirma({
+      sebepler, yukOrnekleri: yukSayilari, esik: p.sonSinifEsigi, ortalamaEsik: p.sonSinifOrtalamaEsigi,
+    });
     sonuc.yukSiniflandirma = yukSiniflandirma;
     if (yukSiniflandirma.ortulenMi) {
-      const enYuksek = yukSiniflandirma.enYuksekYuk.toFixed(1);
-      const esikTxt = yukSiniflandirma.esik.toFixed(1);
-      ortulen.push(...sebepler.map((s) => `${s} (host yükü ${enYuksek} > eşik ${esikTxt} sırasında oluştu — altyapı, paket kusuru DEĞİL)`));
+      // Hangi kriter tetikledi (tepe/ortalama/ikisi) — mesaj yalnız GERÇEKTEN aşılan değeri anar,
+      // aşılmayanı "aşıldı" diye YAZMAZ (30.09: ortalama-tek-başına tetiklerse tepe aşılmamış olabilir).
+      const parcalar = [];
+      if (yukSiniflandirma.tepeAsildiMi) {
+        parcalar.push(`tepe ${yukSiniflandirma.enYuksekYuk.toFixed(1)} > eşik ${yukSiniflandirma.esik.toFixed(1)}`);
+      }
+      if (yukSiniflandirma.ortalamaAsildiMi) {
+        parcalar.push(`ortalama ${yukSiniflandirma.ortalamaYuk.toFixed(1)} > eşik ${yukSiniflandirma.ortalamaEsik.toFixed(1)}`);
+      }
+      const gerekce = parcalar.join(' ve ');
+      ortulen.push(...sebepler.map((s) => `${s} (host yükü — ${gerekce} — sırasında oluştu — altyapı, paket kusuru DEĞİL)`));
       sebepler.length = 0;
     }
     const yukOzet = YK.yukOzeti(yukKayit);
     log(`yük kapısı: karar anı 1dk=${kararYuku.toFixed(1)} · en yüksek=${yukOzet.enYuksek.toFixed(1)}`
-      + ` · ortalama=${yukOzet.ortalama.toFixed(1)} · son sınıf eşiği=${yukSiniflandirma.esik.toFixed(1)}`);
+      + ` · ortalama=${yukOzet.ortalama.toFixed(1)} · son sınıf eşiği (tepe)=${yukSiniflandirma.esik.toFixed(1)}`
+      + ` · (ortalama)=${yukSiniflandirma.ortalamaEsik.toFixed(1)}`);
     yukKanitYazVer({ yukSiniflandirma });
 
     if (ortulen.length && !sebepler.length) {
@@ -837,6 +937,8 @@ module.exports = {
   YASAK_AVD,
   VARSAYILAN_AVD,
   CIHAZ_KITAP_SN,
+  YABANCI_ANR_ORTULME_MIN_SAYI,
+  YABANCI_ANR_ORTULME_ORAN_ESIGI,
   avdAdaylari,
   badgingCoz,
   kurulumSebebi,
@@ -850,6 +952,8 @@ module.exports = {
   webViewYokKarari,
   webViewSiniri,
   cihazKartlari,
+  yabanciAnrOrtusmesi,
+  asamaKarari,
   cihazYukleniyor,
   hamEkranCoz,
   kirp,
