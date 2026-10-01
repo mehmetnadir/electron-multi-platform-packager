@@ -214,3 +214,13 @@ test('12 · KARANTİNA: exe kaynak ısıtıcı/yerel derleme modülleri src/ alt
   }
   assert.deepStrictEqual(kapi.karantinaIhlalleri(), []);
 });
+
+test('13 · KARANTİNA: exe kaynak cache tavanı artığı geri gelmez', () => {
+  const yol = 'src/agent/kaynak-cache-tavani.test.js';
+  assert.ok(kapi.KARANTINA.includes(yol), yol + ': karantina listeden düşmüş');
+  assert.ok(fs.existsSync(path.join(kapi.DEPO, '_graveyard', '2026-10-02-exe-kaynak-artik', yol)),
+    yol + ': mezar dosyası _graveyard/2026-10-02-exe-kaynak-artik/ altında yok');
+  const helpers = fs.readFileSync(path.join(kapi.SRC, 'agent/runner-helpers.js'), 'utf8');
+  assert.ok(!/lruSilinecekler|kaynakCacheTavaniGb/.test(helpers), 'runner-helpers.js ölü cache fonksiyonlarını geri almış');
+  assert.deepStrictEqual(kapi.karantinaIhlalleri(), []);
+});

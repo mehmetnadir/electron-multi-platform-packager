@@ -302,6 +302,8 @@ const KARANTINA = [
   'src/agent/isitici-dongu.js',
   'src/agent/isitici-dongu.test.js',
   'src/agent/local-build.js',
+  // 2026-10-02 artık: _graveyard/2026-10-02-exe-kaynak-artik/OKU.md
+  'src/agent/kaynak-cache-tavani.test.js',
 ];
 
 /** Karantina require taramasının kökleri (depo köküne göreli). */

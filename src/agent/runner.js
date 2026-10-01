@@ -38,7 +38,6 @@ const FormData = require('form-data');
 const {
   mapPlatform,
   backoffMs,
-  lruSilinecekler,
   parseNextJob,
   isTerminalStatus,
   packageStatusOf,
@@ -47,7 +46,7 @@ const {
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, dusukVeriAyristir,
   isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
-  pardusGerekliDiskGb, kaynakCacheTavaniGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
+  pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
   pardusBetikEnv, claimGSurumu, pardusYedekKabulDurumu,
