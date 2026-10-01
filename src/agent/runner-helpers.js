@@ -115,6 +115,12 @@ function parseNextJob(status, body) {
     ...(job.surum != null ? { surum: String(job.surum) } : {}),
     ...(job.surumYok != null ? { surumYok: String(job.surumYok) } : {}),
     ...(job.guncellemeTabaniYok != null ? { guncellemeTabaniYok: String(job.guncellemeTabaniYok) } : {}),
+    // SET LİSTESİ (2026-10-01): book-update claim'i 30.09 16:15'ten beri panel set listesini
+    // (web-stream `proxy_asset_id`, ham metin) `setListesi` alanında gönderiyor; bu satır yokken
+    // alan burada DÜŞÜYORDU → set-uyelik-ek.js "set listesi yok" deyip ek atlıyordu (01.10 12:07
+    // 45550/mac: API set_listesi logu, runner 13 sn sonra "atlandı"). Yalnız dosya yedeği olan
+    // 45482'de ek çalışıyordu. Ham değer AYNEN taşınır; ayrıştırma setListesiAyristir'in işi.
+    ...(typeof job.setListesi === 'string' && job.setListesi.trim() ? { setListesi: job.setListesi } : {}),
   };
 }
 

@@ -137,21 +137,36 @@ test('parseNextJob: claim G alanları (setKimligi, guncellemeTabani, surum) koru
   assert.equal(yok.guncellemeTabaniYok, 'r2 yok');
 });
 
+test('parseNextJob: claim setListesi (panel set listesi, ham) AYNEN korunur; boşsa alan yok', () => {
+  const ham = '45356 | Student Book | k1 | book\n45352 | Test Book\nlink:https://x | Site';
+  const job = parseNextJob(200, { job: { bookId: 45550, platform: 'mac', downloadUrl: 'u', setListesi: ham } });
+  assert.equal(job.setListesi, ham, 'GERİLEME (01.10 12:07 45550/mac): alan düşerse set eki atlanır');
+  const setEk = require('./set-uyelik-ek');
+  const coz = setEk.setListesiCoz({ job, env: {} });
+  assert.equal(coz && coz.kaynak, 'claim');
+  assert.equal(setEk.setListesiAyristir(coz.ham).length, 3);
+  for (const bos of [undefined, null, '', '  \n ']) {
+    const j = parseNextJob(200, { job: { bookId: 1, platform: 'pardus', downloadUrl: 'u', setListesi: bos } });
+    assert.equal('setListesi' in j, false, `boş değer (${JSON.stringify(bos)}) alan üretmemeli`);
+  }
+});
+
 test('parseNextJob: runner.js/windows-serit.js\'in okuduğu claim alanlarının hepsi ayrıştırıcıdan geçer', () => {
   const fs = require('fs');
   const path = require('path');
-  const kaynak = ['runner.js', 'windows-serit.js']
+  const kaynak = ['runner.js', 'windows-serit.js', 'set-uyelik-ek.js']
     .map((d) => fs.readFileSync(path.join(__dirname, d), 'utf8')).join('\n');
   const okunan = new Set([...kaynak.matchAll(/\bjob\.([A-Za-z_]+)/g)].map((m) => m[1]));
   // Sunucunun (book-update next-job) claim'de gönderdiği alanlar.
   const tam = {
     bookId: 1, platform: 'pardus', downloadUrl: 'u', buildMethod: 'build', bookTitle: 't', publisherName: 'p',
     setKimligi: 's', guncellemeTabani: 'https://x', surum: '2.1.1', surumYok: 'a', guncellemeTabaniYok: 'b',
+    setListesi: '45356 | Student Book\n45352 | Test Book',
   };
   const cikan = parseNextJob(200, { job: tam });
   const eksik = [...okunan].filter((a) => a in tam && !(a in cikan));
   assert.deepEqual(eksik, [], `parseNextJob şu claim alanlarını düşürüyor: ${eksik.join(', ')}`);
-  for (const a of ['surum', 'setKimligi', 'guncellemeTabani']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
+  for (const a of ['surum', 'setKimligi', 'guncellemeTabani', 'setListesi']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
 });
 
 test('parseNextJob: 200 bare object (defensive) -> normalized', () => {
