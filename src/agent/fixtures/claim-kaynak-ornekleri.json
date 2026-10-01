@@ -1,0 +1,263 @@
+{
+  "aciklama": "next-job claim yanıtının KAYNAK alanları — API (zod nextJobKaynakSemasi, services/api/src/lib/ajan-kaynak-turu.ts) ile runner (düz JS parseNextJob, node --test) ORTAK fikstürü. Her örnek: gecerli=true ise iki taraf da KABUL eder, false ise iki taraf da REDDEDER. URL'lerdeki kimlik/imza SAHTEDİR (yerel getSignedUrl çıktısı, sahte anahtar). Sözleşme: .claude/docs/exesiz-kaynak-sozlesmesi.md §5, plan exesiz-dalga-b-plani.md.",
+  "surum": 1,
+  "ornekler": [
+    {
+      "ad": "manuel — /kaynak/ R2 adresi",
+      "kaynakTuru": "manuel",
+      "gecerli": true,
+      "claim": {
+        "bookId": "59480",
+        "platform": "windows",
+        "kaynakTuru": "manuel",
+        "downloadUrl": "https://cdn.ydspublishing.com/kaynak/59480/manuel-20261001-070509/build.zip"
+      }
+    },
+    {
+      "ad": "manuel — İmpark exe adresi",
+      "kaynakTuru": "manuel",
+      "gecerli": false,
+      "neden": "manuel kaynak İmpark adresi olamaz",
+      "claim": {
+        "bookId": "45549",
+        "platform": "windows",
+        "kaynakTuru": "manuel",
+        "downloadUrl": "https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45549/YDT-Set-v12.exe"
+      }
+    },
+    {
+      "ad": "manuel — downloadUrl yok",
+      "kaynakTuru": "manuel",
+      "gecerli": false,
+      "neden": "manuel'de downloadUrl zorunlu",
+      "claim": { "bookId": "59480", "platform": "mac", "kaynakTuru": "manuel" }
+    },
+    {
+      "ad": "arsiv-gerekli — yalnız bilgiUrl",
+      "kaynakTuru": "arsiv-gerekli",
+      "gecerli": true,
+      "claim": {
+        "bookId": "45549",
+        "platform": "mac",
+        "kaynakTuru": "arsiv-gerekli",
+        "bilgiUrl": "https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45549/YDT-Set-v12.exe"
+      }
+    },
+    {
+      "ad": "arsiv-gerekli — downloadUrl taşıyor",
+      "kaynakTuru": "arsiv-gerekli",
+      "gecerli": false,
+      "neden": "arsiv-gerekli yanıtında downloadUrl OLMAZ",
+      "claim": {
+        "bookId": "45549",
+        "platform": "mac",
+        "kaynakTuru": "arsiv-gerekli",
+        "downloadUrl": "https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45549/YDT-Set-v12.exe"
+      }
+    },
+    {
+      "ad": "r2-kur — tabansız ilk kurulum",
+      "kaynakTuru": "r2-kur",
+      "gecerli": true,
+      "claim": {
+        "bookId": "45549",
+        "platform": "windows",
+        "surum": "2.51.10",
+        "kaynakTuru": "r2-kur",
+        "kaynakSurumu": "2.51.10",
+        "kurulumBitis": "2026-10-02T03:00:00.000Z"
+      }
+    },
+    {
+      "ad": "r2-kur — önceki geçerli build taban",
+      "kaynakTuru": "r2-kur",
+      "gecerli": true,
+      "claim": {
+        "bookId": "45549",
+        "platform": "mac",
+        "kaynakTuru": "r2-kur",
+        "kaynakSurumu": "2.51.10",
+        "tabanUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.9/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "tabanSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "kurulumBitis": "2026-10-02T03:00:00+03:00"
+      }
+    },
+    {
+      "ad": "r2-kur — tabanUrl var, tabanSha256 yok",
+      "kaynakTuru": "r2-kur",
+      "gecerli": false,
+      "neden": "tabanUrl ve tabanSha256 birlikte gelir",
+      "claim": {
+        "bookId": "45549",
+        "platform": "mac",
+        "kaynakTuru": "r2-kur",
+        "kaynakSurumu": "2.51.10",
+        "tabanUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.9/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kurulumBitis": "2026-10-02T03:00:00.000Z"
+      }
+    },
+    {
+      "ad": "r2-kur — downloadUrl taşıyor",
+      "kaynakTuru": "r2-kur",
+      "gecerli": false,
+      "neden": "r2-kur yanıtında downloadUrl OLMAZ",
+      "claim": {
+        "bookId": "45549",
+        "platform": "windows",
+        "kaynakTuru": "r2-kur",
+        "kaynakSurumu": "2.51.10",
+        "kurulumBitis": "2026-10-02T03:00:00.000Z",
+        "downloadUrl": "https://akillitahta.ydspublishing.com/Uploads/KitapTekExe/45549/YDT-Set-v12.exe"
+      }
+    },
+    {
+      "ad": "r2-kur — kurulumBitis yok, sürüm biçim dışı",
+      "kaynakTuru": "r2-kur",
+      "gecerli": false,
+      "neden": "kurulumBitis zorunlu; kaynakSurumu 2.<kod>.<sayaç>",
+      "claim": { "bookId": "45549", "platform": "windows", "kaynakTuru": "r2-kur", "kaynakSurumu": "2.51" }
+    },
+    {
+      "ad": "r2-al — virtual-hosted imzalı GET",
+      "kaynakTuru": "r2-al",
+      "gecerli": true,
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "surum": "2.51.10",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — path-style imzalı GET (geri dönüşte paket sürümü ≠ kaynakSurumu)",
+      "kaynakTuru": "r2-al",
+      "gecerli": true,
+      "claim": {
+        "bookId": "45549",
+        "platform": "pardus",
+        "surum": "2.51.12",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/yds-kitaplar/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=7ee17c97d4543363e379c9675489c56350e0e878eafc87ec1f24aa74afb217c8&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — İmpark exe adresi",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "kaynakUrl imzalı R2 GET olmalı; İmpark/.exe reddedilir",
+      "claim": {
+        "bookId": "45549",
+        "platform": "windows",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://admin.yayincilik.net/Uploads/KitapTekExe/45549/YDT-Set-v12.exe",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — yayincilik.net host'unda imza taklidi",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "İmpark host'u (yayincilik.net) reddedilir",
+      "claim": {
+        "bookId": "45549",
+        "platform": "windows",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://yds-kitaplar.yayincilik.net/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — kaynakSha256 yok",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "kaynakSha256 zorunlu",
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — imzasız public kök adresi",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "public URL değil, imzalı GET olmalı",
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://cdn.ydspublishing.com/kaynak/45549/2.51.10/build.zip",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — URL sürümü kaynakSurumu değil",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "kaynakUrl yolundaki sürüm = kaynakSurumu",
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.11",
+        "kaynakUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — imza ömrü 7 gün (> 6 sa)",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "X-Amz-Expires ≤ 21600",
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=604800&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890
+      }
+    },
+    {
+      "ad": "r2-al — downloadUrl taşıyor",
+      "kaynakTuru": "r2-al",
+      "gecerli": false,
+      "neden": "r2-al yanıtında downloadUrl OLMAZ",
+      "claim": {
+        "bookId": "45549",
+        "platform": "android",
+        "kaynakTuru": "r2-al",
+        "kaynakSurumu": "2.51.10",
+        "kaynakUrl": "https://yds-kitaplar.0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/kaynak/45549/2.51.10/build.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIDEXAMPLE0000000000%2F20261001%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261001T203906Z&X-Amz-Expires=21600&X-Amz-Signature=b5ad3e855215b51c742d1fa1685c4a95177acbccf026e94f3bc1887fb99c0985&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+        "kaynakSha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        "kaynakBoyut": 1834567890,
+        "downloadUrl": "https://cdn.ydspublishing.com/kaynak/45549/2.51.10/build.zip"
+      }
+    },
+    {
+      "ad": "kaynakTuru bilinmiyor",
+      "kaynakTuru": "yok",
+      "gecerli": false,
+      "neden": "kaynakTuru zorunlu ve dört değerden biri",
+      "claim": { "bookId": "45549", "platform": "windows", "kaynakTuru": "impark-exe", "downloadUrl": "https://admin.yayincilik.net/Uploads/KitapTekExe/45549/x.exe" }
+    }
+  ]
+}
