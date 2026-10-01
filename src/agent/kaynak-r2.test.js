@@ -219,8 +219,10 @@ test('istemci: tamamla 200 / 409 nedenler / 409 nedensiz geçici / 5xx tekrarlar
   };
   let { i } = yap({ status: 200, data: { ok: true } });
   assert.deepEqual(await i.tamamla({}), { durum: 'tamam', veri: { ok: true } });
-  ({ i } = yap({ status: 409, data: { nedenler: ['kitap sayısı 3 ≠ 4'] } }));
-  assert.deepEqual(await i.tamamla({}), { durum: 'red', nedenler: ['kitap sayısı 3 ≠ 4'] });
+  ({ i } = yap({ status: 409, data: { nedenler: ['kitap sayısı 3 ≠ 4'], nedenKodlari: ['kitap-sayisi'] } }));
+  assert.deepEqual(await i.tamamla({}), { durum: 'red', nedenler: ['kitap sayısı 3 ≠ 4'], nedenKodlari: ['kitap-sayisi'] });
+  ({ i } = yap({ status: 409, data: { nedenler: ['x'] } }));
+  assert.deepEqual(await i.tamamla({}), { durum: 'red', nedenler: ['x'], nedenKodlari: [] }, 'kodsuz eski gövde');
   ({ i } = yap({ status: 409, data: { error: 'lease_not_held' } }));
   await assert.rejects(i.tamamla({}), (e) => e.gecici === true);
   let s;
@@ -308,4 +310,27 @@ test('r2KurYayinla ağ hatası (parça) / tamamla 5xx / kilit süresi: GEÇİCİ
   assert.deepEqual(a.yollar(), ['kaynak/birak'], 'süre dolmuşsa yükleme başlamaz');
   a = akis({ presign: { status: 409, data: { error: 'kilit' } } });
   await assert.rejects(R.r2KurYayinla(a.o), (e) => e.gecici === true);
+});
+
+test('istemci: birak 409 (B2 kilidi kapı reddinde zaten bıraktı) → uyarı, hata DEĞİL, tekrar denenmez', async () => {
+  const s = sahteIstek({ 'kaynak/birak': { status: 409, data: { error: 'kilit_yok' } } });
+  const uyarilar = [];
+  const i = R.kaynakUcIstemcisi({ istek: s.istek, sleep: async () => {}, warn: (m) => uyarilar.push(m), deneme: 3, bekleMs: 0 });
+  assert.equal(await i.birak({ bookId: '1', platform: 'mac', surum: '2.1.1', sebep: 'x' }), false);
+  assert.equal(s.cagrilar.length, 1);
+  assert.match(uyarilar.join('\n'), /kaynak\/birak HTTP 409/);
+});
+
+test('r2KurYayinla: kapı reddinde birak 409 dönse de hata KAPI hatasıdır (birak hatası değil)', async () => {
+  const a = akis({ kapi: { gecti: false, kitaplar: [], nedenler: ['[yazma-kapisi] kapak yok'] } });
+  const s409 = sahteIstek({ 'kaynak/birak': { status: 409, data: {} } });
+  a.o.istemci = R.kaynakUcIstemcisi({ istek: s409.istek, sleep: async () => {}, deneme: 2, bekleMs: 0 });
+  await assert.rejects(R.r2KurYayinla(a.o), (e) => e.gecici === false && /yazma kapısı RED.*kapak yok/.test(e.message));
+  assert.deepEqual(s409.cagrilar.map((c) => c.yol), ['kaynak/birak']);
+});
+
+test('r2KurYayinla 409: nedenKodlari hata metninde (bildirim) ve hata nesnesinde', async () => {
+  const a = akis({ tamamla: { status: 409, data: { nedenler: ['boyut düşük'], nedenKodlari: ['boyut-esigi', 'kapak-yok'] } } });
+  await assert.rejects(R.r2KurYayinla(a.o), (e) => /RED \(HTTP 409\) \[boyut-esigi, kapak-yok\]/.test(e.message)
+    && e.nedenKodlari.length === 2);
 });

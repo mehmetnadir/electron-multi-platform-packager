@@ -783,6 +783,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       // karşılaştırması için. Ölçüm yoksa (merdiven kapalı, manuel/r2-al) alan hiç gönderilmez.
       ...(Array.isArray(job.icerikSurumleri) && job.icerikSurumleri.length
         ? { icerikSurumleri: job.icerikSurumleri } : {}),
+      // KAYNAK SÜRÜMÜ (Dalga B, B2 madde 6): claim'deki build sürümü gövdenin kökünde — sunucunun
+      // bellek içi claim eşliği API yeniden başlayınca kaybolur; beyan varsa sürüm paritesi yine çalışır.
+      ...(typeof job.kaynakSurumu === 'string' && job.kaynakSurumu ? { kaynakSurumu: job.kaynakSurumu } : {}),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );
@@ -1835,7 +1838,11 @@ async function manuelZipIndir(url, destPath, { etiket = 'manuel build' } = {}) {
     warn(`${etiket} indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB indi ama geçerli zip DEĞİL — bir kez daha`);
     if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
   }
-  throw new Error(`${etiket} indirilemedi: ${MAX} denemede ağ/sunucu hatası`);
+  // `agHatasi`: yalnız ağ/5xx/durgunluk tükenmesi (4xx, MZ, geçersiz zip KALICI). Manuel yolda bugünkü
+  // davranış aynen (failed); R2 yolunda (r2IndirDogrula) geçici sayılır — R2 kalıcı yerdedir.
+  const tukendi = new Error(`${etiket} indirilemedi: ${MAX} denemede ağ/sunucu hatası`);
+  tukendi.agHatasi = true;
+  throw tukendi;
 }
 
 /** Zip'in giriş adları (`unzip -Z1`, ZIP64; dosya belleğe alınmaz); okunamazsa boş dizi. */
@@ -1923,7 +1930,13 @@ function kaynakIstemcisi(auth) {
 
 /** İndirilen R2 build'ini claim özetiyle doğrular (boyut + sha256); uymazsa KALICI hata. */
 async function r2IndirDogrula(url, hedef, { sha256, boyut = null }) {
-  await kaynakIndirme.r2Indir(url, hedef);
+  try {
+    await kaynakIndirme.r2Indir(url, hedef);
+  } catch (e) {
+    // Ağ tükenmesi GEÇİCİ (koordinatör 01.10): build R2'de kalıcı durur; iş kırılmaz, ertelenir.
+    if (e && e.agHatasi) throw new kaynakR2.KaynakR2Hatasi(e.message, { gecici: true });
+    throw e;
+  }
   const oz = await ikiOzet(hedef);
   kaynakR2.r2OzetDogrula(oz, { sha256, boyut });
   return oz;
@@ -1972,8 +1985,8 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work }) {
   return { oncekiBoyut: arsiv.r2Surum ? arsiv.boyut : null };
 }
 
-/** R2 kurma kilidini bırak + işin kirasını bırak (failed YAZILMAZ). @returns {Promise<{ertelendi: true, sebep: string}>} */
-async function r2KurErtele(auth, job, sebep, { kilitBirak = true } = {}) {
+/** (r2-kur ise) R2 kurma kilidini bırak + işin kirasını bırak (failed YAZILMAZ). @returns {Promise<{ertelendi: true, sebep: string}>} */
+async function r2Ertele(auth, job, sebep, { kilitBirak = true } = {}) {
   currentJob = null; // nabız bırakılan kirayı tazelemesin (kaynakYokBekle ile aynı ders)
   if (kilitBirak) {
     await kaynakIstemcisi(auth).birak({ bookId: job.bookId, platform: job.platform, surum: job.kaynakSurumu, sebep });
@@ -2157,7 +2170,7 @@ async function processJob(auth, job) {
     // r2-kur YALNIZ yüksek bantta (heartbeat `kaynak-kur` ile aynı karar): yetenek evde bildirilmez;
     // bayat bir nabızla yine de gelirse 1–3 GB yükleme başlatılmaz, kilit ve kira bırakılır.
     if (kaynak.tur === 'r2-kur' && !kaynakR2.kaynakKurIzinli(kaynakKurDurumu())) {
-      return r2KurErtele(auth, job, 'kaynak-kur bu konumda kapalı (ofis dışı, serbest bayrağı yok) — build kurulmadı');
+      return r2Ertele(auth, job, 'kaynak-kur bu konumda kapalı (ofis dışı, serbest bayrağı yok) — build kurulmadı');
     }
     if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
     // Pardus paketleyici kimliği (buildPardusArtifact) — exe adından DEĞİL, kaynağın kendisinden.
@@ -2207,11 +2220,17 @@ async function processJob(auth, job) {
     // DALGA B (B4): r2-al → hazır build (önbellek ya da imzalı GET + sha256/boyut doğrulama), olduğu
     // gibi; r2-kur → taban (R2 önceki geçerli build ya da arşiv). Kalanı aşağıdaki zincir.
     let r2OncekiBoyut = null;
-    if (kaynak.tur === 'r2-al') {
-      await r2AlHazirla({ bookId: job.bookId, kaynak, zipPath, work });
-    }
-    if (kaynak.tur === 'r2-kur') {
-      r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work })).oncekiBoyut;
+    try {
+      if (kaynak.tur === 'r2-al') {
+        await r2AlHazirla({ bookId: job.bookId, kaynak, zipPath, work });
+      }
+      if (kaynak.tur === 'r2-kur') {
+        r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work })).oncekiBoyut;
+      }
+    } catch (e) {
+      // R2 indirmesi ağ hatasıyla tükendi → failed YAZILMAZ: (r2-kur ise kilit) + kira bırakılır.
+      if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: kaynak.tur === 'r2-kur' });
+      throw e;
     }
 
     // İÇERİKSİZ KAYNAK KAPISI — ZIP YOLU (2026-09-26): her kaynak (arşiv ve manuel) zip olarak gelir;
@@ -2278,7 +2297,7 @@ async function processJob(auth, job) {
           kapi: yazmaKapisi, ozet: ikiOzet, parcalariYukle, parcaBoyutu: MULTIPART_PART_SIZE, log,
         });
       } catch (e) {
-        if (e && e.gecici) return r2KurErtele(auth, job, e.message, { kilitBirak: false });
+        if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: false });
         throw e;
       }
       // Arşiv = R2'nin yerel önbelleği: aynı Mac'teki diğer platformlar r2-al'de indirmesin.

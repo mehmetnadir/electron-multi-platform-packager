@@ -180,11 +180,12 @@ function tamamlaKitaplari(kitaplar) {
  * Mesajlar `isTransientNetworkError` desenlerine BİLEREK uymaz (sınıf alanla taşınır).
  */
 class KaynakR2Hatasi extends Error {
-  constructor(mesaj, { gecici = false, nedenler = [] } = {}) {
+  constructor(mesaj, { gecici = false, nedenler = [], nedenKodlari = [] } = {}) {
     super(`${R2_ISARETI} ${mesaj}`);
     this.name = 'KaynakR2Hatasi';
     this.gecici = gecici;
     this.nedenler = nedenler;
+    this.nedenKodlari = nedenKodlari;
   }
 }
 
@@ -254,18 +255,21 @@ function kaynakUcIstemcisi({
       const gecici = r.status >= 500 || r.status === 0 || r.status === 409;
       throw new KaynakR2Hatasi(`presign-multipart reddedildi: HTTP ${r.status} ${ozet(r.data)}`, { gecici });
     },
-    /** @returns {Promise<{durum: 'tamam', veri: any} | {durum: 'red', nedenler: string[]}>} */
+    /** 409 gövdesi (B2): `{nedenler: string[], nedenKodlari: string[]}`.
+     * @returns {Promise<{durum: 'tamam', veri: any} | {durum: 'red', nedenler: string[], nedenKodlari: string[]}>} */
     async tamamla(govde) {
       const r = await dene('kaynak/tamamla', govde);
       if (r.status === 200) return { durum: 'tamam', veri: r.data };
       if (r.status === 409 && r.data && Array.isArray(r.data.nedenler)) {
-        return { durum: 'red', nedenler: r.data.nedenler.map(String) };
+        const kodlar = Array.isArray(r.data.nedenKodlari) ? r.data.nedenKodlari.map(String) : [];
+        return { durum: 'red', nedenler: r.data.nedenler.map(String), nedenKodlari: kodlar };
       }
       // 409 nedenler'siz (ör. lease_not_held) ya da 5xx/ağ → geçici; diğer 4xx → kalıcı.
       const gecici = r.status >= 500 || r.status === 0 || r.status === 409;
       throw new KaynakR2Hatasi(`tamamla yanıtı beklenmedik: HTTP ${r.status} ${ozet(r.data)}`, { gecici });
     },
-    /** FIRLATMAZ — kilit sunucuda kurulumBitis'te kendiliğinden düşer. @returns {Promise<boolean>} */
+    /** FIRLATMAZ — kilit sunucuda kurulumBitis'te kendiliğinden düşer. 409 (B2 kapı reddinden sonra
+     * kilidi zaten bırakmıştır) yalnız uyarıdır, hata DEĞİL. @returns {Promise<boolean>} */
     async birak({ bookId, platform, surum, sebep, uploadId }) {
       const r = await dene('kaynak/birak', {
         bookId, platform, surum, sebep: String(sebep || '').slice(0, 300), ...(uploadId ? { uploadId } : {}),
@@ -338,7 +342,8 @@ async function r2KurYayinla({
       : new KaynakR2Hatasi(`tamamla düştü: ${String(e && e.message || e).slice(0, 300)}`, { gecici: true }));
   }
   if (t.durum === 'red') {
-    return birakVeFirlat(new KaynakR2Hatasi(`sunucu kapısı RED (HTTP 409) — build yüklendi ama geçerli sayılmadı, paket üretilmez: ${t.nedenler.join(' | ')}`, { nedenler: t.nedenler }));
+    const kodlar = t.nedenKodlari && t.nedenKodlari.length ? ` [${t.nedenKodlari.join(', ')}]` : '';
+    return birakVeFirlat(new KaynakR2Hatasi(`sunucu kapısı RED (HTTP 409)${kodlar} — build yüklendi ama geçerli sayılmadı, paket üretilmez: ${t.nedenler.join(' | ')}`, { nedenler: t.nedenler, nedenKodlari: t.nedenKodlari || [] }));
   }
   log(`${R2_ISARETI} r2-kur ${job.bookId} ${surum}: tamamlandı (sha256 ${oz.sha256}, ${kitaplar.length} kitap)`);
   return {

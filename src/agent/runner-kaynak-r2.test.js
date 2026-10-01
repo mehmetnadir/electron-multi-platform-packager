@@ -91,6 +91,7 @@ async function sahteSunucu({ dosyalar = {}, tamamla = () => [200, { ok: true }] 
         kayit.uploadGovde = govde;
         return json(500, {});
       }
+      if (dosyalar[yol] === 'KOPAR') { req.socket.destroy(); return undefined; }
       if (dosyalar[yol]) { res.writeHead(200); return res.end(dosyalar[yol]); }
       res.writeHead(404); return res.end();
     });
@@ -261,8 +262,8 @@ test('r2-kur 200: taban arşivden → merdiven → kapı → presign → PUT →
 test('r2-kur 409 (sunucu kapısı): yükleme yapılmış olsa da paket ÜRETİLMEZ, birak çağrılır, kalıcı hata', async () => {
   const zip = setBuildZip();
   const r = await isKostur({ arsivKoku: arsivKur('45549', zip), job: r2Kur(), merdivenDonus: MERDIVEN,
-    sunucu: { tamamla: () => [409, { nedenler: ['boyut 10 < önceki 999 × 0.8'] }] } });
-  assert.match(r.hata.message, /sunucu kapısı RED \(HTTP 409\).*boyut 10 < önceki/);
+    sunucu: { tamamla: () => [409, { nedenler: ['boyut 10 < önceki 999 × 0.8'], nedenKodlari: ['boyut-esigi'] }] } });
+  assert.match(r.hata.message, /sunucu kapısı RED \(HTTP 409\) \[boyut-esigi\].*boyut 10 < önceki/);
   assert.equal(r.kayit.parcalar.length, 1, 'yükleme yapıldı');
   assert.equal(r.kayit.uploadGovde, null, 'paketleyiciye HİÇBİR ŞEY gitmez');
   assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
@@ -367,7 +368,7 @@ test('/result gövdesi: job.icerikSurumleri varsa [{id, vs}] eklenir, yoksa alan
   try {
     const f = path.join(tmp('art'), 'a.apk');
     fs.writeFileSync(f, 'apk');
-    await runner.postResultSuccess({ agentId: 'test', token: 'x' }, { bookId: '1', platform: 'android', icerikSurumleri: [{ id: '111', vs: 7 }] }, f);
+    await runner.postResultSuccess({ agentId: 'test', token: 'x' }, { bookId: '1', platform: 'android', icerikSurumleri: [{ id: '111', vs: 7 }], kaynakSurumu: '2.51.10' }, f);
     await runner.postResultSuccess({ agentId: 'test', token: 'x' }, { bookId: '1', platform: 'android', icerikSurumleri: [] }, f);
   } finally {
     Object.assign(console, orj);
@@ -377,4 +378,41 @@ test('/result gövdesi: job.icerikSurumleri varsa [{id, vs}] eklenir, yoksa alan
   }
   assert.deepEqual(gelen[0].icerikSurumleri, [{ id: '111', vs: 7 }]);
   assert.equal('icerikSurumleri' in gelen[1], false);
+  assert.equal(gelen[0].kaynakSurumu, '2.51.10', 'B2 /result: kaynakSurumu gövde kökünde');
+  assert.equal('kaynakSurumu' in gelen[1], false, 'claim sürümü yoksa alan yok');
+});
+
+// ---------------------------------------------------------------------------
+// R2 indirmesi ağ hatasıyla tükenirse GEÇİCİ (koordinatör 01.10): failed yok, ertele
+// ---------------------------------------------------------------------------
+
+test('r2-al ağ tükenmesi: failed YAZILMAZ — ertelendi, kira bırakılır, kilit (r2-al\'de yok) bırakılmaz', async () => {
+  const zip = setBuildZip();
+  const r = await isKostur({ sunucu: { dosyalar: { [R2_YOL]: 'KOPAR' } }, job: r2Al(zip) });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.donus.ertelendi, true);
+  assert.match(r.donus.sebep, /R2 build indirilemedi: 2 denemede ağ\/sunucu hatası/);
+  assert.equal(r.kayit.istekler.filter((x) => x.includes(R2_YOL)).length, 2, 'AGENT_DOWNLOAD_MAX_ATTEMPTS kadar');
+  assert.equal(r.kayit.govdeler.release.length, 1);
+  assert.equal(r.kayit.govdeler['kaynak/birak'], undefined);
+  assert.equal(r.kayit.govdeler.result, undefined, 'failed yazılmaz');
+  assert.equal(r.kayit.uploadGovde, null);
+});
+
+test('r2-kur tabanUrl ağ tükenmesi: ertelendi, kilit + kira bırakılır', async () => {
+  const tabanYol = '/kaynak/45549/2.51.9/build.zip';
+  const r = await isKostur({ sunucu: { dosyalar: { [tabanYol]: 'KOPAR' } },
+    job: (u) => r2Kur({ tabanUrl: `${u}${tabanYol}?X-Amz-Signature=abc`, tabanSha256: 'a'.repeat(64) })() });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.donus.ertelendi, true);
+  assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
+  assert.equal(r.kayit.govdeler.release.length, 1);
+  assert.equal(r.casus.merdiven, 0);
+});
+
+test('manuel yol: ağ tükenmesi bugünkü gibi KALICI kalır (yalnız R2 yolu geçici)', async () => {
+  const r = await isKostur({ sunucu: { dosyalar: { '/sources/45549/k.zip': 'KOPAR' } },
+    job: (u) => ({ bookId: '45549', platform: 'android', kaynakTuru: 'manuel', downloadUrl: `${u}/sources/45549/k.zip` }) });
+  assert.match(r.hata.message, /manuel build indirilemedi/);
+  assert.equal(r.kayit.govdeler.release, undefined);
 });
