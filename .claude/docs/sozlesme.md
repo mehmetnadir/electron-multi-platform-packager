@@ -72,9 +72,11 @@ kurum logolu paketler üretmek.
 
 ## Veri ve Sınırlar
 
-- **Kaynaklar:** yayıncı exe'si (SFX) → `resources/app/build`; kurum logoları
-  `~/.electron-packager-tool/config/logos`; çıktı `config/output`; ajan kaynak önbelleği
-  `~/.empp-agent/cache` (tavan `EMPP_CACHE_CAP_GB`).
+- **Kaynaklar:** setin build.zip'i (exe'siz kaynak sözleşmesi, book-update `exesiz-kaynak-sozlesmesi.md`):
+  R2 `kaynak/<setId>/<sürüm>/build.zip` — ajan `r2-kur` ile kurar/yazar, `r2-al` ile indirir; yerel arşiv R2'nin
+  önbelleğidir. İmpark exe'si indirilmez (exe/SFX yolu 01.10'da karantinada). Kurum logoları
+  `~/.electron-packager-tool/config/logos`; çıktı `config/output`. (Eski `EMPP_CACHE_CAP_GB` tavanı 02.10'da
+  karantinaya alındı, `_graveyard/2026-10-02-exe-kaynak-artik/`.)
 - **Yasaklar:** `.env`/anahtar dosyası okumak; port 3000; paketleyicinin build içeriğine
   konfig/menü UYDURMASI — tek istisna K17 kök menüsü (kökte menü yoksa paket zaten açılmıyor).
 - **Rationale (anomaliler):** boş `resources/app/build` klasörü AppRun'ın `mkdir -p` artığıdır,
