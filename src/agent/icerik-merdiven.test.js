@@ -476,9 +476,10 @@ const AYRAC = '// --------------------------------------------------------------
 const PROCESS_JOB = SRC.slice(SRC.indexOf('async function processJob'), SRC.indexOf(`${AYRAC}// Main loops`));
 
 test('runner: merdiven kaynak hazır olduktan sonra, paketlemeden ÖNCE; yalnız arşiv kaynağında (manuel M1 atlar)', () => {
-  const merdiven = PROCESS_JOB.indexOf('await icerikMerdiveni({');
+  // Dalga B (B4): çağrı casuslanabilir `kaynakAdim.merdiven` (= icerikMerdiveni) üzerinden.
+  const merdiven = PROCESS_JOB.indexOf('await kaynakAdim.merdiven({');
   assert.ok(merdiven > 0);
-  assert.match(PROCESS_JOB, /if \(kaynak\.merdiven && merdivenAcik\(\)\) \{\n\s+await icerikMerdiveni\(\{\n\s+zip: zipPath,/);
+  assert.match(PROCESS_JOB, /if \(kaynak\.merdiven && merdivenAcik\(\)\) \{\n\s+merdivenSonuc = await kaynakAdim\.merdiven\(\{\n\s+zip: zipPath,/);
   for (const once of ['fsp.copyFile(arsiv.zip', 'await manuelBuildHazirla(', 'icerikKapisiDenetleZip(zipPath']) {
     assert.ok(PROCESS_JOB.indexOf(once) > 0 && PROCESS_JOB.indexOf(once) < merdiven, `${once} önce`);
   }
