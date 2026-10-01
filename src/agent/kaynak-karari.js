@@ -7,6 +7,9 @@
  * koşulda indirilmez (ne Windows aktarımı ne paket kaynağı)". Runner'ın kaynağı TEK yerden,
  * bu SAF fonksiyondan seçilir; sıra:
  *
+ *   0. R2 (Dalga B, sözleşme §5): claim `kaynakTuru` `r2-al` → hazır build R2'den, olduğu gibi;
+ *      `r2-kur` → bu ajan kurar (taban R2/arşiv + merdiven + set eki) ve R2'ye yazar. `r2Karari`.
+ *      Bu türlerde `downloadUrl` hiç manuel sayılmaz.
  *   1. MANUEL build (sözleşme §7 M1): claim `kaynakTuru === 'manuel'` ya da `downloadUrl`
  *      yolunda `/sources/` (Set menüsü / "Yeni İş" yüklemesi, book-update
  *      `agent-source-upload.ts isManualSourceUrl`) veya `/kaynak/` (sözleşme §5 R2 yeri
@@ -55,6 +58,10 @@ function kaynakTuruOku(job) {
   return job && typeof job.kaynakTuru === 'string' ? job.kaynakTuru.trim().toLowerCase() : '';
 }
 
+/** Dalga B R2 türleri (`r2-kur` / `r2-al`) — build R2'nin `kaynak/<setId>/<sürüm>/build.zip`'idir. */
+const R2_TURLERI = Object.freeze(['r2-kur', 'r2-al']);
+const r2TuruMu = (job) => R2_TURLERI.includes(kaynakTuruOku(job));
+
 /**
  * İşin MANUEL kaynak URL'si; manuel değilse null. SAF.
  * @param {{downloadUrl?: string, kaynakTuru?: string}} job
@@ -65,6 +72,8 @@ function manuelKaynakUrl(job) {
   const url = typeof job.downloadUrl === 'string' ? job.downloadUrl.trim() : '';
   if (!url || exeYoluMu(url)) return null;
   const tur = kaynakTuruOku(job);
+  // R2 türlerinde `downloadUrl` YOKTUR (sözleşme); olsa bile manuel sayılmaz — kaynak R2 build'idir.
+  if (R2_TURLERI.includes(tur)) return null;
   if (tur === 'manuel') return url;
   // Sunucu sözleşmesi (book-update ajan-kaynak-turu.ts nextJobKaynakSemasi): 'arsiv-gerekli'
   // claim'inde manuel kaynak YOKTUR — adres (olsa bile) indirilmez.
@@ -76,6 +85,7 @@ function manuelKaynakUrl(job) {
 /**
  * Kaynak kararı. SAF — I/O yok.
  * @param {{ job: object, arsiv?: object|null }} p  arsiv: `arsivKaynagi` dönüşü (yoksa null)
+ * R2 türleri (`r2-al` / `r2-kur`) `r2Karari`'na gider (aşağıda).
  * @returns {{ tur: 'manuel', url: string, merdiven: false, setEki: false }
  *   | { tur: 'arsiv', arsiv: object, merdiven: true, setEki: true }
  *   | { tur: 'yok', sebep: string, merdiven: false, setEki: false }}
@@ -83,6 +93,7 @@ function manuelKaynakUrl(job) {
  *   bayrakları ayrıca açık olmalı — bu alan yalnız kaynağın izin verip vermediğini söyler).
  */
 function kaynakKarari({ job, arsiv = null } = {}) {
+  if (r2TuruMu(job)) return r2Karari(job, arsiv);
   const url = manuelKaynakUrl(job);
   if (url) return { tur: 'manuel', url, merdiven: false, setEki: false };
   if (arsiv && typeof arsiv === 'object' && arsiv.zip) {
@@ -92,6 +103,63 @@ function kaynakKarari({ job, arsiv = null } = {}) {
     ? `${KAYNAK_YOK_SEBEBI} (claim kaynakTuru=manuel ama geçerli build.zip adresi yok)`
     : KAYNAK_YOK_SEBEBI;
   return { tur: 'yok', sebep, merdiven: false, setEki: false };
+}
+
+const SURUM_RE = /^2\.\d+\.\d+$/;
+const SHA_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * Dalga B (B4) — `r2-al` / `r2-kur` kararı. SAF.
+ *   r2-al   : hazır build `kaynakUrl`'den (imzalı GET) indirilir, sha256 + boyut doğrulanır,
+ *             OLDUĞU GİBİ kullanılır — merdiven ve set eki YOK (merdiven/setEki false).
+ *   r2-kur  : build BU ajan kurar. Taban: `tabanUrl` (önceki geçerli R2 build) varsa o, yoksa Mac
+ *             kaynak arşivi; üstüne merdiven + set eki (mevcut zincir), sonra yazma kapısı → R2.
+ *             Taban hiç yoksa 'yok' (§6a BEKLER) — `r2Kur: true` çağırana kurma kilidini bıraktırır.
+ *   gecersiz: claim sözleşme dışı (`job.kaynakGecersiz`, parseNextJob doldurur) ya da zorunlu alan
+ *             eksik — hiçbir şey indirilmez, iş görünür hatayla düşer.
+ */
+function r2Karari(job, arsiv) {
+  const tur = kaynakTuruOku(job);
+  const gecersiz = (neden) => ({
+    tur: 'gecersiz', sebep: `claim sözleşme dışı (${tur}): ${neden}`, merdiven: false, setEki: false,
+    r2Kur: tur === 'r2-kur',
+  });
+  if (job.kaynakGecersiz) return gecersiz(job.kaynakGecersiz);
+  const surum = job.kaynakSurumu;
+  if (typeof surum !== 'string' || !SURUM_RE.test(surum)) return gecersiz('kaynakSurumu yok/biçim dışı');
+  if (tur === 'r2-al') {
+    const url = typeof job.kaynakUrl === 'string' ? job.kaynakUrl : '';
+    if (!url || exeYoluMu(url)) return gecersiz('kaynakUrl yok ya da .exe');
+    if (!SHA_RE.test(String(job.kaynakSha256 || ''))) return gecersiz('kaynakSha256 yok');
+    if (!Number.isSafeInteger(job.kaynakBoyut) || job.kaynakBoyut <= 0) return gecersiz('kaynakBoyut yok');
+    return {
+      tur: 'r2-al', url, sha256: job.kaynakSha256, boyut: job.kaynakBoyut, surum, merdiven: false, setEki: false,
+    };
+  }
+  const ortak = { tur: 'r2-kur', surum, kurulumBitis: job.kurulumBitis || null, merdiven: true, setEki: true };
+  if (job.tabanUrl) {
+    if (exeYoluMu(job.tabanUrl)) return gecersiz('tabanUrl .exe');
+    if (!SHA_RE.test(String(job.tabanSha256 || ''))) return gecersiz('tabanUrl var, tabanSha256 yok');
+    return { ...ortak, taban: { tur: 'r2', url: job.tabanUrl, sha256: job.tabanSha256 } };
+  }
+  if (arsiv && typeof arsiv === 'object' && arsiv.zip) return { ...ortak, taban: { tur: 'arsiv', arsiv } };
+  return {
+    tur: 'yok', sebep: `${KAYNAK_YOK_SEBEBI} (r2-kur: taban yok — tabanUrl yok, arşivde kayıt yok)`,
+    merdiven: false, setEki: false, r2Kur: true,
+  };
+}
+
+/**
+ * Bu iş için Mac kaynak arşivi (doğrulamalı `arsivKaynagi`) OKUNUR mu? Manuel işte, `r2-al`'de
+ * (arşiv orada önbellektir, `r2Onbellek` ile ayrı okunur) ve `tabanUrl`'li `r2-kur`'da OKUNMAZ —
+ * bozuk bir arşiv kaydı bu kaynakları düşürmesin. SAF.
+ */
+function arsivOkunurMu(job) {
+  if (manuelKaynakUrl(job)) return false;
+  const tur = kaynakTuruOku(job);
+  if (tur === 'r2-al') return false;
+  if (tur === 'r2-kur' && job && job.tabanUrl) return false;
+  return true;
 }
 
 /**
@@ -122,6 +190,9 @@ function manuelZipBicimi(girisler) {
 }
 
 module.exports = {
+  R2_TURLERI,
+  r2TuruMu,
+  arsivOkunurMu,
   KAYNAK_YOK_SEBEBI,
   EXE_KAYNAGI_KAPALI,
   MANUEL_YOL_ISARETLERI,

@@ -339,8 +339,9 @@ test('menü Web-Z değilse hiçbir şey eklenmez, eksikler rapora girer', async 
 
 test('runner: ek merdivenden SONRA, pardus/HTTP paketleyiciden ÖNCE; yalnız arşiv kaynağında + anahtar', () => {
   const s = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
-  const merdiven = s.indexOf('await icerikMerdiveni({');
-  const ek = s.indexOf('await setEk.setUyelikEki({');
+  // Dalga B (B4): çağrılar casuslanabilir `kaynakAdim` (= icerikMerdiveni / setEk.setUyelikEki) üzerinden.
+  const merdiven = s.indexOf('await kaynakAdim.merdiven({');
+  const ek = s.indexOf('await kaynakAdim.setEki({');
   const pardus = s.indexOf('await buildPardusArtifact(zipPath');
   const http = s.indexOf('await packagerUploadBuild(zipPath');
   assert.ok(merdiven > 0 && ek > merdiven, 'ek merdivenden sonra');

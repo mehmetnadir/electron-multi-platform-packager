@@ -89,6 +89,13 @@ function izoleOrtam() {
       CONFIG.macSerbestFlag = path.join(dir, 'macos-serbest.istek');
       CONFIG.macDurdurFlag = path.join(dir, 'macos-durdur.istek');
       CONFIG.dusukVeriYoksayFlag = path.join(dir, 'dusuk-veri-yoksay.istek');
+      // Dalga B (B4): `kaynak-kur` rolü ofiste kendiliğinden bildirilir — yetenek listesini birebir
+      // kıyaslayan testler makinenin konumuna bağlı kalmasın diye testlerde varsayılan KAPALI;
+      // gerçek bayrak dosyası okunmaz. Ölçen test (kaynak-r2.test.js) açıkça açar.
+      // `kaynak-r2` ise konumdan ve bayraktan BAĞIMSIZ her zaman bildirilir (inceleme E1) — yalıtılacak
+      // bir girdisi yok; yetenek listesini birebir kıyaslayan testler onu beklenen listeye yazar.
+      if ('kaynakKur' in CONFIG) CONFIG.kaynakKur = false;
+      if ('kaynakKurSerbestFlag' in CONFIG) CONFIG.kaynakKurSerbestFlag = path.join(dir, 'kaynak-kur-serbest.istek');
     },
     temizle() {
       for (const [env, eski] of Object.entries(eskiEnv)) {

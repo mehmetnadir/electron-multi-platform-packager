@@ -300,8 +300,9 @@ test('nöbetçi C: runner.js exe adını yalnız bilgi için arsivKaynagi\'ye ve
   const { kod } = KAYNAKLAR.find((k) => k.goreli === 'src/agent/runner.js');
   assert.equal((kod.match(/imparkKaynagi/g) || []).length, 1, 'imparkKaynagi yalnız çağrıda geçmeli');
   // Exe'siz sözleşme (01.10): manuel işte arşiv okunmaz; okunursa exe adı yine YALNIZ bilgi.
+  // Dalga B (B4): koşul kaynak-karari `arsivOkunurMu` (manuel + r2-al + tabanUrl'li r2-kur okumaz).
   assert.match(kod,
-    /const arsiv = manuelUrl \? null\s*\n\s*: await arsivKaynagi\(job\.bookId, \{ imparkKaynagi: imparkSrcVersion, bilgi: log \}\);/);
+    /const arsiv = !arsivOkunurMu\(job\) \? null\s*\n\s*: await arsivKaynagi\(job\.bookId, \{ imparkKaynagi: imparkSrcVersion, bilgi: log \}\);/);
   assert.doesNotMatch(kod, /impark_kaynagi/);
 });
 

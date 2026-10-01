@@ -154,7 +154,117 @@ async function arsivKaynagi(bookId, {
     etiket: String(kayit.etiket || ''),
     srcVersion: `arsiv-${md5.slice(0, 12)}`,
     imparkKaynagi: imparkKaynagiBilgisi(kayit.impark_kaynagi),
+    // Dalga B: R2 build'inin önbelleğiyse sürümü (yoksa null = Üretim Masası'nın elle yazdığı kayıt).
+    r2Surum: typeof kayit.r2Surum === 'string' && kayit.r2Surum ? kayit.r2Surum : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// DALGA B (B4, exe'siz sözleşme §5 "Mac arşivi R2'nin yerel önbelleği; R2'deki geçerli sürümden
+// tazelenir"). `r2-al` ile inen (ve `r2-kur`'da R2'ye yazılan) build arşive `kaynak.json` +
+// `r2Surum` + `sha256` alanlarıyla yazılır. Kural:
+//   - `r2Onbellek`: kayıt `r2Surum` = istenen sürüm VE sha256/boyut claim'le aynıysa zip yerelden
+//     kullanılır (1–3 GB indirme yok). Farklı sürüm / `r2Surum`'suz kayıt → ıska → indirilir ve
+//     `r2ArsiveYaz` kaydı TAZELER.
+//   - `r2Surum`'suz kayıt (Üretim Masası'nın elle yazdığı) YALNIZ taban olur (`r2-kur`), hiçbir
+//     zaman `r2-al` önbelleği sayılmaz.
+// Arşiv önbellektir: okuma/yazma hatası işi DÜŞÜRMEZ (ıska / uyarı). Hiçbir dosya silinmez — zip
+// aynı adla (`build.zip`) rename ile değişir, eski farklı adlı zip yerinde kalır.
+// ---------------------------------------------------------------------------
+
+/** md5 + sha256 + boyut TEK geçişte (1–3 GB zip iki kez okunmasın). */
+function ikiOzet(dosya) {
+  return new Promise((resolve, reject) => {
+    const m = crypto.createHash('md5');
+    const s = crypto.createHash('sha256');
+    let boyut = 0;
+    fs.createReadStream(dosya)
+      .on('error', reject)
+      .on('data', (p) => { m.update(p); s.update(p); boyut += p.length; })
+      .on('end', () => resolve({ md5: m.digest('hex'), sha256: s.digest('hex'), boyut }));
+  });
+}
+
+const SHA_DAMGA = '.sha256-dogrulandi';
+const damgaDegeri = (st, ozet) => `${st.size}:${Math.floor(st.mtimeMs)}:${ozet}`;
+
+/**
+ * `r2-al` önbellek okuması. FIRLATMAZ — ıska/hata null.
+ * @param {number|string} bookId
+ * @param {{ surum: string, sha256: string, boyut?: number|null, kok?: string, bilgi?: Function }} o
+ * @returns {Promise<null | { zip: string, sha256: string, boyut: number, r2Surum: string }>}
+ */
+async function r2Onbellek(bookId, { surum, sha256, boyut = null, kok = arsivKoku(), bilgi = () => {} } = {}) {
+  const dizin = path.join(kok, String(bookId));
+  try {
+    const kayit = JSON.parse(await fsp.readFile(path.join(dizin, 'kaynak.json'), 'utf8'));
+    if (!kayit.r2Surum) {
+      bilgi(`kaynak arşivi ${bookId}: kayıt r2Surum'suz (elle yazılmış) — r2-al önbelleği sayılmaz, indirilecek`);
+      return null;
+    }
+    if (kayit.r2Surum !== surum || String(kayit.sha256 || '') !== sha256) {
+      bilgi(`kaynak arşivi ${bookId}: önbellek ${kayit.r2Surum} ≠ geçerli ${surum} — tazelenecek`);
+      return null;
+    }
+    if (!kayit.dosya || path.basename(kayit.dosya) !== kayit.dosya) return null;
+    const zip = path.join(dizin, kayit.dosya);
+    const st = await fsp.stat(zip);
+    if (Number(kayit.boyut) !== st.size || (boyut != null && st.size !== boyut)) {
+      bilgi(`kaynak arşivi ${bookId}: önbellek boyutu tutmuyor (${st.size}) — tazelenecek`);
+      return null;
+    }
+    let damga = '';
+    try { damga = (await fsp.readFile(path.join(dizin, SHA_DAMGA), 'utf8')).trim(); } catch (_) { /* yok */ }
+    if (damga !== damgaDegeri(st, sha256)) {
+      const oz = await ikiOzet(zip);
+      if (oz.sha256 !== sha256) {
+        bilgi(`kaynak arşivi ${bookId}: önbellek sha256 tutmuyor — tazelenecek`);
+        return null;
+      }
+      try { await fsp.writeFile(path.join(dizin, SHA_DAMGA), `${damgaDegeri(st, sha256)}\n`); } catch (_) { /* her seferinde hesaplanır */ }
+    }
+    return { zip, sha256, boyut: st.size, r2Surum: kayit.r2Surum };
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') bilgi(`kaynak arşivi ${bookId}: önbellek okunamadı (${e.message}) — indirilecek`);
+    return null;
+  }
+}
+
+/**
+ * Doğrulanmış R2 build'ini arşive yazar (klon kopya → rename; sonra damgalar; EN SON kaynak.json
+ * rename — kayıt yeni zip'i ancak zip yerindeyken gösterir). FIRLATMAZ.
+ * @param {number|string} bookId
+ * @param {string} kaynakZip doğrulanmış zip (kopyalanır, taşınmaz)
+ * @param {{ surum: string, md5: string, sha256: string, boyut: number, kok?: string, uyari?: Function }} o
+ * @returns {Promise<boolean>}
+ */
+async function r2ArsiveYaz(bookId, kaynakZip, {
+  surum, md5, sha256, boyut, kok = arsivKoku(), uyari = (m) => console.warn(m),
+} = {}) {
+  const dizin = path.join(kok, String(bookId));
+  const ek = `.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await fsp.mkdir(dizin, { recursive: true });
+    const geciciZip = path.join(dizin, `build.zip${ek}`);
+    await fsp.copyFile(kaynakZip, geciciZip, fs.constants.COPYFILE_FICLONE);
+    const zip = path.join(dizin, 'build.zip');
+    await fsp.rename(geciciZip, zip);
+    const st = await fsp.stat(zip);
+    if (st.size !== boyut) throw new Error(`kopya boyutu ${st.size} ≠ ${boyut}`);
+    await fsp.writeFile(path.join(dizin, '.md5-dogrulandi'), `${damgaDegeri(st, md5)}\n`);
+    await fsp.writeFile(path.join(dizin, SHA_DAMGA), `${damgaDegeri(st, sha256)}\n`);
+    const kayit = {
+      dosya: 'build.zip', md5, boyut, etiket: `r2-${surum}`, r2Surum: surum, sha256,
+      yazilma: new Date().toISOString(),
+    };
+    const geciciJson = path.join(dizin, `kaynak.json${ek}`);
+    await fsp.writeFile(geciciJson, `${JSON.stringify(kayit, null, 2)}\n`);
+    await fsp.rename(geciciJson, path.join(dizin, 'kaynak.json'));
+    return true;
+  } catch (e) {
+    uyari(`kaynak arşivi ${bookId}: R2 build ${surum} arşive yazılamadı (önbellek, iş sürer): ${e.message}`);
+    return false;
+  }
 }
 
 /**
@@ -188,4 +298,5 @@ function arsivOzeti(kok = arsivKoku()) {
 
 module.exports = {
   arsivKaynagi, arsivKoku, md5Hesapla, imparkAdiNotu, imparkKaynagiBilgisi, arsivOzeti,
+  ikiOzet, r2Onbellek, r2ArsiveYaz,
 };

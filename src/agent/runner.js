@@ -62,8 +62,13 @@ const {
 } = require('./serit-secimi');
 const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
-const { kaynakKarari, manuelKaynakUrl, manuelZipBicimi, exeYoluMu } = require('./kaynak-karari');
+const {
+  kaynakKarari, manuelZipBicimi, exeYoluMu, arsivOkunurMu,
+} = require('./kaynak-karari');
 const { artefaktOzeti } = require('./artefakt-kaniti');
+// Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — uç istemcisi + yayın akışı tek modülde.
+const kaynakR2 = require('./kaynak-r2');
+const { yazmaKapisi } = require('./yazma-kapisi');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -148,6 +153,11 @@ const CONFIG = {
   ofisGw: process.env.AGENT_OFIS_GW || '192.168.1.254',
   macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
   macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
+  // `kaynak-kur` yeteneği (Dalga B, B4): build'i kurup R2'ye 1–3 GB yüklemek YALNIZ yüksek bantta —
+  // ofis ağı ya da bu bayrak (macOS kuralıyla aynı desen). EMPP_KAYNAK_KUR=0 acil kapatma.
+  kaynakKur: process.env.EMPP_KAYNAK_KUR !== '0',
+  kaynakKurSerbestFlag: process.env.EMPP_KAYNAK_KUR_SERBEST_BAYRAK
+    || path.join(os.homedir(), '.empp-agent', 'kaynak-kur-serbest.istek'),
   // WiFi Düşük Veri Modu'nda yükleme/iş alma duraklat (Nadir 2026-09-13). İkili: swift NWPath.isConstrained.
   dusukVeriIkili: process.env.AGENT_LOWDATA_BIN || path.join(os.homedir(), '.empp-agent', 'dusuk-veri'),
   dusukVeriYoksayFlag: path.join(os.homedir(), '.empp-agent', 'dusuk-veri-yoksay.istek'),
@@ -419,6 +429,15 @@ async function probookErisimIlkOlcum(host, { sinirMs = 6000, port = 22 } = {}) {
   return v;
 }
 
+/** `kaynak-kur` yeteneğinin anlık girdisi (heartbeat ve r2-kur iş anı aynı karardan). */
+function kaynakKurDurumu() {
+  return {
+    acik: CONFIG.kaynakKur,
+    ofiste: ofisteMi(),
+    serbest: pauseRequested(CONFIG.kaynakKurSerbestFlag),
+  };
+}
+
 let _sonYetenek = '';
 function guncelYetenekler() {
   let caps = etkinYetenekler(CONFIG.caps, {
@@ -457,6 +476,12 @@ function guncelYetenekler() {
       yedekAktif: yedek.aktif,
     });
   }
+  // KAYNAK-R2 (Dalga B, B4 / inceleme E1): bu runner r2-al/r2-kur claim'ini anlar — sunucu `r2-al`'ı
+  // yalnız bunu bildiren ajana verir. Konumdan BAĞIMSIZ, her zaman bildirilir.
+  caps = kaynakR2.kaynakR2Ekle(caps);
+  // KAYNAK-KUR (Dalga B, B4): platform değil ROL — sunucu `r2-kur`u yalnız bunu bildiren ajana verir.
+  // Evde bildirilmez (1–3 GB yükleme); ofiste ya da `kaynak-kur-serbest.istek` bayrağıyla.
+  caps = kaynakR2.kaynakKurEkle(caps, kaynakKurDurumu());
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
     log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,
@@ -574,7 +599,9 @@ async function presignUpload(auth, job) {
  * bağlantılar: reset olursa yalnız o parça yeniden gider.
  * Sunucu eski sürümdeyse (uç 404) çağıran taraf tek-parça yola düşer.
  */
-const { arsivKaynagi } = require('./kaynak-arsivi');
+const {
+  arsivKaynagi, ikiOzet, r2Onbellek, r2ArsiveYaz,
+} = require('./kaynak-arsivi');
 const { icerikKapisiDenetleZip, zipGirisAdlariniOku } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
@@ -611,6 +638,40 @@ async function uploadMultipart(auth, job, artifactPath, size) {
   const { uploadId, r2ObjectKey, contentType, urls } = start.data;
   log(`uploading artifact to R2 (multipart: ${partCount}×${(partSize / 1e6).toFixed(0)}MB)`, r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
 
+  const parts = await parcalariYukle(artifactPath, size, partSize, urls, contentType);
+
+  // complete-multipart: R2/Cloudflare 5xx geçici olabiliyor (2026-08-27: 40 dk'lık noterli build
+  // HTTP 502 ile kaybedildi; 2026-09-15: 3×15 sn yetmedi, 502 dalgası ~1 dk sürüyor). Parçalar
+  // zaten yüklü ve presigned URL'ler 1 saat geçerli — bu çağrı 8 kez, artan bekleyişle denenir (~6 dk).
+  const COMPLETE_ATTEMPTS = Number(process.env.AGENT_COMPLETE_ATTEMPTS || 8);
+  let done = null;
+  for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt++) {
+    done = await axios.post(
+      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
+      { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
+      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+    ).catch((err) => ({ status: 0, data: { error: err.message } }));
+    if (done.status === 200) break;
+    if (done.status >= 500 || done.status === 0) {
+      const bekle = Math.min(15000 * attempt, 60000);
+      warn(`complete-multipart HTTP ${done.status} (deneme ${attempt}/${COMPLETE_ATTEMPTS}) — ${attempt < COMPLETE_ATTEMPTS ? `${bekle / 1000} sn sonra tekrar` : 'vazgeçildi'}`);
+      if (attempt < COMPLETE_ATTEMPTS) await sleep(bekle);
+      continue;
+    }
+    break; // 4xx: tekrar anlamsız
+  }
+  if (!done || done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done && done.status} ${JSON.stringify(done && done.data)}`);
+  log('artifact uploaded to R2 (multipart) — reporting result...');
+  return { r2ObjectKey, publicUrl: done.data.publicUrl };
+}
+
+/**
+ * Presigned parça URL'lerine dosyayı parça parça PUT eder (dd + curl -4, parça başına 30 deneme).
+ * Paket (`uploadMultipart`) ve kaynak build (`kaynak-r2.r2KurYayinla`) AYNI döngüyü kullanır.
+ * @returns {Promise<Array<{partNumber: number, etag: string}>>}
+ */
+async function parcalariYukle(artifactPath, size, partSize, urls, contentType) {
+  const partCount = Math.ceil(size / partSize);
   const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
   const partFile = `${artifactPath}.part`;
   const parts = [];
@@ -649,30 +710,7 @@ async function uploadMultipart(auth, job, artifactPath, size) {
   } finally {
     await fsp.rm(partFile, { force: true }).catch(() => {});
   }
-
-  // complete-multipart: R2/Cloudflare 5xx geçici olabiliyor (2026-08-27: 40 dk'lık noterli build
-  // HTTP 502 ile kaybedildi; 2026-09-15: 3×15 sn yetmedi, 502 dalgası ~1 dk sürüyor). Parçalar
-  // zaten yüklü ve presigned URL'ler 1 saat geçerli — bu çağrı 8 kez, artan bekleyişle denenir (~6 dk).
-  const COMPLETE_ATTEMPTS = Number(process.env.AGENT_COMPLETE_ATTEMPTS || 8);
-  let done = null;
-  for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt++) {
-    done = await axios.post(
-      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
-      { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
-      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
-    ).catch((err) => ({ status: 0, data: { error: err.message } }));
-    if (done.status === 200) break;
-    if (done.status >= 500 || done.status === 0) {
-      const bekle = Math.min(15000 * attempt, 60000);
-      warn(`complete-multipart HTTP ${done.status} (deneme ${attempt}/${COMPLETE_ATTEMPTS}) — ${attempt < COMPLETE_ATTEMPTS ? `${bekle / 1000} sn sonra tekrar` : 'vazgeçildi'}`);
-      if (attempt < COMPLETE_ATTEMPTS) await sleep(bekle);
-      continue;
-    }
-    break; // 4xx: tekrar anlamsız
-  }
-  if (!done || done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done && done.status} ${JSON.stringify(done && done.data)}`);
-  log('artifact uploaded to R2 (multipart) — reporting result...');
-  return { r2ObjectKey, publicUrl: done.data.publicUrl };
+  return parts;
 }
 
 async function postResultSuccess(auth, job, artifactPath) {
@@ -743,6 +781,14 @@ async function postResultSuccess(auth, job, artifactPath) {
       r2ObjectKey: presigned.r2ObjectKey,
       publicUrl: presigned.publicUrl,
       ...(kanit || {}),
+      // İÇERİK SÜRÜMLERİ (Dalga B, B4): paketin içerdiği kitap içerik sürümleri [{id, vs}] — merdiven
+      // kanıtından (processJob `job.icerikSurumleri`'ni doldurur; claim alanı DEĞİL). Sunucu Dalga A/B
+      // karşılaştırması için. Ölçüm yoksa (merdiven kapalı, manuel/r2-al) alan hiç gönderilmez.
+      ...(Array.isArray(job.icerikSurumleri) && job.icerikSurumleri.length
+        ? { icerikSurumleri: job.icerikSurumleri } : {}),
+      // KAYNAK SÜRÜMÜ (Dalga B, B2 madde 6): claim'deki build sürümü gövdenin kökünde — sunucunun
+      // bellek içi claim eşliği API yeniden başlayınca kaybolur; beyan varsa sürüm paritesi yine çalışır.
+      ...(typeof job.kaynakSurumu === 'string' && job.kaynakSurumu ? { kaynakSurumu: job.kaynakSurumu } : {}),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );
@@ -1742,7 +1788,7 @@ async function hazirPardusPaketi({ bookId } = {}) {
  *   - Yol `.exe` ile bitiyorsa hiç indirmez.
  */
 const MANUEL_GECERSIZ_MAX = 2;
-async function manuelZipIndir(url, destPath) {
+async function manuelZipIndir(url, destPath, { etiket = 'manuel build' } = {}) {
   const ad = path.basename(String(url).split('?')[0]);
   if (exeYoluMu(url)) {
     throw new Error(`exe'siz sözleşme: manuel kaynak .exe olamaz — indirilmedi: ${ad}`);
@@ -1766,12 +1812,12 @@ async function manuelZipIndir(url, destPath) {
     ]);
     const httpKodu = Number((String(res.stdout || '').match(/(\d{3})\s*$/) || [])[1] || 0);
     if (httpKodu >= 400 && httpKodu < 500) {
-      throw new Error(`manuel build HTTP ${httpKodu} — yeniden denenmez (adres/izin hatası): ${ad}`);
+      throw new Error(`${etiket} HTTP ${httpKodu} — yeniden denenmez (adres/izin hatası): ${ad}`);
     }
     const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
     if (res.code !== 0) {
       // Ağ / 5xx / durgunluk: sıfırdan yeniden dene (yarım dosya geçersiz sayılmaz).
-      warn(`manuel build indirme ${attempt}: curl exit ${res.code} (HTTP ${httpKodu || '-'}, ${size} B) — yeniden deneniyor`);
+      warn(`${etiket} indirme ${attempt}: curl exit ${res.code} (HTTP ${httpKodu || '-'}, ${size} B) — yeniden deneniyor`);
       if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
       continue;
     }
@@ -1785,17 +1831,21 @@ async function manuelZipIndir(url, destPath) {
     }
     const girisler = await zipGirisleri(destPath);
     if (girisler.length > 0) {
-      log(`manuel build indirildi: ${(size / 1e6).toFixed(0)}MB, geçerli zip (${girisler.length} giriş, deneme ${attempt})`);
+      log(`${etiket} indirildi: ${(size / 1e6).toFixed(0)}MB, geçerli zip (${girisler.length} giriş, deneme ${attempt})`);
       return;
     }
     gecersiz += 1;
     if (gecersiz >= MANUEL_GECERSIZ_MAX) {
-      throw new Error(`manuel build geçerli zip değil (${gecersiz} tam indirme, ${size} B) — vazgeçildi: ${ad}`);
+      throw new Error(`${etiket} geçerli zip değil (${gecersiz} tam indirme, ${size} B) — vazgeçildi: ${ad}`);
     }
-    warn(`manuel build indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB indi ama geçerli zip DEĞİL — bir kez daha`);
+    warn(`${etiket} indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB indi ama geçerli zip DEĞİL — bir kez daha`);
     if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
   }
-  throw new Error(`manuel build indirilemedi: ${MAX} denemede ağ/sunucu hatası`);
+  // `agHatasi`: yalnız ağ/5xx/durgunluk tükenmesi (4xx, MZ, geçersiz zip KALICI). Manuel yolda bugünkü
+  // davranış aynen (failed); R2 yolunda (r2IndirDogrula) geçici sayılır — R2 kalıcı yerdedir.
+  const tukendi = new Error(`${etiket} indirilemedi: ${MAX} denemede ağ/sunucu hatası`);
+  tukendi.agHatasi = true;
+  throw tukendi;
 }
 
 /** Zip'in giriş adları (`unzip -Z1`, ZIP64; dosya belleğe alınmaz); okunamazsa boş dizi. */
@@ -1854,7 +1904,101 @@ async function manuelBuildHazirla({ url, zipPath, work, bookId }) {
 const kaynakIndirme = {
   exeIndir: (...a) => downloadFile(...a),
   manuelZipIndir: (...a) => manuelZipIndir(...a),
+  // Dalga B: imzalı R2 GET (r2-al kaynağı / r2-kur tabanı) — manuel indirme kurallarıyla AYNI
+  // (curl -4, 4xx'te yeniden deneme yok, MZ/exe reddi, geçerli zip denetimi).
+  r2Indir: (url, hedef) => manuelZipIndir(url, hedef, { etiket: 'R2 build' }),
 };
+
+/**
+ * Kaynak ADIMLARI — merdiven ve set eki bu nesneden çağrılır; testler casus koyup `r2-al`'de
+ * HİÇ çağrılmadıklarını ölçer (kaynak-r2.test.js).
+ */
+const kaynakAdim = {
+  merdiven: (...a) => icerikMerdiveni(...a),
+  setEki: (...a) => setEk.setUyelikEki(...a),
+};
+
+/** Kaynak uç istemcisi (B2) — runner'ın axios + ajan başlığıyla; biçim kaynak-r2.js'te. */
+function kaynakIstemcisi(auth) {
+  return kaynakR2.kaynakUcIstemcisi({
+    istek: (yol, govde) => axios.post(
+      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/${yol}`),
+      govde,
+      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+    ),
+    sleep,
+    warn,
+  });
+}
+
+/** İndirilen R2 build'ini claim özetiyle doğrular (boyut + sha256); uymazsa KALICI hata. */
+async function r2IndirDogrula(url, hedef, { sha256, boyut = null }) {
+  try {
+    await kaynakIndirme.r2Indir(url, hedef);
+  } catch (e) {
+    // Ağ tükenmesi GEÇİCİ (koordinatör 01.10): build R2'de kalıcı durur; iş kırılmaz, ertelenir.
+    if (e && e.agHatasi) throw new kaynakR2.KaynakR2Hatasi(e.message, { gecici: true });
+    throw e;
+  }
+  const oz = await ikiOzet(hedef);
+  kaynakR2.r2OzetDogrula(oz, { sha256, boyut });
+  return oz;
+}
+
+/**
+ * r2-al: geçerli build'i iş kopyasına (`zipPath`) koyar — önce arşiv önbelleği (r2Surum + sha256
+ * aynıysa indirme YOK), ıskada imzalı GET → doğrula → arşivi tazele. Merdiven/set eki YOK.
+ */
+async function r2AlHazirla({ bookId, kaynak, zipPath, work }) {
+  const onb = await r2Onbellek(bookId, {
+    surum: kaynak.surum, sha256: kaynak.sha256, boyut: kaynak.boyut, bilgi: log,
+  });
+  if (onb) {
+    await fsp.copyFile(onb.zip, zipPath, fs.constants.COPYFILE_FICLONE);
+    log(`kaynak R2 ${kaynak.surum} ARŞİV ÖNBELLEĞİNDEN (sha256 ${kaynak.sha256.slice(0, 12)}…) — indirilmedi; `
+      + 'olduğu gibi kullanılır (merdiven/set eki yok)');
+    return { onbellek: true };
+  }
+  const indirilen = path.join(work, 'r2-kaynak.zip');
+  log(`kaynak R2 ${kaynak.surum} (${bookId}) — imzalı GET, ${(kaynak.boyut / 1e6).toFixed(0)}MB; `
+    + 'olduğu gibi kullanılır (merdiven/set eki yok)');
+  const oz = await r2IndirDogrula(kaynak.url, indirilen, { sha256: kaynak.sha256, boyut: kaynak.boyut });
+  await r2ArsiveYaz(bookId, indirilen, { surum: kaynak.surum, ...oz, uyari: warn });
+  await fsp.rename(indirilen, zipPath);
+  return { onbellek: false };
+}
+
+/**
+ * r2-kur: TABANI iş kopyasına koyar — `tabanUrl` (önceki geçerli R2 build, sha doğrulanır) ya da
+ * Mac arşivi. Dönüş `oncekiBoyut`: yazma kapısının %80 ölçütü için önceki geçerli build boyutu
+ * (R2 tabanı ya da r2Surum'lu arşiv kaydı; elle yazılmış arşivde bilinmez → null).
+ */
+async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work }) {
+  if (kaynak.taban.tur === 'r2') {
+    const indirilen = path.join(work, 'r2-taban.zip');
+    log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: önceki geçerli R2 build (imzalı GET)`);
+    const oz = await r2IndirDogrula(kaynak.taban.url, indirilen, { sha256: kaynak.taban.sha256 });
+    await fsp.rename(indirilen, zipPath);
+    return { oncekiBoyut: oz.boyut };
+  }
+  const { arsiv } = kaynak.taban;
+  await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
+  log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: ARŞİV (${arsiv.etiket || '-'}, md5 ${arsiv.md5}`
+    + `${arsiv.r2Surum ? `, R2 ${arsiv.r2Surum}` : ', elle yazılmış'})`);
+  return { oncekiBoyut: arsiv.r2Surum ? arsiv.boyut : null };
+}
+
+/** (r2-kur ise) R2 kurma kilidini bırak + işin kirasını bırak (failed YAZILMAZ). @returns {Promise<{ertelendi: true, sebep: string}>} */
+async function r2Ertele(auth, job, sebep, { kilitBirak = true } = {}) {
+  currentJob = null; // nabız bırakılan kirayı tazelemesin (kaynakYokBekle ile aynı ders)
+  if (kilitBirak) {
+    await kaynakIstemcisi(auth).birak({ bookId: job.bookId, platform: job.platform, surum: job.kaynakSurumu, sebep });
+  }
+  const birakildi = await releaseJob(auth, job, sebep);
+  warn(`${kaynakR2.R2_ISARETI} ${job.bookId} ${job.platform} ertelendi: ${sebep} — failed YAZILMADI, `
+    + (birakildi ? 'kira BIRAKILDI' : 'kira bırakılamadı (süre dolunca kuyruğa döner)'));
+  return { ertelendi: true, sebep };
+}
 
 // KAYNAK YOK — kira bırak + ÖZET bildirim (exe'siz sözleşme §6a; inceleme 01.10 "bildirim seli").
 // Build'siz işler sunucuda sona atılıp tekrar kiralandıkça her bırakma ayrı bildirim üretmesin:
@@ -2006,18 +2150,38 @@ async function processJob(auth, job) {
     // (indirilebilir alanda durmaz); adın kaynağı odur, yoksa eski claim'lerin downloadUrl'i.
     const imparkBilgiUrl = job.bilgiUrl || job.downloadUrl || '';
     const imparkSrcVersion = imparkBilgiUrl ? srcVersionTuret(imparkBilgiUrl) : '';
-    const manuelUrl = manuelKaynakUrl(job);
-    const arsiv = manuelUrl ? null
+    // Arşiv yalnız gerektiğinde okunur (kaynak-karari `arsivOkunurMu`): manuel işte, r2-al'de (arşiv
+    // orada önbellek — `r2Onbellek` ayrı okur) ve tabanUrl'li r2-kur'da OKUNMAZ.
+    const arsiv = !arsivOkunurMu(job) ? null
       : await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
     const kaynak = kaynakKarari({ job, arsiv });
+    // r2-kur kurulamıyor (taban yok / claim sözleşme dışı): kurma kilidini HEMEN bırak — sunucu
+    // build'i başka ajana ya da sonraya verir; kilit kurulumBitis'e kadar asılı kalmasın.
+    if (kaynak.r2Kur) {
+      await kaynakIstemcisi(auth).birak({
+        bookId: job.bookId, platform: job.platform, surum: job.kaynakSurumu, sebep: kaynak.sebep,
+      });
+    }
+    // Sözleşme dışı R2 claim'i: hiçbir şey indirilmez, iş görünür hatayla düşer (failed + bildirim).
+    if (kaynak.tur === 'gecersiz') {
+      throw new Error(`${kaynakR2.R2_ISARETI} ${kaynak.sebep}`);
+    }
     if (kaynak.tur === 'yok') {
       await kaynakYokBekle(auth, job, kaynak.sebep);
       return { ertelendi: true, sebep: kaynak.sebep };
     }
+    // r2-kur YALNIZ yüksek bantta (heartbeat `kaynak-kur` ile aynı karar): yetenek evde bildirilmez;
+    // bayat bir nabızla yine de gelirse 1–3 GB yükleme başlatılmaz, kilit ve kira bırakılır.
+    if (kaynak.tur === 'r2-kur' && !kaynakR2.kaynakKurIzinli(kaynakKurDurumu())) {
+      return r2Ertele(auth, job, 'kaynak-kur bu konumda kapalı (ofis dışı, serbest bayrağı yok) — build kurulmadı');
+    }
     if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
     // Pardus paketleyici kimliği (buildPardusArtifact) — exe adından DEĞİL, kaynağın kendisinden.
     const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion : `manuel-${srcVersionTuret(kaynak.url)}`;
-    const kaynakAdi = kaynak.tur === 'arsiv'
+    // R2 build'inin kimliği sürümüdür (Dalga B): `r2-<sürüm>`; diğer kaynaklarda yukarıdaki.
+    const r2Kaynak = kaynak.tur === 'r2-al' || kaynak.tur === 'r2-kur';
+    const paketKaynakKimligi = r2Kaynak ? `r2-${kaynak.surum}` : srcVersion;
+    const kaynakAdi = r2Kaynak ? `r2:${kaynak.surum}` : kaynak.tur === 'arsiv'
       ? `arsiv:${arsiv.etiket || arsiv.md5.slice(0, 12)}`
       : path.basename(String(kaynak.url).split('?')[0]) || undefined;
     const zipPath = path.join(work, 'build.zip');
@@ -2028,7 +2192,9 @@ async function processJob(auth, job) {
     // (arşiv zip'i) ölçülür — uzak adrese HEAD atılmaz (exe'siz sözleşme); manuelde taban eşik.
     // Kapı düşerse bu bir PAKET KUSURU DEĞİLDİR — `failed` yazılmaz, kira bırakılır.
     if (packagerPlatform === 'pardus') {
-      const kaynakBayt = await kaynakBoyutuTahmin({ yerelZip: kaynak.tur === 'arsiv' ? arsiv.zip : null });
+      // r2-al: boyut claim'den (kaynakBoyut); arşiv/r2-kur arşiv tabanı: yerel zip'ten.
+      const kaynakBayt = kaynak.tur === 'r2-al' ? kaynak.boyut
+        : await kaynakBoyutuTahmin({ yerelZip: arsiv ? arsiv.zip : null });
       const gerekliGb = pardusGerekliDiskGb({
         kaynakBayt,
         kat: Number(process.env.PARDUS_DISK_KAT || 5),
@@ -2054,6 +2220,21 @@ async function processJob(auth, job) {
     if (kaynak.tur === 'manuel') {
       await manuelBuildHazirla({ url: kaynak.url, zipPath, work, bookId: job.bookId });
     }
+    // DALGA B (B4): r2-al → hazır build (önbellek ya da imzalı GET + sha256/boyut doğrulama), olduğu
+    // gibi; r2-kur → taban (R2 önceki geçerli build ya da arşiv). Kalanı aşağıdaki zincir.
+    let r2OncekiBoyut = null;
+    try {
+      if (kaynak.tur === 'r2-al') {
+        await r2AlHazirla({ bookId: job.bookId, kaynak, zipPath, work });
+      }
+      if (kaynak.tur === 'r2-kur') {
+        r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work })).oncekiBoyut;
+      }
+    } catch (e) {
+      // R2 indirmesi ağ hatasıyla tükendi → failed YAZILMAZ: (r2-kur ise kilit) + kira bırakılır.
+      if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: kaynak.tur === 'r2-kur' });
+      throw e;
+    }
 
     // İÇERİKSİZ KAYNAK KAPISI — ZIP YOLU (2026-09-26): her kaynak (arşiv ve manuel) zip olarak gelir;
     // kökte `assets/` YOK ve hiç `bookN/` dizini YOK ise kaynak yalnız motordur (11845 SM3-v49.exe
@@ -2067,11 +2248,14 @@ async function processJob(auth, job) {
     // İÇERİK MERDİVENİ (S0 + S1) — yalnız ARŞİV kaynağında (manuel build olduğu gibi kullanılır,
     // sözleşme §7 M1). Yalnız İŞ KOPYASI (zipPath) değişir; ZKitapZipH önbelleği <ID>-<Vs> ile
     // anahtarlıdır. Ölçülemeyen ya da kimliği tutmayan kitapta iş görünür hatayla düşer.
+    // r2-al de olduğu gibi kullanılır (Dalga B: build R2'de kurulmuş, merdiveni orada geçti).
+    const olduguGibiAdi = kaynak.tur === 'r2-al' ? `R2 build ${kaynak.surum} (r2-al)` : 'manuel build';
     if (!kaynak.merdiven && merdivenAcik()) {
-      log(`[merdiven] manuel build — içerik merdiveni ATLANDI (olduğu gibi kullanılır, sözleşme M1): ${job.bookId}`);
+      log(`[merdiven] ${olduguGibiAdi} — içerik merdiveni ATLANDI (olduğu gibi kullanılır, sözleşme M1): ${job.bookId}`);
     }
+    let merdivenSonuc = null;
     if (kaynak.merdiven && merdivenAcik()) {
-      await icerikMerdiveni({
+      merdivenSonuc = await kaynakAdim.merdiven({
         zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
       });
     }
@@ -2080,8 +2264,9 @@ async function processJob(auth, job) {
     // platformun paketleyicisinden ÖNCE. Hiçbir hata paketi DURDURMAZ (eksik-set-kitabi raporu);
     // iş kopyası ya kapıdan geçmiş yeni hâli ya aynen eskisidir (aday kopya + rename).
     if (!kaynak.setEki && setEk.ekAcik()) {
-      log(`${setEk.ISARET} manuel build — set üyeliği eki ATLANDI (olduğu gibi kullanılır, sözleşme M1)`);
+      log(`${setEk.ISARET} ${olduguGibiAdi} — set üyeliği eki ATLANDI (olduğu gibi kullanılır, sözleşme M1)`);
     }
+    let setEkiRapor = null;
     if (kaynak.setEki && setEk.ekAcik()) {
       const setListesi = setEk.setListesiCoz({ job });
       // else dalı BİLEREK yok: runner-pardus nöbetçisi processJob'daki ilk else'i pardus dalı sayar.
@@ -2090,7 +2275,7 @@ async function processJob(auth, job) {
       }
       if (setListesi) {
         try {
-          await setEk.setUyelikEki({
+          setEkiRapor = await kaynakAdim.setEki({
             zip: zipPath, calisma: work, liste: setListesi.ham, listeKaynagi: setListesi.kaynak,
             bookId: job.bookId, platform: job.platform, log, warn,
           });
@@ -2098,6 +2283,28 @@ async function processJob(auth, job) {
           warn(`${setEk.ISARET} beklenmeyen hata, paket mevcut bileşimle: ${agHatasiOzeti(e)}`);
         }
       }
+    }
+    // İçerik sürümü kanıtı (merdiven + set eki): tamamla `kitaplar[].vs` ve `/result` icerikSurumleri.
+    const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
+    job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
+
+    // R2'YE YAZ (Dalga B, r2-kur): kurulan build yazma kapısından (B5) geçerse R2'ye yüklenir ve
+    // `tamamla` ile sunucu kapısına sunulur. Kapı reddi / 409 → paket ÜRETİLMEZ (kalıcı: failed +
+    // bildirim); ağ/5xx/kilit süresi → kira bırakılır (failed yok). Her düşüşte kurma kilidi bırakılır.
+    if (kaynak.tur === 'r2-kur') {
+      let yayin;
+      try {
+        yayin = await kaynakR2.r2KurYayinla({
+          job, zipYolu: zipPath, setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null,
+          oncekiBoyut: r2OncekiBoyut, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
+          kapi: yazmaKapisi, ozet: ikiOzet, parcalariYukle, parcaBoyutu: MULTIPART_PART_SIZE, log,
+        });
+      } catch (e) {
+        if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: false });
+        throw e;
+      }
+      // Arşiv = R2'nin yerel önbelleği: aynı Mac'teki diğer platformlar r2-al'de indirmesin.
+      await r2ArsiveYaz(job.bookId, zipPath, { surum: yayin.surum, ...yayin.ozet, uyari: warn });
     }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten
@@ -2113,7 +2320,7 @@ async function processJob(auth, job) {
       // İkon: yayıncı zip'inde ico.png yok → kayıtlı logo zip köküne eklenir (aşağıda).
       await injectPardusIcon(zipPath, job.publisherName, work);
       await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, {
-        bookId: job.bookId, srcVersion,
+        bookId: job.bookId, srcVersion: paketKaynakKimligi,
         // claim G kimliği (claim-surum): konteynerdeki paketleyiciye kadar taşınır
         setKimligi: job.setKimligi, guncellemeTabani: job.guncellemeTabani, surum: job.surum,
       });
@@ -2372,4 +2579,7 @@ module.exports = {
   packagerPoll,
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
   fetchNextJob, releaseJob,
+  // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
+  kaynakAdim, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
+  _konumAyarla: (ofiste) => { _konum = { t: Date.now(), ofiste: Boolean(ofiste) }; _sonYetenek = ''; },
 };

@@ -98,14 +98,14 @@ test('guncelYetenekler: ProBook erişilemez → pardus düşer; erişilir → ge
   delete process.env.EMPP_PARDUS_KABUL_ERISIM;
   try {
     runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
-    assert.deepEqual(runner.guncelYetenekler(), ['android'], 'erişilemez → pardus düşer');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2'], 'erişilemez → pardus düşer');
 
     runner._probookErisimAyarla({ t: Date.now(), erisilir: true, suruyor: false });
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus'], 'erişilir → pardus geri gelir');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2'], 'erişilir → pardus geri gelir');
 
     runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
     process.env.EMPP_PARDUS_KABUL_ERISIM = '0';
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus'], 'acil kapatmada (=0) erişilemezlik yok sayılır');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2'], 'acil kapatmada (=0) erişilemezlik yok sayılır');
   } finally {
     runner.CONFIG.caps = eskiCaps;
     runner.CONFIG.pardusKabul = eskiPardusKabul;
@@ -122,7 +122,7 @@ test('guncelYetenekler: kabul kapalıyken (pardusKabul=false) erişilemezlik par
   runner.CONFIG.pardusKabul = false;
   try {
     runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus']);
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2']);
   } finally {
     runner.CONFIG.caps = eskiCaps;
     runner.CONFIG.pardusKabul = eskiPardusKabul;
@@ -139,7 +139,7 @@ test('guncelYetenekler: PROBOOK_HOST=yerel iken (kabul ProBook\'un kendisinde) p
   process.env.PROBOOK_HOST = 'yerel';
   try {
     runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus']);
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2']);
   } finally {
     runner.CONFIG.caps = eskiCaps;
     runner.CONFIG.pardusKabul = eskiPardusKabul;

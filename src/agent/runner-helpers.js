@@ -134,7 +134,31 @@ function parseNextJob(status, body) {
     // 45550/mac: API set_listesi logu, runner 13 sn sonra "atlandı"). Yalnız dosya yedeği olan
     // 45482'de ek çalışıyordu. Ham değer AYNEN taşınır; ayrıştırma setListesiAyristir'in işi.
     ...(typeof job.setListesi === 'string' && job.setListesi.trim() ? { setListesi: job.setListesi } : {}),
+    ...r2KaynakAlanlari(job),
   };
+}
+
+/**
+ * DALGA B (B4, exe'siz sözleşme §5): `r2-kur` / `r2-al` claim alanları. Bu dallarda `downloadUrl`
+ * BEKLENMEZ (sözleşme: olmamalı). Şekil `kaynak-r2.claimKaynakDogrula` (book-update zod
+ * `nextJobKaynakSemasi` ikizi, ortak fikstür) ile denetlenir; uymayan claim `kaynakGecersiz`
+ * (neden) taşır → kaynak-karari 'gecersiz' der, hiçbir şey indirilmez, iş görünür hatayla düşer.
+ * İşi düşürmek (null) yerine taşımak bilerek: sunucu satırı kiraladı, sessizce yok saymak kirayı
+ * 30 dk asılı bırakırdı. Eski türler (manuel/arsiv-gerekli) bugünkü yolu izler; onlarda zaten exe
+ * indirmeyen karar fonksiyonu son sözü söyler.
+ */
+function r2KaynakAlanlari(job) {
+  const tur = typeof job.kaynakTuru === 'string' ? job.kaynakTuru.trim() : '';
+  if (tur !== 'r2-kur' && tur !== 'r2-al') return {};
+  const { claimKaynakDogrula } = require('./kaynak-r2');
+  const al = {};
+  for (const k of ['kaynakSurumu', 'kaynakUrl', 'kaynakSha256', 'tabanUrl', 'tabanSha256', 'kurulumBitis']) {
+    if (typeof job[k] === 'string' && job[k]) al[k] = job[k];
+  }
+  if (typeof job.kaynakBoyut === 'number') al.kaynakBoyut = job.kaynakBoyut;
+  const d = claimKaynakDogrula(job);
+  if (!d.gecerli) al.kaynakGecersiz = d.neden;
+  return al;
 }
 
 /**
