@@ -48,6 +48,22 @@ bizim NSIS paketimiz **varsa ve sağlamsa** o verilir; yoksa ya da sorunluysa İ
 **İmza (Authenticode)** bölümündedir; imzasız paket indirmeye çıkmaz, o sürede indirme İmpark exe'sidir. Panelde tek "Windows" satırı;
 hangi kaynağın verildiği ayrı alanda tutulur (`build_method`: `passthrough` | `build`).
 
+## Yayına alma — KARARLANDI (Nadir, 2026-10-01)
+> Nadir 01.10: *"bugünden itibaren windows paketleri bizim üretimimiz ve imzalama mekanizması ile
+> imzalanıp sisteme yüklenmesi lazım."* 01.10 ölçümü: sözleşme 26.09'dan beri ONAYLI ama 57 windows
+> satırının 57'si `build_method` NULL (passthrough) — runner windows şeridi tek iş almamıştı.
+
+1. **Varsayılan `build`:** her windows satırı `build_method='build'` olur (mevcut + yeni açılan).
+   Passthrough yalnız geçiş yedeğidir: R2'de duran İmpark exe'si, bizim imzalı paketimiz üstüne
+   yazılana kadar indirilir; işçi `build` satırına bir daha YAZMAZ (`windowsBuildKorumaKararVer`).
+2. **Pilot önce:** ilk satır 45482 (01.10 15:2x). Nadir panelden "Windows" yeniden kuyruğa alır, paketi
+   kendisi dener. Pilot geçmeden toplu geçiş ve otomatik yeniden üretim YAPILMAZ.
+3. **Pilot sonrası:** kalan satırlar `build`'e çevrilir (yedek: srv21
+   `/root/yedek-deploy/build-method-oncesi-20261001.tsv`), yeni satır varsayılanı koda girer;
+   üretim oto-kontrol düzeninde sürer (kapı + imza + kabul, her paket kanıtla).
+4. **Ön koşul (Mac):** İmpark VPN + Storage7 SMB bağlı (`~/bin/impark-diskler.sh`); yoksa runner
+   windows yeteneğini ilan etmez, iş bekler — İmpark exe'si indirilmeye devam eder.
+
 ## İmza (Authenticode) — TEK KAYNAK
 > Nadir 30.09: imza sözleşmesi exe üretim sözleşmesinin içinde durur. Bu bölüm Windows imzası için tek
 > kaynaktır; skill `windows-imzalama`, `scripts/OKU-imza-yuva-smb.md` ve diğer belgeler buraya bağlanır,
