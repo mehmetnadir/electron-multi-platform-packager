@@ -23,7 +23,7 @@
 | Yayınevi yönetimi | `src/client/publishers.html` |
 | Platform yardımcıları (KULLANILIYOR) | `src/platforms/macos/{mac-signing,dmg-layout}.js`, `src/platforms/common/fs-shim.js`, `src/platforms/android/empp-android-shim.js` |
 | Ölü platform iskeletleri (KARANTİNA, 2026-09-21) | `_graveyard/2026-09-21-platforms/` — eski `*PackagingService.js` + registry/orchestrator/interfaces (12 dosya, ~6.4k satır); hiçbir giriş noktasından require edilmiyordu, ölçüm+kanıt `OKU.md`'de, kalıcı kapı `src/platforms/olu-yol-kapisi.js`/`.test.js` |
-| Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js`, `local-build.js` |
+| Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js` | (`local-build.js` + exe ısıtıcıları 01.10'da `_graveyard/2026-10-01-exe-kaynak/`)|
 
 ## Dikkat Edilecekler (Gotchas)
 > Tam tuzak defteri (K17/K18, başsız kabul, Pardus disk kapısı, kurulum bilgilendirme,
@@ -40,7 +40,7 @@
 - **`settingsRoutes.js` 'electron'ı koşulsuz require ETME:** sunucuda yok → crash-loop. Korumalı require.
 - **Kuyruk boşalınca temizlik:** temp'i toptan silme — tamamlanmış ama ajanın henüz indirmediği çıktı (`temp/<job>/macos`) korunur (`queueService`), yoksa `/api/download` 404.
 - **Agent modunda output silinmez tuzağı (2026-08-30):** `delete-job` gerçek paketleri (`config/output/{name}`) YALNIZ `req.body.outputPath` verilirse siler (frontend gönderir). Ajan body'siz çağırıyordu → agent modunda output HİÇ silinmiyor, `~/.electron-packager-tool/config/output` 98 GB'a şişti. Fix: outputPath job kaydından çözülür (`packagingJobs` + otoriter `queueService.getPackagingStatus(jobId)`). Backstop: `sweepStaleOutputs` (başlangıç + saatlik, mtime > `OUTPUT_TTL_HOURS`=72s) — build↔silme arası restart'ta job kaydı uçarsa yakalar. Yeni "iş bitince sil" akışı yazarken: ajanın gerçekten neyi sildiğini SUNUCUDA ölç (agent "output released" log'u atsa bile packager silmemiş olabilir).
-- **Kaynak cache sürüm budaması (2026-08-30):** yayıncı exe sürümü bump'lanınca (…-v63→v64) eski `/var/empp-cache/{book}/{v63}/build.zip` ölü kalır. `pruneSiblingVersions` yeni sürüm cache'e girer girmez (populate+HIT sonrası) aynı kitabın diğer sürümlerini siler. TTL janitor (14 gün) yalnız backstop — bump'ta anında budama bunun işi.
+- **Kaynak cache sürüm budaması — KALDIRILDI (01.10):** exe'siz kaynakla runner exe-türevi cache yazmıyor; `pruneSiblingVersions`/`cacheTavaniUygula` `_graveyard/2026-10-01-exe-kaynak/`'te (OKU.md). Eski `~/.empp-agent/cache` (4,7 GB) elle temizlenecek.
 - **dmg düzeni:** `platforms/macos/dmg-layout.js` (sharp arka plan, MUTLAK yol — göreli yol app dizinine göre çözülüp ENOENT verdi).
 - **Ajan (`src/agent/runner.js`) — EXE'SİZ (2026-10-01):** İmpark exe'si HİÇBİR koşulda indirilmez; kaynak `kaynak-karari.js`: manuel build.zip (`/sources/`·`/kaynak/`·`kaynakTuru=manuel`, olduğu gibi) > kaynak arşivi (+merdiven +set eki) > yok → kira bırak + `bildir kosucu`, failed yok. Exe-türevi kaynak önbelleği, HEAD, hazır pardus devri, ısıtıcı ve `local-build.js` kapalı. R2 multipart parça 30 deneme, complete-multipart 5xx 3 deneme, geçici ağ hatasında `failed` yazılmaz (lease dolunca yeniden).
 - **Sunucu (S21) servisleri:** gerçek Android paketleyici = systemd `empp-packager` (`/opt/empp-packager`, :3091) + systemd `empp-agent`. pm2 `packager-service` (`/opt/electron-packager`) AYRI kopya — güncellemede `/opt/empp-packager`'ı reset'le, `systemctl restart empp-packager empp-agent`. Log: `/var/log/empp-packager.log`, `/var/log/empp-agent.log`.
