@@ -23,7 +23,7 @@
 | Yayınevi yönetimi | `src/client/publishers.html` |
 | Platform yardımcıları (KULLANILIYOR) | `src/platforms/macos/{mac-signing,dmg-layout}.js`, `src/platforms/common/fs-shim.js`, `src/platforms/android/empp-android-shim.js` |
 | Ölü platform iskeletleri (KARANTİNA, 2026-09-21) | `_graveyard/2026-09-21-platforms/` — eski `*PackagingService.js` + registry/orchestrator/interfaces (12 dosya, ~6.4k satır); hiçbir giriş noktasından require edilmiyordu, ölçüm+kanıt `OKU.md`'de, kalıcı kapı `src/platforms/olu-yol-kapisi.js`/`.test.js` |
-| Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js` | (`local-build.js` + exe ısıtıcıları 01.10'da `_graveyard/2026-10-01-exe-kaynak/`)|
+| Ajan (pull-mode build agent) | `src/agent/runner.js`, `runner-helpers.js`, `publisher-update.js` (`local-build.js` + exe ısıtıcıları 01.10'da `_graveyard/2026-10-01-exe-kaynak/`) |
 
 ## Dikkat Edilecekler (Gotchas)
 > Tam tuzak defteri (K17/K18, başsız kabul, Pardus disk kapısı, kurulum bilgilendirme,
