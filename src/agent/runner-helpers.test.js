@@ -154,19 +154,19 @@ test('parseNextJob: claim setListesi (panel set listesi, ham) AYNEN korunur; bo�
 test('parseNextJob: runner.js/windows-serit.js\'in okuduğu claim alanlarının hepsi ayrıştırıcıdan geçer', () => {
   const fs = require('fs');
   const path = require('path');
-  const kaynak = ['runner.js', 'windows-serit.js', 'set-uyelik-ek.js']
+  const kaynak = ['runner.js', 'windows-serit.js', 'set-uyelik-ek.js', 'kaynak-karari.js']
     .map((d) => fs.readFileSync(path.join(__dirname, d), 'utf8')).join('\n');
   const okunan = new Set([...kaynak.matchAll(/\bjob\.([A-Za-z_]+)/g)].map((m) => m[1]));
   // Sunucunun (book-update next-job) claim'de gönderdiği alanlar.
   const tam = {
     bookId: 1, platform: 'pardus', downloadUrl: 'u', buildMethod: 'build', bookTitle: 't', publisherName: 'p',
     setKimligi: 's', guncellemeTabani: 'https://x', surum: '2.1.1', surumYok: 'a', guncellemeTabaniYok: 'b',
-    setListesi: '45356 | Student Book\n45352 | Test Book',
+    setListesi: '45356 | Student Book\n45352 | Test Book', kaynakTuru: 'manuel',
   };
   const cikan = parseNextJob(200, { job: tam });
   const eksik = [...okunan].filter((a) => a in tam && !(a in cikan));
   assert.deepEqual(eksik, [], `parseNextJob şu claim alanlarını düşürüyor: ${eksik.join(', ')}`);
-  for (const a of ['surum', 'setKimligi', 'guncellemeTabani', 'setListesi']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
+  for (const a of ['surum', 'setKimligi', 'guncellemeTabani', 'setListesi', 'kaynakTuru']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
 });
 
 test('parseNextJob: 200 bare object (defensive) -> normalized', () => {
@@ -177,10 +177,29 @@ test('parseNextJob: 200 bare object (defensive) -> normalized', () => {
 });
 
 test('parseNextJob: missing required field -> null', () => {
-  assert.equal(parseNextJob(200, { job: { bookId: 'b1', platform: 'android' } }), null); // no downloadUrl
   assert.equal(parseNextJob(200, { job: { platform: 'android', downloadUrl: 'u' } }), null); // no bookId
+  assert.equal(parseNextJob(200, { job: { bookId: 'b1', downloadUrl: 'u' } }), null); // no platform
   assert.equal(parseNextJob(200, {}), null);
   assert.equal(parseNextJob(200, null), null);
+});
+
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): downloadUrl'süz iş SESSİZCE düşmez — bookId + platform yeter;
+// kaynak kararı (arşiv / manuel / yok → kira bırak) kaynak-karari.js'te verilir.
+test('parseNextJob: downloadUrl\'süz iş KABUL edilir (bookId + platform yeter), alan boş dize', () => {
+  const j = parseNextJob(200, { job: { bookId: 45482, platform: 'android' } });
+  assert.ok(j, 'downloadUrl yok diye iş düşmemeli');
+  assert.equal(j.bookId, '45482');
+  assert.equal(j.platform, 'android');
+  assert.equal(j.downloadUrl, '');
+  assert.equal('kaynakTuru' in j, false);
+});
+
+test('parseNextJob: claim kaynakTuru taşınır (kırpılmış); boşsa alan yok', () => {
+  assert.equal(parseNextJob(200, { job: { bookId: 1, platform: 'mac', kaynakTuru: ' manuel ' } }).kaynakTuru, 'manuel');
+  for (const bos of ['', '   ', null, 7]) {
+    const j = parseNextJob(200, { job: { bookId: 1, platform: 'mac', kaynakTuru: bos } });
+    assert.equal('kaynakTuru' in j, false, `boş/geçersiz kaynakTuru (${JSON.stringify(bos)}) alan üretmemeli`);
+  }
 });
 
 test('parseNextJob: non-200/204 status -> null', () => {

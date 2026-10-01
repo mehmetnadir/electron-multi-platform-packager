@@ -55,43 +55,42 @@ test('adresi olmayan iş elenir (yarım kayıt ısıtılmaz)', async () => {
   assert.deepEqual(s.map((j) => j.bookId), ['1']);
 });
 
-test('tur: peek adresini AJANIN anahtarıyla aynı yola yazar', async () => {
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): döngü İmpark exe'sini ısıtıyordu — kapıyla KAPALI; peek bile yapılmaz.
+
+test('KAPALI: tur peek YAPMAZ, hiçbir şey ısıtmaz/indirmez', async () => {
   const kok = await gecici();
   const kayitlar = [];
+  const yakala = [];
+  const mesajlar = [];
   const { durum, sonuc } = await birTur({
     kimlik: KIMLIK, adet: 1, cacheRoot: kok, diskTabaniGb: 0,
-    arac: sahteArac(kayitlar), kayit: () => {},
-    istemci: sahteIstemci({ status: 200, data: { jobs: [{ bookId: '45550', downloadUrl: IMZALI }] } }),
+    arac: sahteArac(kayitlar), kayit: (m) => mesajlar.push(m),
+    istemci: sahteIstemci({ status: 200, data: { jobs: [{ bookId: '45550', downloadUrl: IMZALI }] } }, yakala),
   });
-  assert.equal(durum, 'tur');
-  assert.equal(sonuc[0].durum, 'isitildi');
-  // Ajanın processJob'da kuracağı yol ile BİREBİR aynı olmalı.
-  const beklenen = path.join(kok, '45550', srcVersionTuret(IMZALI), 'build.zip');
-  assert.equal(fs.existsSync(beklenen), true, `beklenen yol yok: ${beklenen}`);
+  assert.equal(durum, 'kapali');
+  assert.deepEqual(sonuc, []);
+  assert.deepEqual(yakala, [], 'peek çağrılmamalı');
+  assert.deepEqual(kayitlar, [], 'indirme/çıkarma/zip çağrılmamalı');
+  assert.equal(fs.existsSync(path.join(kok, '45550', srcVersionTuret(IMZALI))), false);
+  assert.match(mesajlar.join('\n'), /ısıtıcı turu atlandı: exe'siz sözleşme/);
 });
 
-test('peek patlarsa tur atlanır, süreç ölmez', async () => {
-  const kok = await gecici();
-  const patlak = { get: async () => { throw new Error('ECONNRESET'); } };
-  const mesajlar = [];
-  const { durum } = await birTur({
-    kimlik: KIMLIK, adet: 2, cacheRoot: kok, diskTabaniGb: 0,
-    arac: sahteArac(), kayit: (m) => mesajlar.push(m), istemci: patlak,
-  });
-  assert.equal(durum, 'peek-hata');
-  assert.match(mesajlar.join('\n'), /ECONNRESET/);
+test('KAPALI: CLI başlatılsa da hemen uyarıp çıkar (döngü kurulmaz)', () => {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath, [path.join(__dirname, 'isitici-dongu.js')],
+    { encoding: 'utf8', timeout: 20000, env: { ...process.env, AGENT_TOKEN_FILE: path.join(os.tmpdir(), 'yok-token.json') } });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /isitici-dongu: exe'siz sözleşme/);
 });
 
-test('boş kuyrukta hiçbir indirme yapılmaz', async () => {
-  const kok = await gecici();
-  const kayitlar = [];
-  const { durum } = await birTur({
-    kimlik: KIMLIK, adet: 2, cacheRoot: kok, diskTabaniGb: 0,
-    arac: sahteArac(kayitlar), kayit: () => {},
-    istemci: sahteIstemci({ status: 200, data: { jobs: [] } }),
-  });
-  assert.equal(durum, 'bos');
-  assert.deepEqual(kayitlar, []);
+test('local-build.js (exe girdili yerel derleme) KAPALI: --exe verilse de çalışmaz, çıkış 3', () => {
+  const { spawnSync } = require('child_process');
+  const exe = path.join(os.tmpdir(), `sahte-${process.pid}.exe`);
+  fs.writeFileSync(exe, 'MZ');
+  const r = spawnSync(process.execPath, [path.join(__dirname, 'local-build.js'), '--exe', exe, '--title', 'x'],
+    { encoding: 'utf8', timeout: 20000, env: { ...process.env, PACKAGER_API: 'http://127.0.0.1:9' } });
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /local-build: exe'siz sözleşme/);
 });
 
 test('kimlik dosyası yoksa/bozuksa null döner (ısıtıcı başlamaz)', async () => {

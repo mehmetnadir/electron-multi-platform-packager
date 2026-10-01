@@ -35,91 +35,43 @@ function sahteArac(kayitlar = []) {
   };
 }
 
-test('ısıtılan kaynak, ajanın OKUDUĞU yola ve anahtara yazılır', async () => {
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): ısıtıcı İmpark exe'sini indiriyordu — kapıyla KAPALI.
+// Eski "ısıtıldı/zaten/disk/hata/sıra" testleri kapı testleriyle değişti (davranış artık yok).
+
+test('KAPALI: kaynakIsit hiçbir aracı çağırmaz (indirme/çıkarma/zip yok), önbelleğe yazmaz', async () => {
   const kok = await gecici();
   const kayitlar = [];
+  const mesajlar = [];
   const s = await kaynakIsit({
-    bookId: '45550',
-    downloadUrl: URL_A,
-    cacheRoot: kok,
-    diskTabaniGb: 0,
-    arac: sahteArac(kayitlar),
+    bookId: '45550', downloadUrl: URL_A, cacheRoot: kok, diskTabaniGb: 0,
+    arac: sahteArac(kayitlar), kayit: (m) => mesajlar.push(m),
   });
-  assert.equal(s.durum, 'isitildi');
-  // Ajanın processJob'da kurduğu yol ile BİREBİR aynı olmalı; farklıysa HIT hiç olmaz.
-  const beklenen = path.join(kok, '45550', srcVersionTuret(URL_A), 'build.zip');
-  assert.equal(s.yol, beklenen);
-  assert.equal(await fsp.readFile(beklenen, 'utf8'), 'ZIP-ICERIK');
-  assert.deepEqual(kayitlar.map((k) => k[0]), ['indir', 'cikar', 'zip']);
+  assert.equal(s.durum, 'kapali');
+  assert.match(s.sebep, /exe'siz sözleşme/);
+  assert.deepEqual(kayitlar, [], 'exe indirme/çıkarma/zip ÇAĞRILMAMALI');
+  assert.deepEqual(await fsp.readdir(kok), [], 'önbelleğe hiçbir şey yazılmamalı');
+  assert.match(mesajlar.join('\n'), /ısıtma atlandı \(45550\): exe'siz sözleşme/);
 });
 
-test('zaten önbellekteyse indirme YAPILMAZ (ajanın işini tekrarlamaz)', async () => {
-  const kok = await gecici();
-  const hedef = path.join(kok, '45550', srcVersionTuret(URL_A), 'build.zip');
-  await fsp.mkdir(path.dirname(hedef), { recursive: true });
-  await fsp.writeFile(hedef, 'ESKI');
-  const kayitlar = [];
-  const s = await kaynakIsit({
-    bookId: '45550', downloadUrl: URL_A, cacheRoot: kok, diskTabaniGb: 0, arac: sahteArac(kayitlar),
-  });
-  assert.equal(s.durum, 'zaten');
-  assert.deepEqual(kayitlar, []);
-  assert.equal(await fsp.readFile(hedef, 'utf8'), 'ESKI');
-});
-
-// Mutasyon kapanı: disk kapısı düşerse ısıtıcı, pardus derlemesinin 20 GB kapısıyla
-// yarışır ve partiyi düşürür (15 Eyl'de disk 19 GB'a inince bir iş düştü).
-test('boş disk eşiğin altındaysa ısıtma ATLANIR', async () => {
+test('KAPALI: sirayiIsit her işi kapali döner, indirme yok', async () => {
   const kok = await gecici();
   const kayitlar = [];
-  const s = await kaynakIsit({
-    bookId: '45550', downloadUrl: URL_A, cacheRoot: kok,
-    diskTabaniGb: 10 ** 6, arac: sahteArac(kayitlar),
-  });
-  assert.equal(s.durum, 'disk');
-  assert.deepEqual(kayitlar, []);
-  assert.equal(fs.existsSync(path.join(kok, '45550')), false);
-});
-
-test('bir kitap patlarsa sıradaki ısıtılmaya devam eder', async () => {
-  const kok = await gecici();
-  const arac = sahteArac();
-  const patlak = { ...arac, downloadFile: async () => { throw new Error('origin 504'); } };
-  const s1 = await kaynakIsit({ bookId: 'a', downloadUrl: URL_A, cacheRoot: kok, diskTabaniGb: 0, arac: patlak });
-  assert.equal(s1.durum, 'hata');
-  assert.match(s1.hata, /504/);
-  const s2 = await kaynakIsit({ bookId: 'b', downloadUrl: URL_A, cacheRoot: kok, diskTabaniGb: 0, arac });
-  assert.equal(s2.durum, 'isitildi');
-});
-
-test('yarım dosya bırakmaz: hata hâlinde hedefte .tmp kalmaz', async () => {
-  const kok = await gecici();
-  const arac = { ...sahteArac(), zipDir: async () => { throw new Error('zip bozuldu'); } };
-  const s = await kaynakIsit({ bookId: 'c', downloadUrl: URL_A, cacheRoot: kok, diskTabaniGb: 0, arac });
-  assert.equal(s.durum, 'hata');
-  const dizin = path.join(kok, 'c', srcVersionTuret(URL_A));
-  const kalanlar = fs.existsSync(dizin) ? await fsp.readdir(dizin) : [];
-  assert.deepEqual(kalanlar, []);
-});
-
-test('sıra SIRAYLA ısıtılır (yayıncı origin\'ine paralel yüklenmez)', async () => {
-  const kok = await gecici();
-  const sira = [];
-  const arac = {
-    ...sahteArac(),
-    downloadFile: async (url, dest) => {
-      sira.push('bas');
-      await new Promise((r) => setTimeout(r, 5));
-      sira.push('son');
-      await fsp.writeFile(dest, 'X');
-    },
-  };
-  await sirayiIsit(
+  const s = await sirayiIsit(
     [{ bookId: '1', downloadUrl: URL_A }, { bookId: '2', downloadUrl: `${URL_A}?v=2` }],
-    { cacheRoot: kok, diskTabaniGb: 0, arac }
+    { cacheRoot: kok, diskTabaniGb: 0, arac: sahteArac(kayitlar) },
   );
-  // Örtüşme olsaydı ['bas','bas','son','son'] görürdük.
-  assert.deepEqual(sira, ['bas', 'son', 'bas', 'son']);
+  assert.deepEqual(s.map((r) => [r.bookId, r.durum]), [['1', 'kapali'], ['2', 'kapali']]);
+  assert.deepEqual(kayitlar, []);
+});
+
+test('KAPALI: CLI exe adresiyle çağrılsa da hiçbir şey indirmeden uyarıp çıkar', () => {
+  const { spawnSync } = require('child_process');
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'isitici-cli-'));
+  const r = spawnSync(process.execPath, [path.join(__dirname, 'kaynak-isitici.js'), `45550=${URL_A}`],
+    { encoding: 'utf8', timeout: 20000, env: { ...process.env, EMPP_SOURCE_CACHE: kok } });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /kaynak-isitici: exe'siz sözleşme/);
+  assert.deepEqual(fs.readdirSync(kok), []);
 });
 
 test('onbellekteVarMi boş dosyayı HIT saymaz', async () => {

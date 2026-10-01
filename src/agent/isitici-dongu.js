@@ -1,6 +1,10 @@
 'use strict';
 /**
- * Kaynak ön-ısıtma döngüsü — ajanın DIŞINDA, ayrı süreç.
+ * Kaynak ön-ısıtma döngüsü — KAPALI (exe'siz sözleşme, Nadir 01.10: İmpark exe'si HİÇBİR koşulda
+ * indirilmez). `birTur` peek bile yapmadan `{durum:'kapali'}` döner; CLI uyarıp çıkar. Modül
+ * silinmedi (`siradakileriSor`/`kimlikOku` salt okur). Aşağıdaki tarihçe bilgi içindir.
+ *
+ * (Tarihçe) Kaynak ön-ısıtma döngüsü — ajanın DIŞINDA, ayrı süreç.
  *
  * Boru hattı fikri (ölçüm 2026-09-15, 16 pardus işi / 170 dk, ajan günlüğünden
  * faz ayrıştırması): indirme+exe açma **%29**, Docker derleme **%47**, R2
@@ -33,10 +37,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 
-const { sirayiIsit, VARSAYILAN_DISK_TABANI_GB } = require('./kaynak-isitici');
-
-const VARSAYILAN_ARALIK_MS = 60_000;
-const VARSAYILAN_ADET = 2;
+const { EXE_KAYNAGI_KAPALI } = require('./kaynak-karari');
 
 /** Ajanın kayıt dosyasından kimlik okur (runner ile AYNI dosya). */
 function kimlikOku(tokenDosyasi) {
@@ -70,64 +71,18 @@ async function siradakileriSor(kimlik, adet, istemci = axios) {
 }
 
 /**
- * Tek tur: sıradakileri sor, sırayla ısıt, özet döndür.
- * Ağ/API hatası turu düşürür ama süreci ÖLDÜRMEZ — parti etkilenmemeli.
+ * Tek tur — KAPALI (exe'siz sözleşme, 01.10): peek YAPILMAZ, hiçbir şey ısıtılmaz.
+ * @returns {Promise<{durum:'kapali', sonuc: []}>}
  */
-async function birTur({ kimlik, adet, cacheRoot, arac, kayit, istemci, diskTabaniGb }) {
-  let isler = [];
-  try {
-    isler = await siradakileriSor(kimlik, adet, istemci);
-  } catch (e) {
-    kayit(`peek hatası (tur atlandı): ${e.message}`);
-    return { durum: 'peek-hata', sonuc: [] };
-  }
-  if (isler.length === 0) return { durum: 'bos', sonuc: [] };
-
-  const sonuc = await sirayiIsit(
-    isler.map((j) => ({ bookId: String(j.bookId), downloadUrl: j.downloadUrl })),
-    { cacheRoot, arac, kayit, diskTabaniGb },
-  );
-  return { durum: 'tur', sonuc };
+async function birTur({ kayit = () => {} } = {}) {
+  kayit(`ısıtıcı turu atlandı: ${EXE_KAYNAGI_KAPALI}`);
+  return { durum: 'kapali', sonuc: [] };
 }
 
 module.exports = { kimlikOku, siradakileriSor, birTur, apiTabani };
 
-// CLI: node src/agent/isitici-dongu.js
+// CLI: node src/agent/isitici-dongu.js — KAPALI (exe'siz sözleşme)
 if (require.main === module) {
-  const kayit = (m) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
-  const kimlik = kimlikOku();
-  if (!kimlik) {
-    console.error('HATA: ajan kaydı yok (token.json okunamadı) — ısıtıcı başlatılmadı.');
-    process.exit(1);
-  }
-  const cacheRoot = process.env.EMPP_SOURCE_CACHE
-    || path.join(os.homedir(), '.empp-agent', 'cache');
-  fs.mkdirSync(cacheRoot, { recursive: true });
-
-  const adet = Number(process.env.ISITICI_ADET || VARSAYILAN_ADET);
-  const aralik = Number(process.env.ISITICI_ARALIK_MS || VARSAYILAN_ARALIK_MS);
-  const diskTabaniGb = Number(process.env.ISITICI_DISK_TABANI_GB || VARSAYILAN_DISK_TABANI_GB);
-  const arac = require('./runner');
-
-  kayit(`ısıtıcı başladı — api=${apiTabani()} adet=${adet} aralık=${aralik}ms önbellek=${cacheRoot}`);
-
-  let duruyor = false;
-  const dur = () => { duruyor = true; kayit('kapanış istendi, tur bitince çıkılacak.'); };
-  process.on('SIGINT', dur);
-  process.on('SIGTERM', dur);
-
-  (async () => {
-    while (!duruyor) {
-      const { durum, sonuc } = await birTur({
-        kimlik, adet, cacheRoot, arac, kayit, diskTabaniGb,
-      });
-      if (durum === 'tur' && sonuc.length) {
-        const say = sonuc.reduce((a, r) => ({ ...a, [r.durum]: (a[r.durum] || 0) + 1 }), {});
-        kayit(`tur özeti ${JSON.stringify(say)}`);
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, aralik));
-    }
-    kayit('ısıtıcı durdu.');
-  })();
+  console.error(`isitici-dongu: ${EXE_KAYNAGI_KAPALI}`);
+  process.exit(0);
 }

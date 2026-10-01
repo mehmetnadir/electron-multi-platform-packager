@@ -475,17 +475,18 @@ const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
 const AYRAC = '// ---------------------------------------------------------------------------\n';
 const PROCESS_JOB = SRC.slice(SRC.indexOf('async function processJob'), SRC.indexOf(`${AYRAC}// Main loops`));
 
-test('runner: merdiven kaynak hazır olduktan sonra, paketlemeden ÖNCE; hazır paket devri kapanır', () => {
+test('runner: merdiven kaynak hazır olduktan sonra, paketlemeden ÖNCE; yalnız arşiv kaynağında (manuel M1 atlar)', () => {
   const merdiven = PROCESS_JOB.indexOf('await icerikMerdiveni({');
   assert.ok(merdiven > 0);
-  assert.match(PROCESS_JOB, /if \(!hazirDevir && merdivenAcik\(\)\) \{\n\s+await icerikMerdiveni\(\{\n\s+zip: zipPath,/);
-  for (const once of ['fsp.copyFile(arsiv.zip', 'await zipDir(buildDir, zipPath)', 'source cached for reuse']) {
+  assert.match(PROCESS_JOB, /if \(kaynak\.merdiven && merdivenAcik\(\)\) \{\n\s+await icerikMerdiveni\(\{\n\s+zip: zipPath,/);
+  for (const once of ['fsp.copyFile(arsiv.zip', 'await manuelBuildHazirla(', 'icerikKapisiDenetleZip(zipPath']) {
     assert.ok(PROCESS_JOB.indexOf(once) > 0 && PROCESS_JOB.indexOf(once) < merdiven, `${once} önce`);
   }
   for (const sonra of ['injectPardusIcon(', 'buildPardusArtifact(', 'packagerUploadBuild(']) {
     assert.ok(PROCESS_JOB.indexOf(sonra) > merdiven, `${sonra} sonra`);
   }
-  assert.match(PROCESS_JOB, /packagerPlatform === 'pardus' && !arsiv && !merdivenAcik\(\)/);
+  // Hazır pardus paketi devri exe'siz sözleşmeyle tamamen kapalı (processJob hiç sormaz).
+  assert.doesNotMatch(PROCESS_JOB, /hazirPardusPaketi\(|hazirDevir/);
 });
 
 async function sahtePaketleyici() {

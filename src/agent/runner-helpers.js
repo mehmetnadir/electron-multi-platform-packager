@@ -77,11 +77,18 @@ function backoffMs(attempt, baseMs = 1000, maxMs = 30000) {
  *   - HTTP 200 { job: {...} }   -> a leased job        -> normalized job
  *
  * We accept either { job: {...} } or a bare {...} (defensive) and require the
- * three fields the runner needs to act: bookId, platform, downloadUrl.
+ * two fields the runner needs to act: bookId, platform.
+ *
+ * EXE'SİZ SÖZLEŞME (Nadir 01.10): `downloadUrl` artık ZORUNLU DEĞİL. Eskiden alan yoksa iş
+ * burada SESSİZCE düşüyordu (null → "iş yok" sanılıp kira dolana kadar asılı kalıyordu). Kaynak
+ * kararı (arşiv / manuel build / yok → kira bırak) `kaynak-karari.js`'te verilir; burada yalnız
+ * taşınır. `downloadUrl` yoksa alan boş dize olur (tanımsız değil — eski okuyucular güvenli).
+ * `kaynakTuru` (claim, ör. 'manuel') varsa AYNEN taşınır.
  *
  * @param {number} status   HTTP status code
  * @param {any} body        parsed JSON body (or undefined for 204)
- * @returns {({bookId:string, platform:string, downloadUrl:string, buildMethod?:string, bookTitle?:string})|null}
+ * @returns {({bookId:string, platform:string, downloadUrl:string, kaynakTuru?:string,
+ *   buildMethod?:string, bookTitle?:string})|null}
  */
 function parseNextJob(status, body) {
   if (status === 204) return null;
@@ -94,12 +101,15 @@ function parseNextJob(status, body) {
   const platform = job.platform != null ? String(job.platform) : '';
   const downloadUrl = job.downloadUrl != null ? String(job.downloadUrl) : '';
 
-  if (!bookId || !platform || !downloadUrl) return null;
+  if (!bookId || !platform) return null;
 
   return {
     bookId,
     platform,
     downloadUrl,
+    // Kaynak türü (exe'siz sözleşme §7 M1, ör. 'manuel'): kaynak-karari.js okur.
+    ...(typeof job.kaynakTuru === 'string' && job.kaynakTuru.trim()
+      ? { kaynakTuru: job.kaynakTuru.trim() } : {}),
     buildMethod: job.buildMethod != null ? String(job.buildMethod) : undefined,
     bookTitle: job.bookTitle != null ? String(job.bookTitle) : undefined,
     ...(job.publisherName != null ? { publisherName: String(job.publisherName) } : {}),

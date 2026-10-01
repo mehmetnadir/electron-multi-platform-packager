@@ -337,7 +337,7 @@ test('menü Web-Z değilse hiçbir şey eklenmez, eksikler rapora girer', async 
 
 // ─── runner bağlantısı (kaynak nöbetçisi) ───────────────────────────────────────────────────
 
-test('runner: ek merdivenden SONRA, pardus/HTTP paketleyiciden ÖNCE; hazirDevir + anahtar', () => {
+test('runner: ek merdivenden SONRA, pardus/HTTP paketleyiciden ÖNCE; yalnız arşiv kaynağında + anahtar', () => {
   const s = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
   const merdiven = s.indexOf('await icerikMerdiveni({');
   const ek = s.indexOf('await setEk.setUyelikEki({');
@@ -345,8 +345,8 @@ test('runner: ek merdivenden SONRA, pardus/HTTP paketleyiciden ÖNCE; hazirDevir
   const http = s.indexOf('await packagerUploadBuild(zipPath');
   assert.ok(merdiven > 0 && ek > merdiven, 'ek merdivenden sonra');
   assert.ok(pardus > ek && http > ek, 'ek paketleyicilerden önce');
-  assert.match(s, /if \(!hazirDevir && setEk\.ekAcik\(\)\)/);
-  // Listesi olan işte Pardus hazır paketi devralınmaz (eksik bileşim yeniden yayınlanmasın).
-  assert.match(s, /const setEkBekliyor = setEk\.ekAcik\(\) && !!setEk\.setListesiCoz\(\{ job \}\);/);
-  assert.match(s, /!merdivenAcik\(\) && !setEkBekliyor\s*\n\s*\? await hazirPardusPaketi/);
+  // Exe'siz sözleşme (01.10): manuel build olduğu gibi kullanılır (M1) — ek yalnız arşiv kaynağında.
+  assert.match(s, /if \(kaynak\.setEki && setEk\.ekAcik\(\)\)/);
+  // Hazır pardus paketi devri tamamen kapalı (processJob hiç sormaz).
+  assert.doesNotMatch(s, /setEkBekliyor|\? await hazirPardusPaketi/);
 });

@@ -1,3 +1,24 @@
+## 2026-10-01 — Exe'siz kaynak: runner İmpark exe'sini HİÇBİR koşulda indirmez (dal `exesiz-runner-20261001`)
+
+- Sözleşme: book-update `.claude/docs/exesiz-kaynak-sozlesmesi.md` (ONAYLI 01.10). Kaynak TEK SAF fonksiyondan:
+  `src/agent/kaynak-karari.js` → (1) manuel build.zip (claim `kaynakTuru=manuel` ya da adres yolunda
+  `/sources/` · `/kaynak/`; yol `.exe` ise manuel SAYILMAZ) — indirilir, OLDUĞU GİBİ kullanılır (merdiven +
+  set eki ATLANIR, log satırıyla); (2) kaynak arşivi — bugünkü davranış; (3) yok → `releaseJob(… "build yok —
+  exe'siz sözleşme: arşiv/manuel kaynak gerekli")` + `bildir kosucu` (kitap×platform başına 6 sa'te bir),
+  `failed` YAZILMAZ, processJob `{ertelendi:true}` döner, ana döngü 15 sn bekler.
+- Manuel zip biçimi: kök = build (açılmaz); içinde `resources/app/build/` olan eski 59480 tipi kurulum ağacı
+  `unzip` + `findBuildDir` + `zipDir` ile build.zip yapılır (SFX açılmaz). İndirme `manuelZipIndir`
+  (curl, `unzip -Z1` doğrulama).
+- Kapanan exe yolları: asıl indirme + SFX açma + kaynak önbelleği HIT/MISS/populate + yayıncı güncellemesi
+  (exe dalı) + disk kapısındaki HEAD (boyut yalnız yerel arşivden) + hazır pardus devri (`hazirPardusPaketi`
+  hep null, dizin ayarlıysa bir kez uyarı). `downloadFile` yolu `.exe` olan adresi reddeder.
+  `kaynak-isitici.js`/`isitici-dongu.js`/`local-build.js` kapıyla KAPALI (modüller silinmedi).
+- `parseNextJob`: `downloadUrl` artık zorunlu değil (bookId + platform yeter), `kaynakTuru` taşınır.
+- Windows şeridi aynı karardan geçer (onKosul + araç denetiminden sonra).
+- Test: `kaynak-karari.test.js` (18), `runner-exesiz-kaynak.test.js` (18, gerçek processJob + casus
+  `kaynakIndirme`), windows +1, parseNextJob +2; eski exe/önbellek/hazır paket pinleri yeni davranışa
+  çevrildi. 14 mutasyonun hepsi yakalandı.
+
 ## 2026-09-30 — Ajan kirası: erteleme kirayı bırakır + yetim kira istek kimliği (dal `kira-birak-20260930`)
 
 - `fetchNextJob` her mantıksal istek için `X-Istek-Id` (UUID) gönderir; yanıt alınamazsa (ağ/zaman

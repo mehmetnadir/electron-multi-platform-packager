@@ -299,8 +299,9 @@ test('nöbetçi B: impark_kaynagi / imparkKaynagi yalnız kaynak-arsivi.js + run
 test('nöbetçi C: runner.js exe adını yalnız bilgi için arsivKaynagi\'ye verir, sonucu okumaz', () => {
   const { kod } = KAYNAKLAR.find((k) => k.goreli === 'src/agent/runner.js');
   assert.equal((kod.match(/imparkKaynagi/g) || []).length, 1, 'imparkKaynagi yalnız çağrıda geçmeli');
+  // Exe'siz sözleşme (01.10): manuel işte arşiv okunmaz; okunursa exe adı yine YALNIZ bilgi.
   assert.match(kod,
-    /const arsiv = await arsivKaynagi\(job\.bookId, \{ imparkKaynagi: imparkSrcVersion, bilgi: log \}\);/);
+    /const arsiv = manuelUrl \? null\s*\n\s*: await arsivKaynagi\(job\.bookId, \{ imparkKaynagi: imparkSrcVersion, bilgi: log \}\);/);
   assert.doesNotMatch(kod, /impark_kaynagi/);
 });
 

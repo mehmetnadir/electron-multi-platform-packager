@@ -10,9 +10,10 @@
  *
  * Loop per poll:
  *   1. GET  {API}/agents/{id}/next-job        (X-Agent-Token)  -> 204 sleep | 200 job
- *   2. download job.downloadUrl (Windows SFX exe) -> temp
- *   3. extract SFX (unrar, fallback 7z) -> find resources/app/build
- *   4. zip build dir -> POST {PACKAGER}/api/upload-build (sessionId)
+ *   2-3. KAYNAK (exe'siz sözleşme, Nadir 01.10 — İmpark exe'si HİÇBİR koşulda indirilmez):
+ *      kaynak-karari.js → manuel build.zip (indir, olduğu gibi) | kaynak arşivi (+ merdiven + set eki)
+ *      | yok → kira bırak (POST /release) + bildirim, failed YAZILMAZ
+ *   4. build.zip -> POST {PACKAGER}/api/upload-build (sessionId)
  *      -> POST {PACKAGER}/api/package -> poll /api/package-status -> download artifact
  *   5. macos: codesign + notarytool + stapler — NOTER KAPISI (2026-09-26): herhangi biri
  *      düşerse DMG YÜKLENMEZ (geçici sınıf ertelenir; AGENT_NOTER_ZORUNLU=0 eski best-effort)
@@ -61,6 +62,7 @@ const {
 } = require('./serit-secimi');
 const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
+const { kaynakKarari, manuelKaynakUrl, manuelZipBicimi, exeYoluMu } = require('./kaynak-karari');
 const { artefaktOzeti } = require('./artefakt-kaniti');
 
 // ---------------------------------------------------------------------------
@@ -802,6 +804,11 @@ async function postResultFailure(auth, job, errorMessage) {
  * reaches extraction. The slow link is paid once (then cached).
  */
 async function downloadFile(url, destPath) {
+  // EXE'SİZ SÖZLEŞME (Nadir 01.10): yolu .exe ile biten adres HİÇBİR koşulda indirilmez — son
+  // emniyet (processJob bu fonksiyonu zaten çağırmaz; ısıtıcı kapıyla kapalı).
+  if (exeYoluMu(url)) {
+    throw new Error(`exe'siz sözleşme: İmpark exe'si indirilmez (${path.basename(String(url).split('?')[0])})`);
+  }
   const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
   // Throttle: S21's gateway (10.0.0.2) resets LARGE/fast sustained HTTPS transfers
   // (0% packet loss, MTU 1500 ok — a session/shaper reset, not the link). A steady
@@ -1867,12 +1874,6 @@ async function basliksizKabul(artifactPath, packagerPlatform, job, work) {
   });
 }
 
-/**
- * Hazır (başka şeritte üretilmiş) .impark'ı bulur: `<HAZIR_DIR>/<bookId>.impark`
- * ve yanındaki `<bookId>.json` içindeki `srcVersion` ajanın kaynak sürümüyle AYNI
- * olmalı — yoksa BAŞKA bir kaynaktan üretilmiş paketi yüklemiş oluruz (sessiz
- * sürüm karışması). Eşleşmezse hazır paket yok sayılır, normal derleme koşar.
- */
 /** Verilen yolun bulunduğu birimde boş alan (GB, tam sayı); ölçülemezse null. */
 function diskBosGb(yol) {
   try {
@@ -1884,58 +1885,181 @@ function diskBosGb(yol) {
 }
 
 /**
- * Kaynağın SIKIŞTIRILMIŞ boyutunu indirmeden öğrenir: önce yerel önbellek (bedava),
- * olmazsa yayıncı bağlantısına HEAD (tek istek, gövde yok).
+ * Kaynağın SIKIŞTIRILMIŞ boyutunu YALNIZ YERELDEN öğrenir (arşiv zip'i).
  *
- * Ölçülemezse `null` döner — kapı o zaman yalnız tabana bakar; tahmin ÜRETİLMEZ.
- * (Yayıncı hattı kararsız: HEAD düşerse indirmeyi engellemek yanlış olur.)
+ * EXE'SİZ SÖZLEŞME (Nadir 01.10): eskiden yerelde yoksa yayıncı bağlantısına (İmpark exe'si)
+ * HEAD atılıyordu — kaldırıldı; uzak adrese HİÇBİR istek gitmez. Ölçülemezse `null` döner —
+ * kapı o zaman yalnız tabana bakar; tahmin ÜRETİLMEZ.
  *
- * @param {{cachedZip: string, downloadUrl?: string}} p
+ * @param {{yerelZip?: string|null}} p
  * @returns {Promise<number|null>} bayt
  */
-async function kaynakBoyutuTahmin({ cachedZip, downloadUrl }) {
+async function kaynakBoyutuTahmin({ yerelZip } = {}) {
+  if (!yerelZip) return null;
   try {
-    const st = await fsp.stat(cachedZip);
+    const st = await fsp.stat(yerelZip);
     if (st.size > 0) return st.size;
-  } catch (_) { /* önbellekte yok — HEAD'e düş */ }
-  if (!downloadUrl) return null;
-  try {
-    const r = await axios.head(downloadUrl, { timeout: 20000, validateStatus: () => true });
-    const len = Number(r.headers && r.headers['content-length']);
-    if (Number.isFinite(len) && len > 0) return len;
-  } catch (_) { /* HEAD düştü — ölçülemedi */ }
+  } catch (_) { /* yerelde yok — ölçülemedi */ }
   return null;
 }
 
-async function hazirPardusPaketi({ bookId, srcVersion } = {}) {
-  const dir = CONFIG.pardusHazirDir;
-  if (!dir || !bookId) return null;
-  const dosya = path.join(dir, `${bookId}.impark`);
-  let st;
-  try { st = await fsp.stat(dosya); } catch (_) { return null; }
-  if (!st.isFile() || st.size < 100000) return null;
-  try {
-    const bilgi = JSON.parse(await fsp.readFile(path.join(dir, `${bookId}.json`), 'utf8'));
-    if (srcVersion && bilgi.srcVersion && bilgi.srcVersion !== srcVersion) {
-      warn(`pardus: hazır paket ATLANDI — kaynak sürümü tutmuyor (hazır=${bilgi.srcVersion}, iş=${srcVersion})`);
-      return null;
-    }
-    // PAKETLEYİCİ KİMLİĞİ (2026-09-26): kaynak aynı olsa da ESKİ paketleyici koduyla üretilmiş
-    // paket devralınmaz. Ölçülen: 16 hazır paket 18-20.09'da 27 gün geride srv21 koduyla
-    // üretilmişti; SET kökü düzeltmesinden (baefe86) sonra kuyruğa alınan 5 iş bozuk index'i
-    // yeniden yayınlayacaktı. Kimlik yoksa/tutmazsa güvenli taraf: normal derleme.
-    const buKimlik = require('../packaging/surum-turet').paketleyiciKaynakParmakIzi();
-    if (!bilgi.paketleyiciKimligi || bilgi.paketleyiciKimligi !== buKimlik) {
-      warn(`pardus: hazır paket ATLANDI — paketleyici kodu farklı ya da bilinmiyor `
-        + `(hazır=${bilgi.paketleyiciKimligi ? String(bilgi.paketleyiciKimligi).slice(0, 12) : 'yok'}, `
-        + `bu=${buKimlik.slice(0, 12)})`);
-      return null;
-    }
-  } catch (_) {
-    warn('pardus: hazır paketin .json bilgisi okunamadı — güvenli tarafta kalıp normal derleme yapılacak');
-    return null;
+/**
+ * HAZIR PARDUS PAKETİ DEVRİ — KAPALI (exe'siz sözleşme, Nadir 01.10).
+ *
+ * srv21 şeridinin `EMPP_PARDUS_HAZIR_DIR`'e bıraktığı .impark İmpark exe'sinden üretiliyordu
+ * (kaynak-arsivi.js başlığı); exe hiçbir koşulda kaynak olmadığı için bu paket de devralınmaz.
+ * Fonksiyon imzası korunur (buildPardusArtifact çağırır); HER ZAMAN null döner, dizine bakmaz.
+ * Dizin ayarlıysa süreç başına BİR KEZ görünür uyarı yazılır (yanlışlıkla açık env fark edilsin).
+ * @returns {Promise<null>}
+ */
+let _hazirDizinUyarildi = false;
+async function hazirPardusPaketi({ bookId } = {}) {
+  if (CONFIG.pardusHazirDir && !_hazirDizinUyarildi) {
+    _hazirDizinUyarildi = true;
+    warn(`pardus: EMPP_PARDUS_HAZIR_DIR ayarlı (${CONFIG.pardusHazirDir}) ama hazır paket devri KAPALI `
+      + `— exe'siz sözleşme (İmpark exe'sinden üretilmiş paket devralınmaz); ${bookId || '-'} derlenecek`);
   }
-  return { dosya, boyut: st.size };
+  return null;
+}
+
+/**
+ * MANUEL build.zip indirme (exe'siz sözleşme §7 M1) — İmpark exe'si DEĞİL: elle yüklenmiş build
+ * (R2 `sources/<bookId>/…zip` ya da `kaynak/<setId>/<sürüm>/build.zip`). `downloadFile` ile aynı
+ * WAN dayanıklılığı (her deneme sıfırdan, `--speed-limit` durgunluk kapısı, IPv4) ama doğrulama
+ * ZIP'e göre: `unzip -Z1` en az bir giriş listelemeli (kesik zip'in merkez dizini yoktur).
+ * unrar/7z KULLANILMAZ (SFX değil). Yol `.exe` ile bitiyorsa İNDİRMEZ, fırlatır.
+ */
+async function manuelZipIndir(url, destPath) {
+  if (exeYoluMu(url)) {
+    throw new Error(`exe'siz sözleşme: manuel kaynak .exe olamaz — indirilmedi: ${path.basename(String(url).split('?')[0])}`);
+  }
+  const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
+  const rate = process.env.AGENT_DOWNLOAD_RATE ?? '2M';
+  const MAX = Number(process.env.AGENT_DOWNLOAD_MAX_ATTEMPTS || 12);
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    if (stopping) throw new Error('shutting down');
+    await fsp.rm(destPath, { force: true }).catch(() => {});
+    const res = await run('curl', [
+      '-sS', '-4', '-L', '--fail',
+      '--retry', '300', '--retry-delay', '3', '--retry-all-errors',
+      '--retry-max-time', String(retryMax),
+      '--speed-limit', '1024', '--speed-time', '120',
+      ...(rate ? ['--limit-rate', rate] : []),
+      '-o', destPath,
+      url,
+    ]);
+    const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
+    if (res.code !== 0 && size === 0) {
+      warn(`manuel build indirme ${attempt}: curl exit ${res.code}, boş — yeniden deneniyor`);
+      if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
+      continue;
+    }
+    const girisler = await zipGirisleri(destPath);
+    if (girisler.length > 0) {
+      log(`manuel build indirildi: ${(size / 1e6).toFixed(0)}MB, geçerli zip (${girisler.length} giriş, deneme ${attempt})`);
+      return;
+    }
+    warn(`manuel build indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB ama geçerli zip DEĞİL — yeniden deneniyor`);
+    if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
+  }
+  throw new Error(`manuel build indirilemedi: ${MAX} denemede geçerli zip gelmedi`);
+}
+
+/** Zip'in giriş adları (`unzip -Z1`); okunamazsa boş dizi. */
+async function zipGirisleri(zip) {
+  const r = await run('unzip', ['-Z1', zip]);
+  if (r.code !== 0) return [];
+  return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Manuel build.zip'i iş kopyasına (`zipPath`) hazırlar. İki biçim (kaynak-karari `manuelZipBicimi`):
+ *   'kok'          — zip kökü DOĞRUDAN build'dir (sözleşme M1): olduğu gibi taşınır, açılmaz.
+ *   'eski-kurulum' — içinde `resources/app/build/` olan Windows kurulum ağacı (eski 59480 tipi Set
+ *                    menüsü zip'i): bugünkü çıkarma yoluyla uyum — açılır, `findBuildDir` ile
+ *                    build dizini bulunur, `zipDir` ile build.zip yapılır. SFX (exe) açılmaz.
+ * Her iki yolda da yayıncı güncellemesi UYGULANMAZ (manuel build olduğu gibi kullanılır).
+ * @returns {Promise<{bicim: 'kok'|'eski-kurulum'}>}
+ */
+async function manuelBuildHazirla({ url, zipPath, work, bookId }) {
+  const indirilen = path.join(work, 'manuel-kaynak.zip');
+  log(`kaynak MANUEL build.zip (${bookId}) — ${path.basename(String(url).split('?')[0])}; `
+    + 'İmpark exe indirilmez, merdiven/set eki/yayıncı güncellemesi uygulanmaz (sözleşme M1)');
+  await kaynakIndirme.manuelZipIndir(url, indirilen);
+  const bicim = manuelZipBicimi(await zipGirisleri(indirilen));
+  if (bicim === 'kok') {
+    await fsp.rename(indirilen, zipPath);
+    log('manuel build: zip kökü doğrudan build — olduğu gibi kullanılıyor');
+    return { bicim };
+  }
+  const acik = path.join(work, 'manuel-acik');
+  await fsp.mkdir(acik, { recursive: true });
+  const r = await run('unzip', ['-q', '-o', indirilen, '-d', acik]);
+  if (r.code !== 0 && r.code !== 1) { // 1 = yalnız uyarı (unzip)
+    throw new Error(`manuel build zip açılamadı (unzip ${r.code}): ${String(r.stderr || '').slice(-300)}`);
+  }
+  const buildDir = await findBuildDir(acik);
+  log(`manuel build: eski kurulum ağacı (resources/app/build) — build dizini: ${path.relative(acik, buildDir)}`);
+  await zipDir(buildDir, zipPath);
+  await fsp.rm(acik, { recursive: true, force: true }).catch(() => {});
+  await fsp.rm(indirilen, { force: true }).catch(() => {});
+  return { bicim };
+}
+
+/**
+ * Kaynak indirme uçları — processJob'daki HER uzak kaynak indirmesi bu nesneden geçer; testler
+ * buraya casus (spy) koyup exe indirmenin HİÇ çağrılmadığını ölçer. `exeIndir` (= downloadFile)
+ * processJob'da KULLANILMAZ — yalnız ölçülebilir olsun diye burada durur.
+ */
+const kaynakIndirme = {
+  exeIndir: (...a) => downloadFile(...a),
+  manuelZipIndir: (...a) => manuelZipIndir(...a),
+};
+
+// KAYNAK YOK — kira bırak + bildirim (exe'siz sözleşme §6a). Bildirim (bildir kanal `kosucu`)
+// aynı (kitap, platform) için süreç başına KAYNAK_YOK_BILDIRIM_ARALIK_MS'de en çok bir kez gider:
+// sunucu işi sona atıp tekrar kiraladıkça telefon dolmasın; log her seferinde yazılır.
+const KAYNAK_YOK_ISARETI = '[kaynak-yok]';
+const KAYNAK_YOK_BILDIRIM_ARALIK_MS = Number(process.env.EMPP_KAYNAK_YOK_BILDIRIM_ARALIK_MS || 6 * 3600 * 1000);
+const _kaynakYokSonBildirim = new Map();
+
+function kaynakYokBildir({ bookId, bookTitle, platform, sebep }) {
+  if (process.env.EMPP_BILDIRIM === '0') return false;
+  const anahtar = `${bookId}|${platform}`;
+  const simdi = Date.now();
+  const son = _kaynakYokSonBildirim.get(anahtar);
+  if (son !== undefined && simdi - son < KAYNAK_YOK_BILDIRIM_ARALIK_MS) return false;
+  _kaynakYokSonBildirim.set(anahtar, simdi);
+  const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
+  const govde = `${bookTitle || bookId} (${bookId}) — ${sebep}. Üretim BEKLİYOR: kaynak arşivine ya da `
+    + 'manuel build.zip olarak eklenince sürer (exe indirilmez).';
+  const args = ['kosucu', govde, '-b', `⏸ ${platform} bekliyor — build yok`, '-p', 'normal', '-e', 'pause_button'];
+  try {
+    const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
+    ps.on('error', (e) => warn('kaynak-yok bildirimi gönderilemedi:', e.message));
+    ps.unref();
+    return true;
+  } catch (e) {
+    warn('kaynak-yok bildirimi gönderilemedi:', e.message);
+    return false;
+  }
+}
+
+/**
+ * Build'i olmayan iş: HİÇBİR ŞEY indirilmez; kira açıkça bırakılır (sunucu işi kuyruğun sonuna
+ * atar + ajan dışlama backoff'u), görünür bildirim gider, `failed` YAZILMAZ.
+ * @returns {Promise<boolean>} kira bırakıldı mı
+ */
+async function kaynakYokBekle(auth, job, sebep) {
+  // Kirayı bırakmadan ÖNCE nabızdan düş: aradaki bir heartbeat `heldJobs` ile kirayı tazeleyip
+  // bırakılan işi bu ajana geri bağlamasın (30.09 1aa-7 dersi; ertelenebilir dal da release'i
+  // processJob'un finally'sinden SONRA çağırır).
+  currentJob = null;
+  const birakildi = await releaseJob(auth, job, sebep);
+  warn(`${KAYNAK_YOK_ISARETI} ${job.bookId} ${job.platform}: ${sebep} — exe İNDİRİLMEDİ, failed YAZILMADI, `
+    + (birakildi ? 'kira BIRAKILDI (kuyruğun sonunda)' : 'kira bırakılamadı (süre dolunca kuyruğa döner)'));
+  kaynakYokBildir({ bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, sebep });
+  return birakildi;
 }
 
 // ---------------------------------------------------------------------------
@@ -1994,56 +2118,37 @@ async function processJob(auth, job) {
     const winPlan = packagerPlatform === 'windows' ? windowsSerit.onKosul(job) : null;
     if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
 
-    // 1-3. Source cache: the extracted web `build.zip` is produced ONCE per
-    //      (book, source-version) and REUSED across platforms + retries — the
-    //      SAME web build feeds apk / impark / dmg. This avoids re-downloading
-    //      the multi-GB Windows SFX on every job (the slow link is paid once).
-    const cacheRoot = process.env.EMPP_SOURCE_CACHE || '/var/empp-cache';
-    // srcVersionTuret: sorgu dizesini (presigned imza/tarih/süre) ATAR, yalnız yol
-    // sonundan türetir — 2026-09-13 ölçümü: eski kod tüm URL'yi bölüp SON parçayı
-    // alıyordu, presigned URL'lerin sorgusunda literal '/' olmadığından bu SON
-    // parça sorgu dizesinin tamamıydı (X-Amz-Algorithm_..._X-Amz-Cre... dizinleri) —
-    // imza her presign'de değiştiği için cache asla HIT olmuyordu (runner-helpers.js).
-    // KAYNAK ARŞİVİ (2026-09-26, Nadir: "yeni arayüzle üret"): onaylı build zip varsa kaynak
-    // odur — İmpark exe'si indirilmez, yayıncı güncellemesi uygulanmaz, şerit paketi
-    // devralınmaz. Kayıt bozuksa arsivKaynagi hata fırlatır: eski kaynağa sessizce inilmez.
-    // İMPARK EXE ADI YALNIZ BİLGİ (Nadir 27.09 — 26.09 "bayat arşiv" ad kapısı KALDIRILDI):
-    // kayıttaki `impark_kaynagi` işin exe adından (imparkSrcVersion) farklıysa tek bilgi satırı
-    // loglanır, iş SÜRER. Ad (İmpark `S_TestKitaplar.Adi`, elle yazılır) içerik sürümü değildir;
-    // güncellik içerik merdiveninden (S0/S1, aşağıda) ve kabul K4/SET_TUM'dan ölçülür — merdiven
-    // kapalıyken de ad kıyası yok (gerekçe: kaynak-arsivi.js başlığı).
-    const imparkSrcVersion = srcVersionTuret(job.downloadUrl);
-    const arsiv = await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
-    const srcVersion = arsiv ? arsiv.srcVersion : imparkSrcVersion;
-    const cachedZip = path.join(cacheRoot, String(job.bookId), srcVersion, 'build.zip');
+    // 1-3. KAYNAK — EXE'SİZ SÖZLEŞME (Nadir 01.10, book-update exesiz-kaynak-sozlesmesi.md):
+    //      İmpark exe'si HİÇBİR koşulda indirilmez (ne paket kaynağı ne önbellek ne HEAD ne hazır
+    //      paket devri). Kaynak TEK fonksiyondan seçilir (kaynak-karari.js):
+    //        manuel build.zip (claim kaynakTuru=manuel ya da /sources/ · /kaynak/ adresi) → olduğu gibi;
+    //        kaynak arşivi (kaynak-arsivi.js) → arşiv + merdiven + set eki (bugünkü davranış);
+    //        ikisi de yoksa → kira bırakılır + bildirim, failed YAZILMAZ (sözleşme §6a "üretim BEKLER").
+    //      Manuel işte arşiv OKUNMAZ: bozuk bir arşiv kaydı manuel kaynağı düşürmesin. İşin exe adı
+    //      arşive YALNIZ bilgi notu için verilir (27.09 ad kapısı kaldırıldı, kaynak-arsivi.js).
+    const imparkSrcVersion = job.downloadUrl ? srcVersionTuret(job.downloadUrl) : '';
+    const manuelUrl = manuelKaynakUrl(job);
+    const arsiv = manuelUrl ? null
+      : await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
+    const kaynak = kaynakKarari({ job, arsiv });
+    if (kaynak.tur === 'yok') {
+      await kaynakYokBekle(auth, job, kaynak.sebep);
+      return { ertelendi: true, sebep: kaynak.sebep };
+    }
+    // Pardus paketleyici kimliği (buildPardusArtifact) — exe adından DEĞİL, kaynağın kendisinden.
+    const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion : `manuel-${srcVersionTuret(kaynak.url)}`;
+    const kaynakAdi = kaynak.tur === 'arsiv'
+      ? `arsiv:${arsiv.etiket || arsiv.md5.slice(0, 12)}`
+      : path.basename(String(kaynak.url).split('?')[0]) || undefined;
     const zipPath = path.join(work, 'build.zip');
 
-    // HAZIR paket (srv21 şeridi) varsa KAYNAĞI HİÇ İNDİRME: paket zaten bitmiş,
-    // Mac'e yalnız kabul kapısı + R2 yüklemesi kalıyor. Ölçüm 2026-09-17: kontrol
-    // indirmeden SONRA yapıldığı için her devralınan kitapta ~1,5 GB boşuna iniyor,
-    // dar diskte (20 GB kapısı) gereksiz yer yiyordu.
-    // Merdiven açıkken hazır paket DEVRALINMAZ: o paket srcVersion'la (exe adı) anahtarlı, içerik
-    // sürümünü taşımıyor — İmpark ZipVersiyon'u exe değişmeden artınca (45549: 3/3 kitap geride)
-    // eski içerikli paketi yayınlardık. Kaynak her işte S0'dan geçer.
-    // Set üyeliği eki açık VE bu işin set listesi varsa da devralınmaz: hazır paket exe'nin
-    // bileşimini taşır, panelde sonradan eklenen kitap olmadan yayınlanırdı (2026-09-30).
-    const setEkBekliyor = setEk.ekAcik() && !!setEk.setListesiCoz({ job });
-    const hazirDevir = packagerPlatform === 'pardus' && !arsiv && !merdivenAcik() && !setEkBekliyor
-      ? await hazirPardusPaketi({ bookId: job.bookId, srcVersion })
-      : null;
-    if (hazirDevir) log('pardus: HAZIR paket bulundu — kaynak indirme ATLANIYOR:', hazirDevir.impark || hazirDevir);
-
-    // ERKEN DİSK KAPISI (2026-09-18, ölçümle): hazır paket YOKSA pardus işi bu makinede
-    // derlenecek demektir; derleme betiğinin disk kapısı ancak kaynak indirildikten SONRA
-    // konuşuyordu. Gece 11 pardus işi bu yüzden ~1,5 GB'lık kaynağı indirip kapıda düştü
-    // (45472/45487/45551/45481/72379/11845/11811/45541/45100/45549/72411). Kapıyı indirmeden
-    // ÖNCE sorunca hat da disk de boşa harcanmıyor; paket srv21 şeridinde üretilir.
-    // BOYUT ORANTILI (2026-09-19): eşik artık sabit DEĞİL. Kaynağın sıkıştırılmış
-    // boyutundan türetilir (ölçüm ve gerekçe: runner-helpers `pardusGerekliDiskGb`).
-    // Kapı düşerse bu bir PAKET KUSURU DEĞİLDİR — hata işaretlenir, satıra `failed`
-    // yazılmaz, iş kirası dolunca kuyruğa döner ve ajan sıradakine geçer.
-    if (packagerPlatform === 'pardus' && !hazirDevir) {
-      const kaynakBayt = await kaynakBoyutuTahmin({ cachedZip: arsiv ? arsiv.zip : cachedZip, downloadUrl: job.downloadUrl });
+    // ERKEN DİSK KAPISI (2026-09-18, ölçümle): pardus işi bu makinede derlenecek; kapı kaynak
+    // indirilmeden/kopyalanmadan ÖNCE sorulur. BOYUT ORANTILI (2026-09-19): eşik kaynağın
+    // sıkıştırılmış boyutundan türer (runner-helpers `pardusGerekliDiskGb`). Boyut YALNIZ yerelden
+    // (arşiv zip'i) ölçülür — uzak adrese HEAD atılmaz (exe'siz sözleşme); manuelde taban eşik.
+    // Kapı düşerse bu bir PAKET KUSURU DEĞİLDİR — `failed` yazılmaz, kira bırakılır.
+    if (packagerPlatform === 'pardus') {
+      const kaynakBayt = await kaynakBoyutuTahmin({ yerelZip: kaynak.tur === 'arsiv' ? arsiv.zip : null });
       const gerekliGb = pardusGerekliDiskGb({
         kaynakBayt,
         kat: Number(process.env.PARDUS_DISK_KAT || 5),
@@ -2061,129 +2166,43 @@ async function processJob(auth, job) {
       log(`pardus disk kapısı geçildi: ${bosGb} GB boş >= ${gerekliGb} GB gerekli (kaynak ${kaynakMb})`);
     }
 
-    let cacheHit = false;
-    if (!hazirDevir && arsiv) {
+    if (kaynak.tur === 'arsiv') {
       await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
       log(`kaynak ARŞİVDEN (${arsiv.etiket || '-'}, md5 ${arsiv.md5}, ${(arsiv.boyut / 1e6).toFixed(0)}MB)`
         + ' — İmpark exe indirilmedi, yayıncı güncellemesi uygulanmadı');
-      cacheHit = true;
     }
-    if (!hazirDevir && !arsiv) {
-    try {
-      await fsp.access(cachedZip);
-      if (cachedZipIsStale(cachedZip)) throw new Error('cache stale (publisher update)');
-      await fsp.copyFile(cachedZip, zipPath);
-      const mb = ((await fsp.stat(zipPath)).size / 1e6).toFixed(0);
-      log(`source cache HIT (${mb}MB) — skip download:`, cachedZip);
-      cacheHit = true;
-      // Kullanım işaretini mtime'a yaz: TTL temizleyicisi buna bakar.
-      // atime kullanılamaz — herhangi bir `du`/yedekleme taraması onu tazeler
-      // ve ölü cache sonsuza kadar taze görünür (2026-08-18 tespiti).
-      await touchCacheEntry(path.dirname(cachedZip));
-      // HIT'te de buda: önceki job populate ederken budamışsa no-op; değilse yakalar.
-      await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
-      // Kitaplar ARASI toplam bayt tavanı (LRU) — bu iş korunur, en eski kullanılan
-      // başka kitap silinebilir.
-      await cacheTavaniUygula(cacheRoot, job.bookId);
-    } catch (_) {
-      /* cache miss — fall through to download */
+    if (kaynak.tur === 'manuel') {
+      await manuelBuildHazirla({ url: kaynak.url, zipPath, work, bookId: job.bookId });
     }
 
-    if (!cacheHit) {
-      const exePath = path.join(work, 'source.exe');
-      log('source cache MISS — downloading source exe...');
-      await downloadFile(job.downloadUrl, exePath);
-
-      const extractDir = path.join(work, 'extracted');
-      log('extracting SFX...');
-      await extractSfx(exePath, extractDir);
-      const buildDir = await findBuildDir(extractDir);
-      log('build dir:', buildDir);
-
-      // İÇERİKSİZ KAYNAK KAPISI (2026-09-26) — bkz. src/agent/icerik-kapisi.js dosya başlığı
-      // ve `~/.empp-agent/arastirma/set-koku-ezilmis-kok-neden-20260926.md`. Kaynak açıldıktan
-      // hemen SONRA, paketlemeye (yayıncı güncellemesi/zipDir/upload) GİRMEDEN ÖNCE: kökte
-      // `assets/` YOK ve hiç `bookN/` dizini YOK ise kaynak yalnız motordur (11845 SM3-v49.exe
-      // dersi) — iş burada görünür hatayla düşer, R2'ye hiçbir şey yüklenmez.
-      const icerikSonuc = await icerikKapisiDenetle(buildDir, {
-        kaynakAdi: path.basename(String(job.downloadUrl || '').split('?')[0]) || undefined,
-        log,
-      });
-      if (!icerikSonuc.gecti) {
-        throw new Error(icerikSonuc.sebep);
-      }
-
-      // KÖK INDEX DENETİMİ İÇİN GERÇEK KAYNAK ANLIK GÖRÜNTÜSÜ (2026-09-26, T5 — bkz.
-      // kok-index-denetimi.js dosya başlığı ve set-koku-ezilmis-kok-neden raporu). Aşağıdaki
-      // `applyPublisherUpdate` kökü ezebilir (bu satırın kendisi bunu belgeliyor); packagingService
-      // kendi anlık görüntüsünü BUNDAN SONRA (zip yüklendiğinde) alıyordu — yani "kaynak" sandığı
-      // şey zaten runner'ın güncellemesini görmüş oluyordu. Gerçek kaynağı — güncellemeden
-      // HEMEN ÖNCEki kökü — rezerve bir dosyaya bırakıyoruz; packagingService bunu okuyup siler.
-      const kaynakKokIndexOnce = await fsp.readFile(path.join(buildDir, 'index.html'), 'utf8').catch(() => null);
-      if (kaynakKokIndexOnce !== null) {
-        await fsp.writeFile(path.join(buildDir, KOK_INDEX_KAYNAK_MARKER), kaynakKokIndexOnce, 'utf8');
-      }
-
-      // Yayıncı güncellemesi (version.html/zip) paketleme anında uygulanır — macOS'ta
-      // çalışma zamanında uygulanamaz (asar salt-okunur), bkz. publisher-update.js.
-      try {
-        const upd = applyPublisherUpdate(buildDir, { log: (s) => warn(s) });
-        log(`publisher update: ${upd.reason} (${upd.from} → ${upd.to || '-'}, kurum ${upd.companyId || '?'})`);
-      } catch (e) { warn('publisher update uygulanamadı:', agHatasiOzeti(e)); }
-      await zipDir(buildDir, zipPath);
-
-      // Populate the shared cache atomically (tmp + rename). Non-fatal on error.
-      try {
-        await fsp.mkdir(path.dirname(cachedZip), { recursive: true });
-        const tmp = `${cachedZip}.tmp-${process.pid}`;
-        await fsp.copyFile(zipPath, tmp);
-        await fsp.rename(tmp, cachedZip);
-        await touchCacheEntry(path.dirname(cachedZip));
-        log('source cached for reuse:', cachedZip);
-        // Yeni sürüm cache'e girdi → aynı kitabın eski sürümlerini hemen buda.
-        await pruneSiblingVersions(path.join(cacheRoot, String(job.bookId)), srcVersion);
-        // Kitaplar ARASI toplam bayt tavanı (LRU) — bu iş korunur, en eski kullanılan
-        // başka kitap silinebilir.
-        await cacheTavaniUygula(cacheRoot, job.bookId);
-      } catch (e) {
-        warn('source cache populate failed (non-fatal):', agHatasiOzeti(e));
-      }
-    }
-    } // if (!hazirDevir) — hazır paketde kaynak indirme/çıkarma/zip adımları atlanır
-
-    // İÇERİKSİZ KAYNAK KAPISI — ZIP YOLU (2026-09-26, entegrasyon bulgusu). Yukarıdaki dizin
-    // tabanlı kapı (icerikKapisiDenetle) yalnız TAZE İNDİRME dalında (extractSfx/findBuildDir)
-    // çalışır. `cacheHit` — arşiv (kaynak ARŞİVDEN) ya da kaynak önbelleği HIT — zip'i HİÇ
-    // AÇMADAN doğrudan taşır; bu iki yolda kapı bugüne kadar HİÇ devreye girmiyordu. Ölçülen
-    // 45550/45551/11845 içeriksiz zip'leri arşive/önbelleğe HIT olsaydı kapı atlanır, içeriksiz
-    // paket yine üretilirdi. Merdivenden ÖNCE — merdiven zaten "içerik var" varsayımıyla
-    // ZKitapZipH indirir, içeriksiz bir kaynağı BÜYÜTMEMELİ.
-    if (cacheHit) {
-      const icerikZipSonuc = await icerikKapisiDenetleZip(zipPath, {
-        kaynakAdi: path.basename(String(job.downloadUrl || '').split('?')[0]) || undefined,
-        log,
-      });
-      if (!icerikZipSonuc.gecti) {
-        throw new Error(icerikZipSonuc.sebep);
-      }
+    // İÇERİKSİZ KAYNAK KAPISI — ZIP YOLU (2026-09-26): her kaynak (arşiv ve manuel) zip olarak gelir;
+    // kökte `assets/` YOK ve hiç `bookN/` dizini YOK ise kaynak yalnız motordur (11845 SM3-v49.exe
+    // dersi) — iş burada görünür hatayla düşer, R2'ye hiçbir şey yüklenmez. Merdivenden ÖNCE —
+    // merdiven "içerik var" varsayımıyla ZKitapZipH indirir, içeriksiz bir kaynağı BÜYÜTMEMELİ.
+    const icerikZipSonuc = await icerikKapisiDenetleZip(zipPath, { kaynakAdi, log });
+    if (!icerikZipSonuc.gecti) {
+      throw new Error(icerikZipSonuc.sebep);
     }
 
-    // İÇERİK MERDİVENİ (S0 + S1) — kaynak hazır (arşiv kopyası ya da önbellek/exe'den kurulan
-    // build.zip), paketlemeden ÖNCE. Yalnız İŞ KOPYASI (zipPath) değişir: arşiv ve kaynak önbelleği
-    // exe/arşiv katmanıdır, içerik katmanı her işte S0 ile İmpark'a sorulur ve ZKitapZipH önbelleği
-    // <ID>-<Vs> ile anahtarlıdır — önbellek HIT'i eski içeriği yeniden kullanamaz. Ölçülemeyen ya da
-    // kimliği tutmayan kitapta iş görünür hatayla düşer (eski içerikle devam YOK, gerekçe modülde).
-    if (!hazirDevir && merdivenAcik()) {
+    // İÇERİK MERDİVENİ (S0 + S1) — yalnız ARŞİV kaynağında (manuel build olduğu gibi kullanılır,
+    // sözleşme §7 M1). Yalnız İŞ KOPYASI (zipPath) değişir; ZKitapZipH önbelleği <ID>-<Vs> ile
+    // anahtarlıdır. Ölçülemeyen ya da kimliği tutmayan kitapta iş görünür hatayla düşer.
+    if (!kaynak.merdiven && merdivenAcik()) {
+      log(`[merdiven] manuel build — içerik merdiveni ATLANDI (olduğu gibi kullanılır, sözleşme M1): ${job.bookId}`);
+    }
+    if (kaynak.merdiven && merdivenAcik()) {
       await icerikMerdiveni({
         zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
       });
     }
-    // SET ÜYELİĞİ bookN EKİ (2026-09-30, sözleşme "Yeni kurulumda eksik set kitabı"): panelde sete
-    // eklenmiş ama İmpark exe'sinde olmayan kitap ZKitapZipH'den bookN olarak iş kopyasına girer,
-    // Web-Z menüsü panel listesinden yazılır. Merdivenden SONRA (eski kitaplar tazelenmiş), üç
+    // SET ÜYELİĞİ bookN EKİ (2026-09-30, sözleşme "Yeni kurulumda eksik set kitabı"): yalnız ARŞİV
+    // kaynağında (manuel build olduğu gibi kullanılır, sözleşme §7 M1). Merdivenden SONRA, üç
     // platformun paketleyicisinden ÖNCE. Hiçbir hata paketi DURDURMAZ (eksik-set-kitabi raporu);
     // iş kopyası ya kapıdan geçmiş yeni hâli ya aynen eskisidir (aday kopya + rename).
-    if (!hazirDevir && setEk.ekAcik()) {
+    if (!kaynak.setEki && setEk.ekAcik()) {
+      log(`${setEk.ISARET} manuel build — set üyeliği eki ATLANDI (olduğu gibi kullanılır, sözleşme M1)`);
+    }
+    if (kaynak.setEki && setEk.ekAcik()) {
       const setListesi = setEk.setListesiCoz({ job });
       // else dalı BİLEREK yok: runner-pardus nöbetçisi processJob'daki ilk else'i pardus dalı sayar.
       if (!setListesi) {
@@ -2212,7 +2231,7 @@ async function processJob(auth, job) {
     if (packagerPlatform === 'pardus') {
       // Docker'da srv21 ile BİREBİR: HTTP paketleyici (3001) YOK, doğrudan script.
       // İkon: yayıncı zip'inde ico.png yok → kayıtlı logo zip köküne eklenir (aşağıda).
-      if (!hazirDevir) await injectPardusIcon(zipPath, job.publisherName, work);
+      await injectPardusIcon(zipPath, job.publisherName, work);
       await buildPardusArtifact(zipPath, appName, appVersion, artifactPath, work, {
         bookId: job.bookId, srcVersion,
         // claim G kimliği (claim-surum): konteynerdeki paketleyiciye kadar taşınır
@@ -2361,7 +2380,10 @@ async function main() {
 
     // A bad job must never kill the loop.
     try {
-      await processJob(auth, job);
+      const sonuc = await processJob(auth, job);
+      // Kaynak yok (exe'siz sözleşme): kira processJob'da bırakıldı, failed yazılmadı. Tüm kuyruk
+      // build'siz olsa bile döngü sıcak dönmesin — ertelemeyle aynı kısa bekleme.
+      if (sonuc && sonuc.ertelendi) await sleep(15000);
     } catch (e) {
       if (ertelenebilirKaynakHatasi(e)) {
         // Disk darlığı PAKET KUSURU DEĞİLDİR: 'failed' YAZMA. Kira AÇIKÇA bırakılır
@@ -2443,10 +2465,13 @@ if (require.main === module) {
 
 module.exports = {
   installSignalHandlers,
-  // downloadFile/zipDir: kaynak ön-ısıtıcısı (kaynak-isitici.js) AYNI adımları
-  // kullansın diye dışa açıldı — ısıtıcı kendi indirme/zip kodunu yazarsa ajanın
-  // ürettiğinden farklı bir build.zip doğar ve paket sessizce bozulur.
+  // downloadFile/zipDir: kaynak ön-ısıtıcısı (kaynak-isitici.js) için dışa açılmıştı; ısıtıcı
+  // exe'siz sözleşmeyle (01.10) kapıyla KAPALI, downloadFile .exe yolunu reddeder.
   downloadFile, zipDir,
+  // Exe'siz kaynak (01.10): testler kaynakIndirme'ye casus koyar; manuel build yardımcıları.
+  kaynakIndirme, manuelZipIndir, manuelBuildHazirla, zipGirisleri, kaynakYokBekle, kaynakYokBildir,
+  kaynakBoyutuTahmin, KAYNAK_YOK_ISARETI,
+  _kaynakYokBildirimSifirla: () => { _kaynakYokSonBildirim.clear(); },
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   STAPLE_KAPISI_ISARETI, agStapleCikti,
   packagerReleaseJob,

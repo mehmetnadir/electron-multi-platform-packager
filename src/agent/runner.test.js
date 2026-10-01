@@ -94,17 +94,19 @@ test('heartbeat reports the in-flight job so the server extends its lease', () =
   assert.match(SRC, /currentJob\s*=\s*null/); // cleared when idle
 });
 
-test('source cache: reuse build.zip per (book, version) instead of re-downloading', () => {
-  // shared cache root (overridable), keyed by bookId + source filename
-  assert.match(SRC, /EMPP_SOURCE_CACHE/);
-  assert.match(SRC, /cachedZip/);
-  // cache HIT path copies the cached build.zip and SKIPS the download
-  assert.match(SRC, /source cache HIT/);
-  assert.match(SRC, /cacheHit\s*=\s*true/);
-  // download only happens on MISS
-  assert.match(SRC, /if\s*\(!cacheHit\)/);
-  // populated atomically (tmp + rename)
-  assert.match(SRC, /\.rename\(tmp,\s*cachedZip\)/);
+const PJ_KOD = (() => {
+  const ayrac = '// ---------------------------------------------------------------------------\n';
+  return SRC.slice(SRC.indexOf('async function processJob'), SRC.indexOf(`${ayrac}// Main loops`))
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+})();
+
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): kaynak önbelleği (EMPP_SOURCE_CACHE/<bookId>/<exe adı>/build.zip)
+// İmpark exe'sinden açılan build'leri tutuyordu — processJob artık ne okur ne yazar.
+test('exe\'siz: processJob exe-türevi kaynak önbelleğini OKUMAZ/YAZMAZ (HIT/MISS/populate yok)', () => {
+  for (const yasak of ['EMPP_SOURCE_CACHE', 'cachedZip', 'source cache HIT', 'cacheHit', 'source cached for reuse',
+    'touchCacheEntry(', 'pruneSiblingVersions(', 'cacheTavaniUygula(', 'cachedZipIsStale(']) {
+    assert.ok(!PJ_KOD.includes(yasak), `processJob '${yasak}' içermemeli`);
+  }
 });
 
 test('looksLikeRealApk rejects the 45695 fake (web zip named .apk)', () => {
@@ -259,23 +261,13 @@ test('touchCacheEntry olmayan dizinde FIRLATMAZ — üretim durmaz', async () =>
   assert.strictEqual(await touchCacheEntry('/tmp/kesinlikle-olmayan-dizin-38471'), false);
 });
 
-test('cache HIT te kullanım işareti konur (ölü cache taze görünmesin)', () => {
-  const hit = SRC.slice(SRC.indexOf('source cache HIT'), SRC.indexOf('if (!cacheHit)'));
-  assert.match(hit, /touchCacheEntry\(/);
-  // atime a güvenilmediği gerekçesi kodda kayıtlı kalsın
-  assert.match(hit, /atime kullanılamaz/);
-});
-
-test('eski sürüm cache leri budanır (yayıncı bump sonrası disk şişmesin)', () => {
-  // Helper tanımlı ve keep-version dışındaki kardeş dizinleri recursive siliyor.
+test('eski sürüm cache budayıcısı (yardımcı) kardeş dizinleri siler, mevcut sürümü korur', () => {
+  // Yardımcı tanımlı kalır (exe'siz sözleşmeyle processJob artık çağırmıyor — yukarıdaki test).
   const fn = SRC.slice(SRC.indexOf('async function pruneSiblingVersions'),
     SRC.indexOf('async function pruneSiblingVersions') + 700);
   assert.match(fn, /readdir\(bookDir/);
   assert.match(fn, /e\.name === keepVersion/);        // mevcut sürümü koru
   assert.match(fn, /fsp\.rm\([^)]*recursive: true, force: true/); // gerisini sil
-  // Hem populate hem HIT sonrası çağrılıyor; keep = srcVersion, kök = bookId dizini.
-  const calls = SRC.match(/pruneSiblingVersions\(path\.join\(cacheRoot, String\(job\.bookId\)\), srcVersion\)/g) || [];
-  assert.ok(calls.length >= 2, `prune çağrısı populate+HIT te olmalı (bulundu: ${calls.length})`);
 });
 
 // ÇIKIŞ GÖZCÜSÜ (2026-09-13): ajan üretim işinin ortasında sessizce yeniden başladı

@@ -220,6 +220,7 @@ async function sahteApi() {
     }
     if (req.method === 'PUT' && req.url === '/r2/put') { kayit.putlar.push({ md5: md5(govde), boyut: govde.length }); res.writeHead(200); return res.end(); }
     if (req.url === '/agents/test/result') { kayit.sonuclar.push(JSON.parse(govde.toString())); return json(200, { ok: true }); }
+    if (req.url === '/agents/test/release') { (kayit.release = kayit.release || []).push(JSON.parse(govde.toString())); return json(200, { ok: true }); }
     return json(404, {});
   });
   taban = sunucu.url;
@@ -231,7 +232,7 @@ async function sahteApi() {
 // ---------------------------------------------------------------------------
 const WIN_ALANLARI = Object.keys(W.varsayilanAyarlar());
 
-async function windowsIsiKostur({ is = {}, kip = {}, ayar = {} } = {}) {
+async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false } = {}) {
   const exeBuf = peExe(1_200_000);
   const araclar = sahteAraclar();
   const paketleyici = await sahtePaketleyici(exeBuf);
@@ -247,7 +248,7 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {} } = {}) {
   buildZip.addFile('assets/74390/thumbs/1.jpg', Buffer.from('build-zip'));
   const buildZipBuf = buildZip.toBuffer();
   fs.writeFileSync(path.join(arsiv, '74390', 'build.zip'), buildZipBuf);
-  fs.writeFileSync(path.join(arsiv, '74390', 'kaynak.json'), JSON.stringify({
+  if (!arsivYok) fs.writeFileSync(path.join(arsiv, '74390', 'kaynak.json'), JSON.stringify({
     dosya: 'build.zip', md5: md5(buildZipBuf), boyut: buildZipBuf.length, etiket: 'test',
     impark_kaynagi: 'yds-v51.exe' }));
 
@@ -294,7 +295,7 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {} } = {}) {
   const kanitYolu = path.join(kanitDizini, '74390', `${is.surum || '2.51.3'}.json`);
   const kanit = fs.existsSync(kanitYolu) ? JSON.parse(fs.readFileSync(kanitYolu, 'utf8')) : null;
   return {
-    hata, loglar: loglar.join('\n'), gunluk: araclar.oku(), exeBuf, kanit, yuvaKok,
+    hata, loglar: loglar.join('\n'), gunluk: araclar.oku(), okuGunluk: araclar.oku, exeBuf, kanit, yuvaKok,
     paketleyici: { istekler: paketleyici.istekler, paketGovdesi: paketleyici.durum.paketGovdesi },
     api: api.kayit,
   };
@@ -407,6 +408,26 @@ test('claim sürüm taşımıyor → paketleyiciye ve kaynağa HİÇ gidilmez, R
   assert.deepEqual(r.paketleyici.istekler, []);
   r2YazimiSifir(r);
   assert.match(r.gunluk, /bildir bekci/);
+});
+
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): Windows şeridi AYNI kaynak kararını kullanır — arşiv/manuel yoksa
+// İmpark exe'si indirilmez; kira bırakılır, failed yazılmaz, paketleyiciye/imzaya/R2'ye gidilmez.
+test('exe\'siz: arşiv/manuel kaynak yok → exe İNDİRİLMEZ, kira bırakılır, üretim/imza/R2 yok', async () => {
+  const r = await windowsIsiKostur({ arsivYok: true });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.api.release, [{ bookId: '74390', platform: 'windows',
+    sebep: 'build yok — exe\'siz sözleşme: arşiv/manuel kaynak gerekli' }]);
+  assert.deepEqual(r.paketleyici.istekler, []);
+  r2YazimiSifir(r);
+  // bildir ayrık (detached) süreçte koşar — günlüğe düşmesini kısa süre bekle.
+  let gunluk = r.gunluk;
+  for (let i = 0; i < 60 && !/bildir kosucu/.test(gunluk); i += 1) {
+    await new Promise((ok) => setTimeout(ok, 50));
+    gunluk = r.okuGunluk();
+  }
+  assert.match(gunluk, /^bildir kosucu \| Test Kitap \(74390\) — build yok/m);
+  assert.doesNotMatch(r.gunluk, /^(tetik|kabul |bildir bekci)/m, 'imza yuvası/kabul/bekçi tetiklenmemeli');
+  assert.match(r.loglar, /\[kaynak-yok\] 74390 windows/);
 });
 
 test('claim setKimligi book_id\'den farklı → iş düşer, üretim yok', async () => {

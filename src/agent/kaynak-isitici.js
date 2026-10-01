@@ -1,6 +1,12 @@
 'use strict';
 /**
- * Kaynak ön-ısıtıcısı — ajanın BEKLEMEDEN derlemeye başlamasını sağlar.
+ * Kaynak ön-ısıtıcısı — KAPALI (exe'siz sözleşme, Nadir 01.10: İmpark exe'si HİÇBİR koşulda
+ * indirilmez). Isıttığı şey İmpark exe'sinden açılan build.zip'ti; runner artık bu önbelleği
+ * okumuyor (kaynak = arşiv ya da manuel build.zip, kaynak-karari.js). Modül silinmedi: `kaynakIsit`
+ * kapıyla HİÇBİR aracı çağırmadan `{durum:'kapali'}` döner, CLI uyarıp çıkar. Aşağıdaki tarihçe
+ * bilgi içindir.
+ *
+ * (Tarihçe) Kaynak ön-ısıtıcısı — ajanın BEKLEMEDEN derlemeye başlamasını sağlıyordu.
  *
  * Ölçüm (2026-09-15, 16 pardus işi / 170 dk, ajan günlüğünden faz ayrıştırması):
  *   indirme+exe açma **%29** · Docker derleme **%47** · R2 yükleme **%16** · diğer %7
@@ -28,7 +34,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const { srcVersionTuret } = require('./runner-helpers');
-const { applyPublisherUpdate } = require('./publisher-update');
+const { EXE_KAYNAGI_KAPALI } = require('./kaynak-karari');
 
 /** Varsayılan disk tabanı (GB): pardus kapısı 20 GB + bir işin geçici alanı. */
 const VARSAYILAN_DISK_TABANI_GB = 26;
@@ -57,61 +63,13 @@ async function onbellekteVarMi(cacheRoot, bookId, url) {
 }
 
 /**
- * Tek bir kitabın kaynağını önbelleğe hazırlar.
- * @returns {Promise<{durum:'zaten'|'isitildi'|'disk'|'hata', yol?:string, hata?:string}>}
+ * Tek bir kitabın kaynağını önbelleğe hazırlıyordu — KAPALI (exe'siz sözleşme, 01.10).
+ * Hiçbir araç (`arac.downloadFile`/`extractSfx`/`zipDir`) çağrılmaz, önbelleğe yazılmaz.
+ * @returns {Promise<{durum:'kapali', sebep:string}>}
  */
-async function kaynakIsit({ bookId, downloadUrl, cacheRoot, diskTabaniGb = VARSAYILAN_DISK_TABANI_GB, arac, kayit = () => {} }) {
-  const { downloadFile, extractSfx, findBuildDir, zipDir } = arac;
-
-  const varOlan = await onbellekteVarMi(cacheRoot, bookId, downloadUrl);
-  if (varOlan) {
-    kayit(`ısıtma atlandı (zaten önbellekte): ${bookId}`);
-    return { durum: 'zaten', yol: varOlan };
-  }
-
-  const bos = bosDiskGb(cacheRoot);
-  if (bos < diskTabaniGb) {
-    kayit(`ısıtma atlandı (disk ${bos} GB < ${diskTabaniGb} GB): ${bookId}`);
-    return { durum: 'disk' };
-  }
-
-  const gecici = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-isit-'));
-  try {
-    const exePath = path.join(gecici, 'source.exe');
-    kayit(`ısıtma başladı: ${bookId}`);
-    await downloadFile(downloadUrl, exePath);
-
-    const extractDir = path.join(gecici, 'extracted');
-    await extractSfx(exePath, extractDir);
-    const buildDir = await findBuildDir(extractDir);
-
-    try {
-      // SET dalında atlanan kitaplar (sürüm bilinmiyor) GÖRÜNÜR olmalı — sonuç da günlüğe.
-      const upd = applyPublisherUpdate(buildDir, { log: (s) => kayit(`${bookId}: ${s}`) });
-      kayit(`yayıncı güncellemesi (${bookId}): ${upd.reason} (${upd.from} → ${upd.to || '-'})`);
-    } catch (e) {
-      kayit(`yayıncı güncellemesi uygulanamadı (${bookId}): ${e.message}`);
-    }
-
-    const zipPath = path.join(gecici, 'build.zip');
-    await zipDir(buildDir, zipPath);
-
-    const hedefDizin = path.join(cacheRoot, String(bookId), srcVersionTuret(downloadUrl));
-    await fsp.mkdir(hedefDizin, { recursive: true });
-    const hedef = path.join(hedefDizin, 'build.zip');
-    // Atomik yerleştirme: ajan yarım dosyayı HIT sanmasın.
-    const tmp = `${hedef}.tmp-${process.pid}`;
-    await fsp.copyFile(zipPath, tmp);
-    await fsp.rename(tmp, hedef);
-    const mb = Math.round((await fsp.stat(hedef)).size / 1e6);
-    kayit(`ısıtıldı: ${bookId} (${mb} MB) → ${hedef}`);
-    return { durum: 'isitildi', yol: hedef };
-  } catch (e) {
-    kayit(`ısıtma HATA (${bookId}): ${e.message}`);
-    return { durum: 'hata', hata: e.message };
-  } finally {
-    await fsp.rm(gecici, { recursive: true, force: true }).catch(() => {});
-  }
+async function kaynakIsit({ bookId, kayit = () => {} } = {}) {
+  kayit(`ısıtma atlandı (${bookId || '-'}): ${EXE_KAYNAGI_KAPALI}`);
+  return { durum: 'kapali', sebep: EXE_KAYNAGI_KAPALI };
 }
 
 /**
@@ -136,22 +94,8 @@ module.exports = {
   sirayiIsit,
 };
 
-// CLI: node src/agent/kaynak-isitici.js <bookId>=<url> [<bookId>=<url> ...]
+// CLI: node src/agent/kaynak-isitici.js <bookId>=<url> [<bookId>=<url> ...] — KAPALI (exe'siz sözleşme)
 if (require.main === module) {
-  const girdiler = process.argv.slice(2).map((p) => {
-    const i = p.indexOf('=');
-    return { bookId: p.slice(0, i), downloadUrl: p.slice(i + 1) };
-  });
-  const cacheRoot = process.env.EMPP_SOURCE_CACHE || path.join(os.homedir(), '.empp-agent', 'cache');
-  if (!fs.existsSync(cacheRoot)) fs.mkdirSync(cacheRoot, { recursive: true });
-  const arac = require('./runner');
-  sirayiIsit(girdiler, {
-    cacheRoot,
-    arac,
-    diskTabaniGb: Number(process.env.ISITICI_DISK_TABANI_GB || VARSAYILAN_DISK_TABANI_GB),
-    kayit: (m) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${m}`),
-  }).then((s) => {
-    const say = s.reduce((a, r) => ({ ...a, [r.durum]: (a[r.durum] || 0) + 1 }), {});
-    console.log('ÖZET', JSON.stringify(say));
-  });
+  console.error(`kaynak-isitici: ${EXE_KAYNAGI_KAPALI}`);
+  process.exit(0);
 }

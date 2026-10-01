@@ -21,6 +21,12 @@ const axios = require('axios');
 const FormData = require('form-data');
 const archiver = require('archiver');
 
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): bu araç İmpark SFX exe'sini kaynak alır — KAPALI. Açan anahtar
+// yok; yerel üretim için paket-uret skill'i (yerel paketleyici + arşiv/manuel build.zip) kullanılır.
+if (require.main === module) {
+  console.error(`local-build: ${require('./kaynak-karari').EXE_KAYNAGI_KAPALI}`);
+  process.exit(3);
+}
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (v.startsWith('--') ? [...a, [v.slice(2), arr[i + 1]]] : a), []));
 const EXE = args.exe; const TITLE = args.title || 'book'; const PUBLISHER = args.publisher || ''; const OUT = args.out || process.cwd();
 const BOOK_ID = args.bookId || process.env.BOOK_ID || '0';

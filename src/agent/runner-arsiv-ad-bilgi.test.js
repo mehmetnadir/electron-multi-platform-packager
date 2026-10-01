@@ -183,18 +183,22 @@ test('bildirGonder: başarısızlık `bildir paket … -p yuksek -e warning` ür
 // ---------------------------------------------------------------------------
 
 test('processJob: exe kimliği = srcVersionTuret(job.downloadUrl), arşive YALNIZ bilgi için verilir', () => {
-  assert.match(PROCESS_JOB, /const imparkSrcVersion = srcVersionTuret\(job\.downloadUrl\);/);
+  // Exe'siz sözleşme (01.10): downloadUrl'süz işte kimlik boş (bilgi notu yok); srcVersion exe
+  // adından DEĞİL kaynağın kendisinden (arşiv md5 / manuel adres) türer.
+  assert.match(PROCESS_JOB, /const imparkSrcVersion = job\.downloadUrl \? srcVersionTuret\(job\.downloadUrl\) : '';/);
   assert.match(PROCESS_JOB,
-    new RegExp('const arsiv = await arsivKaynagi\\(job\\.bookId, '
+    new RegExp(': await arsivKaynagi\\(job\\.bookId, '
       + '\\{ imparkKaynagi: imparkSrcVersion, bilgi: log \\}\\);'));
-  assert.match(PROCESS_JOB, /const srcVersion = arsiv \? arsiv\.srcVersion : imparkSrcVersion;/);
+  assert.match(PROCESS_JOB,
+    /const srcVersion = kaynak\.tur === 'arsiv' \? arsiv\.srcVersion : `manuel-\$\{srcVersionTuret\(kaynak\.url\)\}`;/);
+  assert.equal((PROCESS_JOB.match(/imparkSrcVersion/g) || []).length, 2, 'exe kimliği başka yerde kullanılmamalı');
 });
 
 test('processJob: arşiv okuması indirme/devir/kopyalamadan ÖNCE', () => {
   const okuma = PROCESS_JOB.indexOf('await arsivKaynagi(');
   assert.ok(okuma > 0);
-  const sonrakiler = ['hazirPardusPaketi(', 'kaynakBoyutuTahmin(', 'fsp.copyFile(arsiv.zip',
-    'downloadFile('];
+  const sonrakiler = ['kaynakKarari(', 'kaynakBoyutuTahmin(', 'fsp.copyFile(arsiv.zip',
+    'manuelBuildHazirla('];
   for (const sonra of sonrakiler) {
     const i = PROCESS_JOB.indexOf(sonra);
     assert.ok(i > okuma, `${sonra} arşiv okumasından sonra gelmeli`);

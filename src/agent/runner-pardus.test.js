@@ -641,7 +641,8 @@ test('hazirPardusPaketi: dizin tanımsızsa null (varsayılan davranış değiş
   } finally { CONFIG.pardusHazirDir = prev; }
 });
 
-test('hazirPardusPaketi: kaynak sürümü AYNI ise devralınır, FARKLI ise yok sayılır', async () => {
+// EXE'SİZ SÖZLEŞME (Nadir 01.10): hazır paket İmpark exe'sinden üretiliyordu — devir KAPALI.
+test('hazirPardusPaketi: kaynak sürümü ve kimlik AYNI olsa bile devralınmaz (exe\'siz sözleşme)', async () => {
   const { hazirPardusPaketi } = require('./runner.js');
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hazir-'));
   const prev = CONFIG.pardusHazirDir;
@@ -651,13 +652,9 @@ test('hazirPardusPaketi: kaynak sürümü AYNI ise devralınır, FARKLI ise yok 
     const kimlik = require('../packaging/surum-turet').paketleyiciKaynakParmakIzi();
     await fsp.writeFile(path.join(dir, '45704.json'),
       JSON.stringify({ srcVersion: 'MP8-v49.exe', paketleyiciKimligi: kimlik }));
-    const bulundu = await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v49.exe' });
-    assert.ok(bulundu && bulundu.dosya.endsWith('45704.impark'));
-    assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v50.exe' }), null,
-      'kaynak sürümü tutmayan hazır paket YÜKLENMEMELİ (sessiz sürüm karışması)');
-    // .json yoksa güvenli taraf: devralma yok
-    await fsp.rm(path.join(dir, '45704.json'));
-    assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v49.exe' }), null);
+    assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v49.exe' }), null,
+      'exe\'den üretilmiş hazır paket YÜKLENMEMELİ');
+    assert.equal(await hazirPardusPaketi({ bookId: '45704', srcVersion: 'MP8-v50.exe' }), null);
   } finally {
     CONFIG.pardusHazirDir = prev;
     await fsp.rm(dir, { recursive: true, force: true });
@@ -686,11 +683,11 @@ test('GERİLEME: hazır paket paketleyici kimliği YOK ya da FARKLI ise devralı
   }
 });
 
-test('buildPardusArtifact: HAZIR paket varsa Docker derlemesi HİÇ çağrılmaz, kapı yine koşar', async () => {
+test('buildPardusArtifact: HAZIR paket dizinde dursa da DEVRALINMAZ — derleme betiği koşar, hazır dosyaya dokunulmaz', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hazir-'));
   const prevDir = CONFIG.pardusHazirDir;
   CONFIG.pardusHazirDir = dir;
-  // TAM squashfs imzalı sahte paket (offset 193728, bytes_used küçük)
+  // TAM squashfs imzalı sahte paket (offset 193728, bytes_used küçük) — eskiden devralınırdı
   const OFF = 193728;
   const buf = Buffer.alloc(OFF + 96 + 1000);
   buf.write('hsqs', OFF, 'ascii');
@@ -704,12 +701,11 @@ test('buildPardusArtifact: HAZIR paket varsa Docker derlemesi HİÇ çağrılmaz
         const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'pardus-work-'));
         try {
           const artifactPath = path.join(work, 'artifact.impark');
-          await buildPardusArtifact('/tmp/yok.zip', 'test-app', '1.0.0', artifactPath, work,
-            { bookId: '45704', srcVersion: 'MP8-v49.exe' });
-          assert.equal(fs.existsSync(artifactPath), true, 'hazır paket artifactPath\'e kopyalanmalı');
-          assert.equal(fs.existsSync(path.join(sdir, 'DERLENDI')), false, 'Docker derleme betiği çağrılmamalı');
-          assert.match(await fsp.readFile(path.join(kdir, 'CAGRILDI'), 'utf8'), /KABUL: .*artifact\.impark/);
-          assert.equal(fs.existsSync(path.join(dir, '45704.impark')), false, 'devralınan dosya diskte bırakılmamalı');
+          await assert.rejects(() => buildPardusArtifact('/tmp/yok.zip', 'test-app', '1.0.0', artifactPath, work,
+            { bookId: '45704', srcVersion: 'MP8-v49.exe' }));
+          assert.equal(fs.existsSync(path.join(sdir, 'DERLENDI')), true, 'derleme betiği çağrılmalı (devir yok)');
+          assert.equal(fs.existsSync(path.join(kdir, 'CAGRILDI')), false, 'derleme düşünce kabul koşmaz');
+          assert.equal(fs.existsSync(path.join(dir, '45704.impark')), true, 'hazır dosyaya dokunulmamalı');
         } finally { await fsp.rm(work, { recursive: true, force: true }); }
       });
     });
@@ -746,34 +742,29 @@ test('probook-kabul.sh kopyalamadan ÖNCE ProBook diskini ölçer', () => {
   assert.ok(diskIdx > 0 && scpIdx > diskIdx, 'disk ölçümü scp çağrısından ÖNCE olmalı');
 });
 
-// HAZIR paket kısa devresi (2026-09-17): kontrol İNDİRMEDEN ÖNCE yapılmalı; yoksa
-// devralınan her kitapta ~1,5 GB kaynak boşuna iniyor (dar diskte üretim durur).
-test('processJob: hazır paket kontrolü kaynak indirmeden ÖNCE ve indirme blokunu kapatır', () => {
+// HAZIR paket kısa devresi (2026-09-17) → EXE'SİZ SÖZLEŞME (01.10): processJob hazır paketi hiç
+// sormaz; kaynak her zaman arşiv/manuel build'dir, ikon her pardus derlemesinde eklenir.
+test('processJob: hazır paket kısa devresi YOK; ikon enjeksiyonu koşulsuz', () => {
   const kaynak = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const hazirIdx = kaynak.indexOf('const hazirDevir = packagerPlatform === \'pardus\'');
-  const indirIdx = kaynak.indexOf('let cacheHit = false;');
-  const dalIdx = kaynak.indexOf('if (!hazirDevir) await injectPardusIcon(');
-  assert.ok(hazirIdx > 0, 'hazirDevir kısa devresi yok');
-  assert.ok(indirIdx > hazirIdx, 'hazır kontrolü indirme/cache blokundan ÖNCE olmalı');
-  assert.match(kaynak.slice(indirIdx, indirIdx + 600), /if \(!hazirDevir && !arsiv\) \{/);
-  assert.ok(dalIdx > 0, 'ikon enjeksiyonu hazır pakette atlanmalı');
+  const pj = kaynak.slice(kaynak.indexOf('async function processJob'));
+  assert.doesNotMatch(pj.slice(0, pj.indexOf('async function main')), /hazirDevir|hazirPardusPaketi\(/);
+  assert.match(pj, /\n\s+await injectPardusIcon\(zipPath, job\.publisherName, work\);/);
 });
 
-// Kaynak arşivi (2026-09-26, Nadir: "yeni arayüzle üret"): arşiv kaydı varsa İmpark exe'si
-// indirilmez ve srv21 şeridinin (İmpark kaynağından üretilmiş) hazır paketi devralınmaz.
-test('processJob: kaynak arşivi srcVersion\'dan önce okunur, hazır paketi ve indirmeyi atlar', () => {
+// Kaynak arşivi (2026-09-26) + exe'siz sözleşme (01.10): kaynak tek karardan; arşiv dalı exe
+// yolu olmadan, manuel dal arşivi okumadan.
+test('processJob: kaynak arşivi srcVersion\'dan önce okunur; indirme yalnız manuel build dalında', () => {
   const kaynak = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  // 27.09: işin exe adı arşive YALNIZ bilgi notu için verilir (ad kapısı kaldırıldı).
-  const arsivIdx = kaynak.indexOf(
-    'const arsiv = await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });');
-  const surumIdx = kaynak.indexOf('const srcVersion = arsiv ? arsiv.srcVersion : imparkSrcVersion;');
-  const arsivDalIdx = kaynak.indexOf('if (!hazirDevir && arsiv) {');
-  const indirIdx = kaynak.indexOf('await downloadFile(job.downloadUrl, exePath);');
+  const arsivIdx = kaynak.indexOf(': await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });');
+  const surumIdx = kaynak.indexOf("const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion");
+  const arsivDalIdx = kaynak.indexOf("if (kaynak.tur === 'arsiv') {");
+  const manuelDalIdx = kaynak.indexOf("if (kaynak.tur === 'manuel') {");
   assert.ok(arsivIdx > 0 && surumIdx > arsivIdx, 'arşiv srcVersion türetilmeden önce okunmalı');
-  assert.match(kaynak, /const hazirDevir = packagerPlatform === 'pardus' && !arsiv/);
-  assert.ok(arsivDalIdx > 0 && arsivDalIdx < indirIdx, 'arşiv dalı indirmeden önce olmalı');
+  assert.ok(arsivDalIdx > surumIdx && manuelDalIdx > arsivDalIdx);
+  assert.ok(!kaynak.slice(kaynak.indexOf('async function processJob')).includes('await downloadFile('),
+    'processJob exe indirmemeli');
 });
 
 // Açılış süresi paket boyutuyla ölçeklenmeli (ölçüm 2026-09-17, 45695): 1,5 GB SET
@@ -803,13 +794,14 @@ test('hazır paket kaynağı ANCAK kabul kapısından sonra silinir', () => {
 // disk sorulur. Gece 11 iş 1,5 GB'lık kaynağı indirip kapıda düştü; kapı indirme
 // çağrısının ÜSTÜNDE durmalı. Bu test kaynağı okur: sıralama bozulursa kırılır.
 // ---------------------------------------------------------------------------
-test('GERİLEME: pardus disk kapısı kaynak indirmeden ÖNCE sorulur', () => {
+test('GERİLEME: pardus disk kapısı kaynak indirmeden/kopyalamadan ÖNCE sorulur', () => {
   const kaynak = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
-  const kapi = kaynak.indexOf('pardus disk kapısı —');
-  const indirme = kaynak.indexOf('source cache MISS');
+  const pj = kaynak.slice(kaynak.indexOf('async function processJob'));
+  const kapi = pj.indexOf('pardus disk kapısı —');
   assert.ok(kapi > 0, 'erken disk kapısı metni yok');
-  assert.ok(indirme > 0, 'indirme günlüğü bulunamadı');
-  assert.ok(kapi < indirme, 'disk kapısı indirmeden SONRA geliyor');
+  for (const sonra of ['await manuelBuildHazirla(', 'await fsp.copyFile(arsiv.zip']) {
+    assert.ok(pj.indexOf(sonra) > kapi, `disk kapısı ${sonra} çağrısından SONRA geliyor`);
+  }
 });
 
 // ---------------------------------------------------------------------------

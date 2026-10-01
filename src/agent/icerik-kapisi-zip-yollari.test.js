@@ -168,7 +168,8 @@ test('icerikKapisiDenetleZip: EMPP_ICERIK_KAPISI=0 iken motor-only zip bile GEÇ
 });
 
 // ---------------------------------------------------------------------------
-// Runner düzeyinde — gerçek processJob, arşiv VE önbellek HIT yolları (2026-09-26)
+// Runner düzeyinde — gerçek processJob, arşiv VE manuel build yolları (2026-09-26; exe'siz
+// sözleşme 01.10: exe-türevi kaynak önbelleği HIT yolu kaldırıldı, yerine manuel build.zip)
 // ---------------------------------------------------------------------------
 
 /** Köprü presigned URL'si — next-job'un Mac ajanına verdiği biçim. */
@@ -177,15 +178,20 @@ function kopruUrl(bookId, ad) {
     + `?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${crypto.randomBytes(8).toString('hex')}`;
 }
 
-/** Sahte paketleyici: her isteği sayar, 500 döner (iş hızlıca düşsün). */
-async function sahtePaketleyici() {
+/**
+ * Sahte paketleyici + API + manuel build sunucusu: /api/* ve /agents/* isteklerini sayar, 500 döner
+ * (iş hızlıca düşsün); `dosyalar`daki yollar (manuel build.zip) 200 ile servis edilir.
+ */
+async function sahtePaketleyici(dosyalar = {}) {
   const istekler = [];
   const sunucu = http.createServer((req, res) => {
-    istekler.push(req.url);
     req.resume();
     req.on('end', () => {
+      const yol = req.url.split('?')[0];
+      if (dosyalar[yol]) { res.writeHead(200); return res.end(fs.readFileSync(dosyalar[yol])); }
+      istekler.push(req.url);
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end('{}');
+      return res.end('{}');
     });
   });
   await new Promise((r) => sunucu.listen(0, '127.0.0.1', r));
@@ -208,12 +214,14 @@ function arsivKur(bookId, zipDosyaYolu) {
 }
 
 /** processJob'u yalıtılmış ortamda koşturur (arşiv VE/YA DA önbellek HIT ortamı hazır). */
-async function isKostur({ arsivKok, onbellekKok, bookId, kaynakAdi }) {
-  const paketleyici = await sahtePaketleyici();
+async function isKostur({ arsivKok, onbellekKok, bookId, kaynakAdi, manuelZip }) {
+  const manuelYol = `/sources/${bookId}/20261001-120000-build.zip`;
+  const paketleyici = await sahtePaketleyici(manuelZip ? { [manuelYol]: manuelZip } : {});
   const eski = {
     arsiv: process.env.EMPP_KAYNAK_ARSIVI,
     cache: process.env.EMPP_SOURCE_CACHE,
     packagerApi: CONFIG.packagerApi,
+    apiBase: CONFIG.apiBase,
   };
   const loglar = [];
   const orjLog = console.log;
@@ -221,12 +229,14 @@ async function isKostur({ arsivKok, onbellekKok, bookId, kaynakAdi }) {
   process.env.EMPP_KAYNAK_ARSIVI = arsivKok || fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-zip-bos-arsiv-'));
   process.env.EMPP_SOURCE_CACHE = onbellekKok || fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-zip-cache-'));
   CONFIG.packagerApi = paketleyici.url;
+  CONFIG.apiBase = paketleyici.url; // kaynak yoksa /release yerel sahteye gider (canlıya ASLA)
   console.log = (...a) => loglar.push(a.join(' '));
   console.warn = (...a) => loglar.push(a.join(' '));
   let hata = null;
   try {
     await processJob({ agentId: 'test', token: 'x' }, {
-      bookId: String(bookId), platform: 'android', downloadUrl: kopruUrl(bookId, kaynakAdi),
+      bookId: String(bookId), platform: 'android',
+      downloadUrl: manuelZip ? `${paketleyici.url}${manuelYol}?X-Amz-Signature=abc` : kopruUrl(bookId, kaynakAdi),
       bookTitle: 'Test Kitap', publisherName: 'YDS Publishing',
     });
   } catch (e) {
@@ -235,6 +245,7 @@ async function isKostur({ arsivKok, onbellekKok, bookId, kaynakAdi }) {
     console.log = orjLog;
     console.warn = orjWarn;
     CONFIG.packagerApi = eski.packagerApi;
+    CONFIG.apiBase = eski.apiBase;
     for (const [k, v] of [['EMPP_KAYNAK_ARSIVI', eski.arsiv], ['EMPP_SOURCE_CACHE', eski.cache]]) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
@@ -259,22 +270,21 @@ test('arşiv yolunda İÇERİKLİ (tek kitap) zip kapıdan GEÇER, paketleyiciye
   assert.match(r.hata.message, /packager upload-build failed: HTTP 500/, 'sahte paketleyici 500 (kapı GEÇTİ, üretim orada düştü)');
 });
 
-test('GERİLEME: kaynak önbelleği HIT yolunda içeriksiz zip [kaynak-iceriksiz] ile düşer', async () => {
-  const onbellekKok = fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-zip-cache-hit-'));
-  const bookId = 45550;
-  const kaynakAdi = 'ShallWe6-v25.exe'; // srcVersionTuret bunu URL'nin son parçasından türetir
-  const hedefDizin = path.join(onbellekKok, String(bookId), kaynakAdi);
-  fs.mkdirSync(hedefDizin, { recursive: true });
-  fs.copyFileSync(MOTOR_ONLY(), path.join(hedefDizin, 'build.zip'));
-
-  const r = await isKostur({ onbellekKok, bookId, kaynakAdi });
+test('GERİLEME: manuel build yolunda içeriksiz zip [kaynak-iceriksiz] ile düşer, paketleyiciye gidilmez', async () => {
+  const r = await isKostur({ bookId: 45550, manuelZip: MOTOR_ONLY() });
   assert.ok(r.hata, 'iş düşmeliydi');
   assert.match(r.hata.message, /^\[kaynak-iceriksiz\]/, r.hata.message);
-  assert.deepEqual(r.istekler, [], 'içeriksiz önbellek zip\'i paketleyiciye HİÇ gitmemeli');
-  assert.match(r.loglar, /source cache HIT/, 'önbellek yolu kullanıldığı loglanmalı (indirme değil)');
+  assert.deepEqual(r.istekler, [], 'içeriksiz manuel zip paketleyiciye HİÇ gitmemeli');
+  assert.match(r.loglar, /kaynak MANUEL build\.zip/, 'manuel yol kullanıldığı loglanmalı');
 });
 
-test('kaynak önbelleği HIT yolunda İÇERİKLİ (SET) zip kapıdan GEÇER', async () => {
+test('manuel build yolunda İÇERİKLİ (SET) zip kapıdan GEÇER', async () => {
+  const r = await isKostur({ bookId: 45538, manuelZip: SET_KITAP() });
+  assert.deepEqual(r.istekler, ['/api/upload-build']);
+  assert.match(r.hata.message, /packager upload-build failed: HTTP 500/);
+});
+
+test('EXE\'SİZ: exe-türevi kaynak önbelleği (EMPP_SOURCE_CACHE) artık OKUNMAZ — kaynak yok, kira bırakılır', async () => {
   const onbellekKok = fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-zip-cache-hit-ok-'));
   const bookId = 45538;
   const kaynakAdi = 'EnglishUp5-24-v45.exe';
@@ -283,8 +293,10 @@ test('kaynak önbelleği HIT yolunda İÇERİKLİ (SET) zip kapıdan GEÇER', as
   fs.copyFileSync(SET_KITAP(), path.join(hedefDizin, 'build.zip'));
 
   const r = await isKostur({ onbellekKok, bookId, kaynakAdi });
-  assert.deepEqual(r.istekler, ['/api/upload-build']);
-  assert.match(r.hata.message, /packager upload-build failed: HTTP 500/);
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.doesNotMatch(r.loglar, /source cache HIT/);
+  assert.deepEqual(r.istekler, ['/agents/test/release'], 'yalnız kira bırakma; paketleyiciye gidilmez');
+  assert.match(r.loglar, /\[kaynak-yok\] 45538 android/);
 });
 
 // ---------------------------------------------------------------------------
@@ -292,12 +304,15 @@ test('kaynak önbelleği HIT yolunda İÇERİKLİ (SET) zip kapıdan GEÇER', as
 // denetiminin AYRI/EK bir çağrı olduğunu doğrular — kaynak-pozisyon testi.
 // ---------------------------------------------------------------------------
 
-test("ZIP kapısı runner.js'te if(cacheHit) altında, İÇERİK MERDİVENİ'nden ÖNCE çağrılır", () => {
+test("ZIP kapısı runner.js'te HER kaynakta (arşiv + manuel) koşulsuz, İÇERİK MERDİVENİ'nden ÖNCE çağrılır", () => {
   const merdivenIdx = SRC.indexOf("// İÇERİK MERDİVENİ (S0 + S1)");
-  const zipKapisiIdx = SRC.indexOf('icerikKapisiDenetleZip(zipPath');
-  const dizinKapisiIdx = SRC.indexOf('icerikKapisiDenetle(buildDir');
+  const zipKapisiIdx = SRC.indexOf('const icerikZipSonuc = await icerikKapisiDenetleZip(zipPath');
+  const arsivIdx = SRC.indexOf('await fsp.copyFile(arsiv.zip, zipPath');
+  const manuelIdx = SRC.indexOf('await manuelBuildHazirla({');
   assert.ok(zipKapisiIdx > 0 && merdivenIdx > 0 && zipKapisiIdx < merdivenIdx,
     'zip kapısı merdivenden ÖNCE olmalı');
-  assert.ok(dizinKapisiIdx > 0 && dizinKapisiIdx < zipKapisiIdx,
-    'dizin kapısı (MISS dalı) ayrı ve zip kapısından önce kalmalı — kaldırılmamış olmalı');
+  assert.ok(arsivIdx > 0 && manuelIdx > 0 && arsivIdx < zipKapisiIdx && manuelIdx < zipKapisiIdx,
+    'zip kapısı iki kaynak hazırlığından da SONRA olmalı');
+  const onceki = SRC.slice(SRC.lastIndexOf('\n', zipKapisiIdx - 1), zipKapisiIdx);
+  assert.match(onceki, /^\n {4}$/, 'kapı bir if bloğunun içinde olmamalı (koşulsuz)');
 });
