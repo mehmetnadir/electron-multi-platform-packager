@@ -36,7 +36,7 @@ test('kod varsayılanı KAPALI: EMPP_PROBOOK_SERIT yoksa pardus Mac\'te kalır',
   runner.CONFIG.caps = ['android', 'pardus'];
   try {
     runner._seritDenetcisiAyarla(seritDenetcisiKur({ env: {}, caps: runner.CONFIG.caps }));
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus']);
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2']);
   } finally { runner.CONFIG.caps = eski; }
 });
 
@@ -50,19 +50,19 @@ test('ProBook sağlıklı → heartbeat yetenekleri pardus İÇERMEZ; nabız bay
       caps: runner.CONFIG.caps, arsivOzetiFn: () => null,
     });
     runner._seritDenetcisiAyarla(d);
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus'], 'karar yokken Mac alır');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2'], 'karar yokken Mac alır');
 
     nabizYaz(dosya, 30 * 1000);
     await d.tazele({ zorla: true });
-    assert.deepEqual(runner.guncelYetenekler(), ['android']);
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2']);
 
     nabizYaz(dosya, 11 * 60 * 1000);
     await d.tazele({ zorla: true });
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus']);
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2']);
 
     nabizYaz(dosya, 30 * 1000, { api: 'yetkisiz' });
     await d.tazele({ zorla: true });
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus'], 'ProBook kiralayamıyorsa Mac alır');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'pardus', 'kaynak-r2'], 'ProBook kiralayamıyorsa Mac alır');
   } finally {
     runner.CONFIG.caps = eski;
     runner._seritDenetcisiAyarla(null);

@@ -12,6 +12,7 @@
  *
  *   claimKaynakDogrula   zod şemasının düz JS ikizi (fikstürdeki her örnek iki tarafta aynı sonuç)
  *   kaynakKurEkle        `kaynak-kur` yeteneği YALNIZ yüksek bantta (ofis ya da serbest bayrağı)
+ *   kaynakR2Ekle         `kaynak-r2` yeteneği HER ZAMAN (bu runner r2-al/r2-kur claim'ini anlar)
  *   merdivenKaniti       merdiven + set eki raporundan {vsler, icerikSurumleri}
  *   r2OzetDogrula        r2-al: indirilen build'in boyut + sha256'sı claim'le birebir
  *   kaynakUcIstemcisi    B2 uçları (presign-multipart / tamamla / birak) — TEK YER
@@ -29,6 +30,8 @@ const KAYNAK_YOLU_DESENI = /^(?:\/[a-z0-9][a-z0-9.-]*)?\/kaynak\/([A-Za-z0-9_-]{
 const ISO_ZAMAN_DESENI = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)$/;
 
 const KAYNAK_KUR_YETENEGI = 'kaynak-kur';
+// Sunucu `r2-al`'ı YALNIZ bunu bildiren ajana verir (inceleme E1): eski runner r2 claim'ini anlamaz.
+const KAYNAK_R2_YETENEGI = 'kaynak-r2';
 const R2_ISARETI = '[kaynak-r2]';
 
 /* ───────────────────────────── Claim doğrulama (SAF) ───────────────────────────── */
@@ -124,6 +127,15 @@ function kaynakKurIzinli({ acik = true, ofiste = false, serbest = false } = {}) 
 }
 
 /** caps'e `kaynak-kur` ekler (izinliyse, yoksa); girdi dizisi değişmez. */
+/**
+ * caps'e `kaynak-r2` ekler — KONUMDAN BAĞIMSIZ, her zaman (r2-al indirmesi her bantta yapılır;
+ * yalnız 1–3 GB YÜKLEME olan `kaynak-kur` banda bağlıdır). Girdi dizisi değişmez, tekrar eklemez.
+ */
+function kaynakR2Ekle(caps) {
+  const liste = Array.isArray(caps) ? caps.filter((c) => c !== KAYNAK_R2_YETENEGI) : [];
+  return [...liste, KAYNAK_R2_YETENEGI];
+}
+
 function kaynakKurEkle(caps, durum) {
   const liste = Array.isArray(caps) ? caps.filter((c) => c !== KAYNAK_KUR_YETENEGI) : [];
   return kaynakKurIzinli(durum) ? [...liste, KAYNAK_KUR_YETENEGI] : liste;
@@ -352,9 +364,9 @@ async function r2KurYayinla({
 }
 
 module.exports = {
-  KAYNAK_TURLERI, KAYNAK_KUR_YETENEGI, R2_ISARETI, KAYNAK_GET_OMRU_TAVANI_SN,
+  KAYNAK_TURLERI, KAYNAK_KUR_YETENEGI, KAYNAK_R2_YETENEGI, R2_ISARETI, KAYNAK_GET_OMRU_TAVANI_SN,
   imzaliKaynakUrlCoz, claimKaynakDogrula, kanonikUrlMi,
-  kaynakKurIzinli, kaynakKurEkle,
+  kaynakKurIzinli, kaynakKurEkle, kaynakR2Ekle,
   merdivenKaniti, tamamlaKitaplari,
   KaynakR2Hatasi, r2OzetDogrula,
   kaynakUcIstemcisi, r2KurYayinla,

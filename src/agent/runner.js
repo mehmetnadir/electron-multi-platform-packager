@@ -476,9 +476,12 @@ function guncelYetenekler() {
       yedekAktif: yedek.aktif,
     });
   }
+  // KAYNAK-R2 (Dalga B, B4 / inceleme E1): bu runner r2-al/r2-kur claim'ini anlar — sunucu `r2-al`'ı
+  // yalnız bunu bildiren ajana verir. Konumdan BAĞIMSIZ, her zaman bildirilir.
+  caps = kaynakR2.kaynakR2Ekle(caps);
   // KAYNAK-KUR (Dalga B, B4): platform değil ROL — sunucu `r2-kur`u yalnız bunu bildiren ajana verir.
   // Evde bildirilmez (1–3 GB yükleme); ofiste ya da `kaynak-kur-serbest.istek` bayrağıyla.
-  if (caps.length) caps = kaynakR2.kaynakKurEkle(caps, kaynakKurDurumu());
+  caps = kaynakR2.kaynakKurEkle(caps, kaynakKurDurumu());
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
     log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,

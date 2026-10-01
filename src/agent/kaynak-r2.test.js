@@ -139,16 +139,16 @@ test('guncelYetenekler: evde kaynak-kur YOK; bayrak dosyasıyla VAR; ofiste VAR'
     C.kaynakKur = true;
     C.kaynakKurSerbestFlag = path.join(d, 'kaynak-kur-serbest.istek');
     runner._konumAyarla(false);
-    assert.deepEqual(runner.guncelYetenekler(), ['android'], 'evde bildirilmez');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2'], 'evde bildirilmez');
     fs.writeFileSync(C.kaynakKurSerbestFlag, '');
     runner._konumAyarla(false);
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-kur'], 'bayrakla bildirilir');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2', 'kaynak-kur'], 'bayrakla bildirilir');
     fs.rmSync(C.kaynakKurSerbestFlag);
     runner._konumAyarla(true);
-    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-kur'], 'ofiste bildirilir');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2', 'kaynak-kur'], 'ofiste bildirilir');
     C.kaynakKur = false;
     runner._konumAyarla(true);
-    assert.deepEqual(runner.guncelYetenekler(), ['android'], 'EMPP_KAYNAK_KUR=0 acil kapatma');
+    assert.deepEqual(runner.guncelYetenekler(), ['android', 'kaynak-r2'], 'EMPP_KAYNAK_KUR=0 acil kapatma');
   } finally {
     Object.assign(C, { caps: eski.caps, kaynakKur: eski.kaynakKur, kaynakKurSerbestFlag: eski.bayrak });
     runner._konumAyarla(false);
@@ -333,4 +333,25 @@ test('r2KurYayinla 409: nedenKodlari hata metninde (bildirim) ve hata nesnesinde
   const a = akis({ tamamla: { status: 409, data: { nedenler: ['boyut düşük'], nedenKodlari: ['boyut-esigi', 'kapak-yok'] } } });
   await assert.rejects(R.r2KurYayinla(a.o), (e) => /RED \(HTTP 409\) \[boyut-esigi, kapak-yok\]/.test(e.message)
     && e.nedenKodlari.length === 2);
+});
+
+test('kaynak-r2 yeteneği HER ZAMAN bildirilir — evde de ofiste de, kaynak-kur kapalıyken de (inceleme E1)', () => {
+  assert.deepEqual(R.kaynakR2Ekle(['android']), ['android', 'kaynak-r2']);
+  assert.deepEqual(R.kaynakR2Ekle(['android', 'kaynak-r2']), ['android', 'kaynak-r2'], 'tekrar eklenmez');
+  assert.deepEqual(R.kaynakR2Ekle([]), ['kaynak-r2']);
+  const C = runner.CONFIG;
+  const eski = { caps: C.caps, kaynakKur: C.kaynakKur, bayrak: C.kaynakKurSerbestFlag };
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kaynak-r2-'));
+  try {
+    C.caps = ['android', 'macos'];
+    C.kaynakKurSerbestFlag = path.join(d, 'yok.istek');
+    for (const [ofiste, kaynakKur] of [[false, false], [false, true], [true, false], [true, true]]) {
+      C.kaynakKur = kaynakKur;
+      runner._konumAyarla(ofiste);
+      assert.ok(runner.guncelYetenekler().includes('kaynak-r2'), `ofiste=${ofiste} kaynakKur=${kaynakKur}`);
+    }
+  } finally {
+    Object.assign(C, { caps: eski.caps, kaynakKur: eski.kaynakKur, kaynakKurSerbestFlag: eski.bayrak });
+    runner._konumAyarla(false);
+  }
 });

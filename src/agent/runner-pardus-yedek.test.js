@@ -187,7 +187,7 @@ test('guncelYetenekler: bayrak GEÇERLİ (gelecek tarih) + ProBook erişilemez �
       runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
       assert.deepEqual(
         runner.guncelYetenekler(),
-        ['android', 'pardus'],
+        ['android', 'pardus', 'kaynak-r2'],
         'bayrak geçerliyken (süresi dolmamış) ProBook erişilemez olsa da konteyner yedeği pardus\'u korur',
       );
     } finally {
@@ -212,7 +212,7 @@ test('guncelYetenekler: bayrak SÜRESİ DOLMUŞ (geçmiş tarih) + ProBook eriş
       runner._probookErisimAyarla({ t: Date.now(), erisilir: false, suruyor: false });
       assert.deepEqual(
         runner.guncelYetenekler(),
-        ['android'],
+        ['android', 'kaynak-r2'],
         'bayrak süresi dolunca (dosya SİLİNMEDİ, yalnız yok sayıldı) yedek pasif sayılır — davranış "hiç bayrak yokmuş" ile AYNI: erişilemez → pardus düşer',
       );
     } finally {
