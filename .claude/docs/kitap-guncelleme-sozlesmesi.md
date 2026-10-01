@@ -326,9 +326,11 @@ SONRA, paketleyiciye yüklemeden ÖNCE — üç platform aynı zip'i paketler).
 **Girdi:**
 1. *Panel set listesi* — `pipeline_platform_summaries` `platform='web-stream'` satırının
    `proxy_asset_id`'si (`assetId | başlık | kapak | contentType | grup`, satır başına bir; ayrıştırma
-   book-update `parseProxyBookList` ile BİREBİR). Runner'a taşıyıcı: claim `setListesi` (API işi,
-   henüz YOK) > `EMPP_SET_LISTESI_DIZINI/<bookId>.txt` (elle/pilot). İkisi de yoksa ek YAPILMAZ
-   (bugünkü davranış, log satırı).
+   book-update `parseProxyBookList` ile BİREBİR). Runner'a taşıyıcı: claim `setListesi` (API
+   30.09 16:15'ten beri gönderiyor; runner `parseNextJob` 01.10'a kadar alanı DÜŞÜRÜYORDU — düzeltme
+   `setlistesi-claim-20261001` f4aa0f9) > `EMPP_SET_LISTESI_DIZINI/<bookId>.txt` (elle/pilot).
+   İkisi de yoksa ek YAPILMAZ (log satırı). Kapsam dışı: windows (İmpark imzalı exe), tek-kitap
+   yapılı set exe'leri (45448/45477/45480 — `bookN` menüsü yok), kurulu taban (G).
 2. *Eksik kitabın içeriği* — `ZKitapZipH/<ID>-<Vs>.zip`; adres İmpark'a motorun kendi sorusuyla
    (`GetKitapGuncellemeBilgi?id=<ID>&setMi=0&versiyon=0`, şablonu kalıp kitabın `app.config.js`
    `updateBookEndPoint`'i) sorulur, indirme + önbellek içerik merdiveninin yoludur
