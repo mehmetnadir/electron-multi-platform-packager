@@ -18,6 +18,19 @@
 - Test: `kaynak-karari.test.js` (18), `runner-exesiz-kaynak.test.js` (18, gerçek processJob + casus
   `kaynakIndirme`), windows +1, parseNextJob +2; eski exe/önbellek/hazır paket pinleri yeni davranışa
   çevrildi. 14 mutasyonun hepsi yakalandı.
+- İnceleme düzeltmeleri (b8d6bfa "DÜZELTME GEREKLİ"):
+  - İçerik kapısı zip'i `adm-zip` ile değil `unzip -Z1` (merkez dizin, ZIP64) ile listeler: 2 GiB üstü zip
+    artık `ERR_FS_FILE_TOO_LARGE` → "içeriksiz" olmaz; listelenemeyen zip AYRI sebep `[kaynak-okunamadi]`.
+    Arşiv zip'i belleğe okunmaz. `__MACOSX/` · `._*` · `.DS_Store` (Finder sıkıştırması) yok sayılır; tek kök
+    klasörlü Finder zip'i (`sarmalayici`) açılıp kök klasör build sayılır.
+  - Build'siz iş: kitap başına bildirim yerine TEK özet ("N iş build bekliyor: …"), en çok saatte bir; son
+    gönderim + bekleyenler `~/.empp-agent/kaynak-yok-bildirim.json`'da (yeniden başlatmada sel yok).
+    Bırakma sonrası bekleme 15 sn → 2 sn (`AGENT_KAYNAK_YOK_BEKLEME_MS`).
+  - `manuelZipIndir`: HTTP 4xx'te yeniden deneme YOK; tam inen geçersiz zip en çok 2 deneme; ilk 2 bayt `MZ`
+    ise hemen exe hatası. Ağ/5xx yeniden denemesi kalır.
+  - Windows: `kaynakKarari` artık `araclariDenetle`den ÖNCE — build yoksa iş failed değil, bırakılır.
+  - `parseNextJob` `bilgiUrl`'yi taşır; `kaynakTuru:'arsiv-gerekli'` claim'i (downloadUrl yok) kabul edilir,
+    manuel SAYILMAZ; arşiv bilgi notu `bilgiUrl`den beslenir.
 
 ## 2026-09-30 — Ajan kirası: erteleme kirayı bırakır + yetim kira istek kimliği (dal `kira-birak-20260930`)
 

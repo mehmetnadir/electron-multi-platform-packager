@@ -31,7 +31,48 @@ YALITIM.configUygula(CONFIG);
 after(() => YALITIM.temizle());
 const {
   yolListesiTara, girisListesindenDegerlendir, zipGirisAdlariniOku, icerikKapisiDenetleZip,
+  KAPI_ISARETI, OKUNAMADI_ISARETI, macosArtigiMi,
 } = require('./icerik-kapisi');
+
+/**
+ * SEYREK (sparse) zip — >2 GiB'lık STORED girişi diskte yer kaplamadan (delik) kurar. Merkez dizin
+ * gerçek; büyük girişin verisi sıfır (CRC 0 — `unzip -Z1` yalnız listeler, doğrulamaz). adm-zip bu
+ * dosyada `ERR_FS_FILE_TOO_LARGE` fırlatır (inceleme 01.10, KRİTİK 1'in yeniden üretimi).
+ */
+function seyrekZip(girisler) {
+  const yol = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'icerik-kapisi-seyrek-')), 'build.zip');
+  const fd = fs.openSync(yol, 'w');
+  let ofs = 0;
+  const merkez = [];
+  try {
+    for (const g of girisler) {
+      const ad = Buffer.from(g.ad, 'utf8');
+      const boyut = g.veri ? g.veri.length : g.boyut;
+      const h = Buffer.alloc(30);
+      h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(10, 4); h.writeUInt16LE(0x800, 6);
+      h.writeUInt32LE(boyut, 18); h.writeUInt32LE(boyut, 22); h.writeUInt16LE(ad.length, 26);
+      fs.writeSync(fd, h, 0, 30, ofs); fs.writeSync(fd, ad, 0, ad.length, ofs + 30);
+      if (g.veri) fs.writeSync(fd, g.veri, 0, g.veri.length, ofs + 30 + ad.length);
+      merkez.push({ ad, boyut, ofs });
+      ofs += 30 + ad.length + boyut;
+    }
+    const cdBas = ofs;
+    for (const m of merkez) {
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(10, 6); c.writeUInt16LE(0x800, 8);
+      c.writeUInt32LE(m.boyut, 20); c.writeUInt32LE(m.boyut, 24); c.writeUInt16LE(m.ad.length, 28);
+      c.writeUInt32LE(m.ofs, 42);
+      fs.writeSync(fd, c, 0, 46, ofs); fs.writeSync(fd, m.ad, 0, m.ad.length, ofs + 46);
+      ofs += 46 + m.ad.length;
+    }
+    const e = Buffer.alloc(22);
+    e.writeUInt32LE(0x06054b50, 0); e.writeUInt16LE(merkez.length, 8); e.writeUInt16LE(merkez.length, 10);
+    e.writeUInt32LE(ofs - cdBas, 12); e.writeUInt32LE(cdBas, 16);
+    fs.writeSync(fd, e, 0, 22, ofs);
+  } finally { fs.closeSync(fd); }
+  return yol;
+}
+const IKI_GIB = 2 * 1024 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Gerçek küçük zip fikstürleri (11845/45550/45551 tarzı + tek kitap + SET + sarmalayıcı)
@@ -151,10 +192,60 @@ test('sarmalayıcı klasörlü tek kitap gerçek zip → GEÇER', async () => {
   assert.equal(sonuc.gecti, true);
 });
 
-test('icerikKapisiDenetleZip: bozuk/olmayan zip içeriksiz SAYILIR (fırlatmaz)', async () => {
+test('icerikKapisiDenetleZip: bozuk/olmayan zip AYRI sebeple düşer ([kaynak-okunamadi], içeriksiz DEĞİL; fırlatmaz)', async () => {
   const yok = path.join(os.tmpdir(), 'olmayan-' + Date.now() + '.zip');
-  const sonuc = await icerikKapisiDenetleZip(yok);
+  const sonuc = await icerikKapisiDenetleZip(yok, { kaynakAdi: 'x.zip' });
   assert.equal(sonuc.gecti, false);
+  assert.ok(sonuc.sebep.startsWith(`${OKUNAMADI_ISARETI} zip giriş listesi okunamadı <x.zip>`), sonuc.sebep);
+  assert.ok(!sonuc.sebep.includes(KAPI_ISARETI));
+  const bozuk = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bozuk-zip-')), 'b.zip');
+  fs.writeFileSync(bozuk, 'zip değil');
+  assert.ok((await icerikKapisiDenetleZip(bozuk)).sebep.startsWith(OKUNAMADI_ISARETI));
+});
+
+test('icerikKapisiDenetleZip: listeleyici fırlatırsa okunamadı; boş/motor liste içeriksiz (iki teşhis ayrı)', async () => {
+  const okunamadi = await icerikKapisiDenetleZip('/yok.zip', { listele: () => { throw new Error('unzip -Z1 rc=9'); } });
+  assert.match(okunamadi.sebep, /^\[kaynak-okunamadi\] .*unzip -Z1 rc=9/);
+  const iceriksiz = await icerikKapisiDenetleZip('/yok.zip', { listele: () => ['index.html', 'core/a.js'] });
+  assert.ok(iceriksiz.sebep.startsWith(KAPI_ISARETI));
+  assert.equal((await icerikKapisiDenetleZip('/yok.zip', { listele: () => ['assets/1/a.jpg'] })).gecti, true);
+});
+
+test('GERİLEME (KRİTİK 1): 2 GiB üstü (seyrek) zip — giriş listesi okunur, içerikli kaynak GEÇER', async () => {
+  const yol = seyrekZip([
+    { ad: 'index.html', veri: Buffer.from('<html></html>') },
+    { ad: 'assets/45482/pages/buyuk.bin', boyut: IKI_GIB + 64 * 1024 * 1024 },
+    { ad: 'assets/45482/thumbs/1.jpg', veri: Buffer.from('jpg') },
+  ]);
+  try {
+    assert.ok(fs.statSync(yol).size > IKI_GIB, 'fikstür 2 GiB üstü olmalı');
+    assert.throws(() => new AdmZip(yol), /ERR_FS_FILE_TOO_LARGE|greater than 2 GiB|too large/i,
+      'adm-zip bu dosyayı okuyamaz (eski arızanın kendisi)');
+    assert.deepEqual(zipGirisAdlariniOku(yol),
+      ['index.html', 'assets/45482/pages/buyuk.bin', 'assets/45482/thumbs/1.jpg']);
+    const sonuc = await icerikKapisiDenetleZip(yol, { kaynakAdi: 'arsiv:test' });
+    assert.deepEqual(sonuc, { gecti: true, sebep: null });
+  } finally { fs.rmSync(path.dirname(yol), { recursive: true, force: true }); }
+});
+
+// FINDER ZIP'İ (01.10): __MACOSX/ ve ._* girişleri içerik değildir — sarmalayıcı/kök kararına girmez.
+test('macosArtigiMi: __MACOSX/, ._dosya ve .DS_Store artık; normal yollar değil', () => {
+  for (const y of ['__MACOSX/', '__MACOSX/build/._index.html', 'build/._index.html', '._x', 'a/.DS_Store']) {
+    assert.equal(macosArtigiMi(y), true, y);
+  }
+  for (const y of ['index.html', 'assets/1/a._b.jpg', 'book1/x.js', '__MACOSXfoo/a']) assert.equal(macosArtigiMi(y), false, y);
+});
+
+test('girisListesindenDegerlendir: Finder ile sıkıştırılmış sarmalayıcı + __MACOSX → GEÇER', () => {
+  const r = girisListesindenDegerlendir(['build/', 'build/index.html', 'build/assets/45482/thumbs/1.jpg',
+    '__MACOSX/', '__MACOSX/build/', '__MACOSX/build/._index.html']);
+  assert.deepEqual(r, { gecti: true, sebep: null });
+});
+
+test('girisListesindenDegerlendir: yalnız __MACOSX altında içerik "varmış gibi" görünen motor-only zip → RED', () => {
+  const r = girisListesindenDegerlendir(['index.html', 'core/a.js', '__MACOSX/assets/._1.jpg', '__MACOSX/book1/._x']);
+  assert.equal(r.gecti, false);
+  assert.ok(r.sebep.startsWith(KAPI_ISARETI));
 });
 
 test('icerikKapisiDenetleZip: EMPP_ICERIK_KAPISI=0 iken motor-only zip bile GEÇER + log satırı', async () => {

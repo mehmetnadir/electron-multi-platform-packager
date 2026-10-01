@@ -26,6 +26,8 @@
  * (bozuk bir arşiv kaydı manuel kaynağı düşürmesin).
  */
 
+const { girisleriTemizle } = require('./icerik-kapisi');
+
 const KAYNAK_YOK_SEBEBI = 'build yok — exe\'siz sözleşme: arşiv/manuel kaynak gerekli';
 
 /**
@@ -62,7 +64,11 @@ function manuelKaynakUrl(job) {
   if (!job || typeof job !== 'object') return null;
   const url = typeof job.downloadUrl === 'string' ? job.downloadUrl.trim() : '';
   if (!url || exeYoluMu(url)) return null;
-  if (kaynakTuruOku(job) === 'manuel') return url;
+  const tur = kaynakTuruOku(job);
+  if (tur === 'manuel') return url;
+  // Sunucu sözleşmesi (book-update ajan-kaynak-turu.ts nextJobKaynakSemasi): 'arsiv-gerekli'
+  // claim'inde manuel kaynak YOKTUR — adres (olsa bile) indirilmez.
+  if (tur === 'arsiv-gerekli') return null;
   const yol = yolKismi(url);
   return MANUEL_YOL_ISARETLERI.some((i) => yol.includes(i)) ? url : null;
 }
@@ -89,18 +95,30 @@ function kaynakKarari({ job, arsiv = null } = {}) {
 }
 
 /**
- * Manuel zip'in giriş listesinden biçim kararı. SAF.
+ * Manuel zip'in giriş listesinden biçim kararı. SAF. Finder artıkları (`__MACOSX/`, `._*`,
+ * `.DS_Store`) karara girmez (icerik-kapisi `girisleriTemizle`).
  *   'kok'          : zip kökü doğrudan build'dir (sözleşme M1 — varsayılan; SFX DEĞİL, unrar/7z ile
  *                    `resources/app/build` ARANMAZ).
  *   'eski-kurulum' : içinde `resources/app/build/` olan Windows kurulum ağacı (eski 59480 tipi
  *                    Set menüsü zip'i) — açılıp o dizin build.zip yapılır (bugünkü çıkarma yolu
  *                    `findBuildDir` ile uyum).
+ *   'sarmalayici'  : kökte build yok, tüm girişler TEK klasör altında (Finder ile klasör sıkıştırma)
+ *                    — açılıp o klasör build.zip yapılır.
+ * `temizle`: zip'te macOS artığı var — 'kok' olsa bile açılıp artıksız yeniden paketlenir.
  * @param {string[]} girisler zip giriş adları
- * @returns {'kok'|'eski-kurulum'}
+ * @returns {{ bicim: 'kok'|'eski-kurulum'|'sarmalayici', temizle: boolean, kokKlasor?: string }}
  */
 function manuelZipBicimi(girisler) {
-  const liste = Array.isArray(girisler) ? girisler.map((g) => String(g).replace(/\\/g, '/')) : [];
-  return liste.some((g) => /(^|\/)resources\/app\/build\//.test(g)) ? 'eski-kurulum' : 'kok';
+  const ham = Array.isArray(girisler) ? girisler.map((g) => String(g).replace(/\\/g, '/')).filter(Boolean) : [];
+  const liste = girisleriTemizle(ham);
+  const temizle = liste.length !== ham.length;
+  if (liste.some((g) => /(^|\/)resources\/app\/build\//.test(g))) return { bicim: 'eski-kurulum', temizle };
+  const kokler = new Set(liste.map((g) => g.split('/')[0]).filter(Boolean));
+  const kokteBuild = liste.some((g) => /^(index\.html$|assets\/|book\d+\/)/i.test(g));
+  if (!kokteBuild && kokler.size === 1 && liste.some((g) => g.includes('/'))) {
+    return { bicim: 'sarmalayici', temizle, kokKlasor: [...kokler][0] };
+  }
+  return { bicim: 'kok', temizle };
 }
 
 module.exports = {

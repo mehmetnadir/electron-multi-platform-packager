@@ -110,6 +110,9 @@ function parseNextJob(status, body) {
     // Kaynak türü (exe'siz sözleşme §7 M1, ör. 'manuel'): kaynak-karari.js okur.
     ...(typeof job.kaynakTuru === 'string' && job.kaynakTuru.trim()
       ? { kaynakTuru: job.kaynakTuru.trim() } : {}),
+    // Bilgi adresi (sunucu 'arsiv-gerekli': exe adresi İNDİRİLEBİLİR alanda durmaz, yalnız ad/sürüm
+    // bilgisi için `bilgiUrl`de gelir — book-update ajan-kaynak-turu.ts nextJobKaynakSemasi).
+    ...(typeof job.bilgiUrl === 'string' && job.bilgiUrl.trim() ? { bilgiUrl: job.bilgiUrl.trim() } : {}),
     buildMethod: job.buildMethod != null ? String(job.buildMethod) : undefined,
     bookTitle: job.bookTitle != null ? String(job.bookTitle) : undefined,
     ...(job.publisherName != null ? { publisherName: String(job.publisherName) } : {}),

@@ -253,7 +253,9 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false
     impark_kaynagi: 'yds-v51.exe' }));
 
   const eskiConfig = {};
-  for (const k of ['apiBase', 'packagerApi', ...WIN_ALANLARI]) eskiConfig[k] = CONFIG[k];
+  for (const k of ['apiBase', 'packagerApi', 'kaynakYokDurumDosyasi', ...WIN_ALANLARI]) eskiConfig[k] = CONFIG[k];
+  // Her koşu kendi özet-bildirim durumuyla (aralık önceki koşudan etkilenmesin).
+  CONFIG.kaynakYokDurumDosyasi = path.join(tmp('kaynak-yok'), 'durum.json');
   const ENV = {
     EMPP_RUNNER_WINDOWS: '1', EMPP_KAYNAK_ARSIVI: arsiv, EMPP_SOURCE_CACHE: tmp('cache'),
     EMPP_BILDIR_IKILI: araclar.bildir, EMPP_BILDIRIM: '1', AGENT_UPLOAD_RATE: '',
@@ -425,9 +427,26 @@ test('exe\'siz: arşiv/manuel kaynak yok → exe İNDİRİLMEZ, kira bırakılı
     await new Promise((ok) => setTimeout(ok, 50));
     gunluk = r.okuGunluk();
   }
-  assert.match(gunluk, /^bildir kosucu \| Test Kitap \(74390\) — build yok/m);
+  assert.match(gunluk, /^bildir kosucu \| 1 iş build bekliyor: 74390\/windows\. /m);
   assert.doesNotMatch(r.gunluk, /^(tetik|kabul |bildir bekci)/m, 'imza yuvası/kabul/bekçi tetiklenmemeli');
   assert.match(r.loglar, /\[kaynak-yok\] 74390 windows/);
+});
+
+// İnceleme 01.10: kaynak kararı araç/yuva denetiminden ÖNCE — build yoksa araç eksikliği iş düşürmez.
+test('exe\'siz: build yok + imza aracı/yuva YOK → yine kira bırakılır (failed değil), araç denetimi koşmaz', async () => {
+  const r = await windowsIsiKostur({ arsivYok: true,
+    ayar: { winOsslsigncode: '/yok/boyle/bir/osslsigncode', winImzaYuvaKoku: '/yok/boyle/bir/yuva' } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.api.release.length, 1);
+  assert.doesNotMatch(r.loglar, /ön koşul: .*osslsigncode bulunamadı/);
+  r2YazimiSifir(r);
+});
+
+test('build VAR + imza aracı YOK → araç denetimi düşürür (davranış korunur), kira bırakılmaz', async () => {
+  const r = await windowsIsiKostur({ ayar: { winOsslsigncode: '/yok/boyle/bir/osslsigncode' } });
+  assert.match(r.hata.message, /ön koşul: .*osslsigncode bulunamadı/);
+  assert.equal((r.api.release || []).length, 0);
+  assert.deepEqual(r.paketleyici.istekler, []);
 });
 
 test('claim setKimligi book_id\'den farklı → iş düşer, üretim yok', async () => {
@@ -494,11 +513,12 @@ test('runner G set yükleme yolu kaldırıldı (tek yazar g-yayin)', () => {
   }
 });
 
-test('ön koşul indirmeden ÖNCE: onKosul + araç/yuva denetimi arşiv kıyasından önce', () => {
+test('sıra: onKosul (saf) → kaynak kararı → araç/yuva denetimi → kaynak hazırlığı', () => {
   const on = PROCESS_JOB.indexOf('windowsSerit.onKosul(job)');
+  const karar = PROCESS_JOB.indexOf('kaynakKarari({ job, arsiv })');
   const arac = PROCESS_JOB.indexOf('windowsSerit.araclariDenetle(CONFIG)');
-  const arsiv = PROCESS_JOB.indexOf('await arsivKaynagi(');
-  assert.ok(on > 0 && arac > on && arsiv > arac);
+  const hazirlik = PROCESS_JOB.indexOf('await fsp.copyFile(arsiv.zip');
+  assert.ok(on > 0 && karar > on && arac > karar && hazirlik > arac);
 });
 
 test('şerit hatası bekçiye bildirilir, sonra yukarı fırlatılır (ana döngü failed yazar)', () => {

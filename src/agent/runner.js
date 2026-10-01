@@ -79,6 +79,9 @@ const CONFIG = {
   tokenFile: process.env.AGENT_TOKEN_FILE || path.join(os.homedir(), '.empp-agent', 'token.json'),
   agentName: process.env.AGENT_NAME || os.hostname(),
   pollMs: Number(process.env.AGENT_POLL_MS || 10000),
+  // Build'siz iş bırakıldıktan sonra kısa bekleme (inceleme 01.10): arşivli işler build'sizlerin
+  // arkasında beklemesin; tekrar kiralamayı sunucunun dışlama backoff'u (10→60 dk) zaten keser.
+  kaynakYokBeklemeMs: Number(process.env.AGENT_KAYNAK_YOK_BEKLEME_MS || 2000),
   heartbeatMs: Number(process.env.AGENT_HEARTBEAT_MS || 15000),
   // İlk heartbeat POST'u düşerse (Happy Eyeballs/DNS/timeout — çoğu geçici) bu kadar
   // bekleyip TEK seferlik hızlı bir daha denenir; o da düşerse tek satır loglanır.
@@ -116,6 +119,9 @@ const CONFIG = {
   // Nadir: "srv21'i kullanıp paralelliği yükseltebilirsin"). Dosya adı: <bookId>.impark
   // ve yanındaki <bookId>.json içinde {srcVersion} — kaynak sürümü tutmazsa KULLANILMAZ.
   pardusHazirDir: process.env.EMPP_PARDUS_HAZIR_DIR || '',
+  // Exe'siz sözleşme (01.10): build'siz işlerin ÖZET bildirim durumu (son gönderim + bekleyenler).
+  kaynakYokDurumDosyasi: process.env.EMPP_KAYNAK_YOK_DURUM
+    || path.join(os.homedir(), '.empp-agent', 'kaynak-yok-bildirim.json'),
   pardusKabul: process.env.EMPP_PARDUS_KABUL === '1',
   pardusKabulScript: process.env.PARDUS_KABUL_SCRIPT
     || path.join(__dirname, '..', '..', 'tools', 'pardus', 'probook-kabul.sh'),
@@ -571,7 +577,7 @@ async function presignUpload(auth, job) {
 const { applyPublisherUpdate, latestLocalUpdate } = require('./publisher-update');
 const { dahaYeniMi } = require('./surum-kiyas');
 const { arsivKaynagi } = require('./kaynak-arsivi');
-const { icerikKapisiDenetle, icerikKapisiDenetleZip } = require('./icerik-kapisi');
+const { icerikKapisiDenetle, icerikKapisiDenetleZip, zipGirisAdlariniOku } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 const { KAYNAK_KOK_INDEX_MARKER: KOK_INDEX_KAYNAK_MARKER } = require('../packaging/kok-index-denetimi');
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
@@ -1924,86 +1930,118 @@ async function hazirPardusPaketi({ bookId } = {}) {
 
 /**
  * MANUEL build.zip indirme (exe'siz sözleşme §7 M1) — İmpark exe'si DEĞİL: elle yüklenmiş build
- * (R2 `sources/<bookId>/…zip` ya da `kaynak/<setId>/<sürüm>/build.zip`). `downloadFile` ile aynı
- * WAN dayanıklılığı (her deneme sıfırdan, `--speed-limit` durgunluk kapısı, IPv4) ama doğrulama
- * ZIP'e göre: `unzip -Z1` en az bir giriş listelemeli (kesik zip'in merkez dizini yoktur).
- * unrar/7z KULLANILMAZ (SFX değil). Yol `.exe` ile bitiyorsa İNDİRMEZ, fırlatır.
+ * (R2 `sources/<bookId>/…zip` ya da `kaynak/<setId>/<sürüm>/build.zip`). Her deneme sıfırdan,
+ * `--speed-limit` durgunluk kapısı, IPv4. Doğrulama ZIP'e göre (`unzip -Z1` en az bir giriş).
+ * unrar/7z KULLANILMAZ (SFX değil). İnceleme düzeltmesi (01.10):
+ *   - 4xx → HEMEN fırlatır, yeniden deneme YOK (adres/izin hatası; eskiden `--retry-all-errors`
+ *     404'ü de bir saate kadar deniyordu). curl'ün kendi `--retry`'ı yalnız geçici sınıf (ağ, 5xx).
+ *   - Tam inen ama geçerli zip olmayan içerik en çok MANUEL_GECERSIZ_MAX (2) kez denenir.
+ *   - İçeriğin ilk 2 baytı `MZ` ise (Windows exe) HEMEN exe hatası — exe hiçbir koşulda kaynak değil.
+ *   - Yol `.exe` ile bitiyorsa hiç indirmez.
  */
+const MANUEL_GECERSIZ_MAX = 2;
 async function manuelZipIndir(url, destPath) {
+  const ad = path.basename(String(url).split('?')[0]);
   if (exeYoluMu(url)) {
-    throw new Error(`exe'siz sözleşme: manuel kaynak .exe olamaz — indirilmedi: ${path.basename(String(url).split('?')[0])}`);
+    throw new Error(`exe'siz sözleşme: manuel kaynak .exe olamaz — indirilmedi: ${ad}`);
   }
   const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
   const rate = process.env.AGENT_DOWNLOAD_RATE ?? '2M';
   const MAX = Number(process.env.AGENT_DOWNLOAD_MAX_ATTEMPTS || 12);
+  let gecersiz = 0;
   for (let attempt = 1; attempt <= MAX; attempt++) {
     if (stopping) throw new Error('shutting down');
     await fsp.rm(destPath, { force: true }).catch(() => {});
     const res = await run('curl', [
       '-sS', '-4', '-L', '--fail',
-      '--retry', '300', '--retry-delay', '3', '--retry-all-errors',
+      '--retry', '300', '--retry-delay', '3', '--retry-connrefused',
       '--retry-max-time', String(retryMax),
       '--speed-limit', '1024', '--speed-time', '120',
       ...(rate ? ['--limit-rate', rate] : []),
+      '-w', '%{http_code}',
       '-o', destPath,
       url,
     ]);
+    const httpKodu = Number((String(res.stdout || '').match(/(\d{3})\s*$/) || [])[1] || 0);
+    if (httpKodu >= 400 && httpKodu < 500) {
+      throw new Error(`manuel build HTTP ${httpKodu} — yeniden denenmez (adres/izin hatası): ${ad}`);
+    }
     const size = (await fsp.stat(destPath).catch(() => ({ size: 0 }))).size;
-    if (res.code !== 0 && size === 0) {
-      warn(`manuel build indirme ${attempt}: curl exit ${res.code}, boş — yeniden deneniyor`);
+    if (res.code !== 0) {
+      // Ağ / 5xx / durgunluk: sıfırdan yeniden dene (yarım dosya geçersiz sayılmaz).
+      warn(`manuel build indirme ${attempt}: curl exit ${res.code} (HTTP ${httpKodu || '-'}, ${size} B) — yeniden deneniyor`);
       if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
       continue;
+    }
+    let bas = Buffer.alloc(0);
+    try {
+      const fh = await fsp.open(destPath, 'r');
+      try { bas = (await fh.read(Buffer.alloc(2), 0, 2, 0)).buffer; } finally { await fh.close(); }
+    } catch (_) { /* okunamadı — aşağıda geçersiz sayılır */ }
+    if (bas.length === 2 && bas.toString('latin1') === 'MZ') {
+      throw new Error(`exe'siz sözleşme: manuel kaynak bir Windows exe'si (MZ) — kullanılmaz: ${ad}`);
     }
     const girisler = await zipGirisleri(destPath);
     if (girisler.length > 0) {
       log(`manuel build indirildi: ${(size / 1e6).toFixed(0)}MB, geçerli zip (${girisler.length} giriş, deneme ${attempt})`);
       return;
     }
-    warn(`manuel build indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB ama geçerli zip DEĞİL — yeniden deneniyor`);
+    gecersiz += 1;
+    if (gecersiz >= MANUEL_GECERSIZ_MAX) {
+      throw new Error(`manuel build geçerli zip değil (${gecersiz} tam indirme, ${size} B) — vazgeçildi: ${ad}`);
+    }
+    warn(`manuel build indirme ${attempt}: ${(size / 1e6).toFixed(0)}MB indi ama geçerli zip DEĞİL — bir kez daha`);
     if (attempt < MAX) await sleep(backoffMs(attempt, 3000, 30000));
   }
-  throw new Error(`manuel build indirilemedi: ${MAX} denemede geçerli zip gelmedi`);
+  throw new Error(`manuel build indirilemedi: ${MAX} denemede ağ/sunucu hatası`);
 }
 
-/** Zip'in giriş adları (`unzip -Z1`); okunamazsa boş dizi. */
+/** Zip'in giriş adları (`unzip -Z1`, ZIP64; dosya belleğe alınmaz); okunamazsa boş dizi. */
 async function zipGirisleri(zip) {
-  const r = await run('unzip', ['-Z1', zip]);
-  if (r.code !== 0) return [];
-  return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  try {
+    return zipGirisAdlariniOku(zip);
+  } catch (_) {
+    return [];
+  }
 }
 
 /**
- * Manuel build.zip'i iş kopyasına (`zipPath`) hazırlar. İki biçim (kaynak-karari `manuelZipBicimi`):
- *   'kok'          — zip kökü DOĞRUDAN build'dir (sözleşme M1): olduğu gibi taşınır, açılmaz.
- *   'eski-kurulum' — içinde `resources/app/build/` olan Windows kurulum ağacı (eski 59480 tipi Set
- *                    menüsü zip'i): bugünkü çıkarma yoluyla uyum — açılır, `findBuildDir` ile
- *                    build dizini bulunur, `zipDir` ile build.zip yapılır. SFX (exe) açılmaz.
- * Her iki yolda da yayıncı güncellemesi UYGULANMAZ (manuel build olduğu gibi kullanılır).
- * @returns {Promise<{bicim: 'kok'|'eski-kurulum'}>}
+ * Manuel build.zip'i iş kopyasına (`zipPath`) hazırlar (biçim: kaynak-karari `manuelZipBicimi`):
+ *   'kok' (artıksız) — zip kökü DOĞRUDAN build'dir (sözleşme M1): olduğu gibi taşınır, açılmaz.
+ *   'kok' + macOS artığı — açılır (artıklar hariç), kök yeniden paketlenir.
+ *   'sarmalayici'    — Finder ile klasör sıkıştırma: açılır, tek klasör build.zip yapılır.
+ *   'eski-kurulum'   — içinde `resources/app/build/` olan Windows kurulum ağacı (eski 59480 tipi):
+ *                      bugünkü çıkarma yoluyla uyum — açılır, `findBuildDir`, `zipDir`. SFX açılmaz.
+ * Hiçbir yolda yayıncı güncellemesi UYGULANMAZ (manuel build olduğu gibi kullanılır).
+ * @returns {Promise<{bicim: string, temizle: boolean}>}
  */
 async function manuelBuildHazirla({ url, zipPath, work, bookId }) {
   const indirilen = path.join(work, 'manuel-kaynak.zip');
   log(`kaynak MANUEL build.zip (${bookId}) — ${path.basename(String(url).split('?')[0])}; `
     + 'İmpark exe indirilmez, merdiven/set eki/yayıncı güncellemesi uygulanmaz (sözleşme M1)');
   await kaynakIndirme.manuelZipIndir(url, indirilen);
-  const bicim = manuelZipBicimi(await zipGirisleri(indirilen));
-  if (bicim === 'kok') {
+  const karar = manuelZipBicimi(await zipGirisleri(indirilen));
+  if (karar.bicim === 'kok' && !karar.temizle) {
     await fsp.rename(indirilen, zipPath);
     log('manuel build: zip kökü doğrudan build — olduğu gibi kullanılıyor');
-    return { bicim };
+    return karar;
   }
   const acik = path.join(work, 'manuel-acik');
   await fsp.mkdir(acik, { recursive: true });
-  const r = await run('unzip', ['-q', '-o', indirilen, '-d', acik]);
-  if (r.code !== 0 && r.code !== 1) { // 1 = yalnız uyarı (unzip)
+  const r = await run('unzip', ['-q', '-o', indirilen, '-x', '__MACOSX/*', '*/._*', '._*', '*.DS_Store',
+    '-d', acik]);
+  if (r.code !== 0 && r.code !== 1 && r.code !== 11) { // 1 = uyarı, 11 = dışlama deseni eşleşmedi
     throw new Error(`manuel build zip açılamadı (unzip ${r.code}): ${String(r.stderr || '').slice(-300)}`);
   }
-  const buildDir = await findBuildDir(acik);
-  log(`manuel build: eski kurulum ağacı (resources/app/build) — build dizini: ${path.relative(acik, buildDir)}`);
+  let buildDir = acik;
+  if (karar.bicim === 'eski-kurulum') buildDir = await findBuildDir(acik);
+  if (karar.bicim === 'sarmalayici') buildDir = path.join(acik, karar.kokKlasor);
+  log(`manuel build: ${karar.bicim}${karar.temizle ? ' + macOS artıkları ayıklandı' : ''} — build dizini: `
+    + `${path.relative(acik, buildDir) || '.'}`);
   await zipDir(buildDir, zipPath);
   await fsp.rm(acik, { recursive: true, force: true }).catch(() => {});
   await fsp.rm(indirilen, { force: true }).catch(() => {});
-  return { bicim };
+  return karar;
 }
 
 /**
@@ -2016,38 +2054,74 @@ const kaynakIndirme = {
   manuelZipIndir: (...a) => manuelZipIndir(...a),
 };
 
-// KAYNAK YOK — kira bırak + bildirim (exe'siz sözleşme §6a). Bildirim (bildir kanal `kosucu`)
-// aynı (kitap, platform) için süreç başına KAYNAK_YOK_BILDIRIM_ARALIK_MS'de en çok bir kez gider:
-// sunucu işi sona atıp tekrar kiraladıkça telefon dolmasın; log her seferinde yazılır.
+// KAYNAK YOK — kira bırak + ÖZET bildirim (exe'siz sözleşme §6a; inceleme 01.10 "bildirim seli").
+// Build'siz işler sunucuda sona atılıp tekrar kiralandıkça her bırakma ayrı bildirim üretmesin:
+// bekleyen (kitap, platform) çiftleri küçük bir durum dosyasında birikir, en çok
+// KAYNAK_YOK_OZET_ARALIK_MS'de (varsayılan 1 sa) BİR özet ("N iş build bekliyor: …") gider. Son
+// gönderim zamanı dosyada durduğu için süreç yeniden başlayınca da sel olmaz. Log her seferinde.
 const KAYNAK_YOK_ISARETI = '[kaynak-yok]';
-const KAYNAK_YOK_BILDIRIM_ARALIK_MS = Number(process.env.EMPP_KAYNAK_YOK_BILDIRIM_ARALIK_MS || 6 * 3600 * 1000);
-const _kaynakYokSonBildirim = new Map();
+const KAYNAK_YOK_OZET_ARALIK_MS = Number(process.env.EMPP_KAYNAK_YOK_BILDIRIM_ARALIK_MS || 3600 * 1000);
+const KAYNAK_YOK_LISTE_TAVAN = 20;
 
-function kaynakYokBildir({ bookId, bookTitle, platform, sebep }) {
-  if (process.env.EMPP_BILDIRIM === '0') return false;
-  const anahtar = `${bookId}|${platform}`;
-  const simdi = Date.now();
-  const son = _kaynakYokSonBildirim.get(anahtar);
-  if (son !== undefined && simdi - son < KAYNAK_YOK_BILDIRIM_ARALIK_MS) return false;
-  _kaynakYokSonBildirim.set(anahtar, simdi);
-  const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
-  const govde = `${bookTitle || bookId} (${bookId}) — ${sebep}. Üretim BEKLİYOR: kaynak arşivine ya da `
-    + 'manuel build.zip olarak eklenince sürer (exe indirilmez).';
-  const args = ['kosucu', govde, '-b', `⏸ ${platform} bekliyor — build yok`, '-p', 'normal', '-e', 'pause_button'];
+function kaynakYokDurumOku() {
   try {
-    const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
-    ps.on('error', (e) => warn('kaynak-yok bildirimi gönderilemedi:', e.message));
-    ps.unref();
-    return true;
+    const d = JSON.parse(fs.readFileSync(CONFIG.kaynakYokDurumDosyasi, 'utf8'));
+    if (d && typeof d === 'object') {
+      return { sonGonderimMs: Number(d.sonGonderimMs) || 0, bekleyen: d.bekleyen && typeof d.bekleyen === 'object' ? d.bekleyen : {} };
+    }
+  } catch (_) { /* yok/bozuk — sıfırdan */ }
+  return { sonGonderimMs: 0, bekleyen: {} };
+}
+
+function kaynakYokDurumYaz(d) {
+  try {
+    fs.mkdirSync(path.dirname(CONFIG.kaynakYokDurumDosyasi), { recursive: true });
+    const tmp = `${CONFIG.kaynakYokDurumDosyasi}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(d));
+    fs.renameSync(tmp, CONFIG.kaynakYokDurumDosyasi);
   } catch (e) {
-    warn('kaynak-yok bildirimi gönderilemedi:', e.message);
+    warn('kaynak-yok durum dosyası yazılamadı (bildirim aralığı süreç içinde korunmaz):', e.message);
+  }
+}
+
+/** Özet metni (SAF). */
+function kaynakYokOzetMetni(bekleyenler) {
+  const liste = bekleyenler.map((b) => `${b.bookId}/${b.platform}`).sort();
+  const gorunen = liste.slice(0, KAYNAK_YOK_LISTE_TAVAN).join(', ');
+  const kalan = liste.length > KAYNAK_YOK_LISTE_TAVAN ? ` … +${liste.length - KAYNAK_YOK_LISTE_TAVAN}` : '';
+  return `${liste.length} iş build bekliyor: ${gorunen}${kalan}. Exe indirilmez — kaynak arşivine ya da `
+    + 'manuel build.zip olarak eklenince üretim sürer.';
+}
+
+/**
+ * Bekleyen işi durum dosyasına ekler; aralık dolduysa TEK özet bildirim gönderir ve listeyi sıfırlar.
+ * @returns {boolean} bu çağrıda bildirim gönderildi mi
+ */
+function kaynakYokOzet({ bookId, bookTitle, platform, simdi = Date.now() }) {
+  const d = kaynakYokDurumOku();
+  d.bekleyen[`${bookId}|${platform}`] = { bookId: String(bookId), bookTitle: bookTitle || '', platform, sonMs: simdi };
+  if (process.env.EMPP_BILDIRIM === '0' || simdi - d.sonGonderimMs < KAYNAK_YOK_OZET_ARALIK_MS) {
+    kaynakYokDurumYaz(d);
     return false;
   }
+  const bekleyenler = Object.values(d.bekleyen);
+  const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
+  const args = ['kosucu', kaynakYokOzetMetni(bekleyenler), '-b', `⏸ ${bekleyenler.length} iş build bekliyor`,
+    '-p', 'normal', '-e', 'pause_button'];
+  try {
+    const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
+    ps.on('error', (e) => warn('kaynak-yok özet bildirimi gönderilemedi:', e.message));
+    ps.unref();
+  } catch (e) {
+    warn('kaynak-yok özet bildirimi gönderilemedi:', e.message);
+  }
+  kaynakYokDurumYaz({ sonGonderimMs: simdi, bekleyen: {} });
+  return true;
 }
 
 /**
  * Build'i olmayan iş: HİÇBİR ŞEY indirilmez; kira açıkça bırakılır (sunucu işi kuyruğun sonuna
- * atar + ajan dışlama backoff'u), görünür bildirim gider, `failed` YAZILMAZ.
+ * atar + ajan dışlama backoff'u), özet bildirime eklenir, `failed` YAZILMAZ.
  * @returns {Promise<boolean>} kira bırakıldı mı
  */
 async function kaynakYokBekle(auth, job, sebep) {
@@ -2058,7 +2132,7 @@ async function kaynakYokBekle(auth, job, sebep) {
   const birakildi = await releaseJob(auth, job, sebep);
   warn(`${KAYNAK_YOK_ISARETI} ${job.bookId} ${job.platform}: ${sebep} — exe İNDİRİLMEDİ, failed YAZILMADI, `
     + (birakildi ? 'kira BIRAKILDI (kuyruğun sonunda)' : 'kira bırakılamadı (süre dolunca kuyruğa döner)'));
-  kaynakYokBildir({ bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, sebep });
+  kaynakYokOzet({ bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform });
   return birakildi;
 }
 
@@ -2111,12 +2185,12 @@ async function processJob(auth, job) {
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
   try {
-    // WINDOWS ŞERİDİ ön koşulu — kaynak İNDİRİLMEDEN (windows-serit.js): claim sürümü
-    // 2.<panel kodu>.<paket sayacı> (sözleşme madde 1), kimlik = book_id, G tabanı https,
-    // imza betiği + osslsigncode + statik kapı var, imza yuvası erişilir. Düşerse iş görünür
-    // hatayla düşer (aşağıdaki catch: bekçi bildirimi), hiçbir şey indirilmez/üretilmez.
+    // WINDOWS ŞERİDİ ön koşulu (SAF) — kaynak İNDİRİLMEDEN (windows-serit.js): claim sürümü
+    // 2.<panel kodu>.<paket sayacı> (sözleşme madde 1), kimlik = book_id, G tabanı https. Düşerse iş
+    // görünür hatayla düşer (aşağıdaki catch: bekçi bildirimi). Araç/yuva denetimi (araclariDenetle)
+    // KAYNAK KARARINDAN SONRA (inceleme 01.10): build yoksa windows işi araç eksikliğiyle failed
+    // olmasın, kira bırakılsın.
     const winPlan = packagerPlatform === 'windows' ? windowsSerit.onKosul(job) : null;
-    if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
 
     // 1-3. KAYNAK — EXE'SİZ SÖZLEŞME (Nadir 01.10, book-update exesiz-kaynak-sozlesmesi.md):
     //      İmpark exe'si HİÇBİR koşulda indirilmez (ne paket kaynağı ne önbellek ne HEAD ne hazır
@@ -2126,7 +2200,10 @@ async function processJob(auth, job) {
     //        ikisi de yoksa → kira bırakılır + bildirim, failed YAZILMAZ (sözleşme §6a "üretim BEKLER").
     //      Manuel işte arşiv OKUNMAZ: bozuk bir arşiv kaydı manuel kaynağı düşürmesin. İşin exe adı
     //      arşive YALNIZ bilgi notu için verilir (27.09 ad kapısı kaldırıldı, kaynak-arsivi.js).
-    const imparkSrcVersion = job.downloadUrl ? srcVersionTuret(job.downloadUrl) : '';
+    // Sunucu 'arsiv-gerekli' claim'inde exe adresini yalnız BİLGİ olarak `bilgiUrl`de gönderir
+    // (indirilebilir alanda durmaz); adın kaynağı odur, yoksa eski claim'lerin downloadUrl'i.
+    const imparkBilgiUrl = job.bilgiUrl || job.downloadUrl || '';
+    const imparkSrcVersion = imparkBilgiUrl ? srcVersionTuret(imparkBilgiUrl) : '';
     const manuelUrl = manuelKaynakUrl(job);
     const arsiv = manuelUrl ? null
       : await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
@@ -2135,6 +2212,7 @@ async function processJob(auth, job) {
       await kaynakYokBekle(auth, job, kaynak.sebep);
       return { ertelendi: true, sebep: kaynak.sebep };
     }
+    if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
     // Pardus paketleyici kimliği (buildPardusArtifact) — exe adından DEĞİL, kaynağın kendisinden.
     const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion : `manuel-${srcVersionTuret(kaynak.url)}`;
     const kaynakAdi = kaynak.tur === 'arsiv'
@@ -2381,9 +2459,9 @@ async function main() {
     // A bad job must never kill the loop.
     try {
       const sonuc = await processJob(auth, job);
-      // Kaynak yok (exe'siz sözleşme): kira processJob'da bırakıldı, failed yazılmadı. Tüm kuyruk
-      // build'siz olsa bile döngü sıcak dönmesin — ertelemeyle aynı kısa bekleme.
-      if (sonuc && sonuc.ertelendi) await sleep(15000);
+      // Kaynak yok (exe'siz sözleşme): kira processJob'da bırakıldı, failed yazılmadı. Kısa bekleme
+      // (2 sn): arşivli işler gecikmesin; aynı işin tekrar gelmesini sunucu dışlama backoff'u keser.
+      if (sonuc && sonuc.ertelendi) await sleep(CONFIG.kaynakYokBeklemeMs);
     } catch (e) {
       if (ertelenebilirKaynakHatasi(e)) {
         // Disk darlığı PAKET KUSURU DEĞİLDİR: 'failed' YAZMA. Kira AÇIKÇA bırakılır
@@ -2469,9 +2547,8 @@ module.exports = {
   // exe'siz sözleşmeyle (01.10) kapıyla KAPALI, downloadFile .exe yolunu reddeder.
   downloadFile, zipDir,
   // Exe'siz kaynak (01.10): testler kaynakIndirme'ye casus koyar; manuel build yardımcıları.
-  kaynakIndirme, manuelZipIndir, manuelBuildHazirla, zipGirisleri, kaynakYokBekle, kaynakYokBildir,
-  kaynakBoyutuTahmin, KAYNAK_YOK_ISARETI,
-  _kaynakYokBildirimSifirla: () => { _kaynakYokSonBildirim.clear(); },
+  kaynakIndirme, manuelZipIndir, manuelBuildHazirla, zipGirisleri, kaynakYokBekle, kaynakYokOzet,
+  kaynakYokOzetMetni, kaynakYokDurumOku, kaynakBoyutuTahmin, KAYNAK_YOK_ISARETI,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   STAPLE_KAPISI_ISARETI, agStapleCikti,
   packagerReleaseJob,

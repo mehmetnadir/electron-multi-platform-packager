@@ -161,12 +161,12 @@ test('parseNextJob: runner.js/windows-serit.js\'in okuduğu claim alanlarının 
   const tam = {
     bookId: 1, platform: 'pardus', downloadUrl: 'u', buildMethod: 'build', bookTitle: 't', publisherName: 'p',
     setKimligi: 's', guncellemeTabani: 'https://x', surum: '2.1.1', surumYok: 'a', guncellemeTabaniYok: 'b',
-    setListesi: '45356 | Student Book\n45352 | Test Book', kaynakTuru: 'manuel',
+    setListesi: '45356 | Student Book\n45352 | Test Book', kaynakTuru: 'manuel', bilgiUrl: 'https://x/a.exe',
   };
   const cikan = parseNextJob(200, { job: tam });
   const eksik = [...okunan].filter((a) => a in tam && !(a in cikan));
   assert.deepEqual(eksik, [], `parseNextJob şu claim alanlarını düşürüyor: ${eksik.join(', ')}`);
-  for (const a of ['surum', 'setKimligi', 'guncellemeTabani', 'setListesi', 'kaynakTuru']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
+  for (const a of ['surum', 'setKimligi', 'guncellemeTabani', 'setListesi', 'kaynakTuru', 'bilgiUrl']) assert.ok(okunan.has(a), `${a} runner'da okunmuyor mu?`);
 });
 
 test('parseNextJob: 200 bare object (defensive) -> normalized', () => {
@@ -200,6 +200,22 @@ test('parseNextJob: claim kaynakTuru taşınır (kırpılmış); boşsa alan yok
     const j = parseNextJob(200, { job: { bookId: 1, platform: 'mac', kaynakTuru: bos } });
     assert.equal('kaynakTuru' in j, false, `boş/geçersiz kaynakTuru (${JSON.stringify(bos)}) alan üretmemeli`);
   }
+});
+
+// Sunucu sözleşmesi (book-update ajan-kaynak-turu.ts nextJobKaynakSemasi): 'arsiv-gerekli' claim'inde
+// downloadUrl ALANI YOK, exe adresi yalnız BİLGİ olarak bilgiUrl'de.
+test('parseNextJob: {kaynakTuru:"arsiv-gerekli", bilgiUrl, downloadUrl yok} claim kabul edilir, alanlar taşınır', () => {
+  const bilgiUrl = 'https://acc.r2.cloudflarestorage.com/akillitahtalar/45472/YDT-Set-v62.exe?X-Amz-Signature=a';
+  const j = parseNextJob(200, { job: { bookId: 45472, platform: 'pardus', kaynakTuru: 'arsiv-gerekli', bilgiUrl } });
+  assert.ok(j);
+  assert.equal(j.kaynakTuru, 'arsiv-gerekli');
+  assert.equal(j.bilgiUrl, bilgiUrl);
+  assert.equal(j.downloadUrl, '', 'indirilebilir alan boş kalır');
+  const m = parseNextJob(200, { job: { bookId: 1, platform: 'mac', kaynakTuru: 'manuel',
+    downloadUrl: 'https://r2/x/sources/1/a.zip' } });
+  assert.equal(m.kaynakTuru, 'manuel');
+  assert.equal('bilgiUrl' in m, false, 'bilgiUrl yoksa alan da yok');
+  assert.equal('bilgiUrl' in parseNextJob(200, { job: { bookId: 1, platform: 'mac', bilgiUrl: '  ' } }), false);
 });
 
 test('parseNextJob: non-200/204 status -> null', () => {

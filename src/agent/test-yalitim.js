@@ -34,6 +34,7 @@
  *   EMPP_KABUL_KANIT_KOK           ← tools/kabul/basliksiz-kabul.js `kanitKoku()` (…/kabul-kanit/)
  *   EMPP_BILDIR_IKILI              ← gerçek push bildirimi atan ikili (~/.local/bin/bildir)
  *   IMPARK_BUTUNLUK_PY             ← CONFIG.imparkButunlukPy (salt-okuma script yolu, yine de izole)
+ *   EMPP_KAYNAK_YOK_DURUM          ← CONFIG.kaynakYokDurumDosyasi    (…/kaynak-yok-bildirim.json)
  *
  * `configUygula(CONFIG)`: `macSerbestFlag`, `macDurdurFlag`, `dusukVeriYoksayFlag` alanlarının
  * CONFIG'te env-override'ı YOK (runner.js'te hardcoded `path.join(os.homedir(), ...)`) — bu
@@ -61,6 +62,7 @@ const ENV_ESLEME = {
   EMPP_KABUL_KANIT_KOK: 'kabul-kanit',
   EMPP_BILDIR_IKILI: 'yok-boyle-bir-bildir-ikili',
   IMPARK_BUTUNLUK_PY: 'yok-boyle-bir-impark-butunluk.py',
+  EMPP_KAYNAK_YOK_DURUM: 'kaynak-yok-bildirim.json',
 };
 
 /**

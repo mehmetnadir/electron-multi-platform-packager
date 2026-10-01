@@ -25,20 +25,40 @@
  * HIT'i (`cachedZip`) zip'i HİÇ AÇMADAN doğrudan paketleyiciye taşır — bu iki yolda kapı hiç
  * devreye girmiyordu. 45550/45551/11845'in içeriksiz `build.zip`'leri tam bu iki yoldan (arşiv
  * ya da önbellek) HIT olsaydı kapı atlanır, içeriksiz paket yine üretilirdi. `girisListesindenDegerlendir`/
- * `icerikKapisiDenetleZip` aynı [kaynak-iceriksiz] kuralını zip'in MERKEZ DİZİNİNDEN (adm-zip,
+ * `icerikKapisiDenetleZip` aynı [kaynak-iceriksiz] kuralını zip'in MERKEZ DİZİNİNDEN (`unzip -Z1`,
  * sıkıştırılmış içeriği açmadan) uygular — `extractSfx`'in "çıkarma bir sarmalayıcı dizin
  * ekleyebilir" toleransını (`findBuildDir`) taklit eder: kökte assets/bookN yoksa VE tüm
  * girdiler TEK bir üst klasör altındaysa bir seviye iner.
  *
- * BAĞIMLILIK KURALI: dizin yolu yalnız Node stdlib; zip yolu `adm-zip` (depoda zaten
- * bağımlılık — `src/services/uploadService.js` aynı `getEntries()`/`entryName` desenini
- * kullanır, kopya tanım değil aynı kütüphane).
+ * ZIP OKUMA = `unzip -Z1` (exe'siz inceleme 01.10, KRİTİK): eskiden `new AdmZip(yol)` kullanılıyordu —
+ * adm-zip dosyanın TAMAMINI belleğe okur; 2 GiB üstü zip'te `ERR_FS_FILE_TOO_LARGE` fırlatıyor, hata
+ * yutulup kaynak "içeriksiz" sayılıyor ve iş `failed` oluyordu. `unzip -Z1` yalnız merkez dizini
+ * okur (ZIP64 dahil), belleğe dosya almaz. Okunamayan zip artık AYRI sebeple ([kaynak-okunamadi])
+ * düşer — "içeriksiz" (motor-only kaynak) teşhisiyle karışmaz.
+ *
+ * FINDER ZIP'İ (01.10): macOS "Sıkıştır" `__MACOSX/` (AppleDouble `._*`) girişleri ekler; bunlar
+ * içerik değildir — kök/sarmalayıcı kararında YOK SAYILIR (`girisleriTemizle`).
  */
 
 const fsp = require('fs/promises');
-const AdmZip = require('adm-zip');
+const { spawnSync } = require('child_process');
 
 const KAPI_ISARETI = '[kaynak-iceriksiz]';
+/** Zip'in giriş listesi OKUNAMADI (bozuk/kesik/yok) — içeriksizlikten ayrı teşhis. */
+const OKUNAMADI_ISARETI = '[kaynak-okunamadi]';
+
+/** Finder/AppleDouble artığı mı? (`__MACOSX/…` ya da herhangi bir seviyede `._ad`) */
+function macosArtigiMi(yol) {
+  const y = String(yol || '').replace(/\\/g, '/');
+  return /^__MACOSX(\/|$)/.test(y) || /(^|\/)\._[^/]*$/.test(y) || /(^|\/)\.DS_Store$/.test(y);
+}
+
+/** Giriş adlarını normalleştirir (`\\` → `/`, baştaki `/` atılır) ve macOS artıklarını eler. Saf. */
+function girisleriTemizle(girisler) {
+  return (girisler || [])
+    .map((g) => String(g || '').replace(/\\/g, '/').replace(/^\/+/, ''))
+    .filter((g) => g && !macosArtigiMi(g));
+}
 
 /**
  * KAPATMA ANAHTARI (2026-09-26, koordinatör ek isi): kapı canlıda yanlış-RED üretirse
@@ -136,9 +156,7 @@ function yolListesiTara(yollar) {
  * @returns {{ gecti: boolean, sebep: string|null }}
  */
 function girisListesindenDegerlendir(girisler, { kaynakAdi = '' } = {}) {
-  const yollar = (girisler || [])
-    .map((g) => String(g || '').replace(/\\/g, '/').replace(/^\/+/, ''))
-    .filter(Boolean);
+  const yollar = girisleriTemizle(girisler);
 
   let sonuc = yolListesiTara(yollar);
   if (!sonuc.hasAssets && !sonuc.hasBookN) {
@@ -158,16 +176,21 @@ function girisListesindenDegerlendir(girisler, { kaynakAdi = '' } = {}) {
 }
 
 /**
- * Zip dosyasının giriş adlarını (`entryName`) okur — `adm-zip` yalnız MERKEZ DİZİNİ okur,
- * hiçbir girişi açmaz/çıkarmaz (büyük zip'te de hızlı). Saf değil (I/O) ama senkron ve yerel —
- * dış süreç/zaman aşımı gerekmez.
+ * Zip dosyasının giriş adlarını `unzip -Z1` ile okur — yalnız MERKEZ DİZİN (ZIP64 dahil), dosya
+ * belleğe alınmaz, hiçbir giriş açılmaz (2 GiB+ zip'te de çalışır). Okunamazsa FIRLATIR.
  *
  * @param {string} zipYolu
  * @returns {string[]}
  */
 function zipGirisAdlariniOku(zipYolu) {
-  const zip = new AdmZip(zipYolu);
-  return zip.getEntries().map((e) => e.entryName);
+  const r = spawnSync('unzip', ['-Z1', zipYolu], {
+    encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: 120000,
+  });
+  if (r.error) throw r.error;
+  if (r.status !== 0) {
+    throw new Error(`unzip -Z1 rc=${r.status}: ${String(r.stderr || r.stdout || '').trim().slice(-300)}`);
+  }
+  return String(r.stdout || '').split('\n').map((x) => x.replace(/\r$/, '')).filter(Boolean);
 }
 
 /**
@@ -180,22 +203,31 @@ function zipGirisAdlariniOku(zipYolu) {
  * @param {{ kaynakAdi?: string, env?: object, log?: (s: string) => void }} [secenekler]
  * @returns {Promise<{ gecti: boolean, sebep: string|null }>}
  */
-async function icerikKapisiDenetleZip(zipYolu, { kaynakAdi = '', env = process.env, log = () => {} } = {}) {
+async function icerikKapisiDenetleZip(zipYolu, {
+  kaynakAdi = '', env = process.env, log = () => {}, listele = zipGirisAdlariniOku,
+} = {}) {
   if (!acikMi(env)) {
     log('icerik-kapisi KAPALI (env) — zip denetlenmedi, geçti sayıldı');
     return { gecti: true, sebep: null };
   }
   let girisler;
   try {
-    girisler = zipGirisAdlariniOku(zipYolu);
+    girisler = listele(zipYolu);
   } catch (e) {
-    return degerlendir({ hasAssets: false, hasBookN: false, kaynakAdi });
+    const etiket = kaynakAdi ? ` <${kaynakAdi}>` : '';
+    return {
+      gecti: false,
+      sebep: `${OKUNAMADI_ISARETI} zip giriş listesi okunamadı${etiket}: ${String(e && e.message || e).slice(0, 300)}`,
+    };
   }
   return girisListesindenDegerlendir(girisler, { kaynakAdi });
 }
 
 module.exports = {
   KAPI_ISARETI,
+  OKUNAMADI_ISARETI,
+  macosArtigiMi,
+  girisleriTemizle,
   acikMi,
   bookNMi,
   degerlendir,

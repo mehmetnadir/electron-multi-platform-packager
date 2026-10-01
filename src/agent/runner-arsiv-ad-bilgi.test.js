@@ -182,10 +182,12 @@ test('bildirGonder: başarısızlık `bildir paket … -p yuksek -e warning` ür
 // Kaynak metni — exe adı yalnız bilgi için arşive verilir; kaynak seçimi değişmedi
 // ---------------------------------------------------------------------------
 
-test('processJob: exe kimliği = srcVersionTuret(job.downloadUrl), arşive YALNIZ bilgi için verilir', () => {
-  // Exe'siz sözleşme (01.10): downloadUrl'süz işte kimlik boş (bilgi notu yok); srcVersion exe
-  // adından DEĞİL kaynağın kendisinden (arşiv md5 / manuel adres) türer.
-  assert.match(PROCESS_JOB, /const imparkSrcVersion = job\.downloadUrl \? srcVersionTuret\(job\.downloadUrl\) : '';/);
+test('processJob: exe kimliği = srcVersionTuret(job.bilgiUrl || job.downloadUrl), arşive YALNIZ bilgi için verilir', () => {
+  // Exe'siz sözleşme (01.10): 'arsiv-gerekli' claim'inde exe adresi yalnız bilgiUrl'de gelir;
+  // ikisi de yoksa kimlik boş (bilgi notu yok). srcVersion exe adından DEĞİL kaynağın kendisinden
+  // (arşiv md5 / manuel adres) türer. Davranış: runner-exesiz-kaynak.test.js 'arsiv-gerekli' testleri.
+  assert.match(PROCESS_JOB, /const imparkBilgiUrl = job\.bilgiUrl \|\| job\.downloadUrl \|\| '';/);
+  assert.match(PROCESS_JOB, /const imparkSrcVersion = imparkBilgiUrl \? srcVersionTuret\(imparkBilgiUrl\) : '';/);
   assert.match(PROCESS_JOB,
     new RegExp(': await arsivKaynagi\\(job\\.bookId, '
       + '\\{ imparkKaynagi: imparkSrcVersion, bilgi: log \\}\\);'));
