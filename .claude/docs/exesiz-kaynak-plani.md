@@ -29,7 +29,12 @@
    "köprüde exe" yerine "R2 build ya da liste var mı"ya döner.
 5. **Arşivsiz 40 kitap** — build'i exe'siz kurma: kabuk (motor + okuyucu iskeleti) bizim deposundan,
    kitaplar listeden ZKitapZipH ile, set menüsü listeden. İlk kurulum Üretim Masası'nda, sonra 3. adım.
-6. **Tek kitap yapılı setler (45448/45472/45477/45480)** — karar: bookN'li set kabuğuna taşınsın mı?
+6. **Güncellik tetiği exe'den içerik sürümüne** — version-refresh/guardian İmpark exe'sine HEAD atmaz;
+   her kitabın içerik sürümünü (`GetKitapGuncellemeBilgi`, merdivenin S0 sorusu) düzenli sorar, bir kitap
+   ilerlediyse onu içeren setler yeniden kuyruğa girer. Sürüm artmadan içerik değişimi için S2 (dosya
+   farkı) ayrı kalem. Bugün: üretim anında yeni sürüm İNDİRİLİR (01.10 45549: 25775 v23→v27), ama
+   üretimi tetikleyen exe değişimidir — exe kapanınca tetik de kapanır.
+7. **Tek kitap yapılı setler (45448/45472/45477/45480)** — karar: bookN'li set kabuğuna taşınsın mı?
 
 ## Nadir'den karar
 - (a) Arşivsiz kitaplar 5. adım bitene kadar: üretim BEKLESİN mi (önerim: evet, İmpark exe'si yayında kalır)?
