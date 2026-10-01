@@ -180,9 +180,11 @@ test('SÖZLEŞME: src/agent içinde sürüm kararı veren her dosya surum-kiyas 
   );
 });
 
-test('SÖZLEŞME: bilinen üç uç gerçekten tek kaynağa bağlı', () => {
+test('SÖZLEŞME: bilinen uç gerçekten tek kaynağa bağlı', () => {
   // Muafiyet listesi büyüyerek testi boşaltamasın diye uçlar İSİMLE çivili.
-  for (const f of ['publisher-update.js', 'local-build.js', 'runner.js']) {
+  // (2026-10-01: runner.js:cachedZipIsStale ve local-build.js:zipStale ölü kod olarak
+  // _graveyard/2026-10-01-exe-kaynak/'a taşındı — kalan tek canlı kıyas ucu publisher-update.)
+  for (const f of ['publisher-update.js']) {
     const kaynak = fs.readFileSync(path.join(__dirname, f), 'utf8');
     assert.ok(tekKaynagiIthalEdiyorMu(kaynak), `${f} surum-kiyas ithal etmiyor`);
   }

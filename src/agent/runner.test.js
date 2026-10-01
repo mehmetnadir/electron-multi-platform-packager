@@ -172,7 +172,7 @@ test('isValidArchiveOutput: KESİK indirme reddedilir (asıl arıza biçimimiz)'
 const http = require('node:http');
 const os = require('node:os');
 const fsp = require('node:fs/promises');
-const { packagerReleaseJob, touchCacheEntry, CONFIG } = require('./runner.js');
+const { packagerReleaseJob, CONFIG } = require('./runner.js');
 
 /** Test süresince packager API'sini yerel bir sunucuya yönlendirir. */
 async function withFakePackager(handler, fn) {
@@ -240,34 +240,6 @@ test('jobId yoksa boşuna istek atılmaz', async () => {
 
   assert.strictEqual(ok, false);
   assert.strictEqual(called, false);
-});
-
-test('touchCacheEntry mtime i tazeler — TTL temizleyicisinin baktığı işaret', async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cache-touch-'));
-  try {
-    const old = new Date(Date.now() - 30 * 24 * 3600 * 1000); // 30 gün önce
-    await fsp.utimes(dir, old, old);
-    assert.ok(Date.now() - (await fsp.stat(dir)).mtimeMs > 20 * 24 * 3600 * 1000);
-
-    assert.strictEqual(await touchCacheEntry(dir), true);
-
-    assert.ok(Date.now() - (await fsp.stat(dir)).mtimeMs < 5000); // tazelendi
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('touchCacheEntry olmayan dizinde FIRLATMAZ — üretim durmaz', async () => {
-  assert.strictEqual(await touchCacheEntry('/tmp/kesinlikle-olmayan-dizin-38471'), false);
-});
-
-test('eski sürüm cache budayıcısı (yardımcı) kardeş dizinleri siler, mevcut sürümü korur', () => {
-  // Yardımcı tanımlı kalır (exe'siz sözleşmeyle processJob artık çağırmıyor — yukarıdaki test).
-  const fn = SRC.slice(SRC.indexOf('async function pruneSiblingVersions'),
-    SRC.indexOf('async function pruneSiblingVersions') + 700);
-  assert.match(fn, /readdir\(bookDir/);
-  assert.match(fn, /e\.name === keepVersion/);        // mevcut sürümü koru
-  assert.match(fn, /fsp\.rm\([^)]*recursive: true, force: true/); // gerisini sil
 });
 
 // ÇIKIŞ GÖZCÜSÜ (2026-09-13): ajan üretim işinin ortasında sessizce yeniden başladı

@@ -196,3 +196,21 @@ test('11 · SENTETİK İHLAL: karantina dedektörü require\'ı ve geri gelişi 
     'geri geliş kaçtı');
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+// ─── KARANTİNA (2026-10-01): exe'siz kaynak sonrası ölü exe hattı geri gelmez ───
+test('12 · KARANTİNA: exe kaynak ısıtıcı/yerel derleme modülleri src/ altından require edilirse KIRMIZI', () => {
+  const exe = [
+    'src/agent/kaynak-isitici.js', 'src/agent/isitici-dongu.js', 'src/agent/local-build.js',
+  ];
+  for (const yol of exe) {
+    assert.ok(kapi.KARANTINA.includes(yol), yol + ': exe-kaynak karantinası listeden düşmüş');
+    assert.ok(fs.existsSync(path.join(kapi.DEPO, '_graveyard', '2026-10-01-exe-kaynak', yol)),
+      yol + ': mezar dosyası _graveyard/2026-10-01-exe-kaynak/ altında yok');
+  }
+  // runner.js ve canlı giriş grafiği ölü modülleri çekmemeli:
+  const graf = kapi.canliGraf([path.join(kapi.SRC, 'agent/runner.js')]);
+  for (const yol of exe) {
+    assert.ok(!graf.has(path.join(kapi.DEPO, yol)), yol + ' runner.js grafiğine geri girmiş');
+  }
+  assert.deepStrictEqual(kapi.karantinaIhlalleri(), []);
+});

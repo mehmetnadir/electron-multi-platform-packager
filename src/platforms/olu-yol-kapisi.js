@@ -296,6 +296,12 @@ const KARANTINA = [
   // 2026-09-26 eski G üreticisi (D-2): _graveyard/2026-09-26-g-eski-uretici/OKU.md
   'src/packaging/guncelleme-paketi.js',
   'scripts/guncelleme-manifesti-uret.js',
+  // 2026-10-01 exe'siz kaynak sözleşmesi sonrası ölü exe hattı: _graveyard/2026-10-01-exe-kaynak/OKU.md
+  'src/agent/kaynak-isitici.js',
+  'src/agent/kaynak-isitici.test.js',
+  'src/agent/isitici-dongu.js',
+  'src/agent/isitici-dongu.test.js',
+  'src/agent/local-build.js',
 ];
 
 /** Karantina require taramasının kökleri (depo köküne göreli). */

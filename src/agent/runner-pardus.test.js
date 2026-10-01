@@ -612,13 +612,8 @@ test('GERİLEME: kapı spawn\'ın gerçek `timeout` seçeneğini kullanır, `tim
   assert.match(yardimci, /p\.on\('exit'/);
 });
 
-test('GERİLEME: kapı HER İKİ yolda da (derleme + hazır paket) artifact kopyalandıktan SONRA koşar', () => {
+test('GERİLEME: kapı derleme yolunda artifact kopyalandıktan SONRA koşar', () => {
   const fn = SRC.slice(SRC.indexOf('async function buildPardusArtifact'), SRC.indexOf('async function pardusKabulKapisi'));
-  // Hazır (srv21) yolu: kopyala → kapı → return
-  const hazirBas = fn.indexOf('const hazir = await hazirPardusPaketi');
-  const hazirKopya = fn.indexOf('await fsp.copyFile(hazir.dosya, artifactPath)');
-  const hazirKapi = fn.indexOf('await pardusKabulKapisi(artifactPath, outDir', hazirBas);
-  assert.ok(hazirBas !== -1 && hazirKopya !== -1 && hazirKapi > hazirKopya, 'hazır yolda kapı kopyalamadan sonra olmalı');
   // Derleme yolu: kopyala → kapı
   const kopya = fn.indexOf('await fsp.copyFile(builtPath, artifactPath)');
   const kapi = fn.indexOf('await pardusKabulKapisi(artifactPath, outDir', kopya);
@@ -776,17 +771,6 @@ test('probook-kabul.sh açılış üst sınırını paket boyutuna göre büyüt
   assert.match(kaynak, /OLCEKLI=\$\(\( 300 \+ BOYUT_MB \/ 2 \)\)/);
   assert.match(kaynak, /if \[ "\$OLCEKLI" -gt "\$BEKLE" \]/);
   assert.match(kaynak, /BEKLE="\$OLCEKLI"/);
-});
-
-// Hazır kaynak SİLME sırası (2026-09-17, 45695 kaybı): kapı GEÇMEDEN silinirse,
-// srv21'deki iş dizini de temizlenmiş olduğu için paket tamamen kaybolur.
-test('hazır paket kaynağı ANCAK kabul kapısından sonra silinir', () => {
-  const kaynak = require('fs').readFileSync(require('path').join(__dirname, 'runner.js'), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const kapiIdx = kaynak.indexOf('await pardusKabulKapisi(artifactPath, outDir');
-  const silIdx = kaynak.indexOf('await fsp.rm(hazir.dosya');
-  assert.ok(kapiIdx > 0 && silIdx > 0, 'kapı/silme satırları bulunamadı');
-  assert.ok(silIdx > kapiIdx, 'silme kapıdan SONRA olmalı');
 });
 
 // ---------------------------------------------------------------------------
