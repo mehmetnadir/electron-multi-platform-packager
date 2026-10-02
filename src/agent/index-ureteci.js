@@ -19,8 +19,13 @@
  *        sütunu), `assets/<id>/`; `main.activation="true" key=""` → kod setin ilk açılışında BİR kez.
  *      - `bookN`: kök = Web-Z menü KABUĞU (TEMA KANCASI `kabuk`), `bookN/` (liste anahtarıyla) = motor +
  *        tek kapaklı menü + içerik; `settings.books`/yama/`set-menu.json` listeden SIFIRDAN.
- *        Kabuk verilmezse `uretec-tema-yok` (Flashy: tema hazır olana kadar ertelenir — YDS kabuğuyla
- *        YAYINLANMAZ). Aktivasyonlu sette bookN YASAK (her kitap ayrı sorar; kapak düzeyi dal kırık).
+ *        Kabuk verilmezse `uretec-tema-yok`. Kabuk `{tema}` ise kök = `webz-tema-kabuk.kabukUret`
+ *        (Flashy web-proxy-modern; kalıbın kökü AÇILMAZ, language-set.js aranmaz), kapak = panel
+ *        coverUrl (liste 3. alanı). Aktivasyonlu sette bookN YASAK (her kitap ayrı sorar).
+ *   4b. YAYINCI DÖNÜŞÜMÜ (`motorDonusumu`, faz 3): başka kurumun motoru kullanılınca okuyucunun kurumu
+ *        okuduğu dört nokta yazılır — iki `kurum.txt`, `bookN/core/kurumlogo.png` (motorun kendi
+ *        gizlemesiyle; düz PNG olsa motor çevrimiçi İmpark logosuyla ezer), `app.config.js`
+ *        `baseEndpointUrl`. Yazım sonrası dört nokta yeniden okunup doğrulanır (kanıt rapora).
  *   5. AKTİVASYON KANCASI: 'set' | 'yok' | 'otomatik' (`anahtarliMi(id)`, ≥1 true → set). imKeys.dll
  *      YAZILMAZ (runner `imkeys.js` set-ek sonrası yazar ve kapısını uygular).
  *   6. Zip'i olmayan oyun/çalışma kâğıdı (contentType kitap değil): bookN'de `webzAdresi` verilirse
@@ -39,6 +44,7 @@ const ig = require('../runtime/icerik-guncelleme');
 const setEk = require('./set-uyelik-ek');
 const gMenu = require('../../tools/g-yayin/menu');
 const bicim = require('../packaging/set-menu-bicim');
+const temaKabuk = require('./webz-tema-kabuk');
 
 const ISARET = '[index-ureteci]';
 const DUZEN = Object.freeze({ TEK_MOTOR: 'tek-motor', BOOKN: 'bookN', OTOMATIK: 'otomatik' });
@@ -46,6 +52,7 @@ const AKTIVASYON = Object.freeze({ SET: 'set', YOK: 'yok', OTOMATIK: 'otomatik' 
 const KOD = Object.freeze({
   TEMA_YOK: 'uretec-tema-yok', KITAP_EKSIK: 'kitap-eksik', AKT_DUZEN: 'aktivasyon-duzen',
   LISTE_YOK: 'liste-yok', PARAMETRE: 'parametre', KALIP: 'kalip', MENU: 'menu', IO: 'io',
+  TEMA: 'tema', DONUSUM: 'donusum',
 });
 const MENU = ig.MENU_GORELI; // classlibraries/ImWin32.dll
 const KAPAK = 'thumbs/1.jpg';
@@ -62,6 +69,10 @@ const VARSAYILAN_SABLON = 'https://www.sorucoz.tv/TestlerMobil/GetKitapGuncellem
   + '?id={bookId}&setMi={isSet}&versiyon={version}';
 /** "Kitap 3" gibi genel ad (KV'de başlık yoksa Worker böyle verir) → BookContent'ten ad çıkarılır. */
 const GENEL_AD = /^\s*(kitap|book)\s*\d*\s*$/i;
+const KURUM_LOGO = 'core/kurumlogo.png';
+const APP_CONFIG = 'app.config.js';
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
+  + 'Chrome/131.0.0.0 Safari/537.36';
 
 class UretecHatasi extends Error {
   constructor(mesaj, { kod = 'uretec', eksik = [] } = {}) {
@@ -90,13 +101,16 @@ function attrYaz(etiket, ad, deger) {
 /** DB metnindeki kaçışlı `\n` → gerçek satır. SAF. */
 const listeNormal = (ham) => (ham == null ? '' : String(ham).replace(/\\n/g, '\n'));
 
-/** Satırın 5. alanı (grup). `setListesiAyristir` grubu döndürmez; ham satırdan okunur. SAF. */
-function grupOku(listeHam, assetId) {
+/** Satırın i. alanı (0 tabanlı; 2 = panel kapağı, 4 = grup). Ayrıştırıcı bunları döndürmez. SAF. */
+function alanOku(listeHam, assetId, i) {
   const satirlar = listeNormal(listeHam).split(/\r?\n/).filter((s) => s.trim());
   const s = satirlar.find((x) => x.split('|')[0].trim() === String(assetId));
   if (!s) return '';
-  return s.split('|').map((x) => x.trim())[4] || '';
+  return s.split('|').map((x) => x.trim())[i] || '';
 }
+
+/** Satırın 5. alanı (grup). SAF. */
+const grupOku = (listeHam, assetId) => alanOku(listeHam, assetId, 4);
 
 /**
  * Plan — listeden kitaplar (sıra, ad, grup, liste anahtarı). SAF.
@@ -125,6 +139,7 @@ function planKur({ listeHam, duzen = DUZEN.OTOMATIK, aktivasyon = AKTIVASYON.YOK
     kitaplar.push({
       n: kitaplar.length + 1, id: String(g.assetId), ad: g.ad || '', anahtar: g.anahtar,
       grup: grupOku(ham, g.assetId), contentType: g.contentType || null,
+      kapak: alanOku(ham, g.assetId, 2) || null,
     });
   }
   if (!kitaplar.length) throw new UretecHatasi('listede İmpark kitabı yok', { kod: KOD.LISTE_YOK });
@@ -308,6 +323,8 @@ function kalipOku(kalipZip) {
  */
 function kabukGecerliMi(kabuk, kalip) {
   if (kabuk === 'kalip') return !!(kalip && kalip.kabuk);
+  // Tema kabuğu kökü kendisi üretir: kalıpta sf425 (language-set.js) ARANMAZ.
+  if (kabuk && typeof kabuk === 'object' && kabuk.tema) return !!temaKabuk.TEMALAR[kabuk.tema];
   return !!(kabuk && typeof kabuk === 'object' && (kabuk.zip || kabuk.dizin));
 }
 
@@ -338,6 +355,94 @@ async function motorAc(kalip, hedef, komut) {
   await unzipKomut([kalip.zip, `${d}/*`, '-x', ...MOTOR_HARIC.map((h) => `${d}/${h}/*`), '-d', gecici], komut);
   await fsp.rename(path.join(gecici, d), hedef);
   await fsp.rmdir(gecici).catch(() => {});
+}
+
+// ─── Yayıncı dönüşümü (faz 3) ──────────────────────────────────────────────────────────────────
+
+/** Motorun logo gizlemesi (ilk 100 bayt 256-b; kendi kendinin tersi). SAF. */
+function logoGizle(buf) {
+  const b = Buffer.from(buf);
+  for (let i = 0; i < 100 && i < b.length; i++) b[i] = (256 - b[i]) & 255;
+  return b;
+}
+
+/** Motor bu dosyayı "düz" sayar mı (ilk 10 baytta "PNG" → çevrimiçi İmpark logosuyla EZER). SAF. */
+const logoDuzMu = (buf) => Buffer.isBuffer(buf) && buf.subarray(0, 10).toString('latin1').includes('PNG');
+
+/** `app.config.js` metninde `baseEndpointUrl` yaz (varsa değiştir, yoksa AppConfig'in başına). SAF. */
+function tabanUcYaz(metin, uc) {
+  const m = String(metin);
+  const re = /(baseEndpointUrl\s*:\s*)(["'])[^"']*\2/;
+  if (re.test(m)) return m.replace(re, (_, a) => `${a}"${uc}"`);
+  const ac = /((?:const|let|var)\s+AppConfig\s*=\s*\{)/;
+  if (!ac.test(m)) throw new UretecHatasi('app.config.js: AppConfig nesnesi yok', { kod: KOD.DONUSUM });
+  return m.replace(ac, (a) => `${a}\n    baseEndpointUrl: "${uc}",`);
+}
+
+/** Dönüşüm parametresi denetimi. SAF. */
+function donusumDenetle(d) {
+  if (!d) return null;
+  if (!/^\d+$/.test(String(d.kurum || ''))) throw new UretecHatasi('motorDonusumu.kurum geçersiz', { kod: KOD.PARAMETRE });
+  if (!Buffer.isBuffer(d.logo) || temaKabuk.gorselUzanti(d.logo) !== 'png') {
+    throw new UretecHatasi('motorDonusumu.logo düz PNG değil', { kod: KOD.PARAMETRE });
+  }
+  if (!/^https:\/\/[a-z0-9.-]+$/i.test(String(d.baseEndpointUrl || ''))) {
+    throw new UretecHatasi('motorDonusumu.baseEndpointUrl geçersiz', { kod: KOD.PARAMETRE });
+  }
+  return { ...d, kurum: String(d.kurum) };
+}
+
+/** Motor dizinine (bookN ya da tek-motor kökü) üç motor noktasını yazar. I/O. */
+async function motorDonusumuUygula(dizin, d) {
+  await fsp.writeFile(path.join(dizin, 'kurum.txt'), d.kurum);
+  await fsp.mkdir(path.join(dizin, 'core'), { recursive: true });
+  await fsp.writeFile(path.join(dizin, KURUM_LOGO), logoGizle(d.logo));
+  const ac = path.join(dizin, APP_CONFIG);
+  await fsp.writeFile(ac, tabanUcYaz(await fsp.readFile(ac, 'utf8'), d.baseEndpointUrl));
+}
+
+/**
+ * Dört noktanın KANITI — yazılanı diskten yeniden okur; tutmayan nokta → UretecHatasi(donusum).
+ * @returns {{kurum:string, uc:string, logoSha256:string, motorlar:string[], kokKurum:string}}
+ */
+function motorDonusumuDogrula(kok, motorlar, d) {
+  const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+  const beklenenLogo = sha(d.logo);
+  const hata = [];
+  const oku = (y) => { try { return fs.readFileSync(path.join(kok, y)); } catch (_) { return null; } };
+  const kokKurum = String(oku('kurum.txt') || '').trim();
+  if (kokKurum !== d.kurum) hata.push(`kök kurum.txt=${kokKurum || '-'}`);
+  for (const m of motorlar) {
+    const on = m ? `${m}/` : '';
+    const kt = String(oku(`${on}kurum.txt`) || '').trim();
+    if (kt !== d.kurum) hata.push(`${on}kurum.txt=${kt || '-'}`);
+    const logo = oku(`${on}${KURUM_LOGO}`);
+    if (!logo || logoDuzMu(logo) || sha(logoGizle(logo)) !== beklenenLogo) hata.push(`${on}${KURUM_LOGO}`);
+    const ac = String(oku(`${on}${APP_CONFIG}`) || '');
+    const um = /baseEndpointUrl\s*:\s*["']([^"']*)["']/.exec(ac);
+    if (!um || um[1] !== d.baseEndpointUrl) hata.push(`${on}${APP_CONFIG} baseEndpointUrl=${um ? um[1] : '-'}`);
+  }
+  if (hata.length) {
+    throw new UretecHatasi(`yayıncı dönüşümü tutmadı: ${hata.slice(0, 4).join(', ')}`, { kod: KOD.DONUSUM });
+  }
+  return { kurum: d.kurum, uc: d.baseEndpointUrl, logoSha256: beklenenLogo, motorlar, kokKurum };
+}
+
+/** Panel kapağı (liste 3. alanı): data URI → Buffer, http(s) → indirilir; görsel değilse null. */
+async function kapakCoz(deger, kapakGetir) {
+  const v = String(deger || '').trim();
+  if (!v) return null;
+  let buf = temaKabuk.dataUriCoz(v);
+  if (!buf && /^https?:\/\/\S+$/i.test(v)) {
+    try { buf = await kapakGetir(v); } catch (_) { buf = null; }
+  }
+  return buf && temaKabuk.gorselUzanti(buf) ? buf : null;
+}
+
+async function varsayilanKapakGetir(url) {
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(20000) });
+  if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
 }
 
 // ─── İçerik ─────────────────────────────────────────────────────────────────────────────────
@@ -424,8 +529,9 @@ function sha256Dosya(dosya) {
  * build.zip üretir. I/O: kalıp zip okunur, içerik önbelleği/indirme, sahne dizini, çıktı zip.
  * @param {{setId:string, setAdi?:string, listeHam:string, kalipZip:string, cikti:string,
  *   calisma:string, duzen?:string, aktivasyon?:string, anahtarliMi?:(id:string)=>Promise<boolean>,
- *   kabuk?:'kalip'|{zip?:string, dizin?:string}|null, webzAdresi?:(g:object)=>string|null,
- *   kurum?:string|null, onbellek?:string, getir?:Function, indir?:Function, komut?:Function,
+ *   kabuk?:'kalip'|{zip?:string, dizin?:string}|{tema:string}|null, webzAdresi?:(g:object)=>string|null,
+ *   kurum?:string|null, motorDonusumu?:{kurum:string, logo:Buffer, baseEndpointUrl:string}|null,
+ *   kapakGetir?:(url:string)=>Promise<Buffer>, onbellek?:string, getir?:Function, indir?:Function, komut?:Function,
  *   log?:Function, bekleMs?:number, sahneyiTut?:boolean}} o
  * @returns {Promise<object>} rapor (zip, duzen, aktivasyon, kitaplar, linkKarti, atlanan, kapiListesi…)
  */
@@ -438,6 +544,8 @@ async function uret(o) {
     aktivasyon: istenen === AKTIVASYON.OTOMATIK ? AKTIVASYON.YOK : istenen,
   });
   const kalip = kalipOku(o.kalipZip);
+  const donusum = donusumDenetle(o.motorDonusumu);
+  const temaAdi = o.kabuk && typeof o.kabuk === 'object' && o.kabuk.tema ? String(o.kabuk.tema) : null;
   // Aktivasyon kancası: 'otomatik' → anahtarliMi her kapak için (çağıran verir).
   const anahtarli = [];
   if (istenen === AKTIVASYON.OTOMATIK) {
@@ -479,13 +587,18 @@ async function uret(o) {
 
   await fsp.mkdir(o.calisma, { recursive: true });
   const sahne = await fsp.mkdtemp(path.join(o.calisma, 'uretec-sahne-'));
-  const kurum = o.kurum != null ? String(o.kurum) : null;
+  const kurum = o.kurum != null ? String(o.kurum) : (donusum ? donusum.kurum : null);
   const kok = path.join(sahne, 'build');
   const kitapRapor = [];
+  const motorlar = [];
+  const kapakSay = { panel: 0, yedek: 0 };
+  let donusumKaniti = null;
   try {
     if (duzen === DUZEN.TEK_MOTOR) {
       await motorAc(kalip, kok, komut);
       for (const y of kalip.kokEkleri) await unzipKomut([kalip.zip, y, '-d', kok], komut);
+      if (donusum) await motorDonusumuUygula(kok, donusum);
+      motorlar.push('');
       const xml = tekMotorMenuXml({
         kalipXml: kalip.kalipXml, setId: String(o.setId), setAdi: o.setAdi || '', aktivasyon, kurum,
         kitaplar: sonuc,
@@ -497,15 +610,17 @@ async function uret(o) {
       }
     } else {
       await fsp.mkdir(kok, { recursive: true });
-      await kabukAc(o.kabuk, kalip, kok, komut);
+      if (!temaAdi) await kabukAc(o.kabuk, kalip, kok, komut);
       const motorKalibi = path.join(sahne, '.motor');
       await motorAc(kalip, motorKalibi, komut);
+      if (donusum) await motorDonusumuUygula(motorKalibi, donusum); // bir kez; kopyalar miras alır
       for (const k of sonuc) {
         const d = k.anahtar; // liste anahtarı (bookN; link ile aynı sayaç — Worker/set-ek ile aynı)
         await fsp.cp(motorKalibi, path.join(kok, d), { recursive: true, errorOnExist: true, force: false });
         const xml = setEk.menuXmlUret(kalip.kalipXml, { id: k.id, vs: k.vs, url: k.url, ad: k.ad });
         await menuYaz(path.join(kok, d), xml, kalip.menuBicim, `${k.id}:${k.vs}`);
         await icerikAc(k, path.join(kok, d, 'assets', k.id), komut);
+        motorlar.push(d);
         kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `${d}/assets/${k.id}`, ad: k.ad, grup: k.grup });
       }
       // Menü girdileri liste sırasıyla: kitap / liste linki / kitap-dışı varlığın link kartı.
@@ -520,14 +635,39 @@ async function uret(o) {
           if (lk) girdiler.push({ dizin: `link${g.sira}`, link: true, url: lk.url, ad: lk.ad || g.ad });
         }
       }
-      const oku = (y) => { try { return fs.readFileSync(path.join(kok, y), 'utf8'); } catch (_) { return null; } };
-      const dosyalar = webzMenuDosyalari(
-        { yama: oku(YAMA), ayar: oku(AYAR), tanim: oku(TANIM), index: oku('index.html') },
-        { setAdi: o.setAdi || '', girdiler },
-      );
-      for (const [y, v] of dosyalar) await fsp.writeFile(path.join(kok, y), v);
+      let dosyalar;
+      if (temaAdi) {
+        // Kök = tema kabuğu (kalıbın kökü AÇILMADI). Kapak = panel coverUrl; ünite = BookContent.
+        const kitaplar = [];
+        for (const g of girdiler) {
+          if (g.link) { kitaplar.push({ dizin: g.dizin, link: true, url: g.url, ad: g.ad }); continue; }
+          const k = sonuc.find((x) => x.anahtar === g.dizin);
+          const kapak = await kapakCoz(k && k.kapak, o.kapakGetir || varsayilanKapakGetir);
+          kapakSay[kapak ? 'panel' : 'yedek'] += 1;
+          let bookContent = null;
+          try { bookContent = fs.readFileSync(path.join(kok, g.dizin, 'assets', g.id, ICERIK)); } catch (_) { /* yok */ }
+          kitaplar.push({ dizin: g.dizin, assetId: g.id, ad: g.ad, grup: g.grup, contentType: g.contentType || 'book',
+            kapak, bookContent });
+        }
+        try {
+          dosyalar = temaKabuk.kabukUret({ tema: temaAdi, setAdi: o.setAdi || String(o.setId), kitaplar }).dosyalar;
+        } catch (e) {
+          throw new UretecHatasi(`tema kabuğu üretilemedi: ${e.message}`, { kod: KOD.TEMA });
+        }
+      } else {
+        const oku = (y) => { try { return fs.readFileSync(path.join(kok, y), 'utf8'); } catch (_) { return null; } };
+        dosyalar = webzMenuDosyalari(
+          { yama: oku(YAMA), ayar: oku(AYAR), tanim: oku(TANIM), index: oku('index.html') },
+          { setAdi: o.setAdi || '', girdiler },
+        );
+      }
+      for (const [y, v] of dosyalar) {
+        await fsp.mkdir(path.dirname(path.join(kok, y)), { recursive: true });
+        await fsp.writeFile(path.join(kok, y), v);
+      }
     }
     if (kurum) await fsp.writeFile(path.join(kok, 'kurum.txt'), kurum);
+    if (donusum) donusumKaniti = motorDonusumuDogrula(kok, motorlar, donusum);
 
     await fsp.mkdir(path.dirname(o.cikti), { recursive: true });
     const gecici = `${o.cikti}.yazim-${process.pid}`;
@@ -544,7 +684,10 @@ async function uret(o) {
     return {
       setId: String(o.setId), zip: o.cikti, boyut, sha256, duzen, aktivasyon,
       motor: { kalip: o.kalipZip, dizin: kalip.motor, kurum: kalip.kurum, kurumYazilan: kurum },
-      kabuk: duzen === DUZEN.BOOKN ? (o.kabuk === 'kalip' ? 'kalip' : (o.kabuk.zip || o.kabuk.dizin)) : null,
+      kabuk: duzen === DUZEN.BOOKN
+        ? (o.kabuk === 'kalip' ? 'kalip' : (temaAdi ? `tema:${temaAdi}` : (o.kabuk.zip || o.kabuk.dizin))) : null,
+      donusum: donusumKaniti,
+      kapak: temaAdi ? kapakSay : null,
       kitaplar: kitapRapor,
       linkKarti: linkKarti.map((g) => ({ assetId: g.id, ad: g.ad, url: g.url, sebep: g.sebep })),
       atlanan: atlanan.map((g) => ({ assetId: g.id, ad: g.ad, sebep: g.sebep })),
@@ -564,11 +707,14 @@ function uretecOzeti(r) {
     kalip: path.basename(path.dirname(r.motor.kalip)), motor: r.motor.dizin, kurum: r.motor.kurumYazilan || r.motor.kurum,
     kabuk: r.kabuk ? (r.kabuk === 'kalip' ? 'kalip' : path.basename(String(r.kabuk))) : null,
     kitap: r.kitaplar.length, linkKarti: r.linkKarti.length, atlanan: r.atlanan.length,
+    ...(r.donusum ? { donusum: { kurum: r.donusum.kurum, uc: r.donusum.uc, motor: r.donusum.motorlar.length } } : {}),
+    ...(r.kapak ? { kapak: r.kapak } : {}),
   };
 }
 
 module.exports = {
   ISARET, DUZEN, AKTIVASYON, KOD, UretecHatasi, planKur, grupOku, aktivasyonKarari, duzenKarari,
   kapiListesiKur, tekMotorMenuXml, webzMenuDosyalari, kalipOku, kabukGecerliMi, uret, uretecOzeti,
-  KOK_MOTOR_EKLERI, MOTOR_HARIC,
+  KOK_MOTOR_EKLERI, MOTOR_HARIC, alanOku, logoGizle, logoDuzMu, tabanUcYaz, donusumDenetle,
+  motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO,
 };

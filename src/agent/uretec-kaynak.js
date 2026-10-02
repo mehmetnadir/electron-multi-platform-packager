@@ -14,9 +14,14 @@
  *   - `uretecKaynagi`: hepsini bağlar; ERTELENECEK durumlar (liste/kalıp/tema yok, kitap alınamadı)
  *     `gecici` hatadır → runner kirayı + kurma kilidini bırakır, `failed` YAZMAZ (§6a ile aynı ilke).
  *
- * YAYINCI TABLOSU (bilinçli dar): kurum ve tema yalnız ölçülmüş yayıncılar için. Flashy: kalıp
- * (arşivde Flashy build'i) ve tema (web-proxy-modern çevrimdışı kabuğu) YOK → `uretec-kalip-yok` /
- * `uretec-tema-yok` ile ERTELENİR; YDS kabuğuyla YAYINLANMAZ (şef kararı 02.10).
+ * YAYINCI TABLOSU (bilinçli dar): kurum ve tema yalnız ölçülmüş yayıncılar için.
+ *   - YDS (kurum 60): kalıbın kendi Web-Z kökü (sf425).
+ *   - Flashy ELT (kurum 310, İmpark SQL UstKurumId — kanıt: flashy-tema-offline.md): arşivde Flashy
+ *     build'i YOK → kalıp = herhangi bir YDS (60) arşiv build'inin MOTORU, kök = tema kabuğu
+ *     (web-proxy-modern), motorun dört kurum noktası dönüştürülür (şef kararı 02.10 faz 3).
+ *     `baseEndpointUrl`: aday flashyelt.yayincilik.net, HER ÜRETİMDE ölçülür (GetKitapGuncellemeBilgi +
+ *     HasZKitapKey JSON dönmeli); dönmezse yedek akillitahta.ydspublishing.com (02.10 ölçüm: aday
+ *     HasZKitapKey'de Cloudflare 403 → yedek). Ölçüm rapora yazılır.
  */
 
 const fs = require('fs');
@@ -24,12 +29,24 @@ const path = require('path');
 const M = require('./icerik-merdiven');
 const U = require('./index-ureteci');
 const setEk = require('./set-uyelik-ek');
+const temaKabuk = require('./webz-tema-kabuk');
 
 const ISARET = '[uretec]';
-/** Yayıncı adı (küçük harf, tr) → { kurum, tema }. tema: 'kalip' = kalıbın Web-Z kökü (sf425). */
+/**
+ * Yayıncı adı (küçük harf, tr) → { kurum, tema, kalipKurum?, uc? }. tema: 'kalip' = kalıbın Web-Z kökü
+ * (sf425); başka değer = `webz-tema-kabuk` teması (kök üretilir + motor dönüşümü).
+ */
+const FLASHY = Object.freeze({
+  kurum: '310', tema: 'web-proxy-modern', kalipKurum: '60',
+  uc: Object.freeze({ aday: 'https://flashyelt.yayincilik.net', yedek: 'https://akillitahta.ydspublishing.com' }),
+});
 const YAYINCILAR = Object.freeze({
   'yds publishing': { kurum: '60', tema: 'kalip' },
+  'flashy elt': FLASHY,
+  flashyelt: FLASHY,
 });
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
+  + 'Chrome/131.0.0.0 Safari/537.36';
 const WORKER_KOKU = 'https://akillitahta.ndr.ist';
 
 class UretecKaynakHatasi extends Error {
@@ -82,7 +99,7 @@ function kalipSec({ arsivKoku, kurum }) {
  * Worker `config/settings.json` (KV'den kurulur) → panel listesi biçimi
  * (`assetId | başlık |  | contentType | grup`; link → `link:<url> | başlık`). Anahtar sırası korunur. SAF.
  */
-function ayarlardanListe(ayar) {
+function ayarlardanListe(ayar, { taban = null } = {}) {
   const books = ayar && ayar.books && typeof ayar.books === 'object' ? ayar.books : null;
   if (!books) return null;
   const satirlar = [];
@@ -94,7 +111,11 @@ function ayarlardanListe(ayar) {
       continue;
     }
     if (b.assetId == null || b.assetId === '') continue;
-    satirlar.push(`${temiz(b.assetId)} | ${temiz(b.title)} |  | ${temiz(b.contentType)} | ${temiz(b.group)}`);
+    // Kapak (panel coverUrl): data URI / mutlak adres aynen; göreli → Worker tabanına göre mutlak.
+    let kapak = String(b.coverUrl || '').trim();
+    if (kapak && !/^(?:data:image\/|https?:\/\/)/i.test(kapak)) kapak = taban ? `${taban}/${kapak.replace(/^\.?\//, '')}` : '';
+    if (/[|\s]/.test(kapak.replace(/^data:[^,]*,/, ''))) kapak = '';
+    satirlar.push(`${temiz(b.assetId)} | ${temiz(b.title)} | ${kapak} | ${temiz(b.contentType)} | ${temiz(b.group)}`);
   }
   return satirlar.length ? satirlar.join('\n') : null;
 }
@@ -103,7 +124,7 @@ function ayarlardanListe(ayar) {
 async function varsayilanAyarGetir(url) {
   const r = await fetch(url, {
     redirect: 'follow',
-    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
+    headers: { 'User-Agent': UA },
     signal: AbortSignal.timeout(20000),
   });
   if (r.status !== 200) throw new Error(`HTTP ${r.status}`);
@@ -120,8 +141,42 @@ async function listeCoz({ job, env = process.env, ayarGetir = varsayilanAyarGeti
   const kod = job && job.kisaKod ? String(job.kisaKod).trim() : '';
   if (!/^[a-z0-9]{3,12}$/i.test(kod)) return null;
   const url = `${workerKoku}/go/${kod}/web-stream/config/settings.json`;
-  const ham = ayarlardanListe(await ayarGetir(url));
+  const ham = ayarlardanListe(await ayarGetir(url), { taban: `${workerKoku}/go/${kod}/web-stream` });
   return ham ? { ham, kaynak: `kv:${kod}` } : null;
+}
+
+async function varsayilanGetirJson(url) {
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(20000) });
+  const tur = String(r.headers.get('content-type') || '');
+  if (r.status !== 200 || !/json/i.test(tur)) throw new Error(`HTTP ${r.status} ${tur.split(';')[0]}`);
+  return r.json();
+}
+
+/**
+ * Okuyucunun taban ucu: aday GetKitapGuncellemeBilgi VE HasZKitapKey'e JSON (`Success` alanlı)
+ * dönüyorsa aday, yoksa yedek. Ağ: iki salt-okuma GET. Sonuç + gerekçe rapora girer.
+ * @returns {Promise<{uc:string, secilen:'aday'|'yedek', olcum:{guncelleme:string, anahtar:string}}>}
+ */
+async function ucSec({ aday, yedek, ornekId, getirJson = varsayilanGetirJson }) {
+  const sor = async (yol) => {
+    try {
+      const j = await getirJson(`${aday}${yol}`);
+      return j && typeof j === 'object' && 'Success' in j ? 'json' : 'biçim dışı';
+    } catch (e) { return String((e && e.message) || e).slice(0, 60); }
+  };
+  const olcum = {
+    guncelleme: await sor(`/TestlerMobil/GetKitapGuncellemeBilgi?id=${ornekId}&setMi=0&versiyon=0`),
+    anahtar: await sor(`/TestlerMobil/HasZKitapKey?kitapId=${ornekId}`),
+  };
+  const iyi = olcum.guncelleme === 'json' && olcum.anahtar === 'json';
+  return { uc: iyi ? aday : yedek, secilen: iyi ? 'aday' : 'yedek', olcum };
+}
+
+/** Listenin ilk İmpark kitabı (uç ölçümü için). SAF. */
+function ornekKitap(listeHam) {
+  const g = setEk.setListesiAyristir(String(listeHam || '').replace(/\\n/g, '\n'))
+    .find((x) => !x.link && /^[1-9]\d*$/.test(String(x.assetId)));
+  return g ? String(g.assetId) : null;
 }
 
 /** Zip'i olmayan oyun/çalışma kâğıdı için çevrimiçi Web-Z adresi (kisaKod varsa). SAF. */
@@ -149,16 +204,35 @@ async function uretecKaynagi(o) {
   if (!yay) {
     throw new UretecKaynakHatasi('uretec-kalip-yok', `yayıncı tablosunda yok: ${job.publisherName || '-'} (kurum/tema ölçülmedi)`);
   }
-  const kalip = kalipSec({ arsivKoku: o.arsivKoku, kurum: yay.kurum });
-  if (!kalip) throw new UretecKaynakHatasi('uretec-kalip-yok', `kurum ${yay.kurum} için arşivde motor kalıbı yok`);
-  log(`${ISARET} ${job.bookId}: liste ${liste.kaynak}, kalıp ${kalip.set} (kurum ${kalip.kurum})`);
+  const kalipKurum = yay.kalipKurum || yay.kurum;
+  const kalip = kalipSec({ arsivKoku: o.arsivKoku, kurum: kalipKurum });
+  if (!kalip) throw new UretecKaynakHatasi('uretec-kalip-yok', `kurum ${kalipKurum} için arşivde motor kalıbı yok`);
+  // Tema kabuklu yayıncı: kök üretilir, motorun kurum noktaları dönüştürülür.
+  let kabuk = yay.tema === 'kalip' ? 'kalip' : null;
+  let motorDonusumu = null;
+  let ucSecimi = null;
+  if (yay.tema !== 'kalip') {
+    if (!temaKabuk.TEMALAR[yay.tema]) throw new UretecKaynakHatasi('uretec-tema-yok', `tema kayıtlı değil: ${yay.tema}`);
+    kabuk = { tema: yay.tema };
+    const ornek = ornekKitap(liste.ham);
+    ucSecimi = ornek
+      ? await (o.ucSecFn || ucSec)({ ...yay.uc, ornekId: ornek })
+      : { uc: yay.uc.yedek, secilen: 'yedek', olcum: { guncelleme: 'örnek yok', anahtar: 'örnek yok' } };
+    motorDonusumu = {
+      kurum: yay.kurum, baseEndpointUrl: ucSecimi.uc,
+      logo: fs.readFileSync(path.join(temaKabuk.TEMA_KOKU, yay.tema, 'images', 'logo.png')),
+    };
+  }
+  log(`${ISARET} ${job.bookId}: liste ${liste.kaynak}, kalıp ${kalip.set} (kurum ${kalip.kurum})`
+    + `${kabuk && kabuk.tema ? `, tema ${kabuk.tema} → kurum ${yay.kurum}, uç ${ucSecimi.uc} (${ucSecimi.secilen}: `
+      + `güncelleme ${ucSecimi.olcum.guncelleme}, anahtar ${ucSecimi.olcum.anahtar})` : ''}`);
   let rapor;
   try {
     rapor = await (o.uret || U.uret)({
       setId: String(job.bookId), setAdi: job.bookTitle || '', listeHam: liste.ham, kalipZip: kalip.zip,
       cikti: o.zipPath, calisma: path.join(o.work, 'uretec'), duzen: U.DUZEN.OTOMATIK,
       aktivasyon: U.AKTIVASYON.OTOMATIK, anahtarliMi: o.anahtarliMi,
-      kabuk: yay.tema === 'kalip' ? 'kalip' : null, webzAdresi: webzAdresiKur(job),
+      kabuk, motorDonusumu, kapakGetir: o.kapakGetir, webzAdresi: webzAdresiKur(job),
       onbellek: o.onbellek || M.icerikOnbellekKoku(), getir: o.getir, indir: o.indir, log,
     });
   } catch (e) {
@@ -170,10 +244,11 @@ async function uretecKaynagi(o) {
     if (e && e.gecici) throw new UretecKaynakHatasi('uretec-ag', String(e.message || e).slice(0, 200));
     throw e;
   }
+  if (ucSecimi) rapor.ucSecimi = ucSecimi;
   return { rapor, liste };
 }
 
 module.exports = {
   ISARET, YAYINCILAR, WORKER_KOKU, UretecKaynakHatasi, uretecAcik, yayinciBul, kalipSec,
-  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi,
+  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi, ucSec, ornekKitap, FLASHY,
 };

@@ -62,6 +62,11 @@ const TEMALAR = Object.freeze({
       [/https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/font-awesome\/6\.5\.2\/css\/all\.min\.css/g,
         `${VENDOR}/fontawesome/css/all.min.css`],
     ]),
+    // Çevrimdışı pakette anlamsız metin (şef 02.10 faz 3: "Web Sürümü" kalkar, "Akıllı Tahta"
+    // kalır). Desen bulunmazsa üretim DURUR (tema kaydı → sessiz kayma yok).
+    metin: Object.freeze([
+      [/<span>Akıllı Tahta · Web Sürümü<\/span>/g, '<span>Akıllı Tahta</span>'],
+    ]),
     yamaOncesi: '<script src="theme.js?v=2"></script>',
   }),
 });
@@ -313,6 +318,11 @@ function indexUret(ham, tema, setAdi) {
     if (s === once) {
       throw new KabukHatasi(`index.html: beklenen CDN bağlantısı yok (${desen})`, 'tema');
     }
+  }
+  for (const [desen, yerine] of t.metin || []) {
+    const once = s;
+    s = s.replace(desen, yerine);
+    if (s === once) throw new KabukHatasi(`index.html: beklenen metin yok (${desen})`, 'tema');
   }
   if (!/<title>[^<]*<\/title>/.test(s)) throw new KabukHatasi('index.html: <title> yok', 'tema');
   s = s.replace(/<title>[^<]*<\/title>/, `<title>${htmlKacis(setAdi)}</title>`);

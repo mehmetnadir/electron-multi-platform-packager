@@ -110,6 +110,16 @@ test('index.html: başlık = set adı, imza meta, yama theme.js\'ten ÖNCE, stil
   assert.equal(bicim.webZKabukIndexiMi(s), true, 'paketleyici kabuğu Web-Z olarak tanımalı');
 });
 
+test('altbilgi: "Web Sürümü" çevrimdışı pakette kalkar, "Akıllı Tahta" kalır; desen yoksa RED', () => {
+  const s = K.kabukUret(temel()).dosyalar.get('index.html').toString('utf8');
+  assert.doesNotMatch(s, /Web Sürümü/);
+  assert.match(s, /<footer class="footer">[\s\S]*<span>Akıllı Tahta<\/span>[\s\S]*<\/footer>/);
+  const ham = fs.readFileSync(path.join(TEMA, 'index.html'), 'utf8');
+  assert.match(ham, /Web Sürümü/, 'kaynak tema metni değişmedi (dönüşüm yalnız pakette)');
+  assert.throws(() => K.indexUret(ham.replace('Akıllı Tahta · Web Sürümü', 'X'), 'web-proxy-modern', 'S'),
+    (e) => e.kod === 'tema' && /beklenen metin yok/.test(e.message));
+});
+
 test('yama sözleşmesi: TEK __setSettings ataması, books = settings.json = set-menu.json', () => {
   const { dosyalar, ayarlar } = K.kabukUret(temel());
   const yama = dosyalar.get(K.YAMA).toString('utf8');

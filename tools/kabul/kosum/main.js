@@ -314,6 +314,22 @@ async function kos() {
     await tikla(win, kart);
     adim.yontem = 'fare';
     let url = await gez;
+    if ((!url || !/\/book\d+\//i.test(url)) && kart.tip === 'tema') {
+      // Tema kabuğu: kart ünite penceresini açar → ilk görünür üniteye GERÇEK fare tıklaması.
+      const unite = await win.webContents.executeJavaScript(`(() => {
+        const el = [...document.querySelectorAll('#unitModal .unit-item')].find((e) => e.getClientRects().length);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), metin: el.innerText.trim().slice(0, 60) };
+      })()`, true).catch(() => null);
+      if (unite) {
+        adim.unite = unite.metin;
+        gez = gezinmeBekle(win, 12000);
+        await tikla(win, unite);
+        adim.yontem = 'fare+unite';
+        url = await gez;
+      }
+    }
     if (!url || !/\/book\d+\//i.test(url)) {
       // Kart üstünde bir katman (tanıtım turu vb.) fareyi yutmuş olabilir → DOM tıklaması.
       gez = gezinmeBekle(win, 12000);

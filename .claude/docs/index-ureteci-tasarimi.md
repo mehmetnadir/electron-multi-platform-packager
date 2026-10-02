@@ -1,4 +1,4 @@
-# Index Üreteci — kaynaksız setlerin build.zip'i  `[TASARIM + RUNNER BAĞLANTISI — 2026-10-02, dal index-ureteci-20261002, merge yok]`
+# Index Üreteci — kaynaksız setlerin build.zip'i  `[TASARIM + RUNNER BAĞLANTISI + FLASHY — 2026-10-02; faz 1-2 agent-mode'da, faz 3 dal index-flashy-20261002, merge yok]`
 
 > Nadir 02.10: "yapmamız şart". Sözleşme: book-update `exesiz-kaynak-sozlesmesi.md` (ONAYLI) §K "set
 > index'i BİZİMDİR, kitap listesi = panel Web-Z listesi", §5 yazma kapısı, §2b imKeys, §7 manuel yollar.
@@ -14,7 +14,7 @@
 | 2 | Sürüm kaydı DDL'siz: `kaynak='uretec'` + `kapi_kaniti`'ne üreteç özeti, `tur='otomatik'` | runner `tamamla` gövdesine `uretec:{…}` (sunucu zod'u bilinmeyen alanı atar → **book-update işi**: tamamla `uretec`i okuyup `kaynak`/`kapi_kaniti`'ne yazsın) |
 | 3 | Yeniden üretim tetiği = mevcut §4 (Web-Z liste değişimi → kur isteği); üreteç r2-kur'un kaynak adımı | `kaynakKarari` → `taban:{tur:'uretec'}` |
 | 4 | Zip'siz oyun/çalışma kâğıdı → link kartı (4fbb8c1 biçimi); rapora say | `webzAdresi` (kisaKod) → `type:'link'`; yoksa `atlanan`; `kapiListesi` |
-| 5 | Flashy teması ayrı ajanda; YDS kabuğuyla YAYINLANMAZ → `uretec-tema-yok` ile ertele | `kabuk` kancası ('kalip' / {zip} / {dizin}); yayıncı tablosu yalnız YDS |
+| 5 | ~~Flashy ertelenir~~ → faz 3 (§11): Flashy (kurum 310) bookN, kalıp = YDS motoru, kök = tema kabuğu | `kabuk:{tema}` + `motorDonusumu`; yayıncı tablosu YDS + Flashy ELT |
 
 > Merge/deploy/DB/R2 yazımı YOK — bu belge ve prototip kuru koşudur.
 
@@ -136,5 +136,37 @@ Her kitapta `BookContent.xml` + `thumbs/1.jpg` + ilk sayfa var; bookN'de `settin
 5. Sete kitap ÇIKARILINCA r2-kur tabanı eski kitabı taşır (set eki silmez) → üreteçle yeniden kurma tetiği.
 6. 59480/60114 `games`/`worksheets` Web-Z varlıkları (ZKitapZipH yok) çevrimdışına nasıl girer?
 
+## 11. Faz 3 — Flashy (UYGULANDI, dal `index-flashy-20261002`)
+
+Şef kararları 02.10: Flashy setleri (kurum 310) bookN; kalıp = herhangi bir YDS (60) arşiv build'i, ama
+kalıbın KÖKÜ açılmaz — kök = `webz-tema-kabuk.kabukUret` (bkz. `flashy-tema-offline.md`). `uretec-kalip-yok`
+artık yalnız arşivde hiç YDS motoru yoksa.
+
+| Karar | Kodda | Kanıt (74430 kuru koşu, 02.10) |
+|---|---|---|
+| Kök = tema kabuğu; kalıpta `scripts/language-set.js` aranmaz | `kabukGecerliMi({tema})`, `uret` tema dalı (`kabukAc` yok) | zip'te `language-set.js` yok, `empp-webz-tema` imzası var |
+| İki `kurum.txt` → 310 | `motorDonusumu.kurum` (motor kalıbına bir kez; kök `kurum` ondan) | kök + book1 + book2 = 310 |
+| `bookN/core/kurumlogo.png` → Flashy logosu | tema `images/logo.png` (327×327) = paketleyici kaydı "Flashy ELT" (sha AYNI); **motorun gizlemesiyle** (ilk 100 bayt 256-b) yazılır | çözülmüş sha = Flashy logo sha |
+| `app.config.js` `baseEndpointUrl` | `ucSec`: aday flashyelt GetKitapGuncellemeBilgi + HasZKitapKey JSON → aday, değilse yedek YDS; yoksa anahtar eklenir | aday HasZKitapKey **CF 403** → `akillitahta.ydspublishing.com` |
+| Kapak = panel coverUrl | liste 3. alanı (data URI / http indirilir; olmazsa `thumbs/1.jpg` yedeği, sayılır) | 2/2 panel kapağı (webp) |
+| Altbilgi "Web Sürümü" kalkar | `TEMALAR['web-proxy-modern'].metin` (desen yoksa üretim durur) | "Akıllı Tahta" kaldı |
+
+**Logo neden gizli yazılır (bundle ölçümü, 45540 `main.js`):** motor açılışta `core/kurumlogo.png` yoksa ya da
+ilk 10 baytında "PNG" varsa `GetKurumLogo?id=<bookN/kurum.txt>` ile İmpark logosunu indirip gizleyerek YAZAR.
+İmpark'ın 310 logosu (`flashyelt.yayincilik.net/Uploads/Logo/flashyelt.png`, 218×216, 733 B) beyaz-saydam —
+düz yazsaydık ilk çevrimiçi açılışta ona dönerdi.
+
+**Uç neden yedekte (ölçüm 02.10, UA'lı curl):** flashyelt.yayincilik.net `GetKitapGuncellemeBilgi` 200 JSON,
+`HasZKitapKey`/`IsZKitapKurumAktif` 403 Cloudflare "Just a moment" (UA'lı/UA'sız/Electron UA). YDS alanı
+üçüne de 200 JSON. Paketleyicinin `yayinci-domain-yamasi` sorucoz.tv'yi `baseEndpointUrl` host'una çevirdiği
+için uç YDS kalır; Flashy WAF'ı düzelince `ucSec` her üretimde ölçtüğü için kendiliğinden adaya geçer.
+
+**Başsız kabul (74430, `tools/kabul/basliksiz-kabul.js --platform zip`, Electron 27.3.11 offscreen, ağ kapalı):**
+kapı tema kartlarını tanımıyordu (kart 0/2 → RED). `kosum/dom-yoklama.js` artık `.flashy-card[data-id=bookN]`
+kartını sayar, `kosum/main.js` tıklama ünite penceresi açarsa ilk `.unit-item`'a gerçek fare tıklaması yapar.
+Sonuç GEÇTİ: menü 2/2 kart, panel kapakları; book1 → `defaultPageNo=3` ("Theme 1"), okuyucu sol üstte Flashy
+logosu. Bilinen gürültü: motorun `core/kurumLogo.png` (büyük L) isteği ERR_FILE_NOT_FOUND — kalıpta da var,
+paketleyici `harf-kapisi` çözer.
+
 ---
-Son Güncelleme: 2026-10-02 — ilk sürüm (prototip `index-ureteci-20261002`).
+Son Güncelleme: 2026-10-02 — faz 3 Flashy (§11); önceki: ilk sürüm + runner bağlantısı.

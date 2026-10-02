@@ -118,7 +118,7 @@ async function sahteSunucu() {
 }
 
 /** processJob'u yalıtılmış ortamda; üreteç adımı sahte İmpark + verilen anahtarlı kararıyla. */
-async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {} }) {
+async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {}, ek = {} }) {
   const sunucu = await sahteSunucu();
   const casus = { merdiven: 0, setEki: 0, uretec: 0 };
   const orj = { ...kaynakAdim };
@@ -127,7 +127,7 @@ async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {} 
   kaynakAdim.uretec = async (a) => {
     casus.uretec += 1;
     return uk.uretecKaynagi({ ...a, arsivKoku: o.arsivKoku, getir: o.getir, indir: o.indir,
-      onbellek: path.join(o.d, 'onb'), anahtarliMi: async (id) => anahtarli(id), ...(listeCozFn ? { listeCozFn } : {}) });
+      onbellek: path.join(o.d, 'onb'), anahtarliMi: async (id) => anahtarli(id), ...(listeCozFn ? { listeCozFn } : {}), ...ek });
   };
   const ENV = {
     EMPP_KAYNAK_ARSIVI: tmp('bos-arsiv'), EMPP_ARSIV_MERDIVEN: '1', EMPP_SET_UYELIK_EK: '1', EMPP_BILDIRIM: '0',
@@ -205,8 +205,50 @@ test('r2-kur taban YOK, anahtarsız YDS seti: bookN + kalıbın Web-Z kabuğu; K
   assert.match(r.is.setListesi, /^501 \| Kitap 1 \|  \| book \| \nlink:https:\/\/v\.example\/x \| Video\n502 \| B/);
 });
 
-test('r2-kur taban YOK, yayıncı tablosunda yok (Flashy): ERTELENİR uretec-kalip-yok — failed/tamamla yok', async () => {
+test('r2-kur taban YOK, Flashy (kurum 310): YDS motoru + tema kökü + dört nokta → tamamla (+uretec) → paketleyici', async () => {
   const o = await ortam();
+  const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(8, 2)]);
+  const ucSorular = [];
+  const ek = {
+    ucSecFn: async (a) => { ucSorular.push(a); return uk.ucSec({ ...a, getirJson: async (u) => {
+      if (/HasZKitapKey/.test(u)) throw new Error('HTTP 403 text/html');
+      return { Success: true };
+    } }); },
+    kapakGetir: async () => { throw new Error('ağ yok'); },
+  };
+  const liste = `501 | Practice Book | data:image/webp;base64,${WEBP.toString('base64')} | book |\n502 | Activity | https://k.example/2.png | book |`;
+  const r = await isKostur({ o, ek, job: { publisherName: 'Flashy ELT', bookId: '74430', bookTitle: 'Flashy Grade 4 Set', setListesi: liste } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+  assert.equal(ucSorular.length, 1);
+  assert.deepEqual([ucSorular[0].aday, ucSorular[0].yedek, ucSorular[0].ornekId],
+    ['https://flashyelt.yayincilik.net', 'https://akillitahta.ydspublishing.com', '501']);
+  const t = r.kayit.govdeler['kaynak/tamamla'][0];
+  assert.deepEqual(t.kitaplar.map((k) => [k.n, k.id, k.icerik, k.kapak]), [[1, '501', true, true], [2, '502', true, true]]);
+  assert.equal(t.uretec.duzen, 'bookN');
+  assert.equal(t.uretec.kabuk, 'tema:web-proxy-modern');
+  assert.equal(t.uretec.kalip, '99999', 'kalıp = YDS (60) arşiv build\'i');
+  assert.deepEqual(t.uretec.donusum, { kurum: '310', uc: 'https://akillitahta.ydspublishing.com', motor: 2 });
+  assert.deepEqual(t.uretec.kapak, { panel: 1, yedek: 1 });
+  assert.match(r.loglar, /uç https:\/\/akillitahta\.ydspublishing\.com \(yedek: güncelleme json, anahtar HTTP 403/);
+  const yuklenen = Buffer.concat(r.kayit.parcalar);
+  assert.deepEqual(yuklenenZip(r.kayit.uploadGovde), yuklenen);
+  const zipYolu = path.join(tmp('kontrol'), 'b.zip');
+  fs.writeFileSync(zipYolu, yuklenen);
+  const dz = M.zipDizini(zipYolu);
+  const oku = (y) => M.zipGirdiOku(zipYolu, dz.get(y));
+  assert.equal(dz.has('scripts/language-set.js'), false, 'kalıbın (YDS) kökü açılmadı');
+  assert.match(oku('index.html').toString(), /empp-webz-tema/);
+  assert.doesNotMatch(oku('index.html').toString(), /Web Sürümü/);
+  assert.equal(oku('kurum.txt').toString(), '310');
+  assert.equal(oku('book2/kurum.txt').toString(), '310');
+  assert.match(oku('book1/app.config.js').toString(), /baseEndpointUrl: "https:\/\/akillitahta\.ydspublishing\.com"/);
+  const logo = fs.readFileSync(path.join(require('./webz-tema-kabuk').TEMA_KOKU, 'web-proxy-modern/images/logo.png'));
+  assert.deepEqual(require('./index-ureteci').logoGizle(oku('book1/core/kurumlogo.png')), logo);
+  assert.deepEqual(oku('images/book1.webp'), WEBP);
+});
+
+test('r2-kur taban YOK, Flashy ama arşivde YDS (60) kalıbı yok: ERTELENİR uretec-kalip-yok — failed/tamamla yok', async () => {
+  const o = await ortam({ kurum: '7' });
   const r = await isKostur({ o, job: { publisherName: 'Flashy ELT', bookId: '74430', setListesi: '501 | A' } });
   assert.equal(r.hata, null);
   assert.equal(r.donus.ertelendi, true);
@@ -233,6 +275,27 @@ test('r2-kur taban YOK, liste hiç yok (claim/dosya/kisaKod): ERTELENİR uretec-
 });
 
 // ─── uretec-kaynak saf parçalar ─────────────────────────────────────────────────────────────
+
+test('ucSec: aday iki soruya JSON dönerse aday; biri bile dönmezse yedek (ölçüm gerekçesiyle)', async () => {
+  const uc = { aday: 'https://a.example', yedek: 'https://y.example', ornekId: '7' };
+  const sorulan = [];
+  const iyi = await uk.ucSec({ ...uc, getirJson: async (u) => { sorulan.push(u); return { Success: false }; } });
+  assert.deepEqual([iyi.uc, iyi.secilen], ['https://a.example', 'aday']);
+  assert.deepEqual(sorulan, ['https://a.example/TestlerMobil/GetKitapGuncellemeBilgi?id=7&setMi=0&versiyon=0',
+    'https://a.example/TestlerMobil/HasZKitapKey?kitapId=7']);
+  const k = await uk.ucSec({ ...uc, getirJson: async (u) => (/HasZ/.test(u) ? { Html: 1 } : { Success: true }) });
+  assert.deepEqual([k.uc, k.secilen, k.olcum.anahtar], ['https://y.example', 'yedek', 'biçim dışı']);
+  assert.equal(uk.ornekKitap('link:https://x.example | L\\nabc | X\\n77 | Y'), '77');
+});
+
+test('ayarlardanListe: panel kapağı 3. alana (data/mutlak aynen, göreli → Worker tabanı)', () => {
+  assert.equal(uk.ayarlardanListe({ books: {
+    book1: { assetId: '1', title: 'A', coverUrl: 'data:image/webp;base64,AAA=' },
+    book2: { assetId: '2', title: 'B', coverUrl: 'images/book2.png' },
+    book3: { assetId: '3', title: 'C', coverUrl: 'https://c.example/3.jpg' },
+  } }, { taban: 'https://w.example/go/k/web-stream' }),
+  '1 | A | data:image/webp;base64,AAA= |  | \n2 | B | https://w.example/go/k/web-stream/images/book2.png |  | \n3 | C | https://c.example/3.jpg |  | ');
+});
 
 test('ayarlardanListe: Worker settings.json → panel listesi (sıra, link, grup; | kaçışı)', () => {
   assert.equal(uk.ayarlardanListe({ books: {

@@ -369,3 +369,146 @@ test('genel ad ("Kitap 1", KV başlığı yok) → BookContent pdfUrl\'den ad; s
     getir: o.getir, indir: o.indir, bekleMs: 0 });
   assert.deepEqual(r.kitaplar.map((k) => k.ad), ['Super Monsters 3 Students', 'Kitap 2']);
 });
+
+// ─── Faz 3: Flashy — tema kabuğu + yayıncı dönüşümü ─────────────────────────────────────────
+
+const temaKabuk = require('./webz-tema-kabuk');
+const crypto = require('crypto');
+const FLASHY_LOGO = fs.readFileSync(path.join(temaKabuk.TEMA_KOKU, 'web-proxy-modern', 'images', 'logo.png'));
+const PNG_1 = Buffer.concat([Buffer.from([0x89]), Buffer.from('PNG\r\n\u001a\n', 'latin1'), Buffer.alloc(24, 3)]);
+const WEBP_1 = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(8, 2)]);
+const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
+const DONUSUM = { kurum: '310', logo: FLASHY_LOGO, baseEndpointUrl: 'https://akillitahta.ydspublishing.com' };
+
+test('tabanUcYaz: varsa değiştirir, yoksa AppConfig başına ekler; AppConfig yoksa RED', () => {
+  assert.equal(U.tabanUcYaz('const AppConfig = {\n  baseEndpointUrl: "https://a.example", x: 1 };', 'https://b.example'),
+    'const AppConfig = {\n  baseEndpointUrl: "https://b.example", x: 1 };');
+  assert.match(U.tabanUcYaz('var AppConfig = { x: 1 };', 'https://b.example'),
+    /^var AppConfig = \{\n {4}baseEndpointUrl: "https:\/\/b\.example",\s*x: 1 \};$/);
+  assert.throws(() => U.tabanUcYaz('window.X = {};', 'https://b.example'), (e) => e.kod === 'donusum');
+});
+
+test('logo gizleme: motorun 256-b şeması kendi tersidir; gizli logo "düz" sayılmaz (çevrimiçi ezilmez)', () => {
+  const g = U.logoGizle(FLASHY_LOGO);
+  assert.equal(U.logoDuzMu(FLASHY_LOGO), true);
+  assert.equal(U.logoDuzMu(g), false);
+  assert.deepEqual(U.logoGizle(g), FLASHY_LOGO);
+  assert.deepEqual(g.subarray(100), FLASHY_LOGO.subarray(100), 'yalnız ilk 100 bayt');
+});
+
+test('donusumDenetle: kurum sayı, logo düz PNG, uç https kökü — değilse parametre hatası', () => {
+  assert.equal(U.donusumDenetle(null), null);
+  assert.equal(U.donusumDenetle(DONUSUM).kurum, '310');
+  for (const bozuk of [{ kurum: 'x' }, { logo: U.logoGizle(FLASHY_LOGO) }, { logo: WEBP_1 },
+    { baseEndpointUrl: 'http://a.example' }, { baseEndpointUrl: 'https://a.example/yol' }]) {
+    assert.throws(() => U.donusumDenetle({ ...DONUSUM, ...bozuk }), (e) => e.kod === 'parametre', JSON.stringify(Object.keys(bozuk)));
+  }
+});
+
+test('alanOku/planKur: panel kapağı (3. alan) plana girer, grup (5. alan) aynen', () => {
+  const p = U.planKur({ listeHam: '501 | A | data:image/png;base64,AAAA | book | G\n502 | B' });
+  assert.deepEqual(p.kitaplar.map((k) => [k.id, k.kapak, k.grup]), [['501', 'data:image/png;base64,AAAA', 'G'], ['502', null, '']]);
+});
+
+const FLASHY_LISTE = [
+  `501 | Practice Book | data:image/webp;base64,${WEBP_1.toString('base64')} | book |`,
+  '502 | Kitap 2 | https://kapak.example/502.png | book |',
+  '503 | Test Book | https://kapak.example/yok.png |  |',
+  'link:https://w.example/ws | Worksheet',
+].join('\n');
+
+async function flashyUret(o, ek = {}) {
+  const getirilen = [];
+  const r = await U.uret({
+    setId: '74430', setAdi: 'Flashy Grade 4 Set', listeHam: FLASHY_LISTE, kalipZip: o.kalipZip,
+    cikti: path.join(o.d, 'flashy', 'build.zip'), calisma: path.join(o.d, 'cal'), duzen: 'otomatik',
+    aktivasyon: 'yok', kabuk: { tema: 'web-proxy-modern' }, motorDonusumu: DONUSUM,
+    kapakGetir: async (u) => { getirilen.push(u); if (/yok/.test(u)) throw new Error('404'); return PNG_1; },
+    onbellek: path.join(o.d, 'onb'), getir: o.getir, indir: o.indir, bekleMs: 0, sahneyiTut: true, ...ek,
+  });
+  return { r, getirilen };
+}
+
+test('uret Flashy: kök = tema kabuğu (kalıp kökü AÇILMAZ), panel kapakları, altbilgi, dört nokta KANITLI', async () => {
+  const o = await ortam();
+  const { r, getirilen } = await flashyUret(o);
+  const kok = path.join(r.sahne, 'build');
+  const oku = (y) => fs.readFileSync(path.join(kok, y));
+  assert.equal(r.duzen, 'bookN');
+  assert.equal(r.kabuk, 'tema:web-proxy-modern');
+  // Kalıbın kökü açılmadı: sf425 izleri yok, tema imzası var.
+  assert.equal(fs.existsSync(path.join(kok, 'scripts/language-set.js')), false);
+  assert.equal(fs.existsSync(path.join(kok, 'electronUpdate.js')), false);
+  const idx = oku('index.html').toString('utf8');
+  assert.match(idx, /<meta name="empp-webz-tema" content="web-proxy-modern" \/>/);
+  assert.match(idx, /<title>Flashy Grade 4 Set<\/title>/);
+  assert.doesNotMatch(idx, /Web Sürümü/);
+  assert.match(idx, /<span>Akıllı Tahta<\/span>/);
+  assert.deepEqual(oku('images/logo.png'), FLASHY_LOGO);
+  // Kapak: data URI → images/book1.webp; http → indirildi (book2.png); indirilemeyen → thumbs yedeği.
+  const ayar = JSON.parse(oku('config/settings.json'));
+  assert.equal(ayar.books.book1.coverUrl, 'images/book1.webp');
+  assert.deepEqual(oku('images/book1.webp'), WEBP_1);
+  assert.equal(ayar.books.book2.coverUrl, 'images/book2.png');
+  assert.equal(ayar.books.book3.coverUrl, 'book3/assets/503/thumbs/1.jpg');
+  assert.equal(ayar.books.link4.type, 'link');
+  assert.deepEqual(getirilen, ['https://kapak.example/502.png', 'https://kapak.example/yok.png']);
+  assert.deepEqual(r.kapak, { panel: 2, yedek: 1 });
+  assert.equal(ayar.books.book2.title, 'Kitap 2', 'genel ad BookContent pdfUrl yoksa kalır');
+  // Dört nokta (diskten): iki kurum.txt, gizli Flashy logosu, baseEndpointUrl.
+  assert.equal(oku('kurum.txt').toString(), '310');
+  for (const d of ['book1', 'book2', 'book3']) {
+    assert.equal(oku(`${d}/kurum.txt`).toString(), '310');
+    const logo = oku(`${d}/core/kurumlogo.png`);
+    assert.equal(U.logoDuzMu(logo), false);
+    assert.equal(sha(U.logoGizle(logo)), sha(FLASHY_LOGO));
+    assert.match(oku(`${d}/app.config.js`).toString(), /baseEndpointUrl: "https:\/\/akillitahta\.ydspublishing\.com"/);
+  }
+  assert.deepEqual(r.donusum.motorlar, ['book1', 'book2', 'book3']);
+  assert.equal(r.donusum.logoSha256, sha(FLASHY_LOGO));
+  const oz = U.uretecOzeti(r);
+  assert.deepEqual([oz.kabuk, oz.donusum, oz.kapak], ['tema:web-proxy-modern',
+    { kurum: '310', uc: 'https://akillitahta.ydspublishing.com', motor: 3 }, { panel: 2, yedek: 1 }]);
+  // Yazma kapısı (bookN + tema kökü) geçer.
+  const k = yazmaKapisi({ zipYolu: r.zip, setListesi: r.kapiListesi, tur: 'otomatik' });
+  assert.equal(k.gecti, true, JSON.stringify(k.nedenKodlari));
+  await fsp.rm(r.sahne, { recursive: true, force: true });
+});
+
+test('uret Flashy: tema kabuğu kalıpta sf425 aramaz (language-set.js yok) — kalip kabuğu ise tema-yok', async () => {
+  const o = await ortam();
+  // Kalıbın kökünü sf425'siz yeniden kur: yalnız motor.
+  const d2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'uretec-sfsiz-'));
+  const ac = await M.komut('unzip', ['-q', o.kalipZip, 'book1/*', '-d', d2]);
+  assert.equal(ac.code, 0);
+  const sfsiz = path.join(d2, 'k.zip');
+  await zipla(d2, sfsiz);
+  assert.equal(U.kalipOku(sfsiz).kabuk, false);
+  assert.equal(U.kabukGecerliMi({ tema: 'web-proxy-modern' }, U.kalipOku(sfsiz)), true);
+  assert.equal(U.kabukGecerliMi({ tema: 'yok-tema' }, U.kalipOku(sfsiz)), false);
+  const { r } = await flashyUret({ ...o, kalipZip: sfsiz });
+  assert.equal(r.kabuk, 'tema:web-proxy-modern');
+  await assert.rejects(flashyUret({ ...o, kalipZip: sfsiz }, { kabuk: 'kalip' }), (e) => e.kod === 'uretec-tema-yok');
+});
+
+test('motorDonusumuDogrula: tek nokta bile tutmazsa RED (kurum / logo düz / uç)', async () => {
+  const o = await ortam();
+  const { r } = await flashyUret(o);
+  const kok = path.join(r.sahne, 'build');
+  const bozucular = [
+    () => fs.writeFileSync(path.join(kok, 'book2/kurum.txt'), '60'),
+    () => fs.writeFileSync(path.join(kok, 'book1/core/kurumlogo.png'), FLASHY_LOGO),
+    () => fs.writeFileSync(path.join(kok, 'book3/app.config.js'), 'var AppConfig = { baseEndpointUrl: "https://x.example" };'),
+    () => fs.writeFileSync(path.join(kok, 'kurum.txt'), '60'),
+  ];
+  for (const boz of bozucular) {
+    const yedek = path.join(o.d, `yedek-${Math.random()}`);
+    await fsp.cp(kok, yedek, { recursive: true });
+    boz();
+    assert.throws(() => U.motorDonusumuDogrula(kok, r.donusum.motorlar, DONUSUM), (e) => e.kod === 'donusum');
+    await fsp.rm(kok, { recursive: true, force: true });
+    await fsp.rename(yedek, kok);
+  }
+  assert.equal(U.motorDonusumuDogrula(kok, r.donusum.motorlar, DONUSUM).kurum, '310');
+  await fsp.rm(r.sahne, { recursive: true, force: true });
+});

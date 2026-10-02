@@ -10,6 +10,9 @@
  *     ve gruplar için `.book-item.book-group` (geri düğmesi `.book-group-back` sayılmaz).
  *   • Yayıncı / sade menü (`set-menu.js`): `a[href]`, `[data-url]`, `[onclick]` içinde
  *     `bookN/` yolu → kitap başına TEK kart (buton + kapak aynı kitabı gösterir).
+ *   • Web-Z TEMA kabuğu (runner `webz-tema-kabuk.js`, Flashy web-proxy-modern; 02.10):
+ *     `.flashy-card[data-id="bookN"]` (link kartı `linkN` sayılmaz). Tıklama ünite penceresini
+ *     açar (`.unit-item`); ileri adım ilk üniteye tıklar (main.js).
  * Motor kitaplığı: tek kitap paketinde okuyucu yerine kitap rafı açılırsa dikey kapak
  * görselleri (<img> ya da arka plan görselli kutu) `kapaklar` olarak döner (ileri adım
  * bunlardan birine tıklar).
@@ -77,7 +80,16 @@ function domYokla() {
     });
   });
   const yol = [...yolKartlari.values()];
-  const kartlar = webz.length >= yol.length ? webz : yol;
+  const tema = [];
+  document.querySelectorAll('.flashy-card[data-id]').forEach((el) => {
+    const id = String(el.getAttribute('data-id') || '');
+    if (!/^book\d+$/.test(id) || !gorunur(el)) return;
+    tema.push({
+      anahtar: `tema:${id}`, tip: 'tema', kitap: id, metin: (el.innerText || '').trim().slice(0, 80),
+      secici: `.flashy-card[data-id="${id}"]`, ...merkez(el),
+    });
+  });
+  const kartlar = [webz, yol, tema].reduce((a, b) => (b.length > a.length ? b : a));
 
   // --- Yükleniyor göstergeleri ---------------------------------------------
   const yukleniyor = [];
