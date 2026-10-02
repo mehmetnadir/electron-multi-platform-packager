@@ -1,3 +1,16 @@
+## 2026-10-02 — Windows "imza bekliyor" tutma + imza eşiği (dal `imza-hold-20261002`)
+
+- Eşik: yuva açıkken runner imza adımını (`_hazir` kopyası + imza kuyruğu kilidi + yuva penceresi) en çok
+  `EMPP_WIN_IMZA_ESIK_DK` (varsayılan 5; 0 = eski "sonuna kadar bekle") bekler. Aşılırsa `imzaEsigiHatasi` →
+  paket hazır kuyruğa (`hazirKoy`), `/release {durum:'imza-bekliyor'}`, runner sıradaki işe geçer. TAKAS
+  başladıktan sonra betik ASLA kesilmez (tek yuva paylaşımlı; `komutKos` `yumusak` seçeneği). Kill switch
+  `EMPP_WIN_IMZA_BEKLEME=0` eşiği de kapatır.
+- Sunucu tutarsa (`tutuldu:true`; book-update `imza-hold-20261002`) satır running+kira bizde kalır, bekçi aynı
+  jetonla `/result` yayınlar; eski sunucuda alan yok sayılır, satır kuyruğa döner, yeniden kiralanınca hazır
+  kayıt devralınır (eski davranış). `currentJob` release'ten önce düşer (heartbeat lease tazelemesin).
+- Bekçi: imzalı kabul KALDI → `reddedildi/` + `postResultFailure` (sunucudaki tutma kapanır).
+- Test: `src/agent/runner-imza-hold.test.js` (8), `tools/windows/imza-bekcisi.test.js` (+2); mutasyonla doğrulandı.
+
 ## 2026-10-01 — Exe'siz kaynak: runner İmpark exe'sini HİÇBİR koşulda indirmez (dal `exesiz-runner-20261001`)
 
 - Sözleşme: book-update `.claude/docs/exesiz-kaynak-sozlesmesi.md` (ONAYLI 01.10). Kaynak TEK SAF fonksiyondan:

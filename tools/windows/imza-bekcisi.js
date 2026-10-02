@@ -143,6 +143,10 @@ async function kaydiIsle(giris, d) {
     } catch (e) {
       if (kabulKaldiMi(e)) {
         const s = await H.sonuclandir(cfg, giris, 'reddedildi', { durum: 'red', sebep: e.message, zamanRed: new Date().toISOString() });
+        // Sunucu satırı TUTUYOR (imza-bekliyor hold): kapatılmazsa sonsuza dek running kalır. Paket kusuru
+        // → failed (kira + faz temizlenir; panel "yeniden kuyruğa al" ile yeni üretim). Best-effort:
+        // postResultFailure fırlatmaz; sunucu eskiyse (satır zaten kuyruğa dönmüş) 409 zararsızdır.
+        if (d.postResultFailure) await d.postResultFailure(d.auth, job, `[imza-bekliyor] imzalı kabul KALDI: ${e.message}`.slice(0, 1500));
         return { durum: 'red', sebep: e.message, dizin: s.dizin };
       }
       await H.manifestGuncelle(giris.dizin, { sonHata: e.message, sonDeneme: new Date().toISOString() });
@@ -231,7 +235,7 @@ async function ana(argv = process.argv.slice(2)) {
   const d = {
     cfg, log, kuru: argv.includes('--kuru'), komutKos: W.komutKos, simdi: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)), imzaliYayinZinciri: W.imzaliYayinZinciri,
-    postResultSuccess: runner.postResultSuccess, presignUpload: runner.presignUpload,
+    postResultSuccess: runner.postResultSuccess, postResultFailure: runner.postResultFailure, presignUpload: runner.presignUpload,
     aktivasyonBeklenir: runner.aktivasyonBeklenir, auth: null,
   };
   if ((await H.hazirListesi(cfg)).length && !d.kuru) d.auth = await tokenOku(cfg);

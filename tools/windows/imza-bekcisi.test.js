@@ -260,3 +260,29 @@ test('kaynak: bekçi ikinci bir imza yolu içermez (imza betiği/osslsigncode do
   assert.doesNotMatch(kod, /imza-yuva-smb|osslsigncode|bekle-ve-tak/);
   assert.match(kod, /imzaliYayinZinciri: W\.imzaliYayinZinciri/);
 });
+
+test('kabul KALDI → sunucudaki tutma kapatılır (postResultFailure çağrılır, satır sonsuza dek running kalmaz)', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('402');
+  const basarisizlar = [];
+  const z = await B.tur(o.bagimlilik({
+    imzaliYayinZinciri: async () => { throw new Error("windows paketi windows-kasa kabul kapısından geçemedi (KALDI) — R2'ye YÜKLENMEDİ: 0/2"); },
+    postResultFailure: async (auth, job, mesaj) => { basarisizlar.push({ bookId: job.bookId, platform: job.platform, mesaj }); },
+  }));
+  assert.equal(z.reddedilen, 1);
+  assert.equal(basarisizlar.length, 1);
+  assert.equal(basarisizlar[0].bookId, '402');
+  assert.equal(basarisizlar[0].platform, 'windows');
+  assert.match(basarisizlar[0].mesaj, /^\[imza-bekliyor\] imzalı kabul KALDI/);
+});
+
+test('imza hatası (KALDI değil) → failed YAZILMAZ: kayıt yerinde, tutma sürer', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('403');
+  const basarisizlar = [];
+  await B.tur(o.bagimlilik({
+    imzaliYayinZinciri: async () => { throw new Error('imza yuvası zaman aşımı'); },
+    postResultFailure: async (a, j, m) => { basarisizlar.push(m); },
+  }));
+  assert.equal(basarisizlar.length, 0);
+});

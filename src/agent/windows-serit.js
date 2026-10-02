@@ -48,6 +48,16 @@ const kasaKabul = require('./windows-kasa-kabul');
 const hazir = require('./windows-hazir');
 
 const ISARET = '[windows-serit]';
+/** İmza eşiği (runner imzayı beklemeden paketi hazır kuyruğa alır) hata işareti. */
+const IMZA_ESIK_ISARETI = '[imza-esik]';
+
+/** İmza eşiği aşıldı hatası: yayın YOK, paket kusuru DEĞİL — çağıran hazır kuyruğa alır. */
+function imzaEsigiHatasi(sebep) {
+  const e = new Error(`${ISARET} ${IMZA_ESIK_ISARETI} ${sebep} — imzasız paket R2'ye YAZILMADI`);
+  e.imzaEsigi = true;
+  return e;
+}
+const imzaEsigiMi = (e) => Boolean(e && e.imzaEsigi);
 const YUVA_ID = '66902';
 const SURUM_DESENI = /^2\.\d+\.\d+$/;
 const KAPI_ZORUNLU_PASS = { 13: 'G güncelleme kanalı', 14: 'K içerik kanalı', 15: 'kurulum dizinine yazma yok' };
@@ -230,7 +240,7 @@ function peImzaDizini(baslik) {
 // ---------------------------------------------------------------------------
 
 /** Süreç grubu olarak koşturur; zaman aşımında grubu öldürür. Asla fırlatmaz. */
-function komutKos(argv, { env = {}, zamanAsimiMs = 0, satir = () => {}, cwd } = {}) {
+function komutKos(argv, { env = {}, zamanAsimiMs = 0, satir = () => {}, cwd, yumusak = null } = {}) {
   return new Promise((coz) => {
     let bitti = false;
     const bitir = (v) => { if (!bitti) { bitti = true; coz(v); } };
@@ -256,15 +266,32 @@ function komutKos(argv, { env = {}, zamanAsimiMs = 0, satir = () => {}, cwd } = 
     cocuk.stdout.on('data', isle);
     cocuk.stderr.on('data', isle);
     let zamanAsimi = false;
+    // Yumuşak kesme (imza eşiği): `yumusak.ms` dolunca, `yumusak.uygun()` doğru olduğu ilk anda
+    // grup öldürülür (uygun değilse — ör. yuva takası sürerken — beklenir, asla yarıda kesilmez).
+    let yumusakKesildi = false;
+    let yumusakT = null;
+    if (yumusak && yumusak.ms > 0) {
+      const kontrol = () => {
+        if (bitti) return;
+        if (yumusak.uygun()) {
+          yumusakKesildi = true;
+          try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* ölü */ }
+          return;
+        }
+        yumusakT = setTimeout(kontrol, yumusak.aralikMs || 1000);
+      };
+      yumusakT = setTimeout(kontrol, yumusak.ms);
+    }
     const t = zamanAsimiMs > 0 ? setTimeout(() => {
       zamanAsimi = true;
       try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* ölü */ }
     }, zamanAsimiMs) : null;
-    cocuk.on('error', (e) => { if (t) clearTimeout(t); bitir({ kod: -1, hata: e.message, cikti, zamanAsimi }); });
+    cocuk.on('error', (e) => { if (t) clearTimeout(t); if (yumusakT) clearTimeout(yumusakT); bitir({ kod: -1, hata: e.message, cikti, zamanAsimi }); });
     cocuk.on('close', (kod) => {
       if (t) clearTimeout(t);
+      if (yumusakT) clearTimeout(yumusakT);
       if (tampon.trim()) satir(tampon);
-      bitir({ kod: kod == null ? -1 : kod, cikti, zamanAsimi });
+      bitir({ kod: kod == null ? -1 : kod, cikti, zamanAsimi, yumusakKesildi });
     });
   });
 }
@@ -502,8 +529,11 @@ async function yabanciImzaSurecleri(desen) {
  * elle akış (imzala.sh / betiğin kendisi) beklenir. Tavan dolarsa fırlatır.
  * @returns {Promise<() => Promise<void>>} bırak
  */
-async function imzaKilidiAl(cfg, { log, sleep }) {
+async function imzaKilidiAl(cfg, { log, sleep, esikBitisMs = 0 }) {
   const bitis = Date.now() + cfg.winImzaKilitBeklemeMs;
+  // Eşik: kilit/yabancı süreç beklemesi eşiği aşarsa paket hazır kuyruğa alınır (kilit alınmadan
+  // çıkılır → yuvaya HİÇ dokunulmamış olur).
+  const esikAsildi = () => esikBitisMs > 0 && Date.now() > esikBitisMs;
   await fsp.mkdir(path.dirname(cfg.winImzaKilit), { recursive: true });
   let tutucu = null;
   let ilk = true;
@@ -512,6 +542,7 @@ async function imzaKilidiAl(cfg, { log, sleep }) {
     if (r.tutucu) { tutucu = r.tutucu; break; }
     if (r.kod !== 75) throw new Error(`${ISARET} imza kilidi açılamadı (perl çıkış ${r.kod}${r.hata ? `, ${r.hata}` : ''})`);
     if (ilk) { log('windows: imza kuyruğu kilidi dolu (başka iş imzada) — sıra bekleniyor'); ilk = false; }
+    if (esikAsildi()) throw imzaEsigiHatasi('imza kuyruğu kilidi eşik süresinde boşalmadı (başka iş imzada)');
     if (Date.now() > bitis) throw new Error(`${ISARET} imza kuyruğu kilidi ${Math.round(cfg.winImzaKilitBeklemeMs / 60000)} dk boşalmadı — R2'ye YAZILMADI`);
     await sleep(cfg.winImzaKilitAralikMs);
   }
@@ -521,6 +552,7 @@ async function imzaKilidiAl(cfg, { log, sleep }) {
       const yabanci = await yabanciImzaSurecleri(cfg.winImzaYabanciDesen);
       if (!yabanci.length) break;
       if (ilkY) log(`windows: yuvayı elle koşan imza süreci var (pid ${yabanci.join(',')}) — bekleniyor`);
+      if (esikAsildi()) throw imzaEsigiHatasi('yuva elle koşan imza sürecinden eşik süresinde boşalmadı');
       if (Date.now() > bitis) throw new Error(`${ISARET} yuva elle koşan imza sürecinden boşalmadı — R2'ye YAZILMADI`);
       await sleep(cfg.winImzaKilitAralikMs);
     }
@@ -549,26 +581,39 @@ function imzaEnv(work) {
 }
 
 /** Toplu akış 2: `_hazir`'a kopyala + geri oku (yuvaya dokunmaz → kilitsiz). */
-async function imzaHazirla({ exe, work, cfg, log }) {
+async function imzaHazirla({ exe, work, cfg, log, esikBitisMs = 0 }) {
   log('windows: imza hazırlığı (_hazir kopyası + geri okuma) —', path.basename(exe));
+  // Eşik: hazırlık yuvaya dokunmaz (yalnız _hazir kopyası) → eşikte kesmek güvenlidir.
+  const kalan = esikBitisMs > 0 ? Math.max(1000, esikBitisMs - Date.now()) : 0;
+  const sure = kalan > 0 ? Math.min(cfg.winImzaHazirlaTimeoutMs, kalan) : cfg.winImzaHazirlaTimeoutMs;
   const r = await komutKos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'hazirla', exe], {
-    env: imzaEnv(work), zamanAsimiMs: cfg.winImzaHazirlaTimeoutMs, satir: (s) => log('  [imza]', s),
+    env: imzaEnv(work), zamanAsimiMs: sure, satir: (s) => log('  [imza]', s),
   });
+  if (r.zamanAsimi && kalan > 0 && kalan < cfg.winImzaHazirlaTimeoutMs) {
+    throw imzaEsigiHatasi('_hazir kopyası eşik süresinde bitmedi');
+  }
   if (r.hata || r.zamanAsimi || r.kod !== 0) {
     throw new Error(`${ISARET} imza hazırlığı (_hazir) düştü: ${r.hata || (r.zamanAsimi ? 'zaman aşımı' : `çıkış ${r.kod}`)} — R2'ye YAZILMADI`);
   }
 }
 
 /** Toplu akış 3: pencere → takas → imza (bekleme kuralı betikte). İmzalı yerel kopyanın yolu. */
-async function imzaBekleVeTak({ exe, work, cfg, log }) {
+async function imzaBekleVeTak({ exe, work, cfg, log, esikBitisMs = 0 }) {
   let tetik = false;
+  // Takas başladıysa (yuvada bizim dosyamız imzada) betik ASLA yarıda kesilmez: tek yuva paylaşımlı,
+  // yarım takas ya da imzadaki dosya sonraki işi bozar. Eşik yalnız pencere beklenirken geçerlidir.
+  let takasBasladi = false;
   const satir = (s) => {
     log('  [imza]', s);
     if (!tetik && s.includes('PENCERE BEKLENİYOR')) { tetik = true; tetikCek(cfg, work, log); }
+    if (!takasBasladi && /PENCERE: |takas \d\/3/.test(s)) takasBasladi = true;
   };
   const r = await komutKos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'bekle-ve-tak', exe], {
     env: imzaEnv(work), zamanAsimiMs: cfg.winImzaTimeoutMs, satir,
+    yumusak: esikBitisMs > 0
+      ? { ms: Math.max(1, esikBitisMs - Date.now()), uygun: () => !takasBasladi, aralikMs: 1000 } : null,
   });
+  if (r.yumusakKesildi) throw imzaEsigiHatasi('imza yuvası penceresi eşik süresinde açılmadı (takas başlamadan bırakıldı)');
   if (r.hata) throw new Error(`${ISARET} imza betiği başlatılamadı: ${r.hata} — R2'ye YAZILMADI`);
   if (r.zamanAsimi) {
     throw new Error(`${ISARET} imza zaman aşımı (${Math.round(cfg.winImzaTimeoutMs / 60000)} dk) — `
@@ -648,23 +693,31 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
   kanit.kabulImzasizKapi = k1.kapi;
   if (k1.kanitDizini) kanit.kabulImzasizKanit = k1.kanitDizini;
 
-  // İMZA BEKLİYOR (§2a): yuva yok → imzasız paket hazır kuyruğa; yayın YOK, imzalı dosya YOK.
-  if (imzaKipi === 'hazir') {
+  // İMZA BEKLİYOR (§2a): imzasız paket hazır kuyruğa; yayın YOK, imzalı dosya YOK.
+  const hazirdaTut = async (sebep) => {
     const hedef = typeof r2Hedef === 'function' ? await r2Hedef() : r2Hedef;
     const h = await hazir.hazirKoy({
-      exe: artifactPath, job, surum: plan.surum, kanit, cfg, kabul: k1, r2Hedef: hedef,
-      sebep: 'imza yuvası erişilemiyor',
+      exe: artifactPath, job, surum: plan.surum, kanit, cfg, kabul: k1, r2Hedef: hedef, sebep,
     });
     kanit.durum = hazir.IMZA_BEKLIYOR_FAZI;
     kanit.hazirDizini = h.dizin;
     const yol = await kanitYaz(cfg, kanit);
     log(`windows: İMZA BEKLİYOR — imzasız paket hazır kuyrukta (${h.dizin}); R2'ye YAZILMADI, `
       + 'imza bekçisi yuva açılınca imzalatıp yayınlar');
-    return { hazir: h, kanit, kanitYolu: yol };
-  }
+    return { hazir: h, kanit, kanitYolu: yol, sebep };
+  };
+  if (imzaKipi === 'hazir') return hazirdaTut('imza yuvası erişilemiyor');
 
-  const z = await imzaliYayinZinciri({ imzasiz: artifactPath, job, work, cfg, log, sleep: bekle, aktivasyon, kanit });
-  return z;
+  // Yuva açık: imza eşiği (varsayılan 5 dk, EMPP_WIN_IMZA_ESIK_DK; 0 = eski: sonuna kadar bekle).
+  // Aşılırsa runner imzayı beklemez — paket hazır kuyruğa, iş imza-bekliyor.
+  const esikMs = cfg.winHazirAcik ? Number(cfg.winImzaEsikMs) || 0 : 0;
+  try {
+    return await imzaliYayinZinciri({ imzasiz: artifactPath, job, work, cfg, log, sleep: bekle, aktivasyon, kanit, esikMs });
+  } catch (e) {
+    if (!imzaEsigiMi(e)) throw e;
+    log(`windows: imza eşiği aşıldı (${Math.round(esikMs / 60000)} dk) — ${e.message}`);
+    return hazirdaTut(`imza ${Math.round(esikMs / 60000)} dk içinde tamamlanmadı: ${e.message.replace(/^.*\[imza-esik\] /, '').slice(0, 160)}`);
+  }
 }
 
 /**
@@ -673,13 +726,16 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
  * tamamlanır ve diske yazılır. Düşerse FIRLATIR (R2'ye hiçbir şey yazılmamıştır).
  * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
  */
-async function imzaliYayinZinciri({ imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit }) {
+async function imzaliYayinZinciri({ imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit, esikMs = 0 }) {
   const bekle = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
-  await imzaHazirla({ exe: imzasiz, work, cfg, log });
-  const birak = await imzaKilidiAl(cfg, { log, sleep: bekle });
+  // esikMs > 0 (yalnız runner): imza adımı (hazırlık + kilit + pencere) bu süreyi aşarsa
+  // `imzaEsigiHatasi` fırlar — çağıran paketi hazır kuyruğa alır. Takas başladıktan sonra eşik YOK.
+  const esikBitisMs = esikMs > 0 ? Date.now() + esikMs : 0;
+  await imzaHazirla({ exe: imzasiz, work, cfg, log, esikBitisMs });
+  const birak = await imzaKilidiAl(cfg, { log, sleep: bekle, esikBitisMs });
   let imzaliYol;
   try {
-    imzaliYol = await imzaBekleVeTak({ exe: imzasiz, work, cfg, log });
+    imzaliYol = await imzaBekleVeTak({ exe: imzasiz, work, cfg, log, esikBitisMs });
     await yuvayiArsivle({ exe: imzasiz, cfg, log });
   } finally {
     await birak();
@@ -724,7 +780,7 @@ module.exports = {
   ISARET, YUVA_ID, SURUM_DESENI, KAPI_ZORUNLU_PASS, KAPI_IZINLI_OLCULEMEDI, KOK_INDEX_YOLU,
   varsayilanAyarlar, onKosul, imzaDosyaAdi, kapiCiktisiniAyristir, kapiKarari, imzaDogrulamaKarari,
   peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
-  imzaliYayinZinciri, kanitYaz,
+  imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
   kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
   yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,
 };

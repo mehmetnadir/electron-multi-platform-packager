@@ -37,6 +37,12 @@ function hazirAyarlari(env = process.env) {
     // EMPP_WIN_IMZA_BEKLEME=0 → eski davranış: yuva yoksa windows ilan edilmez/üretilmez.
     winHazirAcik: env.EMPP_WIN_IMZA_BEKLEME !== '0',
     winHazirKoku: env.EMPP_WIN_HAZIR_KOK || path.join(os.homedir(), '.empp-agent', 'windows-hazir'),
+    // Runner'ın imza adımına ayırdığı süre (dk → ms). Dolarsa (imza kuyruğu kilidi dolu / _hazir
+    // kopyası / yuva penceresi; takas BAŞLAMADAN) paket hazır kuyruğa alınır, sunucuya imza-bekliyor
+    // bildirilir, runner sıradaki işe geçer; imza bekçisi yayınlar. 0 = kapalı (eski: imzayı bekle).
+    // EMPP_WIN_IMZA_BEKLEME=0 (hazır kuyruk kapalı) esiği de kapatır.
+    winImzaEsikMs: env.EMPP_WIN_IMZA_BEKLEME === '0' ? 0
+      : Math.max(0, Number(env.EMPP_WIN_IMZA_ESIK_DK === undefined ? 5 : env.EMPP_WIN_IMZA_ESIK_DK) || 0) * 60 * 1000,
     winHazirBildirimEsikMs: 3 * 3600 * 1000,
     winHazirBildirimAralikMs: 3 * 3600 * 1000,
   };

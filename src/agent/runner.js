@@ -559,18 +559,29 @@ async function fetchNextJob(auth) {
  * @returns {Promise<boolean>} kira bırakıldı mı
  */
 async function releaseJob(auth, job, sebep, ek = {}) {
+  return (await releaseJobYanit(auth, job, sebep, ek)).ok;
+}
+
+/**
+ * `releaseJob`'un ayrıntılı hâli. `tutuldu` = sunucu `durum:'imza-bekliyor'`u TANIDI ve satırı kuyruğa
+ * bırakmadan (running + kira sahibi + lease NULL) tuttu (yanıtta `tutuldu:true`). Eski sunucu alanı
+ * yok sayar, satırı olağan bırakır → `ok:true, tutuldu:false` (runner eski davranışa düşer: iş yeniden
+ * kiralanınca hazır kayıt devralınır). FIRLATMAZ.
+ * @returns {Promise<{ok:boolean, tutuldu:boolean}>}
+ */
+async function releaseJobYanit(auth, job, sebep, ek = {}) {
   try {
     const res = await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/release`),
       { bookId: job.bookId, platform: job.platform, sebep: String(sebep || '').slice(0, 300), ...ek },
       { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true },
     );
-    if (res.status === 200) return true;
+    if (res.status === 200) return { ok: true, tutuldu: Boolean(res.data && res.data.tutuldu === true) };
     warn('kira bırakılamadı (HTTP', res.status + '), kira dolunca kuyruğa döner:', job.bookId, job.platform);
-    return false;
+    return { ok: false, tutuldu: false };
   } catch (e) {
     warn('kira bırakılamadı (ağ):', job.bookId, job.platform, '-', agHatasiOzeti(e));
-    return false;
+    return { ok: false, tutuldu: false };
   }
 }
 
@@ -2161,16 +2172,25 @@ async function r2HedefYoklama(auth, job) {
 }
 
 /**
- * "İmza bekliyor" bildirimi (§2a). Bugünkü sunucu `/release`'i tanır (kira bırakılır, iş kuyruğun
- * sonuna ve bu ajana 10→60 dk verilmez); `durum:'imza-bekliyor'` alanı book-update'e eklenecek
- * tutma (hold) için ileriye uyumludur — tanımayan sunucu alanı yok sayar.
+ * "İmza bekliyor" bildirimi (§2a). YENİ sunucu (`imza-hold-20261002`) `durum:'imza-bekliyor'`u TUTAR:
+ * satır running + kira sahibi bu ajan kalır, lease NULL (claim/stale-recovery görmez), completed
+ * YAZILMAZ, müşteri eski dosyayı almaya devam eder; imza bekçisi aynı ajan jetonuyla `/result`
+ * ile yayınlar. ESKİ sunucu alanı yok sayıp satırı kuyruğa bırakır (`tutuldu` yok) → bu hâlde iş
+ * yeniden kiralanınca `hazirIsiDevral` hazır kaydı devralır (eski davranış, kayıp yok).
+ * `currentJob` ÖNCE düşer: aradaki heartbeat `heldJobs` ile NULL lease'i 30 dk'ya tazeleyip tutmayı
+ * bozmasın (1aa-7 dersi).
+ * @returns {Promise<{ok:boolean, tutuldu:boolean}>}
  */
 async function imzaBekliyorBildir(auth, job, hazirKayit, sebep) {
-  const birakildi = await releaseJob(auth, job,
+  currentJob = null;
+  const r = await releaseJobYanit(auth, job,
     `[${windowsHazir.IMZA_BEKLIYOR_FAZI}] ${sebep || ''} — hazır: ${path.basename(hazirKayit.dizin)}`,
     { durum: windowsHazir.IMZA_BEKLIYOR_FAZI, hazir: path.basename(hazirKayit.dizin) });
-  warn(`windows: ${job.bookId} İMZA BEKLİYOR — failed YAZILMADI, ${birakildi ? 'kira bırakıldı' : 'kira dolunca döner'}; `
-    + `R2'ye yazılmadı (${hazirKayit.dizin})`);
+  const durum = r.tutuldu ? 'sunucuda TUTULDU (kira bizde, kuyruğa dönmez; bekçi yayınlar)'
+    : r.ok ? 'kira bırakıldı (eski sunucu: kuyruğa döndü, yeniden kiralanınca hazır kayıt devralınır)'
+      : 'kira dolunca döner';
+  warn(`windows: ${job.bookId} İMZA BEKLİYOR — failed YAZILMADI, ${durum}; R2'ye yazılmadı (${hazirKayit.dizin})`);
+  return r;
 }
 
 /**
@@ -2193,6 +2213,12 @@ async function hazirIsiDevral(auth, job, winPlan, bekleyen, work) {
   }
   try {
     return await hazirKaydiYayinla(auth, job, winPlan, bekleyen, work);
+  } catch (e) {
+    // İmza eşiği yeniden aşıldı: paket zaten hazır kayıtta — yeniden imza-bekliyor, iş düşmez.
+    if (!windowsSerit.imzaEsigiMi(e)) throw e;
+    warn(`windows: ${job.bookId} hazır paket imza eşiğinde yine tamamlanmadı — ${e.message}`);
+    await imzaBekliyorBildir(auth, job, bekleyen, 'imza eşiği aşıldı (hazır paket devrinde)');
+    return { ertelendi: true, imzaBekliyor: true, sebep: 'imza eşiği aşıldı' };
   } finally {
     await kayitKilidi();
   }
@@ -2214,6 +2240,7 @@ async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
   kanit.hazirDizini = bekleyen.dizin;
   const zincir = await windowsSerit.imzaliYayinZinciri({
     imzasiz: bekleyen.exeYolu, job, work, cfg: CONFIG, log, sleep, aktivasyon: aktivasyonBeklenir(job.bookTitle), kanit,
+    esikMs: CONFIG.winHazirAcik ? Number(CONFIG.winImzaEsikMs) || 0 : 0,
   });
   const yayin = await postResultSuccess(auth, job, zincir.imzaliYol);
   await windowsSerit.yayinKaniti(zincir, yayin, CONFIG, log);
@@ -2517,9 +2544,10 @@ async function processJob(auth, job) {
       if (winZincir.hazir) {
         // İMZA BEKLİYOR: yayın YOK. Sunucuya ara durum bildirilir (kira bırakılır; book-update
         // `durum:'imza-bekliyor'`u tanıyınca satırı yeniden kiralanmayacak biçimde tutar).
-        await imzaBekliyorBildir(auth, job, winZincir.hazir, winKip.sebep);
+        const bekleSebep = winZincir.sebep || winKip.sebep;
+        await imzaBekliyorBildir(auth, job, winZincir.hazir, bekleSebep);
         await packagerReleaseJob(jobId);
-        return { ertelendi: true, imzaBekliyor: true, sebep: winKip.sebep };
+        return { ertelendi: true, imzaBekliyor: true, sebep: bekleSebep };
       }
       yayinYolu = winZincir.imzaliYol;
     } else {
@@ -2726,7 +2754,7 @@ module.exports = {
   pardusYedekKabul,
   konteynerKabulKapisi,
   _yedekLogSifirla: () => { _yedekAktifSon = false; },
-  packagerStartPackage, postResultSuccess, presignUpload, releaseJob, imzaBekliyorBildir, hazirIsiDevral,
+  packagerStartPackage, postResultSuccess, postResultFailure, presignUpload, releaseJob, releaseJobYanit, imzaBekliyorBildir, hazirIsiDevral,
   aktivasyonBeklenir,
   packagerPoll,
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
