@@ -315,7 +315,6 @@ function pardusYedekKabulDurumu(icerik, simdiMs) {
   return { aktif: false, bitis: satir, sebep: 'suresi-doldu' };
 }
 
-/** `route -n get default` çıktısından ağ geçidini çeker; yoksa null. */
 /**
  * `dusuk-veri` ikilisinin çıktısını yorumlar (Nadir kuralı 2026-09-13): WiFi Düşük Veri Modu
  * (Network framework: path.isConstrained) açıksa yükleme/iş alımı duraklatılır — yol/hotspot verisini yakmaz.
@@ -326,9 +325,21 @@ function dusukVeriAyristir(ciktiStr) {
   return m ? m[1] === '1' : false;
 }
 
+/**
+ * Varsayılan ağ geçidini ayıklar; yoksa null. İki biçim (02.10, ProBook ajanı):
+ *  - macOS `route -n get default`  → "gateway: 192.168.1.254"
+ *  - Linux `ip route show default` → "default via 192.168.1.254 dev enp0s25 ..."
+ *    (birden çok default satırında ilki — metrik sırası `ip`in kendi sıralamasıdır).
+ */
 function agGecidiAyikla(routeCiktisi) {
-  const m = /gateway:\s*([0-9.]+)/.exec(String(routeCiktisi || ''));
+  const metin = String(routeCiktisi || '');
+  const m = /gateway:\s*([0-9.]+)/.exec(metin) || /^default\s+via\s+([0-9.]+)/m.exec(metin);
   return m ? m[1] : null;
+}
+
+/** Bu platformda varsayılan geçidi soran komut: [komut, argümanlar]. */
+function agGecidiKomutu(platform = process.platform) {
+  return platform === 'linux' ? ['ip', ['route', 'show', 'default']] : ['route', ['-n', 'get', 'default']];
 }
 
 function restartRequested(flagPath) {
@@ -1128,6 +1139,7 @@ module.exports = {
   pardusYedekKabulDurumu,
   srcVersionTuret,
   agGecidiAyikla,
+  agGecidiKomutu,
   dusukVeriAyristir,
   asciiAppName,
   pickLogoId,

@@ -2,7 +2,7 @@
 # ProBook Pardus şeridi ORTAMI — serit-ajan.sh (canlı ajan) ve kuru-kosu.sh (yüklemesiz deneme)
 # AYNI dosyayı `source` eder: kuru koşu canlıyla birebir aynı bayraklarla derler/kabul eder.
 # runner.js yalnız ortamla ProBook kipine alınır:
-#   AGENT_CAPS=pardus · PARDUS_BUILD_SCRIPT=pardus-yerel-build.sh (docker'sız, DEB kapalı)
+#   AGENT_CAPS=pardus,kaynak-kur,kaynak-r2 · PARDUS_BUILD_SCRIPT=pardus-yerel-build.sh (docker'sız, DEB kapalı)
 #   EMPP_PARDUS_KABUL=1 + PROBOOK_HOST=yerel (kabul aynı makinede, scp yok)
 #   PACKAGER_API=yerel logo ucu (ikon Mac'e bağımlı değil) · TMPDIR/önbellek ~/empp-serit altında
 #   PATH başında docker şimi (runner'ın ensureDockerReady'si için; bkz. bin/docker)
@@ -11,7 +11,10 @@ REPO="${EMPP_SERIT_REPO:-$SERIT/repo}"
 export EMPP_SERIT_KOK="$SERIT"
 # $SERIT/opt/bin: kullanıcı düzeyi unrar (kur.sh unrar_kur) — WinRAR SFX kaynağını 7z AÇAMIYOR.
 export PATH="$REPO/tools/probook/bin:$SERIT/opt/bin:$SERIT/node/bin:/usr/local/bin:/usr/bin:/bin"
-export AGENT_CAPS="${AGENT_CAPS:-pardus}"
+# 02.10 (sözleşme §2c): ProBook ofis makinesi → build kurulumu (kaynak-kur, 1–3 GB R2 yüklemesi) da
+# burada koşar. runner iki rolü heartbeat'te yeniden hesaplar: kaynak-r2 her zaman, kaynak-kur yalnız
+# ofis geçidinde (ip route default via 192.168.1.254) ya da ~/.empp-agent/kaynak-kur-serbest.istek ile.
+export AGENT_CAPS="${AGENT_CAPS:-pardus,kaynak-kur,kaynak-r2}"
 export AGENT_NAME="${AGENT_NAME:-probook-serit}"
 export PARDUS_BUILD_SCRIPT="${PARDUS_BUILD_SCRIPT:-$REPO/tools/pardus/pardus-yerel-build.sh}"
 export PARDUS_KABUL_SCRIPT="${PARDUS_KABUL_SCRIPT:-$REPO/tools/pardus/probook-kabul.sh}"

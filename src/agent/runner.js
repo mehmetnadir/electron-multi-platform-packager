@@ -44,7 +44,7 @@ const {
   artifactExtension,
   joinUrl,
   pickLogoId, asciiAppName,
-  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, dusukVeriAyristir,
+  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, agGecidiKomutu, dusukVeriAyristir,
   isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
@@ -275,7 +275,9 @@ function ofisteMi() {
   if (simdi - _konum.t < 60000) return _konum.ofiste;
   let ofiste = false;
   try {
-    const out = require('child_process').execFileSync('route', ['-n', 'get', 'default'], { timeout: 3000, encoding: 'utf8' });
+    // macOS `route`, Linux (ProBook ajanı, 02.10) `ip route` — ikisi de agGecidiAyikla'dan geçer.
+    const [komut, argv] = agGecidiKomutu();
+    const out = require('child_process').execFileSync(komut, argv, { timeout: 3000, encoding: 'utf8' });
     ofiste = agGecidiAyikla(out) === CONFIG.ofisGw;
   } catch (e) { ofiste = false; }
   _konum = { t: simdi, ofiste };

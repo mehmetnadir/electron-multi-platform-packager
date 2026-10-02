@@ -44,7 +44,7 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
-  assert.equal(o.caps, 'pardus');
+  assert.equal(o.caps, 'pardus,kaynak-kur,kaynak-r2');
   assert.equal(o.host, 'yerel');
   assert.equal(o.build, path.join(repo, 'tools', 'pardus', 'pardus-yerel-build.sh'));
   assert.equal(o.kabul, '1');

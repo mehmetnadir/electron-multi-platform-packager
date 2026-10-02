@@ -532,6 +532,22 @@ test('agGecidiAyikla: route çıktısından geçit; yoksa null', () => {
   assert.equal(agGecidiAyikla(''), null);
 });
 
+test('agGecidiAyikla: Linux ip route çıktısı (ProBook) — ilk default satırı', () => {
+  const pb = 'default via 192.168.1.254 dev enp0s25 proto dhcp src 192.168.1.55 metric 100 \n'
+    + 'default via 192.168.1.254 dev wlo1 proto static metric 600\n';
+  assert.equal(agGecidiAyikla(pb), '192.168.1.254');
+  assert.equal(agGecidiAyikla('default via 192.168.2.1 dev wlan0 metric 600\n'), '192.168.2.1');
+  // default olmayan rota satırı geçit sayılmaz
+  assert.equal(agGecidiAyikla('10.0.0.0/24 via 192.168.1.1 dev eth0\n'), null);
+  assert.equal(agGecidiAyikla('default dev tailscale0 scope link\n'), null);
+});
+
+test('agGecidiKomutu: linux → ip route, diğerleri → route -n get', () => {
+  const { agGecidiKomutu } = require('./runner-helpers');
+  assert.deepEqual(agGecidiKomutu('linux'), ['ip', ['route', 'show', 'default']]);
+  assert.deepEqual(agGecidiKomutu('darwin'), ['route', ['-n', 'get', 'default']]);
+});
+
 const { dusukVeriAyristir } = require('./runner-helpers');
 
 test('dusukVeriAyristir: constrained=1 → true, =0 → false (WiFi Düşük Veri Modu, Nadir 2026-09-13)', () => {
