@@ -60,6 +60,7 @@ async function ortam({ kurum = '60', kabuk = true, idler = ['501', '502'] } = {}
       'scripts/language-set.js': '//', 'scripts/cevrimdisi-yama.js': `window.__setSettings = ${JSON.stringify(ayar)};\n`,
     } : { 'index.html': '<html>motor kopyası</html>' }),
     'kurum.txt': kurum, 'book1/kurum.txt': kurum, 'book1/index.html': '<html>motor</html>',
+    'electron.js': 'const { app } = require("electron");\n', 'set_app.config': 'const AppConfig = {\n};\n',
     'book1/app.config.js': `var AppConfig = { updateBookEndPoint: "${SABLON}" };`,
     'book1/classlibraries/ImWin32.dll': ig.menuKodla(KALIP_XML, () => 0.5, { bas: 127, ara: 16, son: 127 }),
     'book1/assets/111/data/BookContent.xml': '<Book/>', 'book1/assets/111/thumbs/1.jpg': 'k', 'book1/assets/111/pages/1.png': 'p',
@@ -236,7 +237,9 @@ test('r2-kur taban YOK, Flashy (kurum 310): YDS motoru + tema kökü + dört nok
   fs.writeFileSync(zipYolu, yuklenen);
   const dz = M.zipDizini(zipYolu);
   const oku = (y) => M.zipGirdiOku(zipYolu, dz.get(y));
-  assert.equal(dz.has('scripts/language-set.js'), false, 'kalıbın (YDS) kökü açılmadı');
+  assert.equal(dz.has('scripts/language-set.js'), false, 'kalıbın (YDS) menü kabuğu gelmedi');
+  assert.equal(dz.has('electron.js') && dz.has('main.js'), true, 'kök Electron girişi korunur (saha 74430 pardus RED)');
+  assert.match(oku('set_app.config').toString(), /baseEndpointUrl: "https:\/\/akillitahta\.ydspublishing\.com"/);
   assert.match(oku('index.html').toString(), /empp-webz-tema/);
   assert.doesNotMatch(oku('index.html').toString(), /Web Sürümü/);
   assert.equal(oku('kurum.txt').toString(), '310');

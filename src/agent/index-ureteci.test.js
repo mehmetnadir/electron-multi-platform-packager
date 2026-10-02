@@ -55,6 +55,14 @@ async function ortam({ idler = ['501', '502', '503'], dataBos = [], bc = {} } = 
     'scripts/cevrimdisi-yama.js': `(function(){\n  window.__setSettings = ${JSON.stringify(yamaAyar)};\n})();\n`,
     'set-menu.json': JSON.stringify({ setAdi: 'Eski Set', tema: 'webZSf425', kitaplar: [{ ad: 'Eski', assetId: '111', klasor: 'book1' }] }),
     'images/book1.png': 'eski-kapak', 'images/logo.png': 'logo', 'kurum.txt': '60', 'electronUpdate.js': '// eu',
+    // Kök Electron/İmpark çalışma dosyaları (45540 kökünden örnek) + sf425 kabuk artıkları.
+    'electron.js': 'const { app } = require("electron");\napp.whenReady().then(() => {});\n',
+    'set_app.config': 'const AppConfig = {\n    appName: "Akıllı Tahta",\n};\n',
+    'old_app.config.js': 'const AppConfig = {\n\tbaseEndpointUrl: "https://akillitahta.ydspublishing.com",\n};\n',
+    'core/kurumlogo.png': Buffer.concat([Buffer.from([0x89]), Buffer.from('PNG\r\n', 'latin1'), Buffer.alloc(150, 7)]),
+    'core/icons/ButtonHand.svg': '<svg/>', 'version.txt': '1.12.7', '2030d1504cb4d568b6da.main.js': '// motor paketi',
+    'languages/tr.json': '{}', 'i18n/tr.js': '// i18n', 'features/live-test.html': '<html/>', 'assets2/book1.png': 'yds-buton',
+    'styles/language-set.css': '/* sf425 */',
     'book1/index.html': '<html>motor</html>',
     'book1/app.config.js': `var AppConfig = { updateBookEndPoint: "${SABLON}" };`,
     'book1/43e23fce2b7009474555a77.js': '// motor',
@@ -438,7 +446,24 @@ test('uret Flashy: kök = tema kabuğu (kalıp kökü AÇILMAZ), panel kapaklar�
   assert.equal(r.kabuk, 'tema:web-proxy-modern');
   // Kalıbın kökü açılmadı: sf425 izleri yok, tema imzası var.
   assert.equal(fs.existsSync(path.join(kok, 'scripts/language-set.js')), false);
-  assert.equal(fs.existsSync(path.join(kok, 'electronUpdate.js')), false);
+  // Kök ÇALIŞMA dosyaları korunur (saha 74430 pardus RED: electron.js yoktu); index dosyaları kalıptan gelmez.
+  for (const y of ['electron.js', 'electronUpdate.js', 'set_app.config', 'old_app.config.js', 'version.txt',
+    'core/icons/ButtonHand.svg', '2030d1504cb4d568b6da.main.js']) {
+    assert.equal(fs.existsSync(path.join(kok, y)), true, `çalışma dosyası korunmalı: ${y}`);
+  }
+  for (const y of ['languages/tr.json', 'i18n/tr.js', 'features/live-test.html', 'assets2/book1.png',
+    'styles/language-set.css', 'images/book1.png']) {
+    assert.equal(fs.existsSync(path.join(kok, y)), false, `index dosyası kalıptan gelmemeli: ${y}`);
+  }
+  // Giriş: main.js = electron.js kopyası, sözdizimi geçerli (node --check).
+  assert.deepEqual(oku('main.js'), oku('electron.js'));
+  const nc = await M.komut(process.execPath, ['--check', path.join(kok, 'main.js')]);
+  assert.equal(nc.code, 0, nc.stderr);
+  // Kök yapılandırma + kök logo da dönüşür (beşinci nokta: kök çalışma dosyaları).
+  assert.match(oku('set_app.config').toString(), /baseEndpointUrl: "https:\/\/akillitahta\.ydspublishing\.com"/);
+  assert.match(oku('old_app.config.js').toString(), /baseEndpointUrl: "https:\/\/akillitahta\.ydspublishing\.com"/);
+  assert.equal(sha(U.logoGizle(oku('core/kurumlogo.png'))), sha(FLASHY_LOGO));
+  assert.deepEqual(r.donusum.kokYapilandirma, ['set_app.config', 'old_app.config.js']);
   const idx = oku('index.html').toString('utf8');
   assert.match(idx, /<meta name="empp-webz-tema" content="web-proxy-modern" \/>/);
   assert.match(idx, /<title>Flashy Grade 4 Set<\/title>/);
@@ -479,7 +504,7 @@ test('uret Flashy: tema kabuğu kalıpta sf425 aramaz (language-set.js yok) — 
   const o = await ortam();
   // Kalıbın kökünü sf425'siz yeniden kur: yalnız motor.
   const d2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'uretec-sfsiz-'));
-  const ac = await M.komut('unzip', ['-q', o.kalipZip, 'book1/*', '-d', d2]);
+  const ac = await M.komut('unzip', ['-q', o.kalipZip, 'book1/*', 'electron.js', '-d', d2]);
   assert.equal(ac.code, 0);
   const sfsiz = path.join(d2, 'k.zip');
   await zipla(d2, sfsiz);
@@ -491,6 +516,16 @@ test('uret Flashy: tema kabuğu kalıpta sf425 aramaz (language-set.js yok) — 
   await assert.rejects(flashyUret({ ...o, kalipZip: sfsiz }, { kabuk: 'kalip' }), (e) => e.kod === 'uretec-tema-yok');
 });
 
+test('kök giriş dosyası yoksa (electron.js/main.js) tema üretimi RED kalip — yedek şablona düşülmez', async () => {
+  const o = await ortam();
+  const d2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'uretec-girissiz-'));
+  const ac = await M.komut('unzip', ['-q', o.kalipZip, '-x', 'electron.js', '-d', d2]);
+  assert.equal(ac.code, 0);
+  const girissiz = path.join(d2, 'k.zip');
+  await zipla(d2, girissiz);
+  await assert.rejects(flashyUret({ ...o, kalipZip: girissiz }), (e) => e.kod === 'kalip' && /giriş dosyası/.test(e.message));
+});
+
 test('motorDonusumuDogrula: tek nokta bile tutmazsa RED (kurum / logo düz / uç)', async () => {
   const o = await ortam();
   const { r } = await flashyUret(o);
@@ -500,6 +535,8 @@ test('motorDonusumuDogrula: tek nokta bile tutmazsa RED (kurum / logo düz / uç
     () => fs.writeFileSync(path.join(kok, 'book1/core/kurumlogo.png'), FLASHY_LOGO),
     () => fs.writeFileSync(path.join(kok, 'book3/app.config.js'), 'var AppConfig = { baseEndpointUrl: "https://x.example" };'),
     () => fs.writeFileSync(path.join(kok, 'kurum.txt'), '60'),
+    () => fs.writeFileSync(path.join(kok, 'set_app.config'), 'const AppConfig = { baseEndpointUrl: "https://x.example" };'),
+    () => fs.writeFileSync(path.join(kok, 'core/kurumlogo.png'), FLASHY_LOGO),
   ];
   for (const boz of bozucular) {
     const yedek = path.join(o.d, `yedek-${Math.random()}`);

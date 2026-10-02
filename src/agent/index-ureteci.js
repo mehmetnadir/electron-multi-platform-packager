@@ -63,6 +63,25 @@ const AYAR = 'config/settings.json';
 const TANIM = 'set-menu.json';
 /** Motor kopyalanırken alınmayan alt ağaçlar (içerik, menü, kullanıcı verisi). */
 const MOTOR_HARIC = Object.freeze(['assets', 'classlibraries', 'temp']);
+/**
+ * TEMA KABUĞUNDA kalıp kökünden ALINMAYAN "index" dosyaları (menü/kabuk; tema yeniden üretir). Geri
+ * kalan kök = Electron/İmpark ÇALIŞMA dosyaları, AYNEN korunur (saha 02.10 74430 pardus kabul RED:
+ * kök hiç açılmadığı için `electron.js` yoktu, paketleyici yedek main.js şablonuna düştü).
+ * Sınıflama ölçümü (45540 kökü ↔ 74430 üretimi, 02.10): sf425 `index.html` → images/logo.png,
+ * scripts/* (7), styles/* (3); `language-loader.js` → languages/; `language-set.css` → images/bg.jpg;
+ * Web-Z menü verisi config/settings.json + set-menu.json; Üretim Masası kabuk artıkları i18n/,
+ * features/, assets2/ (YDS buton görselleri; hiçbir kök dosya başvurmuyor). Çalışma: electron.js
+ * (giriş; favicon.ico'yu yükler), electronUpdate.js, old_app.config.js, set_app.config, version.txt,
+ * core/ (logo/ikon/arka plan — icons.js/images.js/tour.js başvurur), hash'li motor paketleri,
+ * 43e23fce…js, main.html, Main.xml, SET_BOOK.txt, Default.aspx, favicon.ico. `kurum.txt` ayrıca yazılır.
+ */
+const KOK_INDEX = Object.freeze({
+  dosyalar: Object.freeze(['index.html', 'set-menu.json', 'kurum.txt']),
+  dizinler: Object.freeze(['config', 'scripts', 'styles', 'images', 'languages', 'i18n', 'features', 'assets2']),
+});
+/** Kök çalışma yapılandırmaları — `baseEndpointUrl` dönüşümü burada da uygulanır (varsa). */
+const KOK_YAPILANDIRMA = Object.freeze(['set_app.config', 'old_app.config.js']);
+
 /** bookN motorunda olmayan, arşiv kökünden tamamlanan motor dosyaları (ölçüm 02.10, 45472 kökü). */
 const KOK_MOTOR_EKLERI = Object.freeze(['electronUpdate.js', 'old_app.config.js']);
 const VARSAYILAN_SABLON = 'https://www.sorucoz.tv/TestlerMobil/GetKitapGuncellemeBilgi'
@@ -348,6 +367,30 @@ async function kabukAc(kabuk, kalip, kok, komut) {
   });
 }
 
+/**
+ * TEMA KABUĞU: kalıbın kökünden yalnız ÇALIŞMA dosyalarını `kok`e açar (bookN/ ve KOK_INDEX hariç).
+ * Kökte `main.js` yoksa `electron.js` kopyalanır (paketleyicinin kendi kuralı da bu; build kendini
+ * anlatsın, yedek şablon devreye girmesin). Giriş dosyası yoksa RED (kalip).
+ */
+async function kokCalismaDosyalariAc(kalip, kok, komut) {
+  const haric = ['book*/*', ...KOK_INDEX.dosyalar, ...KOK_INDEX.dizinler.map((d) => `${d}/*`)];
+  await unzipKomut([kalip.zip, '-x', ...haric, '-d', kok], komut);
+  const giris = ['main.js', 'electron.js'].filter((y) => fs.existsSync(path.join(kok, y)));
+  if (!giris.length) {
+    throw new UretecHatasi('kalıp kökünde Electron giriş dosyası (main.js / electron.js) yok', { kod: KOD.KALIP });
+  }
+  if (!giris.includes('main.js')) await fsp.copyFile(path.join(kok, 'electron.js'), path.join(kok, 'main.js'));
+}
+
+/** Kök çalışma dosyalarına dönüşüm: kurum logosu (varsa) + kök yapılandırmaların `baseEndpointUrl`'i. */
+async function kokDonusumuUygula(kok, d) {
+  if (fs.existsSync(path.join(kok, KURUM_LOGO))) await fsp.writeFile(path.join(kok, KURUM_LOGO), logoGizle(d.logo));
+  for (const y of KOK_YAPILANDIRMA) {
+    const p = path.join(kok, y);
+    if (fs.existsSync(p)) await fsp.writeFile(p, tabanUcYaz(await fsp.readFile(p, 'utf8'), d.baseEndpointUrl));
+  }
+}
+
 /** Motoru `hedef` dizinine açar (assets/classlibraries/temp hariç). */
 async function motorAc(kalip, hedef, komut) {
   const gecici = `${hedef}.motor-${process.pid}`;
@@ -422,10 +465,23 @@ function motorDonusumuDogrula(kok, motorlar, d) {
     const um = /baseEndpointUrl\s*:\s*["']([^"']*)["']/.exec(ac);
     if (!um || um[1] !== d.baseEndpointUrl) hata.push(`${on}${APP_CONFIG} baseEndpointUrl=${um ? um[1] : '-'}`);
   }
+  // Kök çalışma dosyaları (tema kökü): varsa kök logo ve kök yapılandırmaların ucu da dönüşmüş olmalı.
+  const kokYap = [];
+  if (!motorlar.includes('')) {
+    const kl = oku(KURUM_LOGO);
+    if (kl && (logoDuzMu(kl) || sha(logoGizle(kl)) !== beklenenLogo)) hata.push(`kök ${KURUM_LOGO}`);
+    for (const y of KOK_YAPILANDIRMA) {
+      const m = oku(y);
+      if (m == null) continue;
+      const um = /baseEndpointUrl\s*:\s*["']([^"']*)["']/.exec(String(m));
+      if (!um || um[1] !== d.baseEndpointUrl) hata.push(`kök ${y} baseEndpointUrl=${um ? um[1] : '-'}`);
+      kokYap.push(y);
+    }
+  }
   if (hata.length) {
     throw new UretecHatasi(`yayıncı dönüşümü tutmadı: ${hata.slice(0, 4).join(', ')}`, { kod: KOD.DONUSUM });
   }
-  return { kurum: d.kurum, uc: d.baseEndpointUrl, logoSha256: beklenenLogo, motorlar, kokKurum };
+  return { kurum: d.kurum, uc: d.baseEndpointUrl, logoSha256: beklenenLogo, motorlar, kokKurum, kokYapilandirma: kokYap };
 }
 
 /** Panel kapağı (liste 3. alanı): data URI → Buffer, http(s) → indirilir; görsel değilse null. */
@@ -610,7 +666,9 @@ async function uret(o) {
       }
     } else {
       await fsp.mkdir(kok, { recursive: true });
-      if (!temaAdi) await kabukAc(o.kabuk, kalip, kok, komut);
+      if (temaAdi) await kokCalismaDosyalariAc(kalip, kok, komut);
+      else await kabukAc(o.kabuk, kalip, kok, komut);
+      if (temaAdi && donusum) await kokDonusumuUygula(kok, donusum);
       const motorKalibi = path.join(sahne, '.motor');
       await motorAc(kalip, motorKalibi, komut);
       if (donusum) await motorDonusumuUygula(motorKalibi, donusum); // bir kez; kopyalar miras alır
@@ -730,5 +788,5 @@ module.exports = {
   ISARET, DUZEN, AKTIVASYON, KOD, UretecHatasi, planKur, grupOku, aktivasyonKarari, duzenKarari,
   kapiListesiKur, tekMotorMenuXml, webzMenuDosyalari, kalipOku, kabukGecerliMi, uret, uretecOzeti,
   KOK_MOTOR_EKLERI, MOTOR_HARIC, alanOku, logoGizle, logoDuzMu, tabanUcYaz, donusumDenetle,
-  motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO, linkVarliklari,
+  motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO, linkVarliklari, KOK_INDEX, KOK_YAPILANDIRMA,
 };

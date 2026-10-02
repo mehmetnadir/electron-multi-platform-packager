@@ -144,12 +144,28 @@ artık yalnız arşivde hiç YDS motoru yoksa.
 
 | Karar | Kodda | Kanıt (74430 kuru koşu, 02.10) |
 |---|---|---|
-| Kök = tema kabuğu; kalıpta `scripts/language-set.js` aranmaz | `kabukGecerliMi({tema})`, `uret` tema dalı (`kabukAc` yok) | zip'te `language-set.js` yok, `empp-webz-tema` imzası var |
+| Kök menü = tema kabuğu; kalıpta `scripts/language-set.js` aranmaz; kök ÇALIŞMA dosyaları korunur (aşağı) | `kabukGecerliMi({tema})`, `uret` tema dalı (`kabukAc` yok) | zip'te `language-set.js` yok, `empp-webz-tema` imzası var |
 | İki `kurum.txt` → 310 | `motorDonusumu.kurum` (motor kalıbına bir kez; kök `kurum` ondan) | kök + book1 + book2 = 310 |
 | `bookN/core/kurumlogo.png` → Flashy logosu | tema `images/logo.png` (327×327) = paketleyici kaydı "Flashy ELT" (sha AYNI); **motorun gizlemesiyle** (ilk 100 bayt 256-b) yazılır | çözülmüş sha = Flashy logo sha |
 | `app.config.js` `baseEndpointUrl` | `ucSec`: aday flashyelt GetKitapGuncellemeBilgi + HasZKitapKey JSON → aday, değilse yedek YDS; yoksa anahtar eklenir | aday HasZKitapKey **CF 403** → `akillitahta.ydspublishing.com` |
 | Kapak = panel coverUrl | liste 3. alanı (data URI / http indirilir; olmazsa `thumbs/1.jpg` yedeği, sayılır) | 2/2 panel kapağı (webp) |
 | Altbilgi "Web Sürümü" kalkar | `TEMALAR['web-proxy-modern'].metin` (desen yoksa üretim durur) | "Akıllı Tahta" kaldı |
+
+**Kök: çalışma dosyası ↔ index (saha 02.10, 74430 pardus kabul RED — kök hiç açılmadığı için `electron.js`
+yoktu, paketleyici yedek main.js şablonuna düştü; Lingoland 72378/72379 geçiyordu).** Ölçüm 45540 kökü ↔
+74430 üretimi: `index-ureteci.js` `KOK_INDEX`.
+
+| Sınıf | Dosyalar | Kanıt |
+|---|---|---|
+| INDEX (kalıptan alınmaz; tema üretir) | `index.html`, `set-menu.json`, `config/`, `scripts/`, `styles/`, `images/`, `languages/`, `i18n/`, `features/`, `assets2/`; `kurum.txt` yeniden yazılır | sf425 `index.html` → logo/scripts(7)/styles(3); `language-loader.js` → languages/; `language-set.css` → images/bg.jpg; i18n/features/assets2 Üretim Masası kabuk artığı (hiçbir kök dosya başvurmuyor; assets2 = YDS buton görselleri) |
+| ÇALIŞMA (aynen korunur) | `electron.js` (giriş), `electronUpdate.js`, `old_app.config.js`, `set_app.config`, `version.txt`, `core/`, hash'li motor paketleri, `43e23fce…js`, `main.html`, `Main.xml`, `SET_BOOK.txt`, `Default.aspx`, `favicon.ico`, `icons.js`/`images.js`/`tour.js` | `electron.js` → `index.html` + `favicon.ico`; icons/images.js → `core/`; arşivdeki 17 YDS build'inin hepsinde kök giriş = `electron.js` |
+
+Kökte `main.js` yoksa `electron.js` kopyalanır (paketleyicinin kuralıyla aynı); giriş yoksa üretim RED
+(`kalip`). Kök dönüşüm: `core/kurumlogo.png` → gizli Flashy logosu, `set_app.config` + `old_app.config.js`
+`baseEndpointUrl` → seçilen uç; doğrulamada kök noktalar da okunur. 74430 kuru koşu: kök 540 girdi,
+`node --check main.js` geçti; paketin KENDİ `main.js`'i Electron 27'de görünmez koşturuldu (BrowserWindow
+show:false+offscreen sarmalı, main.js değişmeden): 1 pencere, `index.html` yüklendi, 2/2 kart, altbilgi
+"Akıllı Tahta", odak korundu, kalan Electron süreci 0.
 
 **Logo neden gizli yazılır (bundle ölçümü, 45540 `main.js`):** motor açılışta `core/kurumlogo.png` yoksa ya da
 ilk 10 baytında "PNG" varsa `GetKurumLogo?id=<bookN/kurum.txt>` ile İmpark logosunu indirip gizleyerek YAZAR.
