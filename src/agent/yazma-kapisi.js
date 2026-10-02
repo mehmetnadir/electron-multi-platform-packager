@@ -33,6 +33,9 @@
  *      Liste yoksa: tür `manuel` → kimlik denetimi
  *      ATLANIR (Nadir 01.10); `otomatik` ve set yapılı build → liste yok = ret. Tek kitap yapılı
  *      build (bookN yok) listesiz geçer.
+ *      TEK MOTORLU SET (02.10, index üreteci; İmpark'ın kendi set exe'si 45472/45480 aynı düzen):
+ *      bookN yok, kök `classlibraries/ImWin32.dll` ≥2 İmpark kapağı → her kapak bir kitap (n = menü
+ *      sırası), içerik/kapak `assets/<kapak ID>/` altında ölçülür; listesiz otomatik tür = ret.
  *   2. her kitapta içerik (`assets/<id>/data/BookContent.xml` + ilk sayfa `pages/1.*`) VE kapak
  *      (`assets/<id>/thumbs/1.jpg`) — set-uyelik-ek kapısıyla aynı ölçüt.
  *   3. boyut ≥ oncekiBoyut × 0,8 (oncekiBoyut ya da boyut yoksa atlanır).
@@ -179,6 +182,29 @@ function kitapOlc(kume, onEk) {
   };
 }
 
+/** Belirli bir `assets/<id>` için `{icerik, kapak}` (tek motorlu sette her kapak ayrı ölçülür). */
+function kitapOlcId(kume, onEk, id) {
+  const a = `${onEk}assets/${id}/`;
+  return {
+    icerik: kume.has(a + ICERIK) && ILK_SAYFA.some((p) => kume.has(a + p)),
+    kapak: kume.has(a + KAPAK),
+  };
+}
+
+/**
+ * Tek motorlu set: kök `classlibraries/ImWin32.dll` menüsündeki İmpark kapak kimlikleri (menü
+ * sırası, tekilleştirilmiş). 2'den az kapak → [] (tek kitap yapılı build bugünkü yolda kalır).
+ */
+function kokMenuKapaklari(okuyucu, kume) {
+  if (!kume.has(ig.MENU_GORELI)) return [];
+  try {
+    const ham = okuyucu.veri(ig.MENU_GORELI);
+    const xml = ham ? ig.menuCoz(ham) : null;
+    const idler = [...new Set((xml ? ig.kapaklar(xml) : []).map((c) => String(c.ID)).filter(imparkKimligiMi))];
+    return idler.length >= 2 ? idler : [];
+  } catch (_) { return []; }
+}
+
 /** Listedeki kitap (link olmayan) satırları (`setListesiAyristir`); liste yok/boşsa null. */
 function listeGirdileri(setListesi) {
   if (setListesi == null) return null;
@@ -226,6 +252,8 @@ function yazmaKapisi({
   const bookNler = [...new Set(yollar.map((y) => y.split('/')[0]).filter(bookNMi))]
     .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
   const setYapili = bookNler.length > 0;
+  const tekMotorKapaklar = setYapili ? [] : kokMenuKapaklari(oku, kume);
+  const ad = (k) => (setYapili ? `book${k.n}` : tekMotorKapaklar.length ? `kök#${k.n}(${k.id})` : 'kök');
 
   const kitaplar = [];
   const dizinAdi = new Map(); // n → assets/<dizin> (kimlik menüden çözülünce de içerik oradan ölçülür)
@@ -245,6 +273,14 @@ function yazmaKapisi({
       }
       kitaplar.push({ n, id, ...(vsler[n] != null ? { vs: vsler[n] } : {}), icerik: k.icerik, kapak: k.kapak });
     }
+  } else if (tekMotorKapaklar.length) {
+    // TEK MOTORLU SET (02.10, index üreteci + İmpark'ın kendi set exe'si 45472/45480): bookN yok,
+    // kök ImWin32 menüsünde ≥2 İmpark kapağı → her kapak bir kitap, menü sırasıyla n=1..N.
+    tekMotorKapaklar.forEach((id, i) => {
+      const k = kitapOlcId(kume, '', id);
+      kitaplar.push({ n: i + 1, id, ...(vsler[i + 1] != null ? { vs: vsler[i + 1] } : {}), icerik: k.icerik, kapak: k.kapak });
+    });
+    notlar.push(`tek motorlu set: kök menüde ${tekMotorKapaklar.length} kapak`);
   } else {
     const k = kitapOlc(kume, '');
     if (k.id != null) kitaplar.push({ n: 1, id: k.id, ...(vsler[1] != null ? { vs: vsler[1] } : {}), icerik: k.icerik, kapak: k.kapak });
@@ -302,24 +338,24 @@ function yazmaKapisi({
     const listeKume = new Set(listeImpark);
     denetlenecek = [];
     for (const k of kitaplar) {
-      const ad = setYapili ? `book${k.n}` : 'kök';
+      const adi = ad(k);
       if (webzN.has(k.n)) continue;
       if (listeKume.has(String(k.id))) denetlenecek.push(k);
       else if (imparkKimligiMi(k.id)) {
-        ret(KOD.LISTE_DISI, `liste-disi-kitap: ${ad} kimliği ${k.id} listede yok${ozet}`);
-      } else notlar.push(`liste dışı ek korundu: ${ad}`);
+        ret(KOD.LISTE_DISI, `liste-disi-kitap: ${adi} kimliği ${k.id} listede yok${ozet}`);
+      } else notlar.push(`liste dışı ek korundu: ${adi}`);
     }
-  } else if (tur !== 'manuel' && setYapili) {
+  } else if (tur !== 'manuel' && (setYapili || tekMotorKapaklar.length)) {
     ret(KOD.LISTE_YOK, 'set listesi yok (otomatik tür) — kitap sayısı doğrulanamadı');
   }
   if (!kitaplar.length) ret(KOD.KITAP_YOK, 'kitap bulunamadı (bookN yok, assets/<id> yok)');
 
   // 2. içerik + kapak (liste kitapları; korunan ekler denetlenmez, sunucuya da gitmez)
   for (const k of denetlenecek) {
-    const ad = setYapili ? `book${k.n}` : 'kök';
-    if (k.id == null) ret(KOD.ID_YOK, `${ad}: assets/<id> yok`);
-    if (!k.icerik) ret(KOD.ICERIK_YOK, `${ad}: içerik yok (${ICERIK} / ilk sayfa)`);
-    if (!k.kapak) ret(KOD.KAPAK_YOK, `${ad}: kapak yok (${KAPAK})`);
+    const adi = ad(k);
+    if (k.id == null) ret(KOD.ID_YOK, `${adi}: assets/<id> yok`);
+    if (!k.icerik) ret(KOD.ICERIK_YOK, `${adi}: içerik yok (${ICERIK} / ilk sayfa)`);
+    if (!k.kapak) ret(KOD.KAPAK_YOK, `${adi}: kapak yok (${KAPAK})`);
   }
 
   // 3. boyut
