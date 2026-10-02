@@ -30,6 +30,8 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
       derlemeKilidi: e.EMPP_DERLEME_KABUL_KILIDI, indirme: e.AGENT_DOWNLOAD_RATE || '', kanitArsiv: e.EMPP_KANIT_ARSIV, path: e.PATH, nodeOpt: e.NODE_OPTIONS, upload: e.AGENT_UPLOAD_RATE,
       yetimKaldi: require('fs').existsSync(e.EMPP_SERIT_KOK + '/work/empp-agent-eski'),
       motorKanonik: e.EMPP_MOTOR_KANONIK,
+      setG: e.EMPP_SET_GUNCELLEME, gAnahtar: e.EMPP_GUNCELLEME_ACIK_ANAHTAR, uyelik: e.EMPP_SET_UYELIK_EK,
+      merdiven: e.EMPP_ARSIV_MERDIVEN, kabulCdp: e.KABUL_CDP, kabulSetTum: e.KABUL_SET_TUM,
     }));
     setTimeout(() => process.exit(0), 1500);
   `);
@@ -40,11 +42,20 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
     env: { ...process.env, EMPP_SERIT_KOK: serit, EMPP_LOGO_PORT: '0', HOME: serit,
       AGENT_CAPS: '', PROBOOK_HOST: '', PARDUS_BUILD_SCRIPT: '', EMPP_PARDUS_KABUL: '', EMPP_LINUX_DEB: '', PACKAGER_API: '',
       NODE_OPTIONS: '', AGENT_UPLOAD_RATE: '', EMPP_DERLEME_KABUL_KILIDI: '', EMPP_KANIT_ARSIV: '', AGENT_DOWNLOAD_RATE: '',
-      EMPP_MOTOR_KANONIK: '' },
+      EMPP_MOTOR_KANONIK: '', EMPP_SET_GUNCELLEME: '', EMPP_GUNCELLEME_ACIK_ANAHTAR: '', EMPP_SET_UYELIK_EK: '',
+      EMPP_ARSIV_MERDIVEN: '', KABUL_CDP: '', KABUL_SET_TUM: '' },
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
   assert.equal(o.caps, 'pardus,kaynak-kur,kaynak-r2');
+  // Mac paritesi (02.10): G kanalı açık anahtarı + kapsam, set eki, merdiven, CDP kabul
+  assert.match(o.setG, /(^|,)linux(,|$)/);
+  const { pardusBetikEnv } = require('../../src/agent/runner-helpers');
+  assert.equal(pardusBetikEnv({ EMPP_GUNCELLEME_ACIK_ANAHTAR: o.gAnahtar }, {}).sebep, '', 'açık anahtar geçerli ed25519 SPKI olmalı');
+  assert.equal(o.uyelik, '1');
+  assert.equal(o.merdiven, '1');
+  assert.equal(o.kabulCdp, '1');
+  assert.equal(o.kabulSetTum, '1');
   assert.equal(o.host, 'yerel');
   assert.equal(o.build, path.join(repo, 'tools', 'pardus', 'pardus-yerel-build.sh'));
   assert.equal(o.kabul, '1');

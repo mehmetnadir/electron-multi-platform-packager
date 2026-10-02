@@ -29,6 +29,18 @@ export EMPP_SOURCE_CACHE="${EMPP_SOURCE_CACHE:-$SERIT/cache/kaynak}"
 # eslenir (arsiv-esle.sh); nabiz-yaz.js sha12'sini nabza yazar, Mac esit degilse pardus'u kendi alir.
 export EMPP_MOTOR_KANONIK="${EMPP_MOTOR_KANONIK:-$HOME/.empp-agent/motor/kanonik.json}"
 export TMPDIR="${TMPDIR_SERIT:-$SERIT/work}"
+# MAC PARİTESİ (02.10, ilk canlı koşu): Mac run-agent.sh'taki pardus'u etkileyen bayraklar burada yoktu →
+# 74430 paketi G (SET güncelleme) kanalı OLMADAN üretiliyordu ("G açık anahtarı yok"). Mac ile aynı değerler:
+#   G kanalı: ÜRETİM ed25519 AÇIK anahtarı (SPKI sha256 31b8663b…2cf6; özel anahtar Anahtar Zinciri + srv21'de,
+#   burada YOK). Kapsam listesi Mac'teki ile birebir; linux işinde yalnız `linux` öğesi etkilidir.
+export EMPP_SET_GUNCELLEME="${EMPP_SET_GUNCELLEME:-windows,macos,linux,android}"
+export EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-MCowBQYDK2VwAyEAkPKHFRPDIeuQqAa8kWELMl2+14Ga/WHrjfVHDeTR4H4=}"
+#   Set üyeliği eki (panelde sete eklenen kitap pakete bookN) + arşiv içerik merdiveni S0/S1.
+export EMPP_SET_UYELIK_EK="${EMPP_SET_UYELIK_EK:-1}"
+export EMPP_SET_LISTESI_DIZINI="${EMPP_SET_LISTESI_DIZINI:-$HOME/.empp-agent/set-listesi}"
+export EMPP_ARSIV_MERDIVEN="${EMPP_ARSIV_MERDIVEN:-1}"
+#   Kabul E6/E7 (CDP, ayrı ev) + SET'te tüm alt kitapların güncelliği + K4 — Mac'in ProBook kabulüyle aynı.
+export KABUL_CDP="${KABUL_CDP:-1}" KABUL_SET_TUM="${KABUL_SET_TUM:-1}" KABUL_K4="${KABUL_K4:-1}"
 # Kabul boşluk beklemesi (başka kapı/uygulama) ajan zaman aşımına sayılır; zaman aşımı
 # runner'da "ertelenebilir" sınıftır (failed YAZILMAZ). Derleme 2011 CPU'da uzun sürer.
 export AGENT_PARDUS_KABUL_TIMEOUT_MS="${AGENT_PARDUS_KABUL_TIMEOUT_MS:-2700000}"
