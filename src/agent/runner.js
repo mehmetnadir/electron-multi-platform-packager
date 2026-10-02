@@ -635,8 +635,11 @@ async function presignUpload(auth, job) {
  * Sunucu eski sürümdeyse (uç 404) çağıran taraf tek-parça yola düşer.
  */
 const {
-  arsivKaynagi, ikiOzet, r2Onbellek, r2ArsiveYaz,
+  arsivKaynagi, arsivKoku, ikiOzet, r2Onbellek, r2ArsiveYaz,
 } = require('./kaynak-arsivi');
+// INDEX ÜRETECİ (02.10): taban/arşiv yoksa r2-kur build'i üreteçle kurar (uretec-kaynak.js).
+const uretecKaynak = require('./uretec-kaynak');
+const indexUreteci = require('./index-ureteci');
 const { icerikKapisiDenetleZip, zipGirisAdlariniOku } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
@@ -1954,6 +1957,9 @@ const kaynakAdim = {
   // imKeys: bağımlılıklar exports üzerinden çözülür (test-yalitim sahtesini koyabilsin; üretimde
   // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
   imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
+  // Üreteç (r2-kur kaynak adımı): anahtarlı mı sorusu okuyucunun kendi HasZKitapKey'i (imkeys).
+  // (imKeys ile AYNI bağımlılık kaynağı: test-yalitim sahtesi burada da geçerli — internete çıkılmaz).
+  uretec: (o) => uretecKaynak.uretecKaynagi({ anahtarliMi: imKeys.varsayilanBagimliliklar().anahtarliMi, ...o }),
 };
 
 /** Kaynak uç istemcisi (B2) — runner'ın axios + ajan başlığıyla; biçim kaynak-r2.js'te. */
@@ -2011,7 +2017,17 @@ async function r2AlHazirla({ bookId, kaynak, zipPath, work }) {
  * Mac arşivi. Dönüş `oncekiBoyut`: yazma kapısının %80 ölçütü için önceki geçerli build boyutu
  * (R2 tabanı ya da r2Surum'lu arşiv kaydı; elle yazılmış arşivde bilinmez → null).
  */
-async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work }) {
+async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null }) {
+  if (kaynak.taban.tur === 'uretec') {
+    // ÜRETEÇ: build'i Web-Z listesi + ZKitapZipH + kurum motoruyla kurar. Ertelenecek her durum
+    // (liste/kalıp/tema yok, kitap alınamadı, ağ) `gecici` → çağıranın catch'i r2Ertele (failed yok).
+    log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban YOK: build index üreteciyle kuruluyor`);
+    const { rapor, liste } = await kaynakAdim.uretec({ job, zipPath, work, arsivKoku: arsivKoku(), log });
+    // Sonraki adımlar (set eki, yazma kapısı) AYNI listeyi görsün: kitap-dışı varlık link'e çevrilmiş hâli.
+    job.setListesi = rapor.kapiListesi;
+    job.uretecOzeti = { ...indexUreteci.uretecOzeti(rapor), liste: liste.kaynak };
+    return { oncekiBoyut: null };
+  }
   if (kaynak.taban.tur === 'r2') {
     const indirilen = path.join(work, 'r2-taban.zip');
     log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: önceki geçerli R2 build (imzalı GET)`);
@@ -2295,7 +2311,7 @@ async function processJob(auth, job) {
     // orada önbellek — `r2Onbellek` ayrı okur) ve tabanUrl'li r2-kur'da OKUNMAZ.
     const arsiv = !arsivOkunurMu(job) ? null
       : await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
-    const kaynak = kaynakKarari({ job, arsiv });
+    const kaynak = kaynakKarari({ job, arsiv, uretec: uretecKaynak.uretecAcik() });
     // r2-kur kurulamıyor (taban yok / claim sözleşme dışı): kurma kilidini HEMEN bırak — sunucu
     // build'i başka ajana ya da sonraya verir; kilit kurulumBitis'e kadar asılı kalmasın.
     if (kaynak.r2Kur) {
@@ -2373,7 +2389,7 @@ async function processJob(auth, job) {
         await r2AlHazirla({ bookId: job.bookId, kaynak, zipPath, work });
       }
       if (kaynak.tur === 'r2-kur') {
-        r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work })).oncekiBoyut;
+        r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job })).oncekiBoyut;
       }
     } catch (e) {
       // R2 indirmesi ağ hatasıyla tükendi → failed YAZILMAZ: (r2-kur ise kilit) + kira bırakılır.
@@ -2461,6 +2477,8 @@ async function processJob(auth, job) {
           job, zipYolu: zipPath, setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null,
           oncekiBoyut: r2OncekiBoyut, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
+          // Üreteç özeti `tamamla`ya (sunucu bilinmeyen alanı atar; kayıt `kaynak='uretec'` book-update işi).
+          tamamlaEki: job.uretecOzeti ? { uretec: job.uretecOzeti } : {},
           parcaBoyutu: MULTIPART_PART_SIZE, log,
         });
       } catch (e) {

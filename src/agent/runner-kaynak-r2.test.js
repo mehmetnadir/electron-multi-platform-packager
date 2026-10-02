@@ -307,13 +307,23 @@ test('r2-kur evde (bayrak yok, ofis değil): build kurulmaz, kilit + kira bırak
   assert.equal(r.kayit.govdeler.release.length, 1);
 });
 
-test('r2-kur taban yok (tabanUrl yok, arşiv yok): §6a BEKLER — kilit + kira bırakılır, failed yok', async () => {
-  const r = await isKostur({ job: r2Kur() });
+test('r2-kur taban yok + üreteç KAPALI (EMPP_INDEX_URETECI=0): §6a BEKLER — kilit + kira bırakılır, failed yok', async () => {
+  const r = await isKostur({ job: r2Kur(), env: { EMPP_INDEX_URETECI: '0' } });
   assert.equal(r.hata, null);
   assert.equal(r.donus.ertelendi, true);
   assert.match(r.donus.sebep, /r2-kur: taban yok/);
   assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
   assert.equal(r.kayit.govdeler.release.length, 1);
+});
+
+test('r2-kur taban yok + üreteç açık ama kurum kalıbı yok: ERTELENİR (uretec-kalip-yok), kilit + kira bırakılır, failed yok', async () => {
+  const r = await isKostur({ job: r2Kur() });
+  assert.equal(r.hata, null);
+  assert.equal(r.donus.ertelendi, true);
+  assert.match(r.donus.sebep, /uretec-kalip-yok/);
+  assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
+  assert.equal(r.kayit.govdeler.release.length, 1);
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'], undefined);
 });
 
 test('r2-kur tabanUrl: önceki geçerli build R2\'den indirilir + sha doğrulanır; arşiv okunmaz', async () => {

@@ -479,7 +479,7 @@ test('processJob metni: exe indirme/SFX açma/HEAD/önbellek/hazır paket yolu Y
     'hazirPardusPaketi(', 'applyPublisherUpdate(', 'source cache MISS']) {
     assert.ok(!kod.includes(yasak), `processJob '${yasak}' içermemeli`);
   }
-  assert.match(kod, /const kaynak = kaynakKarari\(\{ job, arsiv \}\);/);
+  assert.match(kod, /const kaynak = kaynakKarari\(\{ job, arsiv, uretec: uretecKaynak\.uretecAcik\(\) \}\);/);
   assert.match(kod, /if \(kaynak\.tur === 'yok'\) \{\s*\n\s*await kaynakYokBekle\(auth, job, kaynak\.sebep\);\s*\n\s*return \{ ertelendi: true/);
   // Karar, ilk indirme/kopyalamadan ÖNCE.
   const karar = kod.indexOf('kaynakKarari(');

@@ -329,13 +329,14 @@ function kaynakUcIstemcisi({
  *   kapi: Function, ozet: (zip: string) => Promise<{sha256: string, boyut: number}>,
  *   parcalariYukle: (zip: string, boyut: number, parcaBoyutu: number, urls: any[], contentType?: string)
  *     => Promise<Array<{partNumber: number, etag: string}>>,
- *   parcaBoyutu?: number, simdi?: number, log?: Function }} o
+ *   parcaBoyutu?: number, simdi?: number, log?: Function, tamamlaEki?: object }} o
+ *   `tamamlaEki`: gövdeye eklenen alanlar (ör. üreteç özeti `uretec`).
  * @returns {Promise<{surum: string, sha256: string, boyut: number, kitaplar: object[], r2ObjectKey: string,
  *   ozet: object}>} `ozet` = `ozet()` dönüşü (md5 dahil — arşive yazım yeniden okumasın)
  */
 async function r2KurYayinla({
   job, zipYolu, setListesi = null, oncekiBoyut = null, vsler = {}, istemci, kapi, ozet,
-  parcalariYukle, parcaBoyutu = 64 * 1024 * 1024, simdi = Date.now(), log = () => {},
+  parcalariYukle, parcaBoyutu = 64 * 1024 * 1024, simdi = Date.now(), log = () => {}, tamamlaEki = {},
 }) {
   const surum = job.kaynakSurumu;
   const kimlik = { bookId: job.bookId, platform: job.platform, surum };
@@ -380,7 +381,7 @@ async function r2KurYayinla({
     t = await istemci.tamamla({
       ...kimlik, sha256: oz.sha256, boyut: oz.boyut, kitaplar,
       ...(webzVarliklari.length ? { webzVarliklari } : {}),
-      uploadId, r2ObjectKey: basla.r2ObjectKey, parts,
+      uploadId, r2ObjectKey: basla.r2ObjectKey, parts, ...tamamlaEki,
     });
   } catch (e) {
     return birakVeFirlat(e instanceof KaynakR2Hatasi ? e

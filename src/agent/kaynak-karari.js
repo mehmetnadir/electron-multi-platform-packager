@@ -92,8 +92,8 @@ function manuelKaynakUrl(job) {
  *   merdiven/setEki: bu kaynakta içerik merdiveni / set üyeliği eki UYGULANABİLİR Mİ (kendi
  *   bayrakları ayrıca açık olmalı — bu alan yalnız kaynağın izin verip vermediğini söyler).
  */
-function kaynakKarari({ job, arsiv = null } = {}) {
-  if (r2TuruMu(job)) return r2Karari(job, arsiv);
+function kaynakKarari({ job, arsiv = null, uretec = false } = {}) {
+  if (r2TuruMu(job)) return r2Karari(job, arsiv, uretec);
   const url = manuelKaynakUrl(job);
   if (url) return { tur: 'manuel', url, merdiven: false, setEki: false };
   if (arsiv && typeof arsiv === 'object' && arsiv.zip) {
@@ -114,11 +114,11 @@ const SHA_RE = /^[0-9a-f]{64}$/;
  *             OLDUĞU GİBİ kullanılır — merdiven ve set eki YOK (merdiven/setEki false).
  *   r2-kur  : build BU ajan kurar. Taban: `tabanUrl` (önceki geçerli R2 build) varsa o, yoksa Mac
  *             kaynak arşivi; üstüne merdiven + set eki (mevcut zincir), sonra yazma kapısı → R2.
- *             Taban hiç yoksa 'yok' (§6a BEKLER) — `r2Kur: true` çağırana kurma kilidini bıraktırır.
+ *             Taban yoksa `uretec` açıkken taban 'uretec' (index üreteci kurar), kapalıyken 'yok' (§6a BEKLER) — `r2Kur: true` çağırana kurma kilidini bıraktırır.
  *   gecersiz: claim sözleşme dışı (`job.kaynakGecersiz`, parseNextJob doldurur) ya da zorunlu alan
  *             eksik — hiçbir şey indirilmez, iş görünür hatayla düşer.
  */
-function r2Karari(job, arsiv) {
+function r2Karari(job, arsiv, uretec = false) {
   const tur = kaynakTuruOku(job);
   const gecersiz = (neden) => ({
     tur: 'gecersiz', sebep: `claim sözleşme dışı (${tur}): ${neden}`, merdiven: false, setEki: false,
@@ -143,6 +143,9 @@ function r2Karari(job, arsiv) {
     return { ...ortak, taban: { tur: 'r2', url: job.tabanUrl, sha256: job.tabanSha256 } };
   }
   if (arsiv && typeof arsiv === 'object' && arsiv.zip) return { ...ortak, taban: { tur: 'arsiv', arsiv } };
+  // INDEX ÜRETECİ (02.10, şef kararı): taban yoksa build'i üreteç kurar (Web-Z listesi + ZKitapZipH +
+  // aynı kurumun arşiv motoru) — r2-kur'un kaynak adımı; zincirin kalanı aynen. Kapalıysa §6a BEKLER.
+  if (uretec) return { ...ortak, taban: { tur: 'uretec' } };
   return {
     tur: 'yok', sebep: `${KAYNAK_YOK_SEBEBI} (r2-kur: taban yok — tabanUrl yok, arşivde kayıt yok)`,
     merdiven: false, setEki: false, r2Kur: true,

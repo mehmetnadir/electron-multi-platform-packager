@@ -740,7 +740,7 @@ test('runner G set yükleme yolu kaldırıldı (tek yazar g-yayin)', () => {
 
 test('sıra: onKosul (saf) → kaynak kararı → araç/yuva denetimi → kaynak hazırlığı', () => {
   const on = PROCESS_JOB.indexOf('windowsSerit.onKosul(job)');
-  const karar = PROCESS_JOB.indexOf('kaynakKarari({ job, arsiv })');
+  const karar = PROCESS_JOB.indexOf('kaynakKarari({ job, arsiv, uretec: uretecKaynak.uretecAcik() })');
   const arac = PROCESS_JOB.indexOf('windowsSerit.araclariDenetle(CONFIG, { yuva: winKip.kip');
   const hazirlik = PROCESS_JOB.indexOf('await fsp.copyFile(arsiv.zip');
   assert.ok(on > 0 && karar > on && arac > karar && hazirlik > arac);

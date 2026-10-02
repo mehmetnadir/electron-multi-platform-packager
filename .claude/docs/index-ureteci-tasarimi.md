@@ -1,8 +1,21 @@
-# Index Üreteci — kaynaksız setlerin build.zip'i  `[TASARIM + PROTOTİP — 2026-10-02, dal index-ureteci-20261002]`
+# Index Üreteci — kaynaksız setlerin build.zip'i  `[TASARIM + RUNNER BAĞLANTISI — 2026-10-02, dal index-ureteci-20261002, merge yok]`
 
 > Nadir 02.10: "yapmamız şart". Sözleşme: book-update `exesiz-kaynak-sozlesmesi.md` (ONAYLI) §K "set
 > index'i BİZİMDİR, kitap listesi = panel Web-Z listesi", §5 yazma kapısı, §2b imKeys, §7 manuel yollar.
-> Kod: `src/agent/index-ureteci.js` (+ test), `src/agent/yazma-kapisi.js` (tek motorlu set kuralı).
+> Kod: `src/agent/index-ureteci.js` (üreteç), `src/agent/uretec-kaynak.js` (runner kaynak adımı: liste/kalıp/tema/erteleme),
+> `kaynak-karari.js` (taban yoksa `uretec`), `runner.js` (`r2KurTabanHazirla`), `yazma-kapisi.js` (tek motorlu set kuralı).
+> Testler: `index-ureteci.test.js`, `runner-uretec.test.js` (gerçek processJob, sahte sunucu).
+
+## 0. Şef kararları (02.10, Nadir'in "proaktif karar al" kuralıyla)
+
+| # | Karar | Kodda |
+|---|---|---|
+| 1 | Aktivasyonlu set → tek-motor (zorunlu); aktivasyonsuz → bookN + Web-Z menüsü | `duzen:'otomatik'` → `duzenKarari` |
+| 2 | Sürüm kaydı DDL'siz: `kaynak='uretec'` + `kapi_kaniti`'ne üreteç özeti, `tur='otomatik'` | runner `tamamla` gövdesine `uretec:{…}` (sunucu zod'u bilinmeyen alanı atar → **book-update işi**: tamamla `uretec`i okuyup `kaynak`/`kapi_kaniti`'ne yazsın) |
+| 3 | Yeniden üretim tetiği = mevcut §4 (Web-Z liste değişimi → kur isteği); üreteç r2-kur'un kaynak adımı | `kaynakKarari` → `taban:{tur:'uretec'}` |
+| 4 | Zip'siz oyun/çalışma kâğıdı → link kartı (4fbb8c1 biçimi); rapora say | `webzAdresi` (kisaKod) → `type:'link'`; yoksa `atlanan`; `kapiListesi` |
+| 5 | Flashy teması ayrı ajanda; YDS kabuğuyla YAYINLANMAZ → `uretec-tema-yok` ile ertele | `kabuk` kancası ('kalip' / {zip} / {dizin}); yayıncı tablosu yalnız YDS |
+
 > Merge/deploy/DB/R2 yazımı YOK — bu belge ve prototip kuru koşudur.
 
 ## 1. Kaynaklar (ölçüldü 02.10)
@@ -69,7 +82,17 @@ GetKitapGuncellemeBilgi boş dönerse ya hep ya hiç: build yazılmaz (`kitap-ek
 | `kaynak_build_surumleri.tur` | `otomatik` (DDL yok) — öneri: enum'a `uretec` eklemek (açık soru) |
 | `kaynak_build_surumleri.kaynak` (varchar 32) | bugün geri dönüş notu; üretilen build için `kapi_kaniti.uretec = {kalip, motor, duzen, aktivasyon}` önerilir, `kaynak` alanı geri dönüşe kalsın |
 
-## 7. r2-kur akışına bağlanma (uygulanmadı)
+## 7. r2-kur akışına bağlanma (UYGULANDI, dalda)
+
+| Adım | Davranış |
+|---|---|
+| Karar | `r2-kur` + `tabanUrl` yok + arşiv yok + `EMPP_INDEX_URETECI≠0` (varsayılan açık) → `taban:{tur:'uretec'}`; `=0` → eski §6a BEKLER |
+| Liste | claim `setListesi` > `EMPP_SET_LISTESI_DIZINI` > Worker `…/go/<kisaKod>/web-stream/config/settings.json` (KV'den kurulur; claim `kisaKod` alanı gerekir → **book-update işi**: claim'e `kisaKod` ekle ya da `set-listesi-claim.ts` KV yedeği) |
+| Kalıp | yayıncı tablosu (YDS → kurum 60, tema 'kalip') → arşivde aynı kurumun en yeni motor taşıyan build'i |
+| Erteleme (`failed` yok, kilit + kira bırakılır) | `uretec-liste-yok`, `uretec-kalip-yok`, `uretec-tema-yok`, `uretec-kitap-eksik`, `uretec-ag` (HasZKitapKey/İmpark ağı) |
+| Sonra | `job.setListesi = kapiListesi` (set eki + kapı aynı listeyi görür) → merdiven → set eki → imKeys → yazma kapısı → R2 → tamamla(+`uretec`) |
+
+Eski plan (kayıt için):
 
 1. `kaynak-karari.r2Karari`: `r2-kur` + `tabanUrl` yok + arşiv yok → bugün `yok` (§6a BEKLER). Yeni: claim
    `kaynakUretec=true` (sunucu `kaynak_modu='uretec'` setlerde) → `taban: {tur:'uretec'}`.

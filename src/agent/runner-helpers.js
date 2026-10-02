@@ -134,6 +134,10 @@ function parseNextJob(status, body) {
     // 45550/mac: API set_listesi logu, runner 13 sn sonra "atlandı"). Yalnız dosya yedeği olan
     // 45482'de ek çalışıyordu. Ham değer AYNEN taşınır; ayrıştırma setListesiAyristir'in işi.
     ...(typeof job.setListesi === 'string' && job.setListesi.trim() ? { setListesi: job.setListesi } : {}),
+    // KISA KOD (02.10, index üreteci): DB'de liste boşsa üreteç Worker'ın KV'den kurduğu settings.json'u
+    // `/go/<kisaKod>/web-stream/config/settings.json`'dan okur; zip'siz oyun için link kartı adresi.
+    ...(typeof (job.kisaKod || job.shortCode) === 'string' && String(job.kisaKod || job.shortCode).trim()
+      ? { kisaKod: String(job.kisaKod || job.shortCode).trim() } : {}),
     ...r2KaynakAlanlari(job),
   };
 }
