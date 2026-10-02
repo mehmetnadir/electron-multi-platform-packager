@@ -51,13 +51,15 @@ test('eksik içerik: book2 BookContent yok (kapak var) → icerik=false, geçmez
 test('fazla bookN: 4 dizin ≠ liste 3', () => {
   const r = yazmaKapisi({ buildDizini: f('fazla-bookn'), setListesi: LISTE3 });
   assert.equal(r.gecti, false);
-  assert.ok(r.nedenler.some((n) => /kitap sayısı 4 ≠ liste 3/.test(n)));
+  assert.deepEqual(r.nedenKodlari, ['liste-disi-kitap']);
+  assert.ok(r.nedenler.some((n) => /book4 kimliği 104 listede yok.*kitap sayısı 4 ≠ liste 3/.test(n)), r.nedenler.join('|'));
 });
 
 test('eksik bookN: 2 dizin ≠ liste 3', () => {
   const r = yazmaKapisi({ buildDizini: f('eksik-bookn'), setListesi: LISTE3 });
   assert.equal(r.gecti, false);
-  assert.ok(r.nedenler.some((n) => /kitap sayısı 2 ≠ liste 3/.test(n)));
+  assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
+  assert.ok(r.nedenler.some((n) => /liste kimliği 102 build'de yok.*kitap sayısı 2 ≠ liste 3/.test(n)), r.nedenler.join('|'));
 });
 
 test('boyut: %79 düşer, %80 geçer, oncekiBoyut yoksa atlanır', () => {
@@ -165,4 +167,57 @@ test('2 GiB üstü seyrek zip: unzip -Z1 listeler, boyut stat edilir', () => {
     assert.deepEqual(r.kitaplar, [{ n: 1, id: '9', icerik: true, kapak: true }]);
     assert.equal(yazmaKapisi({ zipYolu: yol, setListesi: '9|Bir', oncekiBoyut: 4 * IKI_GIB }).gecti, false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// --- 02.10 45549: liste dışı İmpark-dışı ek (kimlik "0") korunur; kapı sayı değil kimlik eşler ---
+
+const kitapGirisleri = (n, id) => [
+  `book${n}/assets/${id}/data/BookContent.xml`, `book${n}/assets/${id}/pages/1.png`, `book${n}/assets/${id}/thumbs/1.jpg`,
+];
+const LISTE4 = '101|Bir\n102|Iki\n103|Uc\n104|Dort';
+const build4 = () => [101, 102, 103, 104].flatMap((id, i) => kitapGirisleri(i + 1, id));
+
+test('45549 benzeri: 4 liste kimliği + book5 kimliği "0" → GEÇER, not düşer, ek sunucuya gitmez', () => {
+  const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => [...build4(), ...kitapGirisleri(5, 0)] });
+  assert.equal(r.gecti, true, r.nedenler.join('|'));
+  assert.deepEqual(r.notlar, ['liste dışı ek korundu: book5']);
+  assert.deepEqual(r.kitaplar.map((k) => k.id), ['101', '102', '103', '104']);
+  assert.deepEqual(r.nedenKodlari, []);
+});
+
+test('liste dışı ek içerik/kapaksız bile olsa (kimlik İmpark değil) korunur; boş/harfli kimlik de ek', () => {
+  const ek = ['book5/assets/0/x.txt', 'book6/assets/abc/x.txt', 'book7/index.html'];
+  const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => [...build4(), ...ek] });
+  assert.equal(r.gecti, true, r.nedenler.join('|'));
+  assert.deepEqual(r.notlar, ['liste dışı ek korundu: book5', 'liste dışı ek korundu: book6', 'liste dışı ek korundu: book7']);
+});
+
+test('fazla İmpark kimlikli bookN → RED liste-disi-kitap', () => {
+  const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => [...build4(), ...kitapGirisleri(5, 999)] });
+  assert.equal(r.gecti, false);
+  assert.deepEqual(r.nedenKodlari, ['liste-disi-kitap']);
+  assert.ok(r.nedenler.some((n) => /book5 kimliği 999 listede yok/.test(n)), r.nedenler.join('|'));
+});
+
+test('listede olup build\'de olmayan kimlik → RED kitap-eksik', () => {
+  const eksik = build4().filter((y) => !y.startsWith('book3/'));
+  const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => eksik });
+  assert.equal(r.gecti, false);
+  assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
+  assert.ok(r.nedenler.some((n) => /liste kimliği 103 build'de yok/.test(n)));
+});
+
+test('liste kimliği build\'de var ama içerik/kapak yok → RED (liste kitabı denetlenir)', () => {
+  const g = build4().filter((y) => y !== 'book2/assets/102/thumbs/1.jpg');
+  const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => g });
+  assert.equal(r.gecti, false);
+  assert.deepEqual(r.nedenKodlari, ['kapak-yok']);
+});
+
+test('imparkKimligiMi merdivenin ölçütüyle aynı', () => {
+  const { imparkKimligiMi } = require('./yazma-kapisi');
+  const m = require('./icerik-merdiven').imparkKimligiMi;
+  for (const v of ['0', '', null, undefined, 'abc', '12a', '00', '45549', '7', 0, 5]) {
+    assert.equal(imparkKimligiMi(v), m(v), `kimlik ${JSON.stringify(v)}`);
+  }
 });

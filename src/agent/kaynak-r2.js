@@ -226,7 +226,8 @@ function r2OzetDogrula(oz, beklenen) {
  *     → 200 {uploadId, r2ObjectKey, contentType?, urls:[{partNumber, url}]}
  *   POST agents/:id/kaynak/tamamla {bookId, platform, surum, sha256, boyut, kitaplar,
  *     uploadId, r2ObjectKey, parts:[{partNumber, etag}]} → 200 | 409 {nedenler:[...]}
- *   POST agents/:id/kaynak/birak {bookId, platform, surum, sebep, uploadId?} → 200
+ *   POST agents/:id/kaynak/birak {bookId, platform, surum, sebep, uploadId?, nedenler?, nedenKodlari?} → 200
+ *     (yerel kapı reddinde sebep:'kapi-reddi' + nedenler + nedenKodlari)
  * @param {{ istek: (yol: string, govde: object) => Promise<{status: number, data: any}>,
  *   sleep?: (ms: number) => Promise<void>, warn?: Function, deneme?: number, bekleMs?: number }} o
  *   `istek` göreli yolu (`kaynak/tamamla`) ajan köküne bağlar, ağ hatasında {status: 0} döner.
@@ -282,9 +283,14 @@ function kaynakUcIstemcisi({
     },
     /** FIRLATMAZ — kilit sunucuda kurulumBitis'te kendiliğinden düşer. 409 (B2 kapı reddinden sonra
      * kilidi zaten bırakmıştır) yalnız uyarıdır, hata DEĞİL. @returns {Promise<boolean>} */
-    async birak({ bookId, platform, surum, sebep, uploadId }) {
+    async birak({ bookId, platform, surum, sebep, uploadId, nedenler, nedenKodlari }) {
+      const liste = (a) => (Array.isArray(a) ? a.map((x) => String(x).slice(0, 300)).slice(0, 20) : null);
+      const nd = liste(nedenler);
+      const nk = liste(nedenKodlari);
       const r = await dene('kaynak/birak', {
         bookId, platform, surum, sebep: String(sebep || '').slice(0, 300), ...(uploadId ? { uploadId } : {}),
+        // Yerel kapı reddi (sebep 'kapi-reddi'): sunucu kaynak_kur_ret_at yazsın, aynı sete hemen yeni r2-kur vermesin.
+        ...(nd ? { nedenler: nd } : {}), ...(nk ? { nedenKodlari: nk } : {}),
       });
       if (r.status === 200) return true;
       warn(`${R2_ISARETI} kaynak/birak HTTP ${r.status} — kilit kurulumBitis'te düşer: ${bookId} ${surum}`);
@@ -316,14 +322,17 @@ async function r2KurYayinla({
   const surum = job.kaynakSurumu;
   const kimlik = { bookId: job.bookId, platform: job.platform, surum };
   let uploadId;
-  const birakVeFirlat = async (hata) => {
-    await istemci.birak({ ...kimlik, sebep: hata.message, uploadId });
+  const birakVeFirlat = async (hata, ek = {}) => {
+    await istemci.birak({ ...kimlik, sebep: hata.message, uploadId, ...ek });
     throw hata;
   };
 
   const k = kapi({ zipYolu, setListesi, oncekiBoyut, tur: 'otomatik', vsler });
   if (!k.gecti) {
-    return birakVeFirlat(new KaynakR2Hatasi(`yazma kapısı RED — R2'ye yazılmadı, eski sürüm geçerli kalır: ${k.nedenler.join(' | ')}`, { nedenler: k.nedenler }));
+    return birakVeFirlat(
+      new KaynakR2Hatasi(`yazma kapısı RED — R2'ye yazılmadı, eski sürüm geçerli kalır: ${k.nedenler.join(' | ')}`, { nedenler: k.nedenler }),
+      { sebep: 'kapi-reddi', nedenler: k.nedenler, nedenKodlari: Array.isArray(k.nedenKodlari) ? k.nedenKodlari : [] },
+    );
   }
   const bitis = Date.parse(job.kurulumBitis);
   if (Number.isFinite(bitis) && bitis <= simdi) {

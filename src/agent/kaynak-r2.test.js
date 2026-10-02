@@ -287,7 +287,20 @@ test('r2KurYayinla kapı reddi: yükleme HİÇ başlamaz (presign yok), birak ç
     && e.nedenler.length === 1);
   assert.deepEqual(a.yollar(), ['kaynak/birak']);
   assert.equal(a.sayac.yukle, 0);
-  assert.match(a.s.cagrilar[0].govde.sebep, /kitap sayısı 1 ≠ liste 2/);
+  assert.deepEqual(a.s.cagrilar[0].govde, {
+    bookId: '45549', platform: 'mac', surum: '2.51.10', sebep: 'kapi-reddi',
+    nedenler: ['[yazma-kapisi] kitap sayısı 1 ≠ liste 2'], nedenKodlari: [],
+  });
+});
+
+test('r2KurYayinla yerel kapı reddi: birak {sebep:kapi-reddi, nedenler, nedenKodlari} gövdesiyle gider', async () => {
+  const nedenler = ['[yazma-kapisi] kitap-eksik: liste kimliği 103 build\'de yok', '[yazma-kapisi] book2: kapak yok'];
+  const a = akis({ kapi: { gecti: false, kitaplar: [], nedenler, nedenKodlari: ['kitap-eksik', 'kapak-yok'] } });
+  await assert.rejects(R.r2KurYayinla(a.o), (e) => e.gecici === false);
+  assert.deepEqual(a.yollar(), ['kaynak/birak']);
+  assert.deepEqual(a.s.cagrilar[0].govde, {
+    bookId: '45549', platform: 'mac', surum: '2.51.10', sebep: 'kapi-reddi', nedenler, nedenKodlari: ['kitap-eksik', 'kapak-yok'],
+  });
 });
 
 test('r2KurYayinla 409 nedenler: yükleme yapılmış olsa da KALICI hata + birak (uploadId ile)', async () => {
