@@ -41,6 +41,13 @@ export EMPP_SET_LISTESI_DIZINI="${EMPP_SET_LISTESI_DIZINI:-$HOME/.empp-agent/set
 export EMPP_ARSIV_MERDIVEN="${EMPP_ARSIV_MERDIVEN:-1}"
 #   Kabul E6/E7 (CDP, ayrı ev) + SET'te tüm alt kitapların güncelliği + K4 — Mac'in ProBook kabulüyle aynı.
 export KABUL_CDP="${KABUL_CDP:-1}" KABUL_SET_TUM="${KABUL_SET_TUM:-1}" KABUL_K4="${KABUL_K4:-1}"
+#   Ad karşılaştırması (02.10, run-agent.sh ↔ bu dosya): K17 set menüsü Mac'te açıkça 1 — burada da açık yazılır
+#   (pardus-yerel-build.sh varsayılanı zaten 1). Açılış bekleme TABANI Mac'le aynı 420 sn; yerel kip boyutla büyütür.
+#   Bilerek ALINMAYANLAR: EMPP_BASLIKSIZ_KABUL(_PLATFORMLAR) (yalnız macos/android), EMPP_RUNNER_WINDOWS,
+#   EMPP_PARDUS_HAZIR_DIR (srv21 hazır şeridi; ProBook kendisi üretir), PROBOOK_AKTARIM (uzak kip aktarımı),
+#   EMPP_ICERIK_GUNCELLEME (pardus-yerel-build.sh OKUMAZ, PARDUS_ICERIK_GUNCELLEME=linux), EMPP_SAYFA_WEBP (linux'ta 0).
+export EMPP_SET_MENU="${EMPP_SET_MENU:-1}"
+export PROBOOK_BEKLE="${PROBOOK_BEKLE:-420}"
 # Kabul boşluk beklemesi (başka kapı/uygulama) ajan zaman aşımına sayılır; zaman aşımı
 # runner'da "ertelenebilir" sınıftır (failed YAZILMAZ). Derleme 2011 CPU'da uzun sürer.
 export AGENT_PARDUS_KABUL_TIMEOUT_MS="${AGENT_PARDUS_KABUL_TIMEOUT_MS:-2700000}"
