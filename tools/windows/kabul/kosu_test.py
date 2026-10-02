@@ -160,5 +160,37 @@ class TekAyiklamaNoktasiTest(unittest.TestCase):
             self.assertNotIn('re.match(r"(?s)', kod,
                              "%s yine kendi ayiklamasini yapiyor" % ad)
 
+class KasaKilidiTest(unittest.TestCase):
+    """Elle kosu (kosu.py) ile runner (windows-kasa-kabul.js, perl flock tutucu) AYNI kilit
+    dosyasini kilitler — iki kabul ayni makineye ayni anda gitmez (2026-10-02)."""
+
+    PERL = ('open(my $f, ">>", $ARGV[0]) or exit 74; flock($f, LOCK_EX | LOCK_NB) or exit 75; exit 0;')
+
+    def _perl_dene(self, yol):
+        import subprocess
+        return subprocess.run(["/usr/bin/perl", "-MFcntl=:flock", "-e", self.PERL, yol]).returncode
+
+    def test_kilit_tutulurken_runner_tutucusu_alamaz_birakinca_alir(self):
+        import tempfile
+        yol = os.path.join(tempfile.mkdtemp(prefix="kasa-kilit-"), "k.kilit")
+        with kosu.kasa_kilidi(yol):
+            self.assertEqual(self._perl_dene(yol), 75, "kosu.py kilidi tutarken runner kilit almamali")
+        self.assertEqual(self._perl_dene(yol), 0, "kilit birakilinca runner almali")
+
+    def test_varsayilan_yol_runner_ile_ayni(self):
+        eski = os.environ.pop("EMPP_WIN_KASA_KILIT", None)
+        try:
+            self.assertTrue(kosu.kilit_yolu().endswith(os.path.join(".empp-agent", "windows-kasa-kabul.kilit")))
+        finally:
+            if eski is not None: os.environ["EMPP_WIN_KASA_KILIT"] = eski
+        js = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
+                               "src", "agent", "windows-kasa-kabul.js"), encoding="utf-8").read()
+        self.assertIn("'windows-kasa-kabul.kilit'", js, "runner kilit adi kosu.py ile ayni olmali")
+
+    def test_kos_kilidi_alarak_kosar(self):
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "kosu.py"), encoding="utf-8").read()
+        govde = src[src.index("def kos("):src.index("def _kos(")]
+        self.assertIn("with kasa_kilidi():", govde, "kos() kilitsiz kosmamali")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

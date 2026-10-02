@@ -246,7 +246,10 @@ function etkinYetenekler(caps, durum) {
   // WINDOWS (2026-09-26, windows-serit.js): yalnız `EMPP_RUNNER_WINDOWS=1` (windowsAcik) VE imza
   // yuvası ölçülüp erişilir bulunduysa (imzaYuvasi === true) ilan edilir. İmzasız Windows paketi
   // yayına çıkamayacağı için yuvaya ulaşamayan ajan işi hiç kiralamaz. Ölçülmediyse ilan YOK.
-  const windowsIzin = d.windowsAcik === true && d.imzaYuvasi === true;
+  // İMZA BEKLİYOR (sözleşme exesiz-kaynak §2a, Nadir 02.10): hazır kuyruk açıkken (imzaBekleme)
+  // yuva erişilemese de ilan edilir — paket üretilir, kabulden geçer, imzasız hâliyle hazır kuyruğa
+  // girer, yayına ÇIKMAZ; imzayı yuva açılınca bekçi atar. `imzaBekleme` verilmezse eski kural.
+  const windowsIzin = d.windowsAcik === true && (d.imzaYuvasi === true || d.imzaBekleme === true);
   return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows'));
 }
 
@@ -624,6 +627,13 @@ const PROBOOK_KAPISI_ISARETI = '[ertelenebilir-probook-erisimi]';
  */
 const BASLIKSIZ_KABUL_ISARETI = '[ertelenebilir-basliksiz-kabul]';
 
+/**
+ * windows-kasa (gerçek Windows) kabulünün ÖLÇEMEMESİ — zaman aşımı, izleyici koptu, rapor gelmedi,
+ * paket kasa'ya inmedi, kilit boşalmadı. Paket kusuru DEĞİL; yükleme yok, `failed` yazılmaz
+ * (src/agent/windows-kasa-kabul.js, 2026-10-02).
+ */
+const WIN_KASA_KABUL_ISARETI = '[ertelenebilir-windows-kasa]';
+
 /** Noter/imza zincirinin GEÇİCİ hatalarını ayıran işaret (mesaja gömülür). */
 const NOTER_KAPISI_ISARETI = '[ertelenebilir-noter]';
 
@@ -633,6 +643,7 @@ function ertelenebilirKaynakHatasi(err) {
       : '';
   return raw.includes(DISK_KAPISI_ISARETI) || raw.includes(PROBOOK_KAPISI_ISARETI)
     || raw.includes(BASLIKSIZ_KABUL_ISARETI)
+    || raw.includes(WIN_KASA_KABUL_ISARETI)
     || raw.includes(NOTER_KAPISI_ISARETI);
 }
 
@@ -1143,6 +1154,7 @@ module.exports = {
   pardusKabulSinifi,
   PROBOOK_KAPISI_ISARETI,
   BASLIKSIZ_KABUL_ISARETI,
+  WIN_KASA_KABUL_ISARETI,
   guncellemeDosyalariniSirala,
   guncellemeIcerikTipi,
   tarListesiniAyristir,

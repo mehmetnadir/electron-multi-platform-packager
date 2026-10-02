@@ -20,12 +20,15 @@
  *      kimlik = book_id, `guncellemeTabani` https, imza betiği + osslsigncode + kapı var.
  *   1. statik kapı `scripts/windows-paket-kapisi.js` — 0 FAIL; 13 (G), 14 (K), 15 (kurulum dizinine
  *      yazma) PASS; ÖLÇÜLEMEDİ yalnız 3/5 (sıkıştırılmış NSIS metni). Kök index.html sha256'sı ölçülür.
- *   2. başsız kabul (imzasız) — RED olan imzaya gitmez.
+ *   2. kabul (imzasız) — RED olan imzaya gitmez. Kapı: windows-kasa (gerçek Windows: kur → aç →
+ *      her kitap → ilk sayfa + thumbnail → kaldır; `windows-kasa-kabul.js`) erişilebilirse o,
+ *      erişilemezse bugünkü Mac başsız kabulü (yedek). 02.10, Nadir: "windows kasa'yı kabul kapısı
+ *      olarak kullanmıyor musun?"
  *   3. `_hazir`'a yükleme (`hazirla`, kilitsiz: yuvaya dokunmaz).
  *   4. imza (`bekle-ve-tak`, bekleme kuralı betikte: 180 dk + yuva temizliği + 60 dk + bildirim) —
  *      imza kuyruğu tek yuvalı: makine geneli flock kilidi + elle koşan betik süreci beklenir.
  *   5. imzalı kopya yerelde: PE güvenlik dizini EOF'ta, gövde eşit, `osslsigncode verify`, md5.
- *   6. başsız kabul (imzalı) — sözleşme adım 4 "ikisi de geçmeden yayına çıkmaz".
+ *   6. kabul (imzalı, aynı kapı seçimi) — sözleşme adım 4 "ikisi de geçmeden yayına çıkmaz".
  *   7. iş kanıtı `~/.empp-agent/windows-kanit/<id>/<surum>.json` (md5, kök index, sürüm).
  *
  * G (güncelleme) kanalı: runner G set dosyalarını HİÇBİR YERE yüklemez — G manifestlerinin tek
@@ -41,6 +44,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
+const kasaKabul = require('./windows-kasa-kabul');
+const hazir = require('./windows-hazir');
 
 const ISARET = '[windows-serit]';
 const YUVA_ID = '66902';
@@ -76,7 +81,9 @@ function varsayilanAyarlar() {
     winImzaBeklenenImzaci: 'İm Park Bilişim',
     winKapiBetigi: path.join(REPO_KOKU, 'scripts', 'windows-paket-kapisi.js'),
     winKapiTimeoutMs: 45 * 60 * 1000,
-    winKabulCli: null, // null = tools/kabul/basliksiz-kabul.js
+    winKabulCli: null, // null = tools/kabul/basliksiz-kabul.js (yedek kapı)
+    ...kasaKabul.kasaAyarlari(),
+    ...hazir.hazirAyarlari(),
     winAgirSh: fs.existsSync(agir) ? agir : '',
     winKanitDizini: path.join(ev, 'windows-kanit'),
   };
@@ -359,14 +366,32 @@ async function kanitYaz(cfg, kanit) {
 }
 
 /** Araçlar var mı + imza yuvası erişilir mi (üretim BAŞLAMADAN). Fırlatır. */
-async function araclariDenetle(cfg) {
+async function araclariDenetle(cfg, { yuva = true } = {}) {
   const eksik = [];
-  if (!fs.existsSync(cfg.winImzaBetigi)) eksik.push(`imza betiği yok: ${cfg.winImzaBetigi}`);
   if (!fs.existsSync(cfg.winKapiBetigi)) eksik.push(`kapı betiği yok: ${cfg.winKapiBetigi}`);
-  const ossl = await komutKos(['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
-  if (ossl.kod !== 0) eksik.push(`osslsigncode bulunamadı: ${cfg.winOsslsigncode}`);
-  if (!(await imzaYuvasiErisilirMi(cfg))) eksik.push(`imza yuvası erişilemiyor (İmpark VPN / Storage7): ${cfg.winImzaYuvaKoku}`);
+  // "imza bekliyor" kipinde (yuva yok, sözleşme §2a) imza araçları bu işte KULLANILMAZ — imzayı
+  // sonra bekçi atar; burada aranmaz ki yuva kapalıyken üretim araç yüzünden durmasın.
+  if (yuva) {
+    if (!fs.existsSync(cfg.winImzaBetigi)) eksik.push(`imza betiği yok: ${cfg.winImzaBetigi}`);
+    const ossl = await komutKos(['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
+    if (ossl.kod !== 0) eksik.push(`osslsigncode bulunamadı: ${cfg.winOsslsigncode}`);
+    if (!(await imzaYuvasiErisilirMi(cfg))) eksik.push(`imza yuvası erişilemiyor (İmpark VPN / Storage7): ${cfg.winImzaYuvaKoku}`);
+  }
   if (eksik.length) throw new Error(`${ISARET} ön koşul: ${eksik.join('; ')} — üretim BAŞLAMADI`);
+}
+
+/**
+ * İmza kipi (sözleşme exesiz-kaynak §2a, Nadir 02.10): yuva erişilirse 'yuva' (bugünkü zincir
+ * aynen); erişilemezse ve hazır kuyruk açıksa 'hazir' (üret → kabul → imzasız paket hazır kuyruğa,
+ * yayın YOK); hazır kuyruk kapalıysa 'yuva' döner ve araclariDenetle eskisi gibi düşürür.
+ * @returns {Promise<{kip:'yuva'|'hazir', sebep:string}>}
+ */
+async function imzaKipiSec(cfg) {
+  if (await imzaYuvasiErisilirMi(cfg)) return { kip: 'yuva', sebep: 'imza yuvası erişilir' };
+  if (cfg.winHazirAcik) {
+    return { kip: 'hazir', sebep: `imza yuvası erişilemiyor (İmpark VPN / Storage7: ${cfg.winImzaYuvaKoku})` };
+  }
+  return { kip: 'yuva', sebep: 'imza yuvası erişilemiyor, hazır kuyruk KAPALI (EMPP_WIN_IMZA_BEKLEME=0)' };
 }
 
 /** İmpark sunucusu ping'e cevap veriyor ve yuva kökü görünüyor mu (sınırlı süreli, asılmaz). */
@@ -409,8 +434,24 @@ async function kapiKos({ exe, work, cfg, log, bookId }) {
   };
 }
 
-/** Başsız kabul — Windows şeridinde ZORUNLU (bayraktan bağımsız). RED/ÖLÇÜLEMEDİ → fırlatır. */
-async function kabulKos({ exe, job, work, cfg, log, aktivasyon, etiket }) {
+/**
+ * Kabul — Windows şeridinde ZORUNLU (bayraktan bağımsız). Önce windows-kasa (gerçek Windows);
+ * kasa erişilemez/kullanılamazsa Mac başsız kabulü. KALDI/RED → fırlatır (failed); ÖLÇÜLEMEDİ →
+ * ertelenebilir işaretli fırlatır (failed yazılmaz, kira bırakılır).
+ * @returns {Promise<{kapi:'kasa'|'basliksiz', kanitDizini?:string, sebep?:string}>}
+ */
+async function kabulKos({ exe, job, work, cfg, log, aktivasyon, etiket, sleep }) {
+  const kasa = await kasaKabul.kasaKabulKapisi({
+    exe, bookId: job.bookId, etiket, baslik: job.bookTitle || String(job.bookId), aktivasyon, cfg, log, sleep,
+  });
+  if (kasa.kullanildi) return { kapi: 'kasa', kanitDizini: kasa.kanitDizini };
+  log(`windows: windows-kasa kabulü kullanılamıyor (${kasa.sebep}) — Mac başsız kabul kapısına düşülüyor [${etiket}]`);
+  await basliksizKabul({ exe, job, work, cfg, log, aktivasyon, etiket });
+  return { kapi: 'basliksiz', sebep: kasa.sebep };
+}
+
+/** Bugünkü (02.10 öncesi tek) kapı: Mac'te başsız kabul. RED/ÖLÇÜLEMEDİ → fırlatır. */
+async function basliksizKabul({ exe, job, work, cfg, log, aktivasyon, etiket }) {
   const env = { ...process.env, EMPP_BASLIKSIZ_KABUL: '1', EMPP_BASLIKSIZ_KABUL_PLATFORMLAR: 'windows' };
   const calismaDizini = path.join(work, `kabul-${etiket}`);
   await fsp.mkdir(calismaDizini, { recursive: true });
@@ -588,7 +629,7 @@ async function imzaDogrula({ imzasiz, imzali, cfg, log }) {
  * Yayın öncesi zincirin tamamı. Dönen `imzaliYol` şeridin TEK yayın dosyasıdır.
  * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
  */
-async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, log, sleep, aktivasyon }) {
+async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, log, sleep, aktivasyon, imzaKipi, r2Hedef }) {
   const bekle = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const kanit = {
     bookId: String(job.bookId), bookTitle: job.bookTitle || null, surum: plan.surum,
@@ -602,22 +643,53 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
   kanit.kapi = { ozet: kapi.karar.ozet, maddeler: kapi.maddeler };
   kanit.kokIndex = kapi.kokIndex;
 
-  await kabulKos({ exe: artifactPath, job, work, cfg, log, aktivasyon, etiket: 'imzasiz' });
+  const k1 = await kabulKos({ exe: artifactPath, job, work, cfg, log, aktivasyon, etiket: 'imzasiz', sleep: bekle });
   kanit.kabulImzasiz = 'GECTI';
+  kanit.kabulImzasizKapi = k1.kapi;
+  if (k1.kanitDizini) kanit.kabulImzasizKanit = k1.kanitDizini;
 
-  await imzaHazirla({ exe: artifactPath, work, cfg, log });
+  // İMZA BEKLİYOR (§2a): yuva yok → imzasız paket hazır kuyruğa; yayın YOK, imzalı dosya YOK.
+  if (imzaKipi === 'hazir') {
+    const hedef = typeof r2Hedef === 'function' ? await r2Hedef() : r2Hedef;
+    const h = await hazir.hazirKoy({
+      exe: artifactPath, job, surum: plan.surum, kanit, cfg, kabul: k1, r2Hedef: hedef,
+      sebep: 'imza yuvası erişilemiyor',
+    });
+    kanit.durum = hazir.IMZA_BEKLIYOR_FAZI;
+    kanit.hazirDizini = h.dizin;
+    const yol = await kanitYaz(cfg, kanit);
+    log(`windows: İMZA BEKLİYOR — imzasız paket hazır kuyrukta (${h.dizin}); R2'ye YAZILMADI, `
+      + 'imza bekçisi yuva açılınca imzalatıp yayınlar');
+    return { hazir: h, kanit, kanitYolu: yol };
+  }
+
+  const z = await imzaliYayinZinciri({ imzasiz: artifactPath, job, work, cfg, log, sleep: bekle, aktivasyon, kanit });
+  return z;
+}
+
+/**
+ * İmza → doğrulama → imzalı kabul (yayın öncesi zincirin ikinci yarısı). Runner (yuva açık) ve imza
+ * bekçisi (hazır kuyruk) AYNI fonksiyonu kullanır — ikinci bir imza yolu YOK. `kanit` yerinde
+ * tamamlanır ve diske yazılır. Düşerse FIRLATIR (R2'ye hiçbir şey yazılmamıştır).
+ * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
+ */
+async function imzaliYayinZinciri({ imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit }) {
+  const bekle = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  await imzaHazirla({ exe: imzasiz, work, cfg, log });
   const birak = await imzaKilidiAl(cfg, { log, sleep: bekle });
   let imzaliYol;
   try {
-    imzaliYol = await imzaBekleVeTak({ exe: artifactPath, work, cfg, log });
-    await yuvayiArsivle({ exe: artifactPath, cfg, log });
+    imzaliYol = await imzaBekleVeTak({ exe: imzasiz, work, cfg, log });
+    await yuvayiArsivle({ exe: imzasiz, cfg, log });
   } finally {
     await birak();
   }
 
-  kanit.imzali = await imzaDogrula({ imzasiz: artifactPath, imzali: imzaliYol, cfg, log });
-  await kabulKos({ exe: imzaliYol, job, work, cfg, log, aktivasyon, etiket: 'imzali' });
+  kanit.imzali = await imzaDogrula({ imzasiz, imzali: imzaliYol, cfg, log });
+  const k2 = await kabulKos({ exe: imzaliYol, job, work, cfg, log, aktivasyon, etiket: 'imzali', sleep: bekle });
   kanit.kabulImzali = 'GECTI';
+  kanit.kabulImzaliKapi = k2.kapi;
+  if (k2.kanitDizini) kanit.kabulImzaliKanit = k2.kanitDizini;
   kanit.durum = 'imzali-dogrulandi';
   const yol = await kanitYaz(cfg, kanit);
   log('windows: iş kanıtı (md5 + kök index + sürüm) →', yol);
@@ -651,7 +723,8 @@ async function bekciBildir({ bookId, bookTitle, hata }, log) {
 module.exports = {
   ISARET, YUVA_ID, SURUM_DESENI, KAPI_ZORUNLU_PASS, KAPI_IZINLI_OLCULEMEDI, KOK_INDEX_YOLU,
   varsayilanAyarlar, onKosul, imzaDosyaAdi, kapiCiktisiniAyristir, kapiKarari, imzaDogrulamaKarari,
-  peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi,
-  kapiKos, kabulKos, imzaKilidiAl, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
+  peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
+  imzaliYayinZinciri, kanitYaz,
+  kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
   yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,
 };

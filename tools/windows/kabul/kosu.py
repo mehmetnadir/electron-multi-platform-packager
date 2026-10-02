@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # kosu.py <bookId> — tek paket icin kabul kapisini windows-kasa'da kostur
-import json, os, re, subprocess, sys
+import contextlib, fcntl, json, os, re, subprocess, sys, time
 SP = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.expanduser("~")
 KOK = os.path.join(HOME, "vm-kapi")
@@ -54,7 +54,37 @@ def ciktidan_json(out):
         return None
 
 
+def kilit_yolu():
+    """Runner'in windows-kasa kabul kilidiyle AYNI dosya (src/agent/windows-kasa-kabul.js,
+    winKasaKilit). Elle kosu ile runner ayni makineye ayni anda is gondermesin: kabul.py
+    tum uygulama sureclerini oldurur ve 9333'u tek kullanir — iki kosu birbirini olcer."""
+    return os.environ.get("EMPP_WIN_KASA_KILIT") or os.path.join(HOME, ".empp-agent", "windows-kasa-kabul.kilit")
+
+@contextlib.contextmanager
+def kasa_kilidi(yol=None, aralik=30):
+    """Makine geneli flock (perl tutucuyla ayni flock(2)); dolu ise bekler, haber verir."""
+    yol = yol or kilit_yolu()
+    os.makedirs(os.path.dirname(yol), exist_ok=True)
+    f = open(yol, "a")
+    try:
+        ilk = True
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+            except BlockingIOError:
+                if ilk: print("windows-kasa kabul kilidi dolu (runner ya da baska kosu) — bekleniyor", flush=True); ilk = False
+                time.sleep(aralik)
+        yield
+    finally:
+        try: fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception: pass
+        f.close()
+
 def kos(bid, tavan=2400):
+    with kasa_kilidi():
+        return _kos(bid, tavan)
+
+def _kos(bid, tavan=2400):
     isler = json.load(open(os.path.join(SP, "isler.json")))
     j = next((i for i in isler if i["bookId"] == bid), None)
     if not j:

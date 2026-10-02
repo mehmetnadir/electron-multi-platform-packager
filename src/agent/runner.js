@@ -61,6 +61,8 @@ const {
 } = require('./serit-secimi');
 const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
+const windowsKasaKabul = require('./windows-kasa-kabul');
+const windowsHazir = require('./windows-hazir');
 const {
   kaynakKarari, manuelZipBicimi, exeYoluMu, arsivOkunurMu,
 } = require('./kaynak-karari');
@@ -363,6 +365,22 @@ function imzaYuvasiDurumu() {
   return _imzaYuvasi.erisilir;
 }
 
+// WINDOWS KABUL KAPISI BİLGİSİ (2026-10-02): Windows işinde kabul hangi kapıdan geçecek —
+// windows-kasa (gerçek Windows, izleyici kalbi taze) mı, Mac başsız kabulü (yedek) mi? YALNIZ BİLGİ:
+// yetenek ilanını DEĞİŞTİRMEZ (kasa düşükken de başsız yedek var, windows ilanı imza yuvasına bağlı
+// kalır). Ölçüm ucuz (kalp dosyası okuma, süreç yok); değişince tek satır log atılır.
+let _sonWinKabul = '';
+function winKabulDurumu() {
+  const e = windowsKasaKabul.kasaErisimi(CONFIG);
+  const kapi = e.erisilir ? 'kasa' : 'basliksiz';
+  const iz = `${kapi}|${e.erisilir ? '' : e.sebep.replace(/\d+ sn/g, 'N sn')}`;
+  if (iz !== _sonWinKabul) {
+    log(`windows: winKabul=${kapi} — ${e.sebep}`);
+    _sonWinKabul = iz;
+  }
+  return kapi;
+}
+
 // PARDUS KABUL ERİŞİM KAPISI (2026-09-27): ProBook TCP 22'de yanıt veriyor mu? — imza yuvası
 // ölçümüyle (imzaYuvasiDurumu) BİREBİR aynı kalıp: 60 sn önbellek, arka planda ölçülür, tek
 // uçuş (`suruyor`), heartbeat'i BEKLETMEZ (senkron son değeri döner). Çocuk süreç (ssh/nc)
@@ -451,7 +469,11 @@ function guncelYetenekler() {
     windowsAcik: process.env.EMPP_RUNNER_WINDOWS === '1',
     imzaYuvasi: CONFIG.caps.includes('windows') && process.env.EMPP_RUNNER_WINDOWS === '1'
       ? imzaYuvasiDurumu() : undefined,
+    // İMZA BEKLİYOR (§2a, 02.10): hazır kuyruk açıkken yuva kapalı da olsa windows ilan edilir.
+    imzaBekleme: CONFIG.winHazirAcik === true,
   });
+  const winKabul = CONFIG.caps.includes('windows') && process.env.EMPP_RUNNER_WINDOWS === '1'
+    ? winKabulDurumu() : undefined;
   if (seritDenetcisi) {
     seritDenetcisi.tazele().catch(() => {}); // kendini 60 sn'de bir kısar; beklenmez
     caps = seritDenetcisi.uygula(caps);
@@ -488,6 +510,7 @@ function guncelYetenekler() {
       ...(seritDenetcisi ? ['| pardus şeridi=' + seritDenetcisi.ozet()] : []),
       ...(pardusVar ? ['| probook=' + (probookErisimi === true ? 'erişilir' : (probookErisimi === false ? 'ERİŞİLEMEZ' : 'ölçülmedi'))] : []),
       ...(pardusVar && yedek.aktif && caps.includes('pardus') ? ['| yedek=konteyner(' + yedek.bitis + ')'] : []),
+      ...(winKabul ? ['| winKabul=' + winKabul] : []),
       '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
@@ -533,11 +556,11 @@ async function fetchNextJob(auth) {
  * kira eskisi gibi süre dolunca döner.
  * @returns {Promise<boolean>} kira bırakıldı mı
  */
-async function releaseJob(auth, job, sebep) {
+async function releaseJob(auth, job, sebep, ek = {}) {
   try {
     const res = await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/release`),
-      { bookId: job.bookId, platform: job.platform, sebep: String(sebep || '').slice(0, 300) },
+      { bookId: job.bookId, platform: job.platform, sebep: String(sebep || '').slice(0, 300), ...ek },
       { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true },
     );
     if (res.status === 200) return true;
@@ -2119,6 +2142,87 @@ function aktivasyonBeklenir(baslik) {
   return AKTIVASYON_SERILERI.test(String(baslik || ''));
 }
 
+/**
+ * R2 hedef anahtarı (bilgi): kira bizdeyken presign sorulur, yükleme YAPILMAZ. Hazır kuyruk
+ * manifest'ine yazılır; yayında anahtar yine presign yanıtından gelir. Asla fırlatmaz.
+ */
+async function r2HedefYoklama(auth, job) {
+  try {
+    const p = await presignUpload(auth, job);
+    return { r2ObjectKey: p.r2ObjectKey || null, publicUrl: p.publicUrl || null, kaynak: 'presign (hazır anı, yükleme yok)' };
+  } catch (e) {
+    return { r2ObjectKey: null, kaynak: 'presign yanıt vermedi — yayın anında belirlenir', hata: agHatasiOzeti(e) };
+  }
+}
+
+/**
+ * "İmza bekliyor" bildirimi (§2a). Bugünkü sunucu `/release`'i tanır (kira bırakılır, iş kuyruğun
+ * sonuna ve bu ajana 10→60 dk verilmez); `durum:'imza-bekliyor'` alanı book-update'e eklenecek
+ * tutma (hold) için ileriye uyumludur — tanımayan sunucu alanı yok sayar.
+ */
+async function imzaBekliyorBildir(auth, job, hazirKayit, sebep) {
+  const birakildi = await releaseJob(auth, job,
+    `[${windowsHazir.IMZA_BEKLIYOR_FAZI}] ${sebep || ''} — hazır: ${path.basename(hazirKayit.dizin)}`,
+    { durum: windowsHazir.IMZA_BEKLIYOR_FAZI, hazir: path.basename(hazirKayit.dizin) });
+  warn(`windows: ${job.bookId} İMZA BEKLİYOR — failed YAZILMADI, ${birakildi ? 'kira bırakıldı' : 'kira dolunca döner'}; `
+    + `R2'ye yazılmadı (${hazirKayit.dizin})`);
+}
+
+/**
+ * Hazır kuyrukta bekleyen paketi devral (aynı kitap + sürüm yeniden kiralandı): yuva açıksa imzala →
+ * doğrula → imzalı kabul → yayınla → `yayinlandi/`'ye taşı; kapalıysa yeniden üretmeden imza-bekliyor.
+ */
+async function hazirIsiDevral(auth, job, winPlan, bekleyen, work) {
+  const kip = await windowsSerit.imzaKipiSec(CONFIG);
+  if (kip.kip !== 'yuva' || !(await windowsSerit.imzaYuvasiErisilirMi(CONFIG))) {
+    log(`windows: ${job.bookId} ${winPlan.surum} zaten hazır kuyrukta (${bekleyen.dizin}) — yuva kapalı, yeniden ÜRETİLMEDİ`);
+    await imzaBekliyorBildir(auth, job, bekleyen, kip.sebep);
+    return { ertelendi: true, imzaBekliyor: true, sebep: kip.sebep };
+  }
+  // Kayıt kilidi: imza bekçisi aynı kaydı işliyorsa ikinci kez imzalanıp İKİ KEZ yayınlanmasın.
+  const kayitKilidi = await windowsHazir.kayitKilidiDene(bekleyen.dizin);
+  if (!kayitKilidi) {
+    log(`windows: hazır kayıt (${bekleyen.dizin}) şu an imza bekçisinde — devralınmadı`);
+    await imzaBekliyorBildir(auth, job, bekleyen, 'imza bekçisi bu paketi işliyor');
+    return { ertelendi: true, imzaBekliyor: true, sebep: 'bekçi işliyor' };
+  }
+  try {
+    return await hazirKaydiYayinla(auth, job, winPlan, bekleyen, work);
+  } finally {
+    await kayitKilidi();
+  }
+}
+
+async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
+  await windowsSerit.araclariDenetle(CONFIG, { yuva: true });
+  log(`windows: hazır kuyruktaki paket devralındı (${bekleyen.dizin}) — imzalanıp yayınlanacak, yeniden üretim YOK`);
+  let kanit = null;
+  try { kanit = JSON.parse(await fsp.readFile(windowsSerit.kanitYolu(CONFIG, job.bookId, winPlan.surum), 'utf8')); } catch (_) { kanit = null; }
+  const m = bekleyen.manifest;
+  if (!kanit) {
+    kanit = {
+      bookId: String(job.bookId), bookTitle: job.bookTitle || null, surum: winPlan.surum, setKimligi: winPlan.setKimligi,
+      imzasiz: { md5: m.md5, sha256: m.sha256, boyut: m.boyut }, kapi: m.kanit && m.kanit.kapi, kokIndex: m.kanit && m.kanit.kokIndex,
+      kabulImzasiz: 'GECTI', kabulImzasizKapi: m.kabulKapi, kabulImzasizKanit: m.kabulKanit,
+    };
+  }
+  kanit.hazirDizini = bekleyen.dizin;
+  const zincir = await windowsSerit.imzaliYayinZinciri({
+    imzasiz: bekleyen.exeYolu, job, work, cfg: CONFIG, log, sleep, aktivasyon: aktivasyonBeklenir(job.bookTitle), kanit,
+  });
+  const yayin = await postResultSuccess(auth, job, zincir.imzaliYol);
+  await windowsSerit.yayinKaniti(zincir, yayin, CONFIG, log);
+  try {
+    const s = await windowsHazir.sonuclandir(CONFIG, bekleyen, 'yayinlandi', {
+      durum: 'yayinlandi', yayin: { r2ObjectKey: yayin.r2ObjectKey, publicUrl: yayin.publicUrl, zaman: new Date().toISOString(), yayinlayan: 'runner' },
+      imzali: zincir.kanit.imzali,
+    });
+    log('windows: hazır paket yayınlandı →', s.dizin);
+  } catch (e) { warn('windows: UYARI hazır kayıt yayinlandi/\'ye taşınamadı:', e.message); }
+  bildirGonder({ basarili: true, bookId: job.bookTitle || job.bookId, platform: job.platform, boyutMb: Math.round(m.boyut / 1e6) });
+  return { yayinlandi: true };
+}
+
 async function processJob(auth, job) {
   const packagerPlatform = mapPlatform(job.platform);
   if (!packagerPlatform) {
@@ -2136,6 +2240,12 @@ async function processJob(auth, job) {
     // KAYNAK KARARINDAN SONRA (inceleme 01.10): build yoksa windows işi araç eksikliğiyle failed
     // olmasın, kira bırakılsın.
     const winPlan = packagerPlatform === 'windows' ? windowsSerit.onKosul(job) : null;
+    // HAZIR KUYRUK KISA DEVRESİ (§2a, 02.10): aynı kitap + sürüm zaten "imza bekliyor"sa YENİDEN
+    // ÜRETİLMEZ — yuva açıksa o paket imzalanıp yayınlanır, kapalıysa iş yine imza-bekliyor bildirilir.
+    if (winPlan) {
+      const bekleyen = await windowsHazir.hazirBul(CONFIG, job.bookId, winPlan.surum);
+      if (bekleyen) return await hazirIsiDevral(auth, job, winPlan, bekleyen, work);
+    }
 
     // 1-3. KAYNAK — EXE'SİZ SÖZLEŞME (Nadir 01.10, book-update exesiz-kaynak-sozlesmesi.md):
     //      İmpark exe'si HİÇBİR koşulda indirilmez (ne paket kaynağı ne önbellek ne HEAD ne hazır
@@ -2174,7 +2284,11 @@ async function processJob(auth, job) {
     if (kaynak.tur === 'r2-kur' && !kaynakR2.kaynakKurIzinli(kaynakKurDurumu())) {
       return r2Ertele(auth, job, 'kaynak-kur bu konumda kapalı (ofis dışı, serbest bayrağı yok) — build kurulmadı');
     }
-    if (winPlan) await windowsSerit.araclariDenetle(CONFIG);
+    // İmza kipi (§2a): yuva erişilirse bugünkü zincir; erişilemezse (hazır kuyruk açıkken) paket yine
+    // üretilir ve kabulden geçer, imzasız hâliyle hazır kuyruğa girer (yayın YOK).
+    const winKip = winPlan ? await windowsSerit.imzaKipiSec(CONFIG) : null;
+    if (winKip && winKip.kip === 'hazir') log(`windows: imza kipi HAZIR — ${winKip.sebep}; paket üretilip imza kuyruğunda bekletilecek`);
+    if (winPlan) await windowsSerit.araclariDenetle(CONFIG, { yuva: winKip.kip === 'yuva' });
     // Pardus paketleyici kimliği (buildPardusArtifact) — exe adından DEĞİL, kaynağın kendisinden.
     const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion : `manuel-${srcVersionTuret(kaynak.url)}`;
     // R2 build'inin kimliği sürümüdür (Dalga B): `r2-<sürüm>`; diğer kaynaklarda yukarıdaki.
@@ -2368,7 +2482,17 @@ async function processJob(auth, job) {
       winZincir = await windowsSerit.yayinOncesiZincir({
         artifactPath, job, plan: winPlan, work, jobId, cfg: CONFIG, log, sleep,
         aktivasyon: aktivasyonBeklenir(job.bookTitle),
+        imzaKipi: winKip.kip,
+        // Yalnız kabulden geçip hazır kuyruğa girerken sorulur (tembel) — RED alan pakette presign yok.
+        r2Hedef: winKip.kip === 'hazir' ? () => r2HedefYoklama(auth, job) : undefined,
       });
+      if (winZincir.hazir) {
+        // İMZA BEKLİYOR: yayın YOK. Sunucuya ara durum bildirilir (kira bırakılır; book-update
+        // `durum:'imza-bekliyor'`u tanıyınca satırı yeniden kiralanmayacak biçimde tutar).
+        await imzaBekliyorBildir(auth, job, winZincir.hazir, winKip.sebep);
+        await packagerReleaseJob(jobId);
+        return { ertelendi: true, imzaBekliyor: true, sebep: winKip.sebep };
+      }
       yayinYolu = winZincir.imzaliYol;
     } else {
       await basliksizKabul(artifactPath, packagerPlatform, job, work);
@@ -2574,7 +2698,8 @@ module.exports = {
   pardusYedekKabul,
   konteynerKabulKapisi,
   _yedekLogSifirla: () => { _yedekAktifSon = false; },
-  packagerStartPackage, postResultSuccess,
+  packagerStartPackage, postResultSuccess, presignUpload, releaseJob, imzaBekliyorBildir, hazirIsiDevral,
+  aktivasyonBeklenir,
   packagerPoll,
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
   fetchNextJob, releaseJob,

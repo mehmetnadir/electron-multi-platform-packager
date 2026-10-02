@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  İMZA BEKÇİSİ — her 30 dk bir tur (sözleşme exesiz-kaynak §2a, 02.10).
+  Bekleyen ("imza bekliyor") Windows paketi yoksa hiçbir şeye dokunmaz. Varsa: diskleri bağlamayı
+  dener (VPN ayaktaysa yalnız disk), yuva erişilirse imzalatır + Authenticode doğrular + imzalı
+  kabul + R2 + completed; yuva yoksa ya da bekleyen 3 saati aştıysa `bildir paket` (3 saatte bir).
+
+  Kurulum (tek komut, CHANGEME yerine kullanıcı adı yazılır):
+    sed "s#/Users/CHANGEME#$HOME#g" launchd/com.empp.imza-bekcisi.plist > ~/Library/LaunchAgents/com.empp.imza-bekcisi.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empp.imza-bekcisi.plist
+  Kuru deneme:  tools/windows/imza-bekcisi.sh --kuru ; tail ~/.empp-agent/logs/imza-bekcisi.log
+  Durdurma:     launchctl bootout gui/$(id -u)/com.empp.imza-bekcisi
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.empp.imza-bekcisi</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/CHANGEME/01dev/electron-multi-platform-packager/tools/windows/imza-bekcisi.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/CHANGEME/01dev/electron-multi-platform-packager</string>
+
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Arka plan önceliği ağı kısıyor (launchd-bekci-kurulum-tuzaklari): yükleme 1-2 GB. -->
+  <key>ProcessType</key>
+  <string>Standard</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/empp-imza-bekcisi.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/empp-imza-bekcisi.err</string>
+</dict>
+</plist>

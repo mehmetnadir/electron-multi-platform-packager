@@ -487,6 +487,231 @@ test('imza kuyruğu kilidi tavanı dolarsa iş düşer (sessiz bekleme yok)', as
 // Kaynak yapısı — imzasız yayın yolu kodda YOK
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// windows-kasa kabul kapısı (2026-10-02) — gerçek processJob, SAHTE köprü sürücüsü
+// (src/agent/fikstur/sahte-kasa-surucu.js). Kasa erişilirse kabul ORADA koşar (başsız kapı hiç
+// çağrılmaz); erişilemezse bugünkü başsız kapı yedektir.
+// ---------------------------------------------------------------------------
+const { ertelenebilirKaynakHatasi } = require('./runner-helpers');
+
+async function kasaIleKostur(kip, { kalp = new Date().toISOString(), ...ek } = {}) {
+  const vmKok = tmp('vm');
+  fs.mkdirSync(path.join(vmKok, 'durum'), { recursive: true });
+  fs.writeFileSync(path.join(vmKok, 'durum', 'kalp-windows-kasa.txt'), kalp);
+  const kasaGunluk = path.join(tmp('kasa-gunluk'), 'surucu.jsonl');
+  const eski = { k: process.env.SAHTE_KASA_KIP, g: process.env.SAHTE_KASA_GUNLUK };
+  process.env.SAHTE_KASA_KIP = kip;
+  process.env.SAHTE_KASA_GUNLUK = kasaGunluk;
+  try {
+    const r = await windowsIsiKostur({
+      ...ek,
+      ayar: {
+        winKasaKabul: true, winKasaVmKok: vmKok,
+        winKasaSurucu: path.join(__dirname, 'fikstur', 'sahte-kasa-surucu.js'),
+        winKasaKopruAdres: '127.0.0.1', winKasaKilit: path.join(tmp('kasa-kilit'), 'k.kilit'),
+        winKasaKilitBeklemeMs: 3000, winKasaKilitAralikMs: 50, winKasaKabulTimeoutMs: 60000,
+        ...(ek.ayar || {}),
+      },
+    });
+    r.kasa = fs.existsSync(kasaGunluk)
+      ? fs.readFileSync(kasaGunluk, 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x)) : [];
+    return r;
+  } finally {
+    if (eski.k === undefined) delete process.env.SAHTE_KASA_KIP; else process.env.SAHTE_KASA_KIP = eski.k;
+    if (eski.g === undefined) delete process.env.SAHTE_KASA_GUNLUK; else process.env.SAHTE_KASA_GUNLUK = eski.g;
+  }
+}
+const basliksizKabulSayisi = (r) => r.gunluk.split('\n').filter((s) => s.startsWith('kabul ')).length;
+
+test('kasa erişilir + GECTI: imzasız ve imzalı kabul windows-kasa\'da; başsız kapı hiç koşmaz; R2 = imzalı', async () => {
+  const r = await kasaIleKostur('gecti');
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(basliksizKabulSayisi(r), 0, 'kasa erişilirken Mac başsız kabulü koşmamalı');
+  assert.equal(r.kasa.length, 2, 'kasa: imzasız + imzalı');
+  assert.match(r.kasa[0].anahtar, /^74390-imzasiz-\d{14}$/);
+  assert.match(r.kasa[1].anahtar, /^74390-imzali-\d{14}$/);
+  assert.equal(r.kasa[0].exeBoyut, r.exeBuf.length, 'imzasız kabulde üretilen exe sunuldu');
+  assert.equal(r.kasa[1].exeBoyut, imzalaBuf(r.exeBuf).length, 'imzalı kabulde İMZALI kopya sunuldu');
+  assert.equal(r.api.putlar.length, 1);
+  assert.equal(r.api.putlar[0].md5, md5(imzalaBuf(r.exeBuf)));
+  assert.equal(r.kanit.kabulImzasizKapi, 'kasa');
+  assert.equal(r.kanit.kabulImzaliKapi, 'kasa');
+  assert.ok(fs.existsSync(path.join(r.kanit.kabulImzasizKanit, 'ozet.json')));
+  assert.ok(fs.existsSync(path.join(r.kanit.kabulImzaliKanit, 'rapor.json')));
+});
+
+test('kasa KALDI (imzasız): paket kusuru — imzaya GİTMEZ, R2 yazımı 0, failed (ertelenebilir değil)', async () => {
+  const r = await kasaIleKostur('kaldi-kitap');
+  assert.ok(r.hata, 'iş düşmeliydi');
+  assert.match(r.hata.message, /windows-kasa kabul kapısından geçemedi \(KALDI\)/);
+  assert.equal(ertelenebilirKaynakHatasi(r.hata), false);
+  r2YazimiSifir(r);
+  assert.doesNotMatch(r.gunluk, /^imza /m, 'KALDI paket imza yuvasına gitmez');
+  assert.equal(basliksizKabulSayisi(r), 0, 'KALDI başsız kapıyla "ikinci şans" almaz');
+  assert.equal(r.kasa.length, 1);
+  assert.match(r.gunluk, /bildir bekci/);
+});
+
+test('kasa ÖLÇÜLEMEDİ (zaman aşımı): ertelenebilir — failed yazılmaz, yükleme yok, başsıza düşülmez', async () => {
+  const r = await kasaIleKostur('zaman-asimi');
+  assert.ok(r.hata);
+  assert.equal(ertelenebilirKaynakHatasi(r.hata), true, r.hata.message);
+  assert.match(r.hata.message, /\[ertelenebilir-windows-kasa\] windows-kasa kabulü ÖLÇÜLEMEDİ/);
+  r2YazimiSifir(r);
+  assert.doesNotMatch(r.gunluk, /^imza /m);
+  assert.equal(basliksizKabulSayisi(r), 0);
+});
+
+test('kasa erişilemez (kalp bayat): bugünkü Mac başsız kabulü yedek olarak iki kez koşar', async () => {
+  const r = await kasaIleKostur('gecti', { kalp: '2026-09-27T07:54:34.513Z' });
+  assert.equal(r.hata, null, r.hata && r.hata.message);
+  assert.equal(r.kasa.length, 0, 'erişilemez kasaya iş yazılmaz');
+  assert.equal(basliksizKabulSayisi(r), 2);
+  assert.equal(r.kanit.kabulImzasizKapi, 'basliksiz');
+  assert.equal(r.kanit.kabulImzaliKapi, 'basliksiz');
+  assert.match(r.loglar, /windows-kasa kabulü kullanılamıyor \(izleyici olu: .*\) — Mac başsız kabul kapısına düşülüyor \[imzasiz\]/);
+  assert.equal(r.api.putlar.length, 1);
+});
+
+test('yalıtım: varsayılan test ortamında kasa ERİŞİLEMEZ (gerçek ~/vm-kapi\'ye iş yazılmaz)', () => {
+  assert.notEqual(CONFIG.winKasaVmKok, path.join(os.homedir(), 'vm-kapi'));
+  assert.equal(require('./windows-kasa-kabul').kasaErisimi(CONFIG).erisilir, false);
+});
+
+// ---------------------------------------------------------------------------
+// İMZA BEKLİYOR (sözleşme exesiz-kaynak §2a, 02.10) — yuva kapalıyken de üret + kabul + hazır kuyruk.
+// ---------------------------------------------------------------------------
+const H = require('./windows-hazir');
+const YUVA_YOK = '/yok/boyle/bir/imza-yuvasi';
+
+test('yuva KAPALI + hazır kuyruk açık: üretilir, kabulden geçer, imzasız paket hazır kuyruğa — R2 0, imza 0, failed yok', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok, winOsslsigncode: '/yok/osslsigncode' } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.api.putlar.length, 0, 'imzasız paket R2\'ye GİTMEZ');
+  assert.equal(r.api.sonuclar.length, 0, '/result yok (ne completed ne failed)');
+  assert.doesNotMatch(r.gunluk, /^imza /m, 'imza yuvasına dokunulmaz');
+  assert.doesNotMatch(r.gunluk, /^ossl/m);
+  assert.equal(basliksizKabulSayisi(r), 1, 'imzasız kabul koştu (kasa yok → başsız)');
+  assert.ok(r.paketleyici.istekler.includes('POST /api/package'), 'paket ÜRETİLDİ');
+  assert.equal(r.api.release.length, 1);
+  assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+  assert.match(r.api.release[0].sebep, /^\[imza-bekliyor\] imza yuvası erişilemiyor/);
+  const kayit = await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3');
+  assert.ok(kayit, 'hazır kayıt yok');
+  assert.equal(kayit.manifest.md5, md5(r.exeBuf));
+  assert.equal(md5(fs.readFileSync(kayit.exeYolu)), md5(r.exeBuf), 'hazırdaki exe üretilen imzasız paket');
+  assert.equal(kayit.manifest.r2Hedef.r2ObjectKey, 'softwares/74390/Test - YDS.exe', 'R2 hedefi presign\'dan (yükleme yok)');
+  assert.equal(kayit.manifest.kabulKapi, 'basliksiz');
+  assert.equal(r.kanit.durum, 'imza-bekliyor');
+  assert.equal(r.kanit.hazirDizini, kayit.dizin);
+  assert.match(r.loglar, /İMZA BEKLİYOR/);
+});
+
+test('hazır kayıt varken aynı iş yeniden gelir + yuva hâlâ kapalı → YENİDEN ÜRETİLMEZ, yine imza-bekliyor', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const ayar = { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok };
+  await windowsIsiKostur({ ayar });
+  const r = await windowsIsiKostur({ ayar });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.paketleyici.istekler, [], 'paketleyiciye gidilmedi');
+  assert.equal(basliksizKabulSayisi(r), 0);
+  r2YazimiSifir(r);
+  assert.equal(r.api.release.length, 1);
+  assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+});
+
+test('hazır kayıt varken yuva AÇILDI → yeniden üretmeden imzala + doğrula + imzalı kabul + yayınla; kayıt yayinlandi/\'ye', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await windowsIsiKostur({ ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok } });
+  const r = await windowsIsiKostur({ ayar: { winHazirKoku: hazirKok } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.paketleyici.istekler, [], 'yeniden üretim YOK');
+  assert.match(r.gunluk, /^imza bekle-ve-tak runner-74390-Test-Kitap-2\.51\.3-Setup\.exe/m);
+  assert.equal(r.api.putlar.length, 1);
+  assert.equal(r.api.putlar[0].md5, md5(imzalaBuf(r.exeBuf)), 'R2\'ye İMZALI kopya');
+  assert.equal(basliksizKabulSayisi(r), 1, 'imzalı kopyada kabul');
+  assert.equal(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'), null);
+  const yay = fs.readdirSync(path.join(hazirKok, 'yayinlandi'));
+  assert.equal(yay.length, 1);
+  const m = JSON.parse(fs.readFileSync(path.join(hazirKok, 'yayinlandi', yay[0], 'manifest.json'), 'utf8'));
+  assert.equal(m.durum, 'yayinlandi');
+  assert.equal(m.yayin.yayinlayan, 'runner');
+  assert.equal(r.kanit.durum, 'yayinlandi');
+});
+
+test('hazır kayıt imza bekçisinde kilitliyse runner devralmaz (çift yayın yok), imza-bekliyor bildirir', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await windowsIsiKostur({ ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok } });
+  const kayit = await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3');
+  const birak = await H.kayitKilidiDene(kayit.dizin);
+  try {
+    const r = await windowsIsiKostur({ ayar: { winHazirKoku: hazirKok } });
+    assert.equal(r.hata, null, r.hata && r.hata.stack);
+    r2YazimiSifir(r);
+    assert.doesNotMatch(r.gunluk, /^imza /m);
+    assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+  } finally { await birak(); }
+});
+
+test('hazır kuyruk KAPALI (EMPP_WIN_IMZA_BEKLEME=0) + yuva kapalı → eski davranış: ön koşul düşer, üretim yok', async () => {
+  const r = await windowsIsiKostur({ ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirAcik: false, winHazirKoku: path.join(tmp('hazir'), 'h') } });
+  assert.ok(r.hata);
+  assert.match(r.hata.message, /ön koşul: .*imza yuvası erişilemiyor/);
+  assert.deepEqual(r.paketleyici.istekler, []);
+  r2YazimiSifir(r);
+});
+
+test('yuva kapalı + kasa KALDI → hazır kuyruğa GİRMEZ (kusurlu paket imza beklemez), failed', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await kasaIleKostur('kaldi-kitap', { ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok } });
+  assert.match(r.hata.message, /\(KALDI\)/);
+  assert.equal(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'), null);
+  r2YazimiSifir(r);
+});
+
+test('etkinYetenekler: hazır kuyruk açıkken (imzaBekleme) yuva kapalı da olsa windows ilan edilir; anahtar kapalıysa asla', () => {
+  const caps = ['android', 'windows'];
+  assert.deepEqual(etkinYetenekler(caps, { windowsAcik: true, imzaYuvasi: false, imzaBekleme: true }), caps);
+  assert.deepEqual(etkinYetenekler(caps, { windowsAcik: true, imzaYuvasi: false }), ['android'], 'imzaBekleme verilmezse eski kural');
+  assert.deepEqual(etkinYetenekler(caps, { windowsAcik: false, imzaYuvasi: true, imzaBekleme: true }), ['android']);
+});
+
+test('kaynak: hazır kuyruktan çıkış yolu imzalı kopyadır — hazır dalda postResultSuccess YOK', () => {
+  const devral = SRC.slice(SRC.indexOf('async function hazirKaydiYayinla'), SRC.indexOf('async function processJob'));
+  assert.match(devral, /postResultSuccess\(auth, job, zincir\.imzaliYol\)/);
+  assert.doesNotMatch(devral, /postResultSuccess\(auth, job, bekleyen\.exeYolu\)/);
+  const hazirDal = PROCESS_JOB.slice(PROCESS_JOB.indexOf('if (winZincir.hazir)'), PROCESS_JOB.indexOf('yayinYolu = winZincir.imzaliYol'));
+  assert.doesNotMatch(hazirDal, /postResultSuccess/);
+  assert.match(hazirDal, /return \{ ertelendi: true, imzaBekliyor: true/);
+});
+
+test('heartbeat yetenekleri: winKabul=kasa|basliksiz YALNIZ bilgi olarak loglanır, ilanı değiştirmez', () => {
+  const eski = { caps: CONFIG.caps, vm: CONFIG.winKasaVmKok, env: process.env.EMPP_RUNNER_WINDOWS };
+  const loglar = [];
+  const orj = console.log;
+  console.log = (...a) => loglar.push(a.join(' '));
+  try {
+    process.env.EMPP_RUNNER_WINDOWS = '1';
+    CONFIG.caps = ['windows'];
+    CONFIG.winKasaVmKok = tmp('vm-yok');
+    const c1 = RUNNER.guncelYetenekler();
+    const vm = tmp('vm');
+    fs.mkdirSync(path.join(vm, 'durum'));
+    fs.writeFileSync(path.join(vm, 'durum', 'kalp-windows-kasa.txt'), new Date().toISOString());
+    CONFIG.winKasaVmKok = vm;
+    const c2 = RUNNER.guncelYetenekler();
+    assert.deepEqual(c1.filter((c) => c === 'windows'), c2.filter((c) => c === 'windows'), 'kasa durumu ilanı değiştirmez');
+    assert.ok(loglar.some((s) => /windows: winKabul=basliksiz — izleyici yok/.test(s)), loglar.join('\n'));
+    assert.ok(loglar.some((s) => /windows: winKabul=kasa — izleyici ayakta/.test(s)), loglar.join('\n'));
+  } finally {
+    console.log = orj;
+    CONFIG.caps = eski.caps;
+    CONFIG.winKasaVmKok = eski.vm;
+    if (eski.env === undefined) delete process.env.EMPP_RUNNER_WINDOWS; else process.env.EMPP_RUNNER_WINDOWS = eski.env;
+  }
+});
+
 test('processJob: tek yayın çağrısı yayinYolu ile; Windows\'ta yayinYolu YALNIZ zincirin imzalı kopyası', () => {
   const cagrilar = PROCESS_JOB.match(/postResultSuccess\(/g) || [];
   assert.equal(cagrilar.length, 1);
@@ -516,7 +741,7 @@ test('runner G set yükleme yolu kaldırıldı (tek yazar g-yayin)', () => {
 test('sıra: onKosul (saf) → kaynak kararı → araç/yuva denetimi → kaynak hazırlığı', () => {
   const on = PROCESS_JOB.indexOf('windowsSerit.onKosul(job)');
   const karar = PROCESS_JOB.indexOf('kaynakKarari({ job, arsiv })');
-  const arac = PROCESS_JOB.indexOf('windowsSerit.araclariDenetle(CONFIG)');
+  const arac = PROCESS_JOB.indexOf('windowsSerit.araclariDenetle(CONFIG, { yuva: winKip.kip');
   const hazirlik = PROCESS_JOB.indexOf('await fsp.copyFile(arsiv.zip');
   assert.ok(on > 0 && karar > on && arac > karar && hazirlik > arac);
 });
