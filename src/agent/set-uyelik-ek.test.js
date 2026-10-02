@@ -351,3 +351,133 @@ test('runner: ek merdivenden SONRA, pardus/HTTP paketleyiciden ÖNCE; yalnız ar
   // Hazır pardus paketi devri tamamen kapalı (processJob hiç sormaz).
   assert.doesNotMatch(s, /setEkBekliyor|\? await hazirPardusPaketi/);
 });
+
+// ─── Worksheet LİNK kartı (2026-10-02) ──────────────────────────────────────────────────────
+// Saha: 45550/45482/59835… listelerinde `link:<url> | Worksheet` satırı var; offline menü onu
+// hiç göstermiyordu. Web-Z teması `type:'link'` kartı çizer ama tıklamayı kitap açmak sanır;
+// yama sonuna `set-ek:link-tikla` bloğu eklenir.
+
+const LINKLI_LISTE = '44187 | Reference Book |\n25772\n44579 | Key Words |\n66905 | Games\n'
+  + 'link:https://download.ydspublishing.com/worksheets/grade-8-worksheets/ | Worksheet';
+
+test('link: yama bloğu idempotent, yamaAyir hâlâ tam 1 atama görür, JS sözdizimi geçerli', () => {
+  const yama = fs.readFileSync(path.join(FIKSTUR, 'set/scripts/cevrimdisi-yama.js'), 'utf8');
+  const bir = E.linkYamasiEkle(yama);
+  assert.ok(bir.includes(E.LINK_ISARET));
+  assert.equal(E.linkYamasiEkle(bir), bir, 'ikinci ekleme değiştirmez');
+  assert.doesNotThrow(() => require('../../tools/g-yayin/menu').yamaAyir(bir));
+  assert.doesNotThrow(() => new (require('node:vm').Script)(bir));
+});
+
+test('link: yeniBooks link kaydı type:link + url + sıra; tanıma (set-menu.json) GİRMEZ', () => {
+  const liste = E.setListesiAyristir(LINKLI_LISTE);
+  const sirali = [
+    { dizin: 'book1', liste: liste[0] }, { dizin: 'book2', liste: liste[1] },
+    { dizin: liste[4].anahtar, liste: liste[4], link: true },
+  ];
+  const b = E.yeniBooks({ book1: { assetId: '1', title: 'A' }, book2: { assetId: '2' } }, sirali);
+  assert.deepEqual(Object.keys(b), ['book1', 'book2', 'link5']);
+  assert.deepEqual(b.link5, {
+    contentType: 'link', displayOrder: 2, title: 'Worksheet', type: 'link',
+    url: 'https://download.ydspublishing.com/worksheets/grade-8-worksheets/',
+  });
+});
+
+test('link: eksik kitap YOK, yalnız link var → menüye girer; eski kitaplar bayt-aynı; 2. koşu değişmez', async () => {
+  const o = ortam();
+  const eski = girdiMd5(o.zip, eskiMi);
+  const r = await E.setUyelikEki({ ...o.ortak, liste: LINKLI_LISTE });
+  assert.equal(r.sonuc, 'UYGULANDI', JSON.stringify(r));
+  assert.deepEqual(r.linkler.map((l) => l.sebep), ['menüye link kartı olarak girer']);
+  const a = ayarlar(o.zip);
+  for (const k of [a.yama, a.ayar]) {
+    assert.equal(k.books.link5.type, 'link');
+    assert.equal(k.books.link5.url,
+      'https://download.ydspublishing.com/worksheets/grade-8-worksheets/');
+    assert.equal(Object.keys(k.books).pop(), 'link5', 'link liste sırasında sonda');
+    assert.equal(k.bookCount, Object.keys(k.books).length);
+  }
+  assert.equal(a.tanim.kitaplar.some((k) => k.klasor === 'link5'), false);
+  const d = M.zipDizini(o.zip);
+  const ham = M.zipGirdiOku(o.zip, d.get('scripts/cevrimdisi-yama.js')).toString('utf8');
+  assert.ok(ham.includes(E.LINK_ISARET));
+  const sonra = girdiMd5(o.zip, eskiMi);
+  for (const [ad, h] of eski) assert.equal(sonra.get(ad), h, ad);
+  const once = dosyaMd5(o.zip);
+  const r2 = await E.setUyelikEki({ ...o.ortak, liste: LINKLI_LISTE });
+  assert.equal(r2.sonuc, 'eksik yok, menü güncel — değişiklik yok');
+  assert.equal(dosyaMd5(o.zip), once);
+});
+
+test('link: http(s) olmayan adres (javascript:) menüye GİRMEZ', async () => {
+  const o = ortam();
+  const once = dosyaMd5(o.zip);
+  const r = await E.setUyelikEki({
+    ...o.ortak, liste: '44187 | Reference Book |\n25772\n44579 | Key Words |\n66905 | Games\n'
+      + 'link:javascript:alert(1) | Kötü',
+  });
+  assert.equal(dosyaMd5(o.zip), once);
+  assert.match(r.linkler[0].sebep, /http\(s\) değil/);
+});
+
+test('link kapısı: menüde link yok ya da yama bloğu yok → RED', () => {
+  const metin = { yama: '(function(){})();', ayar: null };
+  const sonra = new Map();
+  const base = {
+    once: new Map(), sonra, eklenen: [], beklenenSira: ['link5'], beklenenAd: {},
+    beklenenLink: { link5: 'https://x.invalid/' }, menuMetinleri: metin,
+  };
+  const yamaYok = require('../../tools/g-yayin/menu');
+  assert.ok(yamaYok);
+  const ihlal = E.kapiDenetle({
+    ...base,
+    menuMetinleri: {
+      yama: 'window.__setSettings = {"books":{"link5":{"type":"link","url":"https://x.invalid/"}}};',
+      ayar: null,
+    },
+  });
+  assert.ok(ihlal.some((s) => /link tıklama bloğu yok/.test(s)), ihlal.join('|'));
+  const ihlal2 = E.kapiDenetle({
+    ...base,
+    menuMetinleri: {
+      yama: `window.__setSettings = {"books":{"link5":{"type":"link","url":"https://bu.invalid/"}}};\n${E.LINK_ISARET}`,
+      ayar: null,
+    },
+  });
+  assert.ok(ihlal2.some((s) => /menü linki link5/.test(s)), ihlal2.join('|'));
+});
+
+// Gerçek 45550 (Shall We 6) arşiv build'i — yoksa atlanır. Yalnız menü dosyaları okunur.
+const ARSIV_45550 = path.join(process.env.HOME || '', '.empp-agent/kaynak-arsivi/45550/build.zip');
+test('45550 gerçek build: Worksheet linki menüye girer; Games (book5, Grade-6-Games) bozulmaz',
+  { skip: !fs.existsSync(ARSIV_45550) }, () => {
+    const oku = (y) => execFileSync('unzip', ['-p', ARSIV_45550, y], { maxBuffer: 1 << 26 })
+      .toString('utf8');
+    const t = { yama: oku('scripts/cevrimdisi-yama.js'), ayar: oku('config/settings.json'),
+      tanim: oku('set-menu.json') };
+    const liste = E.setListesiAyristir('25776 | Reference Book | \n25786 | Workbook | \n'
+      + '16030 | Test Book | \n25814 | Key Words | \n66903 | Games |  | games\n'
+      + 'link:https://download.ydspublishing.com/worksheets/grade-6-worksheets/ | Worksheet');
+    const books = E.menuBooksOku(t.yama, t.ayar);
+    const exe = Object.entries(books).map(([dizin, b]) => ({
+      dizin, id: dizin === 'book5' ? '0' : b.assetId, menuAssetId: b.assetId, ad: b.title,
+    }));
+    const es = E.eslestir(liste, exe);
+    assert.deepEqual(es.eksik, [], 'Games 66903 menü assetId ile book5\'e eşleşir');
+    assert.equal(es.eslesen.find((e) => e.liste.assetId === '66903').dizin, 'book5');
+    const sirali = [];
+    for (const g of liste) {
+      const e = es.eslesen.find((x) => x.liste === g);
+      if (e) sirali.push({ dizin: e.dizin, liste: g });
+      if (g.link) sirali.push({ dizin: g.anahtar, liste: g, link: true });
+    }
+    const out = E.webzYaz(t, sirali);
+    const yeniYama = out.get('scripts/cevrimdisi-yama.js').toString('utf8');
+    const yeniBooks = E.menuBooksOku(yeniYama, out.get('config/settings.json').toString('utf8'));
+    assert.deepEqual(Object.keys(yeniBooks), ['book1', 'book2', 'book4', 'book3', 'book5', 'link6']);
+    assert.equal(yeniBooks.book5.assetId, '66903');
+    assert.equal(yeniBooks.link6.url,
+      'https://download.ydspublishing.com/worksheets/grade-6-worksheets/');
+    assert.ok(yeniYama.includes(E.LINK_ISARET));
+    assert.equal(out.has('set-menu.json'), false, 'link set-menu.json (kitap tanımı) değiştirmez');
+  });

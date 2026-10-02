@@ -11,7 +11,8 @@
  *
  * NE YAPAR (iş kopyası `build.zip` üstünde; arşiv/önbellek zip'ine DOKUNULMAZ):
  *   1. Panel listesi (sıra dahil) ↔ exe kitapları eşlenir: önce assetId (menü + ImWin32 kapak ID),
- *      tutmazsa aynı adlı eşlenmemiş TEK kitap (`ad`). `link:` satırı çevrimdışına girmez.
+ *      tutmazsa aynı adlı eşlenmemiş TEK kitap (`ad`). `link:` satırı (ör. Worksheet) Web-Z menüsüne
+ *      `type:'link'` kartı olarak girer; tıklama yamadaki `set-ek:link-tikla` bloğuyla dış adresi açar.
  *   2. Eşlenmeyen her kitap için İmpark'a motorun kendi sorusu (versiyon=0) sorulur → ZKitapZipH
  *      adresi; içerik merdiveninin önbellek + indirme yolu (`icerikZipiGetir`) kullanılır.
  *   3. Yeni `bookN` = kalıp kitabın okuyucu kabuğu (assets/ ve classlibraries/ hariç) +
@@ -211,6 +212,54 @@ const sirasizKanonik = (v) => {
   return JSON.stringify(v === undefined ? null : v);
 };
 
+const LINK_ISARET = '/* set-ek:link-tikla */';
+/**
+ * Web-Z teması `type:'link'` kartını çizer ama tıklamayı kitap olarak açar (`linkN/index.html`
+ * yok). Yamanın SONUNA eklenen bu blok, link kartına tıklamayı yakalayıp dış adresi açar ve
+ * kartın "Devam Et / Üniteye Git" düğmelerini gizler. `window.__setSettings` ATAMASI içermez
+ * (`yamaAyir` tam 1 atama arar). Tema dosyasına dokunulmaz.
+ */
+const LINK_YAMASI = `
+${LINK_ISARET}
+(function () {
+  "use strict";
+  function linkKaydi(olay) {
+    var ayar = window.__setSettings;
+    var kitaplar = (ayar && ayar.books) || {};
+    var el = olay.target;
+    while (el && el !== document) {
+      var id = el.getAttribute && el.getAttribute("data-book-id");
+      if (id && kitaplar[id] && kitaplar[id].type === "link") { return kitaplar[id]; }
+      el = el.parentNode;
+    }
+    return null;
+  }
+  function ac(olay) {
+    var k = linkKaydi(olay);
+    if (!k || !/^https?:\\/\\//i.test(String(k.url || ""))) { return; }
+    olay.preventDefault();
+    olay.stopImmediatePropagation();
+    window.open(k.url, "_blank");
+  }
+  document.addEventListener("click", ac, true);
+  document.addEventListener("keydown", function (olay) {
+    if (olay.key === "Enter" || olay.key === " ") { ac(olay); }
+  }, true);
+  var stil = document.createElement("style");
+  stil.textContent = '[data-book-id^="link"] .book-actions{display:none!important}';
+  (document.head || document.documentElement).appendChild(stil);
+})();
+`;
+
+/** Yama metnine link-tıkla bloğunu ekler (idempotent). SAF. */
+function linkYamasiEkle(yamaMetni) {
+  const m = String(yamaMetni);
+  return m.includes(LINK_ISARET) ? m : `${m.replace(/\s*$/, '\n')}${LINK_YAMASI}`;
+}
+
+/** Çevrimdışı menüye girebilen link: yalnız http(s). */
+const linkUrlGecerli = (u) => /^https?:\/\/\S+$/i.test(String(u || ''));
+
 /**
  * Menünün yeni `books` nesnesi — ANAHTAR SIRASI = liste sırası (tema bu sırayla çizer), sonra
  * listede olmayan mevcut girdiler. SAF.
@@ -222,7 +271,12 @@ function yeniBooks(books, sirali) {
   sirali.forEach((s, i) => {
     const mevcut = books[s.dizin] && typeof books[s.dizin] === 'object' ? books[s.dizin] : null;
     let kayit;
-    if (s.yeni) {
+    if (s.link) {
+      kayit = {
+        contentType: 'link', displayOrder: i, title: s.liste.ad || 'Kısayol', type: 'link',
+        url: s.liste.url,
+      };
+    } else if (s.yeni) {
       kayit = {
         assetId: String(s.yeni.id), contentType: s.yeni.contentType || 'book',
         coverUrl: `${s.dizin}/assets/${s.yeni.id}/${KAPAK}`, displayOrder: i,
@@ -260,10 +314,14 @@ function webzYaz(t, sirali) {
     if (typeof a.bookCount === 'number') c.bookCount = Object.keys(books).length;
     return c;
   };
+  const linkVar = sirali.some((s) => s.link);
   if (yp) {
     const y2 = uygula(yp.ayarlar);
-    if (kanonik(y2) !== kanonik(yp.ayarlar)) {
-      dosyalar.set(YAMA, Buffer.from(yp.once + JSON.stringify(y2, null, 2) + yp.sonra));
+    const linkEksik = linkVar && !String(t.yama).includes(LINK_ISARET);
+    if (kanonik(y2) !== kanonik(yp.ayarlar) || linkEksik) {
+      let yeni = yp.once + JSON.stringify(y2, null, 2) + yp.sonra;
+      if (linkVar) yeni = linkYamasiEkle(yeni);
+      dosyalar.set(YAMA, Buffer.from(yeni));
     }
   }
   if (ap) {
@@ -276,7 +334,8 @@ function webzYaz(t, sirali) {
     const tn = JSON.parse(t.tanim);
     if (!Array.isArray(tn.kitaplar)) throw new Error(`${TANIM}: kitaplar dizisi yok`);
     const eski = new Map(tn.kitaplar.filter(Boolean).map((k) => [k.klasor, k]));
-    const kitaplar = Object.entries(books).map(([d, b]) => {
+    const kitaplar = Object.entries(books).filter(([, b]) => !(b && b.type === 'link'))
+      .map(([d, b]) => {
       const e = eski.get(d);
       if (e) return { ...e, ad: b.title };
       return {
@@ -304,7 +363,9 @@ function menuBooksOku(yamaMetni, ayarMetni) {
  * Yazım sonrası kapılar (merkez dizin önce/sonra). SAF.
  * @returns {string[]} ihlal satırları
  */
-function kapiDenetle({ once, sonra, eklenen, beklenenSira, beklenenAd, menuMetinleri }) {
+function kapiDenetle({
+  once, sonra, eklenen, beklenenSira, beklenenAd, menuMetinleri, beklenenLink = {},
+}) {
   const ihlal = [];
   const yeniOnek = eklenen.map((e) => `${e.dizin}/`);
   const yeniMi = (ad) => yeniOnek.some((o) => ad.startsWith(o));
@@ -352,6 +413,15 @@ function kapiDenetle({ once, sonra, eklenen, beklenenSira, beklenenAd, menuMetin
       if (!books[d] || books[d].title !== ad) {
         ihlal.push(`menü adı ${d}: ${books[d] ? books[d].title : '(yok)'} ≠ ${ad}`);
       }
+    }
+    for (const [d, url] of Object.entries(beklenenLink)) {
+      if (!books[d] || books[d].type !== 'link' || books[d].url !== url) {
+        ihlal.push(`menü linki ${d}: ${books[d] ? books[d].url : '(yok)'} ≠ ${url}`);
+      }
+    }
+    if (Object.keys(beklenenLink).length && menuMetinleri.yama != null
+      && !menuMetinleri.yama.includes(LINK_ISARET)) {
+      ihlal.push(`${YAMA}: link tıklama bloğu yok`);
     }
     const dizinler = new Set([...sonra.keys()].map((k) => k.split('/')[0]));
     for (const d of sira) {
@@ -518,7 +588,10 @@ async function setUyelikEki(o) {
   const es = eslestir(liste, exe.kitaplar);
   rapor.eslesme = es.eslesen.map((e) => ({ assetId: e.liste.assetId, dizin: e.dizin, yol: e.yol }));
   rapor.listedeYok = es.listedeYok;
-  rapor.linkler = es.linkler.map((g) => ({ ad: g.ad, url: g.url, sebep: 'çevrimdışına girmez' }));
+  const linkler = es.linkler.filter((g) => linkUrlGecerli(g.url));
+  rapor.linkler = es.linkler.map((g) => (linkUrlGecerli(g.url)
+    ? { ad: g.ad, url: g.url, sebep: 'menüye link kartı olarak girer' }
+    : { ad: g.ad, url: g.url, sebep: 'http(s) değil — menüye girmez' }));
   for (const e of es.eslesen.filter((x) => x.yol === 'ad')) {
     log(`${ISARET} ad eşleşmesi: liste ${e.liste.assetId} "${e.liste.ad}" ↔ ${e.dizin}`);
   }
@@ -592,6 +665,7 @@ async function setUyelikEki(o) {
       if (e) sirali.push({ dizin: e.dizin, liste: g });
       const y = eklenen.find((x) => x.liste === g);
       if (y) sirali.push({ dizin: y.dizin, liste: g, yeni: y });
+      if (g.link && linkler.includes(g)) sirali.push({ dizin: g.anahtar, liste: g, link: true });
     }
     const listeDisi = Object.keys(books).filter((k) => !sirali.some((s) => s.dizin === k));
     for (const d of listeDisi) sirali.push({ dizin: d, liste: null });
@@ -629,8 +703,11 @@ async function setUyelikEki(o) {
       const sonra = M.zipDizini(aday);
       const beklenenAd = {};
       for (const s of sirali) if (s.liste && s.liste.ad) beklenenAd[s.dizin] = s.liste.ad;
+      const beklenenLink = {};
+      for (const s of sirali) if (s.link) beklenenLink[s.dizin] = s.liste.url;
       const ihlal = kapiDenetle({
         once: dizin, sonra, eklenen, beklenenSira: sirali.map((s) => s.dizin), beklenenAd,
+        beklenenLink,
         menuMetinleri: { yama: metinAl(aday, sonra, YAMA), ayar: metinAl(aday, sonra, AYAR) },
       });
       if (ihlal.length) throw new Error(`kapı RED (${ihlal.length}; ilk: ${ihlal[0]})`);
@@ -655,5 +732,5 @@ async function setUyelikEki(o) {
 
 module.exports = {
   ISARET, ekAcik, setListesiAyristir, setListesiCoz, eslestir, menuXmlUret, yeniBooks, webzYaz,
-  kapiDenetle, exeKitaplari, tohumluRastgele, setUyelikEki, MENU_YOLLARI, menuBooksOku,
+  kapiDenetle, linkYamasiEkle, LINK_ISARET, exeKitaplari, tohumluRastgele, setUyelikEki, MENU_YOLLARI, menuBooksOku,
 };
