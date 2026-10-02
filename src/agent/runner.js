@@ -91,6 +91,8 @@ const CONFIG = {
   // arkasında beklemesin; tekrar kiralamayı sunucunun dışlama backoff'u (10→60 dk) zaten keser.
   kaynakYokBeklemeMs: Number(process.env.AGENT_KAYNAK_YOK_BEKLEME_MS || 2000),
   heartbeatMs: Number(process.env.AGENT_HEARTBEAT_MS || 15000),
+  // Heartbeat POST zaman aşımı (02.10): yükleme sırasında ev hattı doyunca 15 sn yetmiyordu.
+  heartbeatTimeoutMs: Number(process.env.AGENT_HEARTBEAT_TIMEOUT_MS || 30000),
   // İlk heartbeat POST'u düşerse (Happy Eyeballs/DNS/timeout — çoğu geçici) bu kadar
   // bekleyip TEK seferlik hızlı bir daha denenir; o da düşerse tek satır loglanır.
   // Testler CONFIG.heartbeatRetryMs'i 0'a çekip gerçek zaman beklemeden koşabilir.
@@ -594,13 +596,26 @@ async function releaseJobYanit(auth, job, sebep, ek = {}) {
  * boş `.message` taşıyan AggregateError artık `'bilinmeyen hata'` yerine gerçek
  * code/alt-hata bilgisini taşır). İkinci deneme başarılıysa hiç log yazılmaz.
  */
+/**
+ * Heartbeat'e ÖZEL https.Agent (02.10): yükleme sürerken kira yenileme (heartbeat) yüklemeyle aynı
+ * bağlantı havuzunu/IPv6 yarışını paylaşmasın. `family: 4` — curl yükleme yolu da `-4` kullanır;
+ * ev hattında IPv6/Happy-Eyeballs denemesi 15 sn'lik zaman aşımının kalemini yer. keepAlive kapalı:
+ * uyku sonrası ölü soket yeniden kullanılmaz (her tık taze bağlantı).
+ */
+let _hbAjan = null;
+function heartbeatAjani() {
+  if (!_hbAjan) _hbAjan = new (require('https').Agent)({ keepAlive: false, family: 4 });
+  return _hbAjan;
+}
+
 async function heartbeat(auth) {
   const postOnce = () => axios.post(
     joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
     // capabilities: sunucu tarafı build_agents.capabilities'i güncel tutar (2026-09-10,
     // pardus eklendi) — enroll'da bir kez yazılıp sonra hiç tazelenmiyordu.
     { heldJobs: currentJob ? [currentJob] : [], capabilities: guncelYetenekler() },
-    { headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true },
+    { headers: agentHeaders(auth), timeout: CONFIG.heartbeatTimeoutMs, validateStatus: () => true,
+      httpsAgent: heartbeatAjani() },
   );
   try {
     await postOnce();
@@ -646,48 +661,83 @@ const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('.
 // yolu tek fonksiyondan (EMPP_ARSIV_MERDIVEN=1, varsayılan kapalı). Ayrıntı: icerik-merdiven.js.
 const { icerikMerdiveni, merdivenAcik } = require('./icerik-merdiven');
 const setEk = require('./set-uyelik-ek');
+const devamYukleme = require('./devam-yukleme');
 
 
 const MULTIPART_THRESHOLD = Number(process.env.AGENT_MULTIPART_THRESHOLD || 300 * 1024 * 1024);
 const MULTIPART_PART_SIZE = Number(process.env.AGENT_MULTIPART_PART_SIZE || 64 * 1024 * 1024);
 
-async function uploadMultipart(auth, job, artifactPath, size) {
+async function uploadMultipart(auth, job, artifactPath, size, sha256 = null) {
   const partSize = MULTIPART_PART_SIZE;
-  const partCount = Math.ceil(size / partSize);
+  const basliklar = () => ({ ...agentHeaders(auth), 'Content-Type': 'application/json' });
+  const govde = (ek = {}) => ({ bookId: job.bookId, platform: job.platform, ...ek });
+  const sunucuUc = (ad) => joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/${ad}`);
+
   // presign-multipart: API/Cloudflare 502 dalgaları kısa sürüyor (2026-09-15: günde 15 geçici hata,
   // her biri 10-20 dk'lık derlemeyi baştan yaptırıyordu). 5xx/ağ hatasında bekleyip yeniden dene.
-  const PRESIGN_ATTEMPTS = Number(process.env.AGENT_PRESIGN_ATTEMPTS || 5);
-  let start = null;
-  for (let attempt = 1; attempt <= PRESIGN_ATTEMPTS; attempt++) {
-    start = await axios.post(
-      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/presign-multipart`),
-      { bookId: job.bookId, platform: job.platform, partCount },
-      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
-    ).catch((err) => ({ status: 0, data: { error: err.message } }));
-    if (!(start.status >= 500 || start.status === 0) || attempt === PRESIGN_ATTEMPTS) break;
-    const bekle = Math.min(15000 * attempt, 60000);
-    warn(`presign-multipart HTTP ${start.status} (deneme ${attempt}/${PRESIGN_ATTEMPTS}) — ${bekle / 1000} sn sonra tekrar`);
-    await sleep(bekle);
-  }
-  if (start.status === 404) return null;             // eski sunucu → tek parça yola düş
-  if (start.status !== 200 || !start.data?.uploadId) {
-    throw new Error(`presign-multipart failed: HTTP ${start.status} ${JSON.stringify(start.data)}`);
-  }
-  const { uploadId, r2ObjectKey, contentType, urls } = start.data;
-  log(`uploading artifact to R2 (multipart: ${partCount}×${(partSize / 1e6).toFixed(0)}MB)`, r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
+  const baslat = async (partCount) => {
+    const PRESIGN_ATTEMPTS = Number(process.env.AGENT_PRESIGN_ATTEMPTS || 5);
+    let start = null;
+    for (let attempt = 1; attempt <= PRESIGN_ATTEMPTS; attempt++) {
+      start = await axios.post(
+        sunucuUc('presign-multipart'), govde({ partCount }),
+        { headers: basliklar(), timeout: 120000, validateStatus: () => true },
+      ).catch((err) => ({ status: 0, data: { error: err.message } }));
+      if (!(start.status >= 500 || start.status === 0) || attempt === PRESIGN_ATTEMPTS) break;
+      const bekle = Math.min(15000 * attempt, 60000);
+      warn(`presign-multipart HTTP ${start.status} (deneme ${attempt}/${PRESIGN_ATTEMPTS}) — ${bekle / 1000} sn sonra tekrar`);
+      await sleep(bekle);
+    }
+    if (start.status === 404) return null;             // eski sunucu → tek parça yola düş
+    if (start.status !== 200 || !start.data?.uploadId) {
+      throw new Error(`presign-multipart failed: HTTP ${start.status} ${JSON.stringify(start.data)}`);
+    }
+    return start.data;
+  };
+  // DEVAM (02.10): R2 ListParts + taze URL'ler. 404 (yükleme yok / eski sunucu) → baştan.
+  const durum = async ({ uploadId, r2ObjectKey, partCount }) => {
+    const r = await axios.post(
+      sunucuUc('multipart-durum'), govde({ uploadId, r2ObjectKey, partCount }),
+      { headers: basliklar(), timeout: 120000, validateStatus: () => true },
+    );
+    if (r.status === 404) return { durum: 'yok' };
+    if (r.status !== 200 || !r.data || !Array.isArray(r.data.urls)) {
+      throw new Error(`multipart-durum failed: HTTP ${r.status} ${JSON.stringify(r.data)}`);
+    }
+    return { durum: 'var', parcalar: r.data.parcalar || [], urls: r.data.urls, contentType: r.data.contentType };
+  };
+  const iptal = async ({ uploadId, r2ObjectKey, bookId, platform }) => {
+    const r = await axios.post(
+      sunucuUc('abort-multipart'), { ...govde({ uploadId, r2ObjectKey }), ...(bookId ? { bookId, platform } : {}) },
+      { headers: basliklar(), timeout: 60000, validateStatus: () => true },
+    );
+    // 404: uç yok (eski sunucu) ya da yükleme zaten yok → yutulur; 409 (kira yok) çağırana uyarı olur.
+    if (r.status !== 200 && r.status !== 404) throw new Error(`abort-multipart: HTTP ${r.status}`);
+  };
 
-  const parts = await parcalariYukle(artifactPath, size, partSize, urls, contentType);
+  // Süresi dolmuş eski kayıtlar R2'de kapatılır (sahipsiz parça birikmesin); en iyi çaba.
+  await devamYukleme.eskileriTemizle({
+    iptalci: (d) => iptal({ uploadId: d.uploadId, r2ObjectKey: d.r2ObjectKey, bookId: d.bookId, platform: d.platform }),
+    warn,
+  }).catch((e) => warn('eski yükleme kayıtları temizlenemedi:', agHatasiOzeti(e)));
+
+  const y = await devamYukleme.cokParcaYukle({
+    dosya: artifactPath, size, sha256, partSize, kimlik: { kapsam: 'paket', bookId: job.bookId, platform: job.platform },
+    istemci: { baslat, durum, iptal }, parcaYukleyici: parcalariYukle, log, warn,
+  });
+  if (!y) return null;
+  const { uploadId, r2ObjectKey, parts } = y;
+  log(`artifact R2'de ${y.devamEdildi ? `kaldığı yerden tamamlandı (${y.atlanan} parça atlandı)` : 'yüklendi'} (multipart: ${parts.length}×${(partSize / 1e6).toFixed(0)}MB)`, r2ObjectKey, `${(size / 1e9).toFixed(2)}GB`);
 
   // complete-multipart: R2/Cloudflare 5xx geçici olabiliyor (2026-08-27: 40 dk'lık noterli build
   // HTTP 502 ile kaybedildi; 2026-09-15: 3×15 sn yetmedi, 502 dalgası ~1 dk sürüyor). Parçalar
-  // zaten yüklü ve presigned URL'ler 1 saat geçerli — bu çağrı 8 kez, artan bekleyişle denenir (~6 dk).
+  // zaten yüklü ve imzalı URL'ler uzun ömürlü — bu çağrı 8 kez, artan bekleyişle denenir (~6 dk).
   const COMPLETE_ATTEMPTS = Number(process.env.AGENT_COMPLETE_ATTEMPTS || 8);
   let done = null;
   for (let attempt = 1; attempt <= COMPLETE_ATTEMPTS; attempt++) {
     done = await axios.post(
-      joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result/complete-multipart`),
-      { bookId: job.bookId, platform: job.platform, uploadId, r2ObjectKey, parts },
-      { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 120000, validateStatus: () => true },
+      sunucuUc('complete-multipart'), govde({ uploadId, r2ObjectKey, parts }),
+      { headers: basliklar(), timeout: 120000, validateStatus: () => true },
     ).catch((err) => ({ status: 0, data: { error: err.message } }));
     if (done.status === 200) break;
     if (done.status >= 500 || done.status === 0) {
@@ -698,35 +748,67 @@ async function uploadMultipart(auth, job, artifactPath, size) {
     }
     break; // 4xx: tekrar anlamsız
   }
-  if (!done || done.status !== 200) throw new Error(`complete-multipart failed: HTTP ${done && done.status} ${JSON.stringify(done && done.data)}`);
+  if (!done || done.status !== 200) {
+    // 4xx = sunucu bu yüklemeyi KABUL ETMİYOR (parça/ETag uyuşmazlığı, kira yok): kayıt devam ettirilemez →
+    // R2'de kapat + kaydı sil. 5xx/ağ: parçalar duruyor, kayıt KALIR (sonraki claim yalnız birleştirir).
+    if (done && done.status >= 400 && done.status < 500 && done.status !== 409) {
+      await iptal({ uploadId, r2ObjectKey }).catch((e) => warn('abort-multipart:', agHatasiOzeti(e)));
+      await devamYukleme.durumSil(y.durumYolu);
+    }
+    throw new Error(`complete-multipart failed: HTTP ${done && done.status} ${JSON.stringify(done && done.data)}`);
+  }
+  await devamYukleme.durumSil(y.durumYolu);
   log('artifact uploaded to R2 (multipart) — reporting result...');
   return { r2ObjectKey, publicUrl: done.data.publicUrl };
 }
 
+/** Yükleme hız sınırı: AGENT_UPLOAD_RATE (curl --limit-rate; örn. 4M). VARSAYILAN SINIRSIZ ('' = sınır yok). */
+function yuklemeHizSiniri() {
+  return process.env.AGENT_UPLOAD_RATE ?? '';
+}
+
+/**
+ * curl'ün 403'ü "imza süresi doldu / geçersiz" anlamına gelen çıktısı (--fail: exit 22).
+ * Bu durumda parça URL'leri sunucudan yeniden alınır.
+ */
+const curl403 = (res) => res.code === 22 && /\b403\b/.test(res.stderr || '');
+
 /**
  * Presigned parça URL'lerine dosyayı parça parça PUT eder (dd + curl -4, parça başına 30 deneme).
  * Paket (`uploadMultipart`) ve kaynak build (`kaynak-r2.r2KurYayinla`) AYNI döngüyü kullanır.
- * @returns {Promise<Array<{partNumber: number, etag: string}>>}
+ *
+ * DEVAM (02.10): `secenek.tamamlanan` ({partNumber: etag}) verilen parçalar ATLANIR (R2'de zaten
+ * var); her parça bitince `secenek.kaydet(partNumber, etag)` çağrılır (durum dosyası, devam-yukleme.js);
+ * imza süresi dolarsa `secenek.urlYenile()` taze URL listesi döndürür. Parça başına üstel geri çekilme
+ * (AGENT_UPLOAD_BACKOFF_MS taban, tavan 120 sn). curl: bağlantı 30 sn, durgunluk (60 sn <1 KB/s) kesilir
+ * — uyku sonrası ölü TCP akışı sonsuza asılmaz, yeniden denenir.
+ * @returns {Promise<Array<{partNumber: number, etag: string}>>} TÜM parçalar (atlananlar dahil)
  */
-async function parcalariYukle(artifactPath, size, partSize, urls, contentType) {
+async function parcalariYukle(artifactPath, size, partSize, urls, contentType, secenek = {}) {
   const partCount = Math.ceil(size / partSize);
-  const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
+  const rate = yuklemeHizSiniri();
   const partFile = `${artifactPath}.part`;
+  const tamamlanan = secenek.tamamlanan || {};
   const parts = [];
+  const PART_ATTEMPTS = Number(process.env.AGENT_UPLOAD_PART_ATTEMPTS || 30);
+  const TABAN = Number(process.env.AGENT_UPLOAD_BACKOFF_MS || 2000);
+  let guncelUrls = urls;
   try {
-    for (const { partNumber, url } of urls) {
+    for (const { partNumber } of urls) {
+      if (tamamlanan[partNumber]) { parts.push({ partNumber, etag: tamamlanan[partNumber] }); continue; }
       const offsetMB = ((partNumber - 1) * partSize) / (1024 * 1024);
       const countMB = Math.ceil(Math.min(partSize, size - (partNumber - 1) * partSize) / (1024 * 1024));
       let etag = null;
-      // Kesinti dayanıklılığı (2026-08-27): ev/yavaş hat ve gece koşusu — parça başına 30 deneme,
-      // başarısızlıkta 30 sn bekle (~15 dk ağ kesintisini yerinde bekler; presigned URL'ler 1 saat).
-      const PART_ATTEMPTS = Number(process.env.AGENT_UPLOAD_PART_ATTEMPTS || 30);
+      // Kesinti dayanıklılığı: ev/yavaş hat ve gece koşusu — parça başına 30 deneme, üstel bekleme
+      // (2 sn → tavan 120 sn). İmza 6 saatlik; 403 gelirse URL'ler sunucudan yenilenir.
       for (let attempt = 1; attempt <= PART_ATTEMPTS && !etag; attempt++) {
         if (stopping) throw new Error('shutting down');
-        if (attempt > 1) await sleep(30000);
+        if (attempt > 1) await sleep(devamYukleme.ustelBekleme(attempt - 2, TABAN, 120000));
+        const url = (guncelUrls.find((u) => u.partNumber === partNumber) || {}).url;
         await run('dd', [`if=${artifactPath}`, `of=${partFile}`, 'bs=1M', `skip=${offsetMB}`, `count=${countMB}`, 'status=none']);
         const res = await run('curl', [
           '-sS', '-4', '--fail', '-X', 'PUT', '-D', '-', '-o', '/dev/null',
+          '--connect-timeout', '30', '--speed-limit', '1024', '--speed-time', '60',
           '-H', `Content-Type: ${contentType || 'application/octet-stream'}`,
           '--upload-file', partFile,
           ...(rate ? ['--limit-rate', rate] : []),
@@ -738,11 +820,19 @@ async function parcalariYukle(artifactPath, size, partSize, urls, contentType) {
           else warn(`part ${partNumber}: ETag başlığı yok, yeniden denenecek`);
         } else {
           warn(`part ${partNumber} attempt ${attempt} failed: curl exit ${res.code} ${res.stderr.slice(-120)}`);
-          await sleep(backoffMs(attempt, 3000, 30000));
+          if (curl403(res) && typeof secenek.urlYenile === 'function') {
+            try {
+              guncelUrls = await secenek.urlYenile();
+              log(`  parça ${partNumber}: imza reddedildi (403) — URL'ler sunucudan yenilendi`);
+            } catch (e) {
+              warn(`URL yenilenemedi: ${agHatasiOzeti(e)}`);
+            }
+          }
         }
       }
       if (!etag) throw new Error(`part ${partNumber} could not be uploaded`);
       parts.push({ partNumber, etag });
+      if (typeof secenek.kaydet === 'function') await secenek.kaydet(partNumber, etag);
       if (partNumber % 5 === 0 || partNumber === partCount) log(`  parça ${partNumber}/${partCount} yüklendi`);
     }
   } finally {
@@ -782,10 +872,10 @@ async function postResultSuccess(auth, job, artifactPath) {
   // Büyük artifact → çok parçalı (reset dayanıklı). Sunucu desteklemiyorsa null döner.
   let presigned = null;
   if (size >= MULTIPART_THRESHOLD) {
-    presigned = await uploadMultipart(auth, job, artifactPath, size);
+    presigned = await uploadMultipart(auth, job, artifactPath, size, kanit ? kanit.fileSha256 : null);
   }
 
-  const rate = process.env.AGENT_UPLOAD_RATE ?? '4M';
+  const rate = yuklemeHizSiniri();
   const retryMax = Math.max(3600, Math.floor(CONFIG.packageTimeoutMs / 1000));
   const MAX = Number(process.env.AGENT_UPLOAD_MAX_ATTEMPTS || 6);
   for (let attempt = 1; presigned === null && attempt <= MAX; attempt++) {
@@ -2622,8 +2712,12 @@ async function main() {
   await heartbeat(auth);
 
   // Heartbeat loop (fire-and-forget; never throws into the main loop).
+  // Önceki tık hâlâ sürüyorsa (yavaş hat, 30 sn zaman aşımı) yenisi açılmaz — bağlantı yığılmaz.
+  let hbUcusta = false;
   const hbTimer = setInterval(() => {
-    if (!stopping) heartbeat(auth);
+    if (stopping || hbUcusta) return;
+    hbUcusta = true;
+    Promise.resolve(heartbeat(auth)).catch(() => {}).finally(() => { hbUcusta = false; });
   }, CONFIG.heartbeatMs);
   hbTimer.unref?.();
 
@@ -2772,7 +2866,7 @@ module.exports = {
   pardusYedekKabul,
   konteynerKabulKapisi,
   _yedekLogSifirla: () => { _yedekAktifSon = false; },
-  packagerStartPackage, postResultSuccess, postResultFailure, presignUpload, releaseJob, releaseJobYanit, imzaBekliyorBildir, hazirIsiDevral,
+  yuklemeHizSiniri, packagerStartPackage, postResultSuccess, postResultFailure, presignUpload, releaseJob, releaseJobYanit, imzaBekliyorBildir, hazirIsiDevral,
   aktivasyonBeklenir,
   packagerPoll,
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
