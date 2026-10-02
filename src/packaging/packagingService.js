@@ -19,6 +19,7 @@ const { ensureWritableTree } = require('./ensure-writable');
 const { checkAndroidGradleHeapPreflight } = require('./android-preflight');
 const { applyPublisherDomainPatch } = require('./yayinci-domain-yamasi');
 const { readyToShowEkle } = require('./acilis-yamasi');
+const { yedekMainJs, basligiGuncelle } = require('./yedek-main');
 const sayfaWebp = require('./sayfa-webp');
 const oluMotor = require('./olu-motor-temizligi');
 const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
@@ -1380,58 +1381,9 @@ flatpak-builder --run build-dir manifest.json ${appName.toLowerCase()}
       await fs.copy(electronJsPath, mainJsPath);
       console.log('electron.js dosyası main.js olarak kopyalandı');
     } else if (!await fs.pathExists(mainJsPath)) {
-      const mainJsContent = `
-const { app, BrowserWindow, Menu } = require('electron');
-const path = require('path');
-
-function createWindow() {
-  const mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    title: '${windowTitle}',
-    fullscreen: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
-    }
-  });
-
-  // Ana menüyü devre dışı bırak
-  Menu.setApplicationMenu(null);
-
-  // AppImage için kurulum bildirim dialog'ı
-  if (process.env.APPIMAGE) {
-    const { dialog } = require('electron');
-    setTimeout(() => {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: '${appName} - Başarıyla Yüklendi',
-        message: 'Kurulum tamamlandı! Uygulama şimdi çalışıyor.',
-        detail: 'Bu uygulama ' + (companyName || 'Bilinmeyen Kurum') + ' tarafından hazırlanmıştır.\n\nAppImage formatı sayesinde yönetici şifresi gerekmedi.',
-        buttons: ['Tamam']
-      });
-    }, 1000);
-  }
-
-  mainWindow.loadFile('index.html');
-}
-
-app.whenReady().then(createWindow);
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
-      `;
-      
-      await fs.writeFile(mainJsPath, mainJsContent.trim());
+      // Şablon + değer kaçışı tek yerde (yedek-main.js; 02.10 74430: template literal `\\n` tuzağı).
+      const mainJsContent = yedekMainJs({ windowTitle, appName, companyName });
+      await fs.writeFile(mainJsPath, mainJsContent);
     }
     // main.js'i HER DURUMDA güncelle (2026-08-27): eskiden yalnız "main.js zaten vardı" dalında
     // çalışıyordu; yayıncının electron.js'i kopyalanınca title/fullscreen/sandbox/fs-shim
@@ -1442,10 +1394,8 @@ app.on('activate', () => {
         let mainJsContent = await fs.readFile(mainJsPath, 'utf8');
         
         // Title satırını bul ve güncelle
-        const titleRegex = /title:\s*['"`].*?['"`]/;
-        if (titleRegex.test(mainJsContent)) {
-          mainJsContent = mainJsContent.replace(titleRegex, `title: '${windowTitle}'`);
-        }
+        // Değer JSON literal olarak girer (adında ' / " / $& olan kitap main.js'i kırmasın).
+        mainJsContent = basligiGuncelle(mainJsContent, windowTitle);
         
         // Fullscreen ekle (eğer yoksa)
         if (!mainJsContent.includes('fullscreen:')) {
