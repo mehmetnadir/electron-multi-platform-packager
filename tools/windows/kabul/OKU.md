@@ -103,6 +103,28 @@ günün listesini bu dizine (`tools/windows/kabul/isler.json`) koy. Şema (liste
 yedektir — normal akışta her koşuda üzerine yazılır, koda kalıcı IP gömülmüş sayılmaz.
 Mac'in Tailscale adresi değişirse hiçbir dosya elle düzenlenmez.
 
+## Runner bağlantısı (2026-10-02)
+
+Windows şeridi (`src/agent/windows-serit.js` → `kabulKos`) imzasız ve imzalı paketi ÖNCE bu kapıdan
+geçirir: `src/agent/windows-kasa-kabul.js`. `isler.json` KULLANILMAZ — paket köprünün `dosya/`
+ucundan sunulur (`~/vm-kapi/kabul-<anahtar>.exe`, sabit bağlantı), `kabul.py`'nin MACIP'i yazılmış
+kopyası `kabul-<anahtar>.py`, sarmalayıcı `wrap-<anahtar>.ps1`; anahtar `<bookId>-<imzasiz|imzali>-<damga>`
+(kabul.py'nin `D:\kabul\<anahtar>.exe` önbelleği bu yüzden asla eski paketi kullanmaz; sarmalayıcı
+iş sonunda guest kopyalarını siler).
+
+| Durum | Runner kararı |
+|---|---|
+| izleyici kalbi bayat/yok, `BENDE-windows-kasa`, aktivasyon kodlu seri, köprü adresi yok | kasa KULLANILMAZ → Mac başsız kabulü (yedek) |
+| rapor `GECTI` ve her kitap `GECTI` | imzaya / yayına devam |
+| `KALDI` (KURULMADI, EXE_YOK, CDP_ACILMADI, kitap ACILMADI, ilk sayfa/thumbnail yok) | failed, R2 yok |
+| `INDIRILEMEDI` / `PE_DEGIL`, zaman aşımı, izleyici koptu, rapor yok, kilit boşalmadı | `[ertelenebilir-windows-kasa]` — failed yazılmaz, kira bırakılır |
+
+Kilit: `~/.empp-agent/windows-kasa-kabul.kilit` (flock). `kosu.py` `kos()` da aynı dosyayı kilitler —
+elle koşu ile runner aynı makineye birlikte gitmez. Kanıt: `~/.empp-agent/kabul-kanit/<bookId>-windows-<damga>/`.
+Erişimin ön şartı köprü sunucusunun Mac'te AYAKTA olması (`node tools/windows/vm-kopru-sunucu.js`) ve
+kasa'da izleyicinin koşması — kalp dosyası köprü kapalıyken de bayatlar (bkz. memory
+`kopru-olu-sanilan-misafir-host-tarafinda`).
+
 ## Ölçülmüş tuzaklar (2026-09-22, `windows-kasa` — hepsi yanlış alarm üretmişti, tekrar etme)
 
 1. **İKİ PAKET AİLESİ:** `nsis` (bizim Electron kurulumumuz, `/S` ile
