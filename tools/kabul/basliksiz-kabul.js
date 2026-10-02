@@ -44,6 +44,7 @@ const { macImzaDenetle, imzaKarari } = require('./imza-denetimi');
 const { motorKopyasiMi } = require('../../src/packaging/set-menu');
 const K4 = require('./k4-guncellik');
 const ST = require('./set-guncellik');
+const { anaSurecDenetle } = require('./ana-surec-denetimi');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
@@ -310,6 +311,18 @@ async function calis(argv, yazici) {
     } catch (e) {
       rapor.katmanlar.cikarma = { durum: O.DURUM.OLCULEMEDI, sebepler: [`paket açılamadı: ${e.message}`] };
       say(`ÖLÇÜLEMEDİ: paket açılamadı — ${e.message}`);
+    }
+
+    // 1b. Paketin KENDİ ana süreci (main.js): koşum kosum/main.js ile açıldığı için yürütülmez;
+    // en azından derlenmeli (aksi halde gerçek açılışta Electron hata kutusunda kalır).
+    // ATLANDI (package.json yok / android) katman eklemez — genel kararı ÖLÇÜLEMEDİ'ye çekmesin.
+    if (acilis) {
+      const as = anaSurecDenetle(acilis.kok, acilis.asar, { platform });
+      if (as.durum === 'ATLANDI') say(`ana süreç denetimi atlandı: ${as.sebepler.join(' | ')}`);
+      else {
+        rapor.katmanlar.anaSurec = { durum: as.durum === 'GECTI' ? O.DURUM.GECTI : O.DURUM.RED, sebepler: as.sebepler, giris: as.giris };
+        say(`ana süreç (${as.giris}): ${as.durum === 'GECTI' ? 'derlendi' : `RED — ${as.sebepler.join(' | ')}`}`);
+      }
     }
 
     // 2. İmza (mac)
