@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VM KÖPRÜSÜ — windows-kasa kabul kapısının Mac ucu (tools/windows/vm-kopru-sunucu.js, port 8791).
+  Kasa izleyicisi (vm-izleyici.ps1) görevleri buradan çeker; köprü oturumdan bağımsız açık kalmalı
+  (02.10: arka plan görevi olarak başlatılan köprü 2 saat sınırında öldü). Belirteç ~/vm-kapi altında
+  kalıcı dosyadan okunur; plist'e sır yazılmaz.
+
+  Kurulum (CHANGEME yerine kullanıcı adı):
+    sed "s#/Users/CHANGEME#$HOME#g" launchd/com.empp.vm-kopru.plist > ~/Library/LaunchAgents/com.empp.vm-kopru.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empp.vm-kopru.plist
+  Durum:     lsof -i :8791 ; tail /tmp/empp-vm-kopru.out
+  Durdurma:  launchctl bootout gui/$(id -u)/com.empp.vm-kopru
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.empp.vm-kopru</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGEME/.nvm/versions/node/v24.16.0/bin/node</string>
+    <string>/Users/CHANGEME/01dev/electron-multi-platform-packager/tools/windows/vm-kopru-sunucu.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/CHANGEME/01dev/electron-multi-platform-packager</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>ProcessType</key>
+  <string>Standard</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/empp-vm-kopru.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/empp-vm-kopru.err</string>
+</dict>
+</plist>
