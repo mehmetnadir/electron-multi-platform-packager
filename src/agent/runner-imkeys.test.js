@@ -240,3 +240,21 @@ test('arşiv: anahtarsız kitap → zip dokunulmadan paketleyiciye (bugünkü da
   assert.equal(yuklenenZip(r.kayit.uploadGovde).getEntry('book1/assets/25776/imKeys.dll'), null);
   assert.equal(b.casus.cek, 0);
 });
+
+test('r2-kur: menüde set aktivasyonu KAPALI → R2 build\'inde main.activation="true" + key boş; log sayı verir, kod değil', async () => {
+  const ig = require('../runtime/icerik-guncelleme');
+  const z = new AdmZip(setBuildZip());
+  const xml = '<?xml version="1.0"?><main activation="false" key="" ID="45480"><Group ID="1"><Tab ID="1">'
+    + '<cover ID="111" xmlSource="assets/111/data/BookContent.xml" key="" /></Tab></Group></main>';
+  z.addFile('book1/classlibraries/ImWin32.dll', Buffer.from(ig.menuKodla(xml), 'utf8'));
+  const b = bagKur(['111']);
+  const r = await isKostur({ arsivKoku: arsivKur('45480', z.toBuffer()), job: r2Kur(), bag: b.bag });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  const r2Zip = new AdmZip(Buffer.concat(r.kayit.parcalar));
+  const ana = ig.menuCoz(r2Zip.getEntry('book1/classlibraries/ImWin32.dll').getData()).match(/<main\b[^>]*>/)[0];
+  assert.match(ana, /activation="true"/);
+  assert.match(ana, /key=""/);
+  assert.deepEqual(imKeysOku(r2Zip, 'book1/assets/111/imKeys.dll'), KODLAR);
+  assert.match(r.loglar, /set aktivasyonu: 1 menü, 1 açıldı/);
+  assert.ok(!r.loglar.includes('AB3CD'));
+});

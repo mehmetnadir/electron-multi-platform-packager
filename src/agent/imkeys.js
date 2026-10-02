@@ -112,6 +112,13 @@ function cevrimdisiKarar(veri, girilen) {
   return liste.findIndex((e) => e === r) >= 0 ? 'kabul' : 'red';
 }
 
+/** Etikette alan yaz (yoksa ekle) — icerik-guncelleme `attrYaz` ile aynı kural. */
+function attrYaz(etiket, ad, deger) {
+  const re = new RegExp(`(\\s${ad}=")[^"]*(")`);
+  if (re.test(etiket)) return etiket.replace(re, (_, a, b) => a + deger + b);
+  return etiket.replace(/\s*\/?>$/, (son) => ` ${ad}="${deger}"${son}`);
+}
+
 function attr(etiket, ad) {
   const m = String(etiket || '').match(new RegExp(`\\b${ad}="([^"]*)"`));
   return m ? m[1] : null;
@@ -142,7 +149,14 @@ function kapaklariBul(z) {
     if (!xml) continue;
     cozulenKokler.add(kok);
     const ana = (xml.match(/<main\b[^>]*>/) || [''])[0];
-    menuler.push({ kok, setId: attr(ana, 'ID'), setAktivasyon: attr(ana, 'activation') === 'true' });
+    let ham = null;
+    try { ham = z.oku(g); } catch (_) { ham = null; }
+    const menu = {
+      kok, menuYolu: ad, xml, ana, bicim: ham ? ig.menuBicimi(ham) : null,
+      setId: attr(ana, 'ID'), setAktivasyon: attr(ana, 'activation') === 'true', setKey: attr(ana, 'key') || '',
+      ilkKapak: null,
+    };
+    menuler.push(menu);
     let ilk = true;
     for (const c of ig.kapaklar(xml)) {
       const xs = attr(c.etiket, 'xmlSource');
@@ -151,6 +165,8 @@ function kapaklariBul(z) {
       ilk = false;
       if (!xs || !xs.endsWith(ICERIK_SONEKI)) continue;
       const icerikYolu = kok + xs.replace(/^\/+/, '');
+      // Set diyaloğu `module.covers[0]`'ın imKeys'ini okur — içeriği build'de olmasa bile.
+      if (buIlk) menu.ilkKapak = { id, imKeysYolu: icerikYolu.slice(0, -ICERIK_SONEKI.length) + DOSYA_ADI };
       if (!var_(icerikYolu)) continue;
       if (!imparkKimligiMi(id)) { kimliksiz.push(icerikYolu); continue; }
       kapaklar.push({
@@ -313,18 +329,42 @@ async function imKeysHazirla({ zipYolu, paketId, mod = 'yaz', calisma, anahtarli
   const z = okuyucu || zipOkuyucu(zipYolu);
   const { kapaklar, menuler, kimliksiz } = kapaklariBul(z);
   const idler = [...new Set(kapaklar.map((k) => k.id).concat(
-    menuler.filter((m) => m.setAktivasyon && imparkKimligiMi(m.setId)).map((m) => m.setId),
+    menuler.filter((m) => imparkKimligiMi(m.setId)).map((m) => m.setId),
     imparkKimligiMi(paketId) ? [String(paketId)] : [],
   ))];
   const cevap = new Map();
   await sinirliEsle(idler, 4, async (id) => { cevap.set(id, await anahtarliMi(id)); });
-  const setAktifKokler = new Set(menuler.filter((m) => m.setAktivasyon && cevap.get(m.setId)).map((m) => m.kok));
-  const gerekli = kapaklar.filter((k) => cevap.get(k.id) || (k.ilk && setAktifKokler.has(k.kok)));
+  // SET DÜZEYİ ZORUNLU ("sette bir kez sor", Nadir 02.10): menüde anahtarlı kapak (ya da anahtarlı
+  // set kimliği) varsa o menünün `main.activation` "true", `main.key` boş olmalı. Kapak düzeyi dal
+  // (`!fullActivation && cover.activation`) çevrimdışında tanımsız `getImKeys`/`bookPath`'e çarpıp
+  // kitabı hiç açmıyor; set düzeyinde kod açılışta BİR kez sorulur, `main.key` kalıcı yazılır ve
+  // `fullActivation` kapak denetimini atlar. Çok motorlu (`bookN/`) düzende her menü kendi main'i.
+  const aktifMenuler = menuler.filter((m) => kapaklar.some((k) => k.kok === m.kok && cevap.get(k.id))
+    || (imparkKimligiMi(m.setId) && cevap.get(m.setId)));
+  const menuDosyalari = [];
+  const aktiflestirilen = [];
+  const keyTemizlenen = [];
+  for (const m of aktifMenuler) {
+    let etiket = m.ana;
+    if (!m.setAktivasyon) { etiket = attrYaz(etiket, 'activation', 'true'); aktiflestirilen.push(m.menuYolu); }
+    if (m.setKey) { etiket = attrYaz(etiket, 'key', ''); keyTemizlenen.push(m.menuYolu); }
+    if (etiket === m.ana) continue;
+    const yeni = m.xml.replace(m.ana, etiket);
+    menuDosyalari.push({ yol: m.menuYolu, veri: Buffer.from(m.bicim ? ig.menuKodla(yeni, Math.random, m.bicim) : yeni, 'utf8') });
+  }
+  const yolaGore = new Map();
+  for (const k of kapaklar) if (cevap.get(k.id)) yolaGore.set(k.imKeysYolu, { id: k.id, imKeysYolu: k.imKeysYolu });
+  for (const m of aktifMenuler) {
+    if (m.ilkKapak && !yolaGore.has(m.ilkKapak.imKeysYolu)) yolaGore.set(m.ilkKapak.imKeysYolu, { ...m.ilkKapak });
+  }
+  const gerekli = [...yolaGore.values()];
+  const gerekliId = new Set(gerekli.map((k) => k.id));
   const rapor = {
     paketId: String(paketId), kapakSayisi: kapaklar.length, kimliksiz,
     paketAnahtarli: Boolean(cevap.get(String(paketId))),
-    anahtarli: gerekli.map((k) => ({ id: k.id, imKeysYolu: k.imKeysYolu })),
-    anahtarsiz: kapaklar.filter((k) => !gerekli.includes(k)).map((k) => k.id),
+    anahtarli: gerekli,
+    anahtarsiz: kapaklar.filter((k) => !gerekliId.has(k.id)).map((k) => k.id),
+    aktifMenuler: aktifMenuler.map((m) => m.menuYolu), aktiflestirilen, keyTemizlenen,
     yazilan: [], korunan: [], kodSayisi: 0, atilanKod: 0,
   };
   if (!gerekli.length) {
@@ -332,6 +372,10 @@ async function imKeysHazirla({ zipYolu, paketId, mod = 'yaz', calisma, anahtarli
       + (rapor.paketAnahtarli ? ' (paket ANAHTARLI ama kapak çözülemedi → kapı RED)' : ''));
     return rapor;
   }
+  const menuNotu = () => (aktifMenuler.length
+    ? ` · set aktivasyonu: ${aktifMenuler.length} menü, ${aktiflestirilen.length} açıldı`
+      + (keyTemizlenen.length ? `, ${keyTemizlenen.length} gömülü key temizlendi` : '')
+    : '');
   let yazilacak = gerekli;
   if (mod === 'eksikse') {
     yazilacak = gerekli.filter((k) => {
@@ -352,12 +396,15 @@ async function imKeysHazirla({ zipYolu, paketId, mod = 'yaz', calisma, anahtarli
         + `${yazilacak.length} anahtarlı kapak çevrimdışında 123456 ile açılırdı`);
     }
     const veri = imKeysBicimle(kodlar);
-    await yaz(zipYolu, calisma, yazilacak.map((k) => ({ yol: k.imKeysYolu, veri })));
+    await yaz(zipYolu, calisma, [...yazilacak.map((k) => ({ yol: k.imKeysYolu, veri })), ...menuDosyalari]);
     rapor.yazilan = yazilacak.map((k) => k.imKeysYolu);
+  } else if (menuDosyalari.length) {
+    await yaz(zipYolu, calisma, menuDosyalari);
   }
   log(`${ISARET} ${paketId}: ${kapaklar.length} kapak · ${gerekli.length} anahtarlı · `
     + `${rapor.yazilan.length} yazıldı · ${rapor.korunan.length} korundu · ${rapor.kodSayisi} kod`
     + (rapor.atilanKod ? ` (${rapor.atilanKod} geçersiz atıldı)` : '')
+    + menuNotu()
     + (kimliksiz.length ? ` · ${kimliksiz.length} kimliksiz kapak (Games/Videos) denetlenmedi` : ''));
   return rapor;
 }
@@ -384,6 +431,13 @@ function imKeysKapisi({ zipYolu, rapor, okuyucu = null }) {
       let n = 0;
       try { n = g && !g.dizin ? imKeysCoz(z.oku(g)).length : 0; } catch (_) { n = 0; }
       if (n < 1) nedenler.push(`${k.id}: ${k.imKeysYolu} ${g ? 'boş' : 'yok'}`);
+    }
+    for (const yol of rapor.aktifMenuler || []) {
+      const g = z.dizin.get(yol);
+      let ana = '';
+      try { ana = ((g && ig.menuCoz(z.oku(g))) || '').match(/<main\b[^>]*>/)?.[0] || ''; } catch (_) { ana = ''; }
+      if (attr(ana, 'activation') !== 'true') nedenler.push(`${yol}: set aktivasyonu kapalı (kapak düzeyi çevrimdışında kırık)`);
+      else if (attr(ana, 'key')) nedenler.push(`${yol}: menüde gömülü main.key var (kod sorulmaz)`);
     }
   }
   return nedenler.length

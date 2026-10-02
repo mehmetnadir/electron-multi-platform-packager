@@ -267,3 +267,115 @@ test('kapiSar: imKeys RED yazma kapısını RED yapar, neden kodu eklenir; GEÇ 
   assert.deepEqual(red.kitaplar, [1]);
   assert.deepEqual(K.kapiSar(yk, { gecti: true, nedenler: [], nedenKodlari: [] })({}), yk());
 });
+
+// --- SET DÜZEYİ ZORUNLU ("sette bir kez sor", 02.10) ---
+function menuAna(zip, yol) {
+  const ham = zipOku(zip, yol);
+  return ham ? (ig.menuCoz(ham).match(/<main\b[^>]*>/) || [''])[0] : null;
+}
+const SET_DOSYA = (aktivasyon, ek = {}) => ({
+  'classlibraries/ImWin32.dll': menu({ aktivasyon, kapaklar: [['61633', 'assets/61633/data/BookContent.xml'],
+    ['31723', 'assets/31723/data/BookContent.xml']] }),
+  'assets/61633/data/BookContent.xml': ICERIK,
+  'assets/31723/data/BookContent.xml': ICERIK,
+  ...ek,
+});
+
+test('set düzeyi: bayrak KAPALI + anahtarlı kapak → main.activation="true", key boş, biçim korunur; ilk kapak da imKeys alır; kapı geçer', async () => {
+  const zip = zipKur(SET_DOSYA('false'));
+  const loglar = [];
+  const bag = sahteBag(['31723']); // set kimliği (45480) bile anahtarlı değil: kapak yeter
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45480', calisma: tmp('w'), log: (m) => loglar.push(m), ...bag });
+  const ana = menuAna(zip, 'classlibraries/ImWin32.dll');
+  assert.match(ana, /activation="true"/);
+  assert.match(ana, /key=""/);
+  assert.deepEqual(ig.menuBicimi(zipOku(zip, 'classlibraries/ImWin32.dll')), { bas: 27, ara: 4, son: 27 }, 'kaynak biçimi (27/5) korunur');
+  assert.deepEqual(rapor.aktiflestirilen, ['classlibraries/ImWin32.dll']);
+  assert.deepEqual(rapor.yazilan.sort(), ['assets/31723/imKeys.dll', 'assets/61633/imKeys.dll'], 'covers[0] (61633) set diyaloğunun okuduğu liste');
+  assert.match(loglar.join('\n'), /set aktivasyonu: 1 menü, 1 açıldı/);
+  assert.ok(!loglar.join('\n').includes('AB3CD'));
+  assert.equal(K.imKeysKapisi({ zipYolu: zip, rapor }).gecti, true);
+  assert.equal(ig.kapaklar(ig.menuCoz(zipOku(zip, 'classlibraries/ImWin32.dll'))).length, 2, 'kapaklar aynen');
+});
+
+test('set düzeyi: bayrak zaten AÇIK → menü bayt bayt aynı (yeniden yazılmaz)', async () => {
+  const zip = zipKur(SET_DOSYA('true'));
+  const once = zipOku(zip, 'classlibraries/ImWin32.dll');
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45480', calisma: tmp('w'), ...sahteBag(['31723']) });
+  assert.deepEqual(zipOku(zip, 'classlibraries/ImWin32.dll'), once);
+  assert.deepEqual(rapor.aktiflestirilen, []);
+  assert.deepEqual(rapor.aktifMenuler, ['classlibraries/ImWin32.dll']);
+});
+
+test('set düzeyi: anahtarsız set → menüye ve zip\'e DOKUNULMAZ', async () => {
+  const zip = zipKur(SET_DOSYA('false'));
+  const once = fs.readFileSync(zip);
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45550', calisma: tmp('w'), ...sahteBag([]) });
+  assert.deepEqual(fs.readFileSync(zip), once);
+  assert.deepEqual(rapor.aktifMenuler, []);
+});
+
+test('set düzeyi: menüde gömülü main.key → temizlenir (yoksa kod hiç sorulmaz)', async () => {
+  const ham = ig.menuCoz(menu({ aktivasyon: 'true', kapaklar: [['31723', 'assets/31723/data/BookContent.xml']] })).replace('key=""', 'key="SIZAN"');
+  const zip = zipKur({ 'classlibraries/ImWin32.dll': ig.menuKodla(ham), 'assets/31723/data/BookContent.xml': ICERIK });
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45480', calisma: tmp('w'), ...sahteBag(['31723']) });
+  assert.match(menuAna(zip, 'classlibraries/ImWin32.dll'), /key=""/);
+  assert.deepEqual(rapor.keyTemizlenen, ['classlibraries/ImWin32.dll']);
+  assert.equal(K.imKeysKapisi({ zipYolu: zip, rapor }).gecti, true);
+});
+
+test('set düzeyi, çok motorlu (bookN/): her menü kendi main\'i — anahtarlı+kapalı açılır, anahtarsız dokunulmaz, açık aynen', async () => {
+  const zip = zipKur({
+    'book1/classlibraries/ImWin32.dll': menu({ setId: '45550', aktivasyon: 'false', kapaklar: [['25776', 'assets/25776/data/BookContent.xml']] }),
+    'book1/assets/25776/data/BookContent.xml': ICERIK,
+    'book2/classlibraries/ImWin32.dll': menu({ setId: '45550', aktivasyon: 'false', kapaklar: [['25786', 'assets/25786/data/BookContent.xml']] }),
+    'book2/assets/25786/data/BookContent.xml': ICERIK,
+    'book3/classlibraries/ImWin32.dll': menu({ setId: '45550', aktivasyon: 'true', kapaklar: [['25814', 'assets/25814/data/BookContent.xml']] }),
+    'book3/assets/25814/data/BookContent.xml': ICERIK,
+  });
+  const once2 = zipOku(zip, 'book2/classlibraries/ImWin32.dll');
+  const once3 = zipOku(zip, 'book3/classlibraries/ImWin32.dll');
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45550', calisma: tmp('w'), ...sahteBag(['25776', '25814']) });
+  assert.match(menuAna(zip, 'book1/classlibraries/ImWin32.dll'), /activation="true"/);
+  assert.deepEqual(zipOku(zip, 'book2/classlibraries/ImWin32.dll'), once2, 'anahtarsız kitabın menüsü aynen');
+  assert.deepEqual(zipOku(zip, 'book3/classlibraries/ImWin32.dll'), once3, 'zaten açık menü aynen');
+  assert.deepEqual(rapor.aktiflestirilen, ['book1/classlibraries/ImWin32.dll']);
+  assert.deepEqual(rapor.yazilan.sort(), ['book1/assets/25776/imKeys.dll', 'book3/assets/25814/imKeys.dll']);
+  assert.equal(zipOku(zip, 'book2/assets/25786/imKeys.dll'), null);
+  assert.equal(K.imKeysKapisi({ zipYolu: zip, rapor }).gecti, true);
+});
+
+test('set düzeyi: ilk kapağın içeriği build\'de yoksa da onun imKeys yolu yazılır (diyalog covers[0]\'ı okur)', async () => {
+  const zip = zipKur({
+    'classlibraries/ImWin32.dll': menu({ aktivasyon: 'false', kapaklar: [['70000', 'assets/70000/data/BookContent.xml'],
+      ['31723', 'assets/31723/data/BookContent.xml']] }),
+    'assets/31723/data/BookContent.xml': ICERIK,
+  });
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45480', calisma: tmp('w'), ...sahteBag(['31723']) });
+  assert.ok(rapor.yazilan.includes('assets/70000/imKeys.dll'), JSON.stringify(rapor.yazilan));
+  assert.deepEqual(K.imKeysCoz(zipOku(zip, 'assets/70000/imKeys.dll')), ['AB3CD', 'PQ9RS', 'XK7MZ']);
+});
+
+test('kapı RED: aktif menü hâlâ kapak düzeyinde ya da gömülü key taşıyor', () => {
+  const kapali = zipKur(SET_DOSYA('false', { 'assets/31723/imKeys.dll': K.imKeysBicimle(['AB3CD']) }));
+  const rapor = { paketId: '45480', paketAnahtarli: false, aktifMenuler: ['classlibraries/ImWin32.dll'],
+    anahtarli: [{ id: '31723', imKeysYolu: 'assets/31723/imKeys.dll' }] };
+  const k = K.imKeysKapisi({ zipYolu: kapali, rapor });
+  assert.equal(k.gecti, false);
+  assert.match(k.nedenler.join('|'), /set aktivasyonu kapalı/);
+  const ham = ig.menuCoz(menu({ aktivasyon: 'true', kapaklar: [['31723', 'assets/31723/data/BookContent.xml']] })).replace('key=""', 'key="X"');
+  const keyli = zipKur({ 'classlibraries/ImWin32.dll': ig.menuKodla(ham), 'assets/31723/data/BookContent.xml': ICERIK,
+    'assets/31723/imKeys.dll': K.imKeysBicimle(['AB3CD']) });
+  assert.match(K.imKeysKapisi({ zipYolu: keyli, rapor }).nedenler.join('|'), /gömülü main\.key/);
+});
+
+test('set düzeyi, mod eksikse (r2-al): imKeys hepsi dolu olsa da kapalı bayrak açılır (keypanel çağrılmaz)', async () => {
+  const dolu = K.imKeysBicimle(['OLDKY']);
+  const zip = zipKur(SET_DOSYA('false', { 'assets/31723/imKeys.dll': dolu, 'assets/61633/imKeys.dll': dolu }));
+  const bag = sahteBag(['31723']);
+  const rapor = await K.imKeysHazirla({ zipYolu: zip, paketId: '45480', mod: 'eksikse', calisma: tmp('w'), ...bag });
+  assert.equal(bag.casus.cek, 0);
+  assert.deepEqual(rapor.yazilan, []);
+  assert.match(menuAna(zip, 'classlibraries/ImWin32.dll'), /activation="true"/);
+  assert.equal(K.imKeysKapisi({ zipYolu: zip, rapor }).gecti, true);
+});
