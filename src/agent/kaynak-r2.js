@@ -184,6 +184,23 @@ function tamamlaKitaplari(kitaplar) {
   }));
 }
 
+/**
+ * Yazma kapısı `webzVarliklari` → `tamamla` gövdesi (02.10, 45550): listedeki İmpark-dışı Web-Z
+ * varlıkları (Games/Videos) — `{n, id, yol: 'config'|'ad', icerik, kapak}`. Sunucu liste kimliğini
+ * `kitaplar ∪ webzVarliklari` içinde arar; alanı tanımayan (eski) sunucu yok sayar.
+ */
+function tamamlaWebzVarliklari(liste) {
+  return (Array.isArray(liste) ? liste : [])
+    .filter((w) => w && Number.isSafeInteger(w.n) && w.n >= 1 && w.id != null && String(w.id) !== '')
+    .map((w) => ({
+      n: w.n,
+      id: String(w.id),
+      yol: w.yol === 'ad' ? 'ad' : 'config',
+      icerik: w.icerik === true,
+      kapak: w.kapak === true,
+    }));
+}
+
 /* ───────────────────────────── Hata sınıfı ───────────────────────────── */
 
 /**
@@ -225,7 +242,8 @@ function r2OzetDogrula(oz, beklenen) {
  *   POST agents/:id/kaynak/presign-multipart {bookId, platform, surum, partCount}
  *     → 200 {uploadId, r2ObjectKey, contentType?, urls:[{partNumber, url}]}
  *   POST agents/:id/kaynak/tamamla {bookId, platform, surum, sha256, boyut, kitaplar,
- *     uploadId, r2ObjectKey, parts:[{partNumber, etag}]} → 200 | 409 {nedenler:[...]}
+ *     webzVarliklari? (yalnız doluysa), uploadId, r2ObjectKey, parts:[{partNumber, etag}]}
+ *     → 200 | 409 {nedenler:[...]}
  *   POST agents/:id/kaynak/birak {bookId, platform, surum, sebep, uploadId?, nedenler?, nedenKodlari?} → 200
  *     (yerel kapı reddinde sebep:'kapi-reddi' + nedenler + nedenKodlari)
  * @param {{ istek: (yol: string, govde: object) => Promise<{status: number, data: any}>,
@@ -353,10 +371,16 @@ async function r2KurYayinla({
     return birakVeFirlat(new KaynakR2Hatasi(`yükleme düştü: ${String(e && e.message || e).slice(0, 300)}`, { gecici: true }));
   }
   const kitaplar = tamamlaKitaplari(k.kitaplar);
+  const webzVarliklari = tamamlaWebzVarliklari(k.webzVarliklari);
+  if (Array.isArray(k.notlar) && k.notlar.length) {
+    log(`${R2_ISARETI} yazma kapısı notları ${job.bookId} ${surum}: ${k.notlar.join(' | ')}`);
+  }
   let t;
   try {
     t = await istemci.tamamla({
-      ...kimlik, sha256: oz.sha256, boyut: oz.boyut, kitaplar, uploadId, r2ObjectKey: basla.r2ObjectKey, parts,
+      ...kimlik, sha256: oz.sha256, boyut: oz.boyut, kitaplar,
+      ...(webzVarliklari.length ? { webzVarliklari } : {}),
+      uploadId, r2ObjectKey: basla.r2ObjectKey, parts,
     });
   } catch (e) {
     return birakVeFirlat(e instanceof KaynakR2Hatasi ? e
@@ -376,7 +400,7 @@ module.exports = {
   KAYNAK_TURLERI, KAYNAK_KUR_YETENEGI, KAYNAK_R2_YETENEGI, R2_ISARETI, KAYNAK_GET_OMRU_TAVANI_SN,
   imzaliKaynakUrlCoz, claimKaynakDogrula, kanonikUrlMi,
   kaynakKurIzinli, kaynakKurEkle, kaynakR2Ekle,
-  merdivenKaniti, tamamlaKitaplari,
+  merdivenKaniti, tamamlaKitaplari, tamamlaWebzVarliklari,
   KaynakR2Hatasi, r2OzetDogrula,
   kaynakUcIstemcisi, r2KurYayinla,
 };

@@ -12,8 +12,25 @@
  *      - build'de listede olmayan, kimliği İmpark kimliği OLAN bookN → RED `liste-disi-kitap`;
  *      - kimliği İmpark kimliği olmayan (null, "0", boş, sayısal değil) fazla bookN KABUL edilir,
  *        `notlar`'a "liste dışı ek korundu: bookN" yazılır (merdiven ATLANDI + set eki "korundu").
- *      Kimlik kaynağı = bookN/assets/<id> dizin adı; İmpark kimliği ölçütü `icerik-merdiven.
- *      imparkKimligiMi` ile aynı (/^[1-9]\d*$/). Liste yoksa: tür `manuel` → kimlik denetimi
+ *      KİMLİK ÇÖZÜMÜ (02.10, 45550/45538/45695): bookN'in kimliği sırayla
+ *        (a) `bookN/assets/<id>` dizin adı İmpark kimliğiyse o;
+ *        (a2) değilse `bookN/classlibraries/ImWin32.dll` menüsündeki TEK kapak kimliği İmpark
+ *            kimliğiyse o — merdivenin (S0), K4 kabulünün ve set ekinin okuduğu yer (motorun
+ *            `menuCoz` + `kapaklar`). 45538 book2 `assets/English-Up-5-Workbook` = 6376, 45695
+ *            `Classmate-A1-WorkBook` = 3358. Bu kitap İmpark kitabıdır (`kitaplar`, liste/içerik/kapak
+ *            denetimi aynen);
+ *        (b) hâlâ İmpark kimliği yoksa (Games/Videos: dizin `Grade-6-Games`, kapak ID "0") liste
+ *            kimliği uygulamanın assetId'yi okuduğu yerden eşlenir — menü `settings.books[bookN]
+ *            .assetId` (`scripts/cevrimdisi-yama.js` `window.__setSettings` öncelikli, yoksa
+ *            `config/settings.json`; tema `language-set.js` bunu `xmlParser.parseBookContent`'e verir);
+ *        (c) son çare liste başlığı ↔ menü başlığı (`set-uyelik-ek.eslestir` `ad` yolu — set eki
+ *            ile AYNI fonksiyon, ikinci eşleyici yok).
+ *      (b)/(c) ile eşleşen bookN `webzVarliklari`'na `{n, id, yol: 'config'|'ad', icerik, kapak}`
+ *      girer (`kitaplar`'a KARIŞMAZ, İmpark içerik sürümü beklenmez); `icerik` = `assets/<dizin>/
+ *      data/BookContent.xml` var ve boş değil — yoksa RED `icerik-yok`. Hiçbir yoldan eşleşmeyen
+ *      liste kimliği yine `kitap-eksik` (gerçek eksik kitap reddi korunur).
+ *      İmpark kimliği ölçütü `icerik-merdiven.imparkKimligiMi` ile aynı (/^[1-9]\d*$/).
+ *      Liste yoksa: tür `manuel` → kimlik denetimi
  *      ATLANIR (Nadir 01.10); `otomatik` ve set yapılı build → liste yok = ret. Tek kitap yapılı
  *      build (bookN yok) listesiz geçer.
  *   2. her kitapta içerik (`assets/<id>/data/BookContent.xml` + ilk sayfa `pages/1.*`) VE kapak
@@ -26,13 +43,17 @@
  * Dönen `kitaplar` = sunucu `POST /agents/:id/kaynak/tamamla` gövdesindeki `kitaplar` alanı:
  * `{n, id, vs?, icerik, kapak}`. `vs` yalnız `vsler` ({ n: vs }) verildiyse (merdiven kanıtı).
  * Kabul edilen liste dışı ekler `kitaplar`'a GİRMEZ (sunucuya yalnız liste kitapları gider), `notlar`'da görünür.
+ * `webzVarliklari` = `tamamla` gövdesinin aynı adlı alanı (sunucu `sunucuKapisi` liste kimliğini
+ * `kitaplar ∪ webzVarliklari` içinde arar; eski sunucu alanı yok sayar).
  * `nedenKodlari` = makine okur ret kodları (tekilleştirilmiş), `birak` gövdesine gider.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { girisleriTemizle, bookNMi, zipGirisAdlariniOku, OKUNAMADI_ISARETI } = require('./icerik-kapisi');
-const { setListesiAyristir } = require('./set-uyelik-ek');
+const { setListesiAyristir, eslestir, menuBooksOku, MENU_YOLLARI } = require('./set-uyelik-ek');
+const M = require('./icerik-merdiven');
+const ig = require('../runtime/icerik-guncelleme');
 
 const KAPI_ISARETI = '[yazma-kapisi]';
 const BOYUT_ORANI = 0.8;
@@ -63,17 +84,74 @@ function dizinGirisleri(kok) {
   return out;
 }
 
-/** Temizlenmiş yollar; kökte assets/bookN yoksa ve hepsi TEK klasör altındaysa bir seviye iner. */
+/**
+ * Temizlenmiş yollar; kökte assets/bookN yoksa ve hepsi TEK klasör altındaysa bir seviye iner.
+ * @returns {{yollar: string[], onEk: string}} `onEk` = inilen sarmalayıcı (`''` ya da `<klasör>/`)
+ */
 function kokuBul(yollar) {
   const kokte = (l) => l.some((y) => y.split('/')[0] === 'assets' || bookNMi(y.split('/')[0]));
-  if (kokte(yollar)) return yollar;
+  if (kokte(yollar)) return { yollar, onEk: '' };
   const segs = new Set(yollar.map((y) => y.split('/')[0]));
   if (segs.size === 1) {
     const [tek] = segs;
     const ic = yollar.filter((y) => y.startsWith(`${tek}/`)).map((y) => y.slice(tek.length + 1)).filter(Boolean);
-    if (kokte(ic)) return ic;
+    if (kokte(ic)) return { yollar: ic, onEk: `${tek}/` };
   }
-  return yollar;
+  return { yollar, onEk: '' };
+}
+
+/**
+ * Build içinden dosya okuyucu (kök = sarmalayıcıdan sonraki kök). Zip'te merkez dizin TEMBEL okunur
+ * (`icerik-merdiven.zipDizini`, Zip64; adm-zip yok) — yalnız kimlik/Web-Z çözümü gerektiğinde.
+ * Okunamayan/olmayan girdi → null (kapı bunu "menü yok" / "boyut bilinmiyor" sayar).
+ * @returns {{veri: (yol: string) => Buffer|null, boyut: (yol: string) => number|null}}
+ */
+function varsayilanOkuyucu({ zipYolu, buildDizini, onEk }) {
+  if (zipYolu) {
+    let dizin;
+    const al = (yol) => {
+      if (dizin === undefined) { try { dizin = M.zipDizini(zipYolu); } catch (_) { dizin = null; } }
+      const g = dizin && dizin.get(onEk + yol);
+      return g && !g.dizin ? g : null;
+    };
+    return {
+      veri(yol) {
+        const g = al(yol);
+        if (!g) return null;
+        try { return M.zipGirdiOku(zipYolu, g); } catch (_) { return null; }
+      },
+      boyut(yol) { const g = al(yol); return g ? g.boyut : null; },
+    };
+  }
+  const tam = (yol) => path.join(buildDizini, onEk, yol);
+  return {
+    veri(yol) { try { return fs.readFileSync(tam(yol)); } catch (_) { return null; } },
+    boyut(yol) { try { return fs.statSync(tam(yol)).size; } catch (_) { return null; } },
+  };
+}
+
+const metinOku = (okuyucu, yol) => {
+  const b = okuyucu.veri(yol);
+  return b == null ? null : b.toString('utf8');
+};
+
+/** Uygulamanın kitap menüsü (`settings.books`) — set eki ile AYNI okuma (`menuBooksOku`, yama öncelikli). */
+function menuKitaplari(okuyucu) {
+  const [yama, ayar] = MENU_YOLLARI;
+  try { return menuBooksOku(metinOku(okuyucu, yama), metinOku(okuyucu, ayar)) || null; } catch (_) { return null; }
+}
+
+/**
+ * bookN'in ImWin32 menüsündeki TEK kapak kimliği (merdiven S0 / K4 / set eki `exeKitaplari` ile
+ * aynı okuma: `ig.menuCoz` + `ig.kapaklar`). Menü yok/çözülemedi/çok kapak → null.
+ */
+function menuKapakKimligi(okuyucu, dizin) {
+  try {
+    const ham = okuyucu.veri(`${dizin}/${ig.MENU_GORELI}`);
+    const xml = ham ? ig.menuCoz(ham) : null;
+    const c = xml ? ig.kapaklar(xml) : [];
+    return c.length === 1 && c[0].ID != null ? String(c[0].ID) : null;
+  } catch (_) { return null; }
 }
 
 /** Bir kitap kökü (`''` ya da `bookN/`) için `{id, icerik, kapak}`. */
@@ -101,25 +179,28 @@ function kitapOlc(kume, onEk) {
   };
 }
 
-/** Listedeki kitap (link olmayan) kimlikleri; liste yok/boşsa null. */
-function listeKimlikleri(setListesi) {
+/** Listedeki kitap (link olmayan) satırları (`setListesiAyristir`); liste yok/boşsa null. */
+function listeGirdileri(setListesi) {
   if (setListesi == null) return null;
   const ham = Array.isArray(setListesi) ? setListesi.join('\n') : String(setListesi);
   if (!ham.trim()) return null;
-  return setListesiAyristir(ham).filter((g) => !g.link).map((g) => String(g.assetId));
+  return setListesiAyristir(ham).filter((g) => !g.link);
 }
 
 /**
  * @param {{ buildDizini?: string, zipYolu?: string, setListesi?: string|string[]|null,
  *   oncekiBoyut?: number|null, boyut?: number|null, tur?: 'otomatik'|'manuel',
- *   vsler?: Record<number, number>, listele?: (zip: string) => string[] }} girdi
+ *   vsler?: Record<number, number>, listele?: (zip: string) => string[],
+ *   okuyucu?: {veri: (yol: string) => Buffer|null, boyut: (yol: string) => number|null} }} girdi
+ *   `okuyucu` testler içindir; verilmezse zip/dizinden okunur (yalnız kimlik çözümü gerektiğinde).
  * @returns {{ gecti: boolean,
  *   kitaplar: Array<{n: number, id: string|null, vs?: number, icerik: boolean, kapak: boolean}>,
- *   nedenler: string[] }}
+ *   webzVarliklari: Array<{n: number, id: string, yol: 'config'|'ad', icerik: boolean, kapak: boolean}>,
+ *   nedenler: string[], nedenKodlari: string[], notlar: string[] }}
  */
 function yazmaKapisi({
   buildDizini, zipYolu, setListesi = null, oncekiBoyut = null, boyut = null, tur = 'otomatik',
-  vsler = {}, listele = zipGirisAdlariniOku,
+  vsler = {}, listele = zipGirisAdlariniOku, okuyucu = null,
 } = {}) {
   const nedenler = [];
   const kodlar = new Set();
@@ -133,24 +214,36 @@ function yazmaKapisi({
   } catch (e) {
     const on = zipYolu ? OKUNAMADI_ISARETI : KAPI_ISARETI;
     return {
-      gecti: false, kitaplar: [], notlar,
+      gecti: false, kitaplar: [], webzVarliklari: [], notlar,
       nedenler: [`${on} giriş listesi okunamadı: ${String(e && e.message || e).slice(0, 300)}`],
       nedenKodlari: [KOD.OKUNAMADI],
     };
   }
-  const yollar = kokuBul(girisleriTemizle(ham).filter((y) => !y.endsWith('/')));
+  const { yollar, onEk } = kokuBul(girisleriTemizle(ham).filter((y) => !y.endsWith('/')));
   const kume = new Set(yollar);
+  const oku = okuyucu || varsayilanOkuyucu({ zipYolu, buildDizini, onEk });
 
   const bookNler = [...new Set(yollar.map((y) => y.split('/')[0]).filter(bookNMi))]
     .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
   const setYapili = bookNler.length > 0;
 
   const kitaplar = [];
+  const dizinAdi = new Map(); // n → assets/<dizin> (kimlik menüden çözülünce de içerik oradan ölçülür)
   if (setYapili) {
     for (const d of bookNler) {
       const n = Number(d.replace(/\D/g, ''));
       const k = kitapOlc(kume, `${d}/`);
-      kitaplar.push({ n, id: k.id, ...(vsler[n] != null ? { vs: vsler[n] } : {}), icerik: k.icerik, kapak: k.kapak });
+      dizinAdi.set(n, k.id);
+      let { id } = k;
+      // (a2) dizin adı İmpark kimliği değilse ImWin32 menüsünün tek kapak kimliği (merdiven/K4 kaynağı).
+      if (!imparkKimligiMi(id) && kume.has(`${d}/${ig.MENU_GORELI}`)) {
+        const mk = menuKapakKimligi(oku, d);
+        if (imparkKimligiMi(mk)) {
+          id = mk;
+          notlar.push(`kimlik ImWin32 menüsünden: ${d} = ${mk} (dizin ${k.id == null ? '-' : k.id})`);
+        }
+      }
+      kitaplar.push({ n, id, ...(vsler[n] != null ? { vs: vsler[n] } : {}), icerik: k.icerik, kapak: k.kapak });
     }
   } else {
     const k = kitapOlc(kume, '');
@@ -158,12 +251,51 @@ function yazmaKapisi({
   }
 
   // 1. kitap kimlikleri (sayı eşitliği değil — liste dışı İmpark-dışı ek korunur)
-  const listeIdler = listeKimlikleri(setListesi);
+  const liste = listeGirdileri(setListesi);
+  const listeIdler = liste == null ? null : liste.map((g) => String(g.assetId));
   let denetlenecek = kitaplar;
+  const webzVarliklari = [];
   if (listeIdler != null) {
     const listeImpark = listeIdler.filter(imparkKimligiMi);
     const buildIdler = new Set(kitaplar.map((k) => (k.id == null ? '' : String(k.id))));
     const ozet = kitaplar.length === listeIdler.length ? '' : ` (kitap sayısı ${kitaplar.length} ≠ liste ${listeIdler.length})`;
+
+    // (b)/(c) İmpark kimliği çözülemeyen bookN ↔ build'de bulunmayan liste kimliği: Web-Z varlığı.
+    const webzN = new Set();
+    const bekleyen = [];
+    for (const g of liste) {
+      if (imparkKimligiMi(g.assetId) && !buildIdler.has(String(g.assetId))
+        && !bekleyen.some((b) => b.assetId === g.assetId)) bekleyen.push(g);
+    }
+    const adaylar = setYapili ? kitaplar.filter((k) => !imparkKimligiMi(k.id)) : [];
+    if (bekleyen.length && adaylar.length) {
+      const books = menuKitaplari(oku) || {};
+      const es = eslestir(bekleyen, adaylar.map((k) => {
+        const m = books[`book${k.n}`];
+        return {
+          dizin: `book${k.n}`, id: null,
+          menuAssetId: m && m.assetId != null ? String(m.assetId) : null,
+          ad: m && m.title ? String(m.title) : null,
+        };
+      }));
+      for (const e of es.eslesen) {
+        const k = adaylar.find((x) => `book${x.n}` === e.dizin);
+        const dz = dizinAdi.get(k.n);
+        const bc = dz == null ? null : `book${k.n}/assets/${dz}/${ICERIK}`;
+        // Boyut okunamıyorsa (bilinmiyor) giriş listesindeki varlık yeter; ölçülmüş 0 bayt = içerik yok.
+        const icerik = !!bc && kume.has(bc) && oku.boyut(bc) !== 0;
+        const yol = e.yol === 'ad' ? 'ad' : 'config';
+        webzVarliklari.push({ n: k.n, id: String(e.liste.assetId), yol, icerik, kapak: k.kapak });
+        webzN.add(k.n);
+        buildIdler.add(String(e.liste.assetId));
+        notlar.push(`Web-Z varlığı kabul: book${k.n} ← liste ${e.liste.assetId}`
+          + ` (${yol === 'ad' ? `ad "${e.liste.ad}"` : 'menü assetId'}; dizin ${dz == null ? '-' : dz})`);
+        if (!icerik) {
+          ret(KOD.ICERIK_YOK, `book${k.n}: Web-Z varlığı ${e.liste.assetId} içerik yok (${ICERIK} yok ya da boş)`);
+        }
+      }
+    }
+
     for (const id of new Set(listeImpark)) {
       if (!buildIdler.has(id)) ret(KOD.KITAP_EKSIK, `kitap-eksik: liste kimliği ${id} build'de yok${ozet}`);
     }
@@ -171,6 +303,7 @@ function yazmaKapisi({
     denetlenecek = [];
     for (const k of kitaplar) {
       const ad = setYapili ? `book${k.n}` : 'kök';
+      if (webzN.has(k.n)) continue;
       if (listeKume.has(String(k.id))) denetlenecek.push(k);
       else if (imparkKimligiMi(k.id)) {
         ret(KOD.LISTE_DISI, `liste-disi-kitap: ${ad} kimliği ${k.id} listede yok${ozet}`);
@@ -197,7 +330,7 @@ function yazmaKapisi({
   }
 
   return {
-    gecti: nedenler.length === 0, kitaplar: denetlenecek, nedenler, nedenKodlari: [...kodlar], notlar,
+    gecti: nedenler.length === 0, kitaplar: denetlenecek, webzVarliklari, nedenler, nedenKodlari: [...kodlar], notlar,
   };
 }
 

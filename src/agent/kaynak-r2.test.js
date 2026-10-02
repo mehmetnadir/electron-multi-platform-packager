@@ -281,6 +281,36 @@ test('r2KurYayinla 200: tamamla gövdesi {surum, sha256, boyut, kitaplar(vs merd
   assert.deepEqual(a.sayac.kapiGirdi, { zipYolu: '/is/build.zip', setListesi: '111 | Kitap', oncekiBoyut: 100, tur: 'otomatik', vsler: { 1: 7 } });
 });
 
+test('r2KurYayinla 45550: kapının webzVarliklari\'ı tamamla gövdesine ayrı alanda gider (kitaplar\'a karışmaz); notlar loglanır', async () => {
+  const webz = [{ n: 5, id: '66903', yol: 'config', icerik: true, kapak: true }];
+  const a = akis({ kapi: {
+    gecti: true, kitaplar: [{ n: 1, id: '111', vs: 7, icerik: true, kapak: true }], webzVarliklari: webz,
+    nedenler: [], notlar: ['Web-Z varlığı kabul: book5 ← liste 66903 (menü assetId; dizin Grade-6-Games)'],
+  } });
+  const loglar = [];
+  await R.r2KurYayinla({ ...a.o, log: (s) => loglar.push(s) });
+  const g = a.s.cagrilar[1].govde;
+  assert.deepEqual(g.kitaplar, [{ n: 1, id: '111', vs: 7, icerik: true, kapak: true }]);
+  assert.deepEqual(g.webzVarliklari, webz);
+  assert.ok(loglar.some((s) => /yazma kapısı notları 45549 2\.51\.10: Web-Z varlığı kabul: book5/.test(s)), loglar.join('\n'));
+  // Boş liste gönderilmez (eski gövde birebir — üstteki 200 testi).
+  const b = akis({ kapi: { gecti: true, kitaplar: [{ n: 1, id: '111', icerik: true, kapak: true }], webzVarliklari: [], nedenler: [] } });
+  await R.r2KurYayinla(b.o);
+  assert.equal('webzVarliklari' in b.s.cagrilar[1].govde, false);
+});
+
+test('tamamlaWebzVarliklari: alanları normalize eder, geçersiz satırı düşürür', () => {
+  assert.deepEqual(R.tamamlaWebzVarliklari([
+    { n: 5, id: 66903, yol: 'config', icerik: true, kapak: 1 },
+    { n: 2, id: '66905', yol: 'ad', icerik: false },
+    { n: 0, id: '1' }, { n: 3, id: '' }, null,
+  ]), [
+    { n: 5, id: '66903', yol: 'config', icerik: true, kapak: false },
+    { n: 2, id: '66905', yol: 'ad', icerik: false, kapak: false },
+  ]);
+  assert.deepEqual(R.tamamlaWebzVarliklari(undefined), []);
+});
+
 test('r2KurYayinla kapı reddi: yükleme HİÇ başlamaz (presign yok), birak çağrılır, KALICI hata', async () => {
   const a = akis({ kapi: { gecti: false, kitaplar: [], nedenler: ['[yazma-kapisi] kitap sayısı 1 ≠ liste 2'] } });
   await assert.rejects(R.r2KurYayinla(a.o), (e) => e.gecici === false && /yazma kapısı RED/.test(e.message)

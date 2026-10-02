@@ -221,3 +221,180 @@ test('imparkKimligiMi merdivenin ölçütüyle aynı', () => {
     assert.equal(imparkKimligiMi(v), m(v), `kimlik ${JSON.stringify(v)}`);
   }
 });
+
+// --- 02.10 45550/45538/45695: kimlik dizin adı → ImWin32 kapak kimliği → menü assetId → ad ---
+// Saha: `[yazma-kapisi] kitap-eksik: liste kimliği 66903 build'de yok` (45550 Games, dizin
+// `assets/Grade-6-Games`, kapak ID "0") ve 45538'de 6376 (İmpark kitabı, dizin `English-Up-5-Workbook`).
+
+const ig = require('../runtime/icerik-guncelleme');
+
+/** Motorun şifreli menüsü (merdiven testindeki biçim) — tek kapak. */
+const imMenu = (id, v = 1) => ig.menuKodla('<?xml version="1.0" encoding="UTF-8"?>\n<main activation="false" '
+  + `key="" version="1.0" type="1">\n<Group ID="0"><Tab ID="0">\n<cover guId="" ID="${id}" etkID="${id}" `
+  + `source="assets/${id}/cover.png" corpID="60" URL="https://example.invalid/Uploads/ZKitapZipH/${id}-${v}.zip" `
+  + `version="${v}"/>\n</Tab></Group>\n</main>`);
+
+/** Üretim Masası menüsü: `settings.books` (yama + settings.json, ikisi aynı içerik). */
+const menuDosyalari = (books) => {
+  const ayar = JSON.stringify({ bookCount: Object.keys(books).length, books }, null, 2);
+  return {
+    'config/settings.json': ayar,
+    'scripts/cevrimdisi-yama.js': `(function () {\n  "use strict";\n\n  window.__setSettings = ${ayar};\n})();\n`,
+  };
+};
+
+/** Geçici build dizini: {göreli yol: içerik}; kitap(n, dizin) içerik+kapak+ImWin32 ekler. */
+function buildKur(dosyalar) {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'yazma-kapisi-webz-'));
+  for (const [y, v] of Object.entries(dosyalar)) {
+    fs.mkdirSync(path.dirname(path.join(kok, y)), { recursive: true });
+    fs.writeFileSync(path.join(kok, y), v);
+  }
+  return kok;
+}
+const kitap = (n, dizin, kapakId = dizin, { bc = '<BookContent/>' } = {}) => ({
+  [`book${n}/assets/${dizin}/data/BookContent.xml`]: bc,
+  [`book${n}/assets/${dizin}/pages/1.png`]: 'p',
+  [`book${n}/assets/${dizin}/thumbs/1.jpg`]: 't',
+  [`book${n}/classlibraries/ImWin32.dll`]: imMenu(kapakId),
+  [`book${n}/app.config.js`]: `const AppConfig = { appName: 'book${n}' };`,
+});
+
+const SW6_LISTE = '25776 | Reference Book | \n25786 | Workbook | \n16030 | Test Book | \n25814 | Key Words | \n'
+  + '66903 | Games |  | games\nlink:https://download.ydspublishing.com/worksheets/grade-6-worksheets/ | Worksheet';
+const sw6 = (ek = {}) => ({
+  ...kitap(1, 25776), ...kitap(2, 25786), ...kitap(3, 25814), ...kitap(4, 16030),
+  ...kitap(5, 'Grade-6-Games', 0),
+  ...menuDosyalari({
+    book1: { assetId: '25776', title: 'Reference Book' }, book2: { assetId: '25786', title: 'Workbook' },
+    book3: { assetId: '25814', title: 'Key Words' }, book4: { assetId: '16030', title: 'Test Book' },
+    book5: { assetId: '66903', title: 'Games' },
+  }),
+  ...ek,
+});
+
+test('45550 regresyon: Games book5 (dizin Grade-6-Games, kapak ID "0") ↔ liste 66903 menü assetId ile → GEÇER (dizin + zip)', () => {
+  const kok = buildKur(sw6());
+  const zipDir = ziple(kok);
+  try {
+    for (const g of [{ buildDizini: kok }, { zipYolu: zipDir.zip }]) {
+      const r = yazmaKapisi({ ...g, setListesi: SW6_LISTE, tur: 'otomatik' });
+      assert.equal(r.gecti, true, r.nedenler.join('|'));
+      assert.deepEqual(r.kitaplar.map((k) => k.id), ['25776', '25786', '25814', '16030']);
+      assert.deepEqual(r.webzVarliklari, [{ n: 5, id: '66903', yol: 'config', icerik: true, kapak: true }]);
+      assert.ok(r.notlar.some((n) => /Web-Z varlığı kabul: book5 ← liste 66903 \(menü assetId; dizin Grade-6-Games\)/.test(n)), r.notlar.join('|'));
+      assert.equal(r.notlar.some((n) => /liste dışı ek korundu: book5/.test(n)), false);
+    }
+  } finally {
+    fs.rmSync(kok, { recursive: true, force: true });
+    fs.rmSync(zipDir.dir, { recursive: true, force: true });
+  }
+});
+
+test('45550 + gerçek eksik İmpark kitabı (69523) → Games kabul ama 69523 yine RED kitap-eksik', () => {
+  const kok = buildKur(sw6());
+  try {
+    const r = yazmaKapisi({ buildDizini: kok, setListesi: `${SW6_LISTE}\n69523 | Practice Book`, tur: 'otomatik' });
+    assert.equal(r.gecti, false);
+    assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
+    assert.ok(r.nedenler.some((n) => /liste kimliği 69523 build'de yok/.test(n)), r.nedenler.join('|'));
+    assert.equal(r.nedenler.some((n) => /66903/.test(n)), false, r.nedenler.join('|'));
+    assert.deepEqual(r.webzVarliklari.map((w) => w.id), ['66903']);
+  } finally { fs.rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('Web-Z adayı olsa da menüsü ve adı tutmayan liste kimliği eşlenmez → RED kitap-eksik (yanlış kabul yok)', () => {
+  const kok = buildKur(sw6(menuDosyalari({
+    book1: { assetId: '25776', title: 'Reference Book' }, book2: { assetId: '25786', title: 'Workbook' },
+    book3: { assetId: '25814', title: 'Key Words' }, book4: { assetId: '16030', title: 'Test Book' },
+    book5: { assetId: 'Grade-6-Games', title: 'Oyunlar' },
+  })));
+  try {
+    const r = yazmaKapisi({ buildDizini: kok, setListesi: SW6_LISTE, tur: 'otomatik' });
+    assert.equal(r.gecti, false);
+    assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
+    assert.ok(r.nedenler.some((n) => /liste kimliği 66903 build'de yok/.test(n)));
+    assert.deepEqual(r.webzVarliklari, []);
+    assert.ok(r.notlar.includes('liste dışı ek korundu: book5'), r.notlar.join('|'));
+  } finally { fs.rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('45482 benzeri: menü assetId İmpark değil ("Grade-8-Games") → set eki ile AYNI ad eşlemesi (yol ad)', () => {
+  const kok = buildKur({
+    ...kitap(1, 44187), ...kitap(2, 'Grade-8-Games', 0),
+    ...menuDosyalari({ book1: { assetId: '44187', title: 'Reference Book' }, book2: { assetId: 'Grade-8-Games', title: 'Games' } }),
+  });
+  try {
+    const r = yazmaKapisi({ buildDizini: kok, setListesi: '44187 | Reference Book\n66905 | Games', tur: 'otomatik' });
+    assert.equal(r.gecti, true, r.nedenler.join('|'));
+    assert.deepEqual(r.webzVarliklari, [{ n: 2, id: '66905', yol: 'ad', icerik: true, kapak: true }]);
+    assert.ok(r.notlar.some((n) => /book2 ← liste 66905 \(ad "Games"/.test(n)), r.notlar.join('|'));
+  } finally { fs.rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('45538 regresyon: İmpark kitabı dizini adlı (English-Up-5-Workbook) → kimlik ImWin32 kapak ID 6376, kitaplar\'a girer (vs merdivenden)', () => {
+  const kok = buildKur({
+    ...kitap(1, 44815), ...kitap(2, 'English-Up-5-Workbook', 6376), ...kitap(3, 'Grade-5-Games', 0), ...kitap(4, 'Eu5-videos', 0),
+    ...menuDosyalari({
+      book1: { assetId: '44815', title: "Student's Book" }, book2: { assetId: '6376', title: 'Workbook' },
+      book3: { assetId: '66862', title: 'Games' }, book4: { assetId: '66850', title: 'Videos' },
+    }),
+  });
+  const zipDir = ziple(kok);
+  try {
+    const liste = "44815 | Student's Book\n6376 | Workbook\n66862 | Games |  | games\n66850 | Videos |  | videos\n"
+      + 'link:https://download.ydspublishing.com/worksheets/grade-5-worksheets/ | Worksheets';
+    for (const g of [{ buildDizini: kok }, { zipYolu: zipDir.zip }]) {
+      const r = yazmaKapisi({ ...g, setListesi: liste, vsler: { 1: 4, 2: 3 }, tur: 'otomatik' });
+      assert.equal(r.gecti, true, r.nedenler.join('|'));
+      assert.deepEqual(r.kitaplar, [
+        { n: 1, id: '44815', vs: 4, icerik: true, kapak: true },
+        { n: 2, id: '6376', vs: 3, icerik: true, kapak: true },
+      ]);
+      assert.deepEqual(r.webzVarliklari.map((w) => [w.n, w.id, w.yol]), [[3, '66862', 'config'], [4, '66850', 'config']]);
+      assert.ok(r.notlar.includes('kimlik ImWin32 menüsünden: book2 = 6376 (dizin English-Up-5-Workbook)'), r.notlar.join('|'));
+    }
+  } finally {
+    fs.rmSync(kok, { recursive: true, force: true });
+    fs.rmSync(zipDir.dir, { recursive: true, force: true });
+  }
+});
+
+test('ImWin32 kimliği İmpark ve listede YOK → RED liste-disi-kitap (sözleşme §5: liste dışı İmpark kimliği ret)', () => {
+  const kok = buildKur({ ...kitap(1, 101), ...kitap(2, 'Adli-Kitap', 777) });
+  try {
+    const r = yazmaKapisi({ buildDizini: kok, setListesi: '101 | Bir', tur: 'otomatik' });
+    assert.equal(r.gecti, false);
+    assert.deepEqual(r.nedenKodlari, ['liste-disi-kitap']);
+    assert.ok(r.nedenler.some((n) => /book2 kimliği 777 listede yok/.test(n)), r.nedenler.join('|'));
+  } finally { fs.rmSync(kok, { recursive: true, force: true }); }
+});
+
+test('Web-Z varlığının BookContent.xml\'i boş (0 bayt) → RED icerik-yok; kapak beklenmez', () => {
+  const kok = buildKur(sw6({ 'book5/assets/Grade-6-Games/data/BookContent.xml': '' }));
+  try {
+    const r = yazmaKapisi({ buildDizini: kok, setListesi: SW6_LISTE, tur: 'otomatik' });
+    assert.equal(r.gecti, false);
+    assert.deepEqual(r.nedenKodlari, ['icerik-yok']);
+    assert.ok(r.nedenler.some((n) => /book5: Web-Z varlığı 66903 içerik yok/.test(n)), r.nedenler.join('|'));
+    assert.deepEqual(r.webzVarliklari, [{ n: 5, id: '66903', yol: 'config', icerik: false, kapak: true }]);
+  } finally { fs.rmSync(kok, { recursive: true, force: true }); }
+  const kapaksiz = buildKur(sw6());
+  try {
+    fs.rmSync(path.join(kapaksiz, 'book5/assets/Grade-6-Games/thumbs'), { recursive: true });
+    const r = yazmaKapisi({ buildDizini: kapaksiz, setListesi: SW6_LISTE, tur: 'otomatik' });
+    assert.equal(r.gecti, true, r.nedenler.join('|'));
+    assert.equal(r.webzVarliklari[0].kapak, false);
+  } finally { fs.rmSync(kapaksiz, { recursive: true, force: true }); }
+});
+
+test('menü okunamazsa (okuyucu null döner) Web-Z eşlemesi yapılmaz → bugünkü davranış (kitap-eksik)', () => {
+  const r = yazmaKapisi({
+    zipYolu: 'sahte.zip', setListesi: `${LISTE4}\n66903 | Games`,
+    listele: () => [...build4(), ...kitapGirisleri(5, 'Grade-6-Games')],
+    okuyucu: { veri: () => null, boyut: () => null },
+  });
+  assert.equal(r.gecti, false);
+  assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
+  assert.deepEqual(r.webzVarliklari, []);
+});

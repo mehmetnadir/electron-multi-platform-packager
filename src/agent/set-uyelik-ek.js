@@ -655,5 +655,5 @@ async function setUyelikEki(o) {
 
 module.exports = {
   ISARET, ekAcik, setListesiAyristir, setListesiCoz, eslestir, menuXmlUret, yeniBooks, webzYaz,
-  kapiDenetle, exeKitaplari, tohumluRastgele, setUyelikEki, MENU_YOLLARI,
+  kapiDenetle, exeKitaplari, tohumluRastgele, setUyelikEki, MENU_YOLLARI, menuBooksOku,
 };
