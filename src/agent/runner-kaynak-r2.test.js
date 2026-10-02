@@ -259,15 +259,14 @@ test('r2-kur 200: taban arşivden → merdiven → kapı → presign → PUT →
   assert.equal(kayit.r2Surum, '2.51.10', 'arşiv R2 önbelleği olarak tazelenir');
 });
 
-test('r2-kur 409 (sunucu kapısı): yükleme yapılmış olsa da paket ÜRETİLMEZ, birak çağrılır, kalıcı hata', async () => {
+test('r2-kur 409 (sunucu kapısı): yükleme yapılmış olsa da paket ÜRETİLMEZ, birak YOK (sunucu bıraktı), kalıcı hata', async () => {
   const zip = setBuildZip();
   const r = await isKostur({ arsivKoku: arsivKur('45549', zip), job: r2Kur(), merdivenDonus: MERDIVEN,
     sunucu: { tamamla: () => [409, { nedenler: ['boyut 10 < önceki 999 × 0.8'], nedenKodlari: ['boyut-esigi'] }] } });
   assert.match(r.hata.message, /sunucu kapısı RED \(HTTP 409\) \[boyut-esigi\].*boyut 10 < önceki/);
   assert.equal(r.kayit.parcalar.length, 1, 'yükleme yapıldı');
   assert.equal(r.kayit.uploadGovde, null, 'paketleyiciye HİÇBİR ŞEY gitmez');
-  assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
-  assert.equal(r.kayit.govdeler['kaynak/birak'][0].uploadId, 'UP-1');
+  assert.equal(r.kayit.govdeler['kaynak/birak'], undefined, 'sunucu kilidi kapı reddiyle aynı istekte bıraktı');
   assert.equal(r.kayit.govdeler.release, undefined, 'kalıcı: kira bırakılmaz, ana döngü failed yazar');
   assert.equal(isTransientNetworkError(r.hata), false);
   assert.equal(ertelenebilirKaynakHatasi(r.hata), false);

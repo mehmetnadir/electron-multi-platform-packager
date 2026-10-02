@@ -333,11 +333,27 @@ test('r2KurYayinla yerel kapı reddi: birak {sebep:kapi-reddi, nedenler, nedenKo
   });
 });
 
-test('r2KurYayinla 409 nedenler: yükleme yapılmış olsa da KALICI hata + birak (uploadId ile)', async () => {
+test('r2KurYayinla 409 nedenler (sunucu kapısı): KALICI hata, birak YOK — sunucu kilidi aynı istekte bıraktı', async () => {
+  // Saha 02.10 (59480): sunucu kapı reddinde kilidi bırakıp reddi yazar; ikinci birak 409 kilit_yok
+  // döndü ve runner "kilit kurulumBitis'te düşer" diye yanlış uyardı.
   const a = akis({ tamamla: { status: 409, data: { nedenler: ['boyut 150 < önceki 1000 × 0.8'] } } });
   await assert.rejects(R.r2KurYayinla(a.o), (e) => e.gecici === false && /sunucu kapısı RED \(HTTP 409\)/.test(e.message));
-  assert.deepEqual(a.yollar(), ['kaynak/presign-multipart', 'kaynak/tamamla', 'kaynak/birak']);
-  assert.equal(a.s.cagrilar[2].govde.uploadId, 'U1');
+  assert.deepEqual(a.yollar(), ['kaynak/presign-multipart', 'kaynak/tamamla']);
+  // 409 NEDENSİZ (kilit_yok/lease) tamamla ise geçicidir ve birak denenir (eski davranış).
+  const b = akis({ tamamla: { status: 409, data: { error: 'kilit_yok' } } });
+  await assert.rejects(R.r2KurYayinla(b.o), (e) => e.gecici === true);
+  assert.deepEqual(b.yollar(), ['kaynak/presign-multipart', 'kaynak/tamamla', 'kaynak/birak']);
+});
+
+test('r2KurYayinla: üretecin link kartları webzVarliklari (yol link) olarak tamamla\'ya gider; kapınınkiyle tekilleşir', async () => {
+  const a = akis();
+  a.o.ekWebzVarliklari = [{ n: 3, id: '3100010', yol: 'link', icerik: false, kapak: false },
+    { n: 0, id: 'x', yol: 'link' }, { n: 4, id: '', yol: 'link' }];
+  await R.r2KurYayinla(a.o);
+  const t = a.s.cagrilar.find((c) => c.yol === 'kaynak/tamamla').govde;
+  assert.deepEqual(t.webzVarliklari, [{ n: 3, id: '3100010', yol: 'link', icerik: false, kapak: false }]);
+  assert.deepEqual(R.tamamlaWebzVarliklari([{ n: 2, id: '7', yol: 'link' }, { n: 3, id: '8', yol: 'xx' }]).map((w) => w.yol),
+    ['link', 'config']);
 });
 
 test('r2KurYayinla ağ hatası (parça) / tamamla 5xx / kilit süresi: GEÇİCİ + birak', async () => {

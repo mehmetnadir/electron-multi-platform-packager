@@ -258,6 +258,21 @@ test('r2-kur taban YOK, Flashy ama arşivde YDS (60) kalıbı yok: ERTELENİR ur
   assert.equal(r.kayit.govdeler.release.length, 1, 'kira bırakılır');
 });
 
+test('r2-kur taban YOK, zip\'siz oyun (3100010 Games) link kartı: tamamla webzVarliklari\'nda yol link (saha 59480)', async () => {
+  const o = await ortam();
+  const liste = '501 | A |  | book | \n3100010 | Games |  | games | \n502 | B |  | book | ';
+  const r = await isKostur({ o, job: { bookId: '59480', kisaKod: 'abc12', setListesi: liste } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+  const t = r.kayit.govdeler['kaynak/tamamla'][0];
+  assert.equal(t.uretec.linkKarti, 1);
+  assert.deepEqual(t.kitaplar.map((k) => [k.n, k.id]), [[1, '501'], [3, '502']]);
+  assert.deepEqual(t.webzVarliklari, [{ n: 2, id: '3100010', yol: 'link', icerik: false, kapak: false }],
+    'sunucu kapısı (kendi listesinde 3100010) kimliği kitaplar ∪ webzVarliklari içinde bulur');
+  const n = new Set([...t.kitaplar.map((k) => k.n)]);
+  assert.equal(n.has(2), false, 'link kartının n\'i İmpark kitabının bookN\'iyle çakışmaz');
+  assert.match(r.is.setListesi, /^501 \| A[^\n]*\nlink:https:\/\/akillitahta\.ndr\.ist\/go\/abc12\/web-stream\/book2\/index\.html \| Games\n502/);
+});
+
 test('r2-kur taban YOK, aktivasyonsuz ama kabuk YOK: ERTELENİR uretec-tema-yok (YDS kabuğu uydurulmaz)', async () => {
   const o = await ortam({ kabuk: false });
   const r = await isKostur({ o, job: { setListesi: '501 | A\n502 | B' } });

@@ -2118,6 +2118,8 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null }) 
     // Sonraki adımlar (set eki, yazma kapısı) AYNI listeyi görsün: kitap-dışı varlık link'e çevrilmiş hâli.
     job.setListesi = rapor.kapiListesi;
     job.uretecOzeti = { ...indexUreteci.uretecOzeti(rapor), liste: liste.kaynak };
+    // Link kartına çevrilen öğeler sunucu kapısına `webzVarliklari` (yol 'link') olarak bildirilir.
+    job.uretecWebzVarliklari = indexUreteci.linkVarliklari(rapor);
     return { oncekiBoyut: null };
   }
   if (kaynak.taban.tur === 'r2') {
@@ -2571,6 +2573,7 @@ async function processJob(auth, job) {
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
           // Üreteç özeti `tamamla`ya (sunucu bilinmeyen alanı atar; kayıt `kaynak='uretec'` book-update işi).
           tamamlaEki: job.uretecOzeti ? { uretec: job.uretecOzeti } : {},
+          ekWebzVarliklari: job.uretecWebzVarliklari || [],
           parcaBoyutu: MULTIPART_PART_SIZE, log,
         });
       } catch (e) {

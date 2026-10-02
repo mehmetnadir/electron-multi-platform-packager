@@ -186,8 +186,9 @@ function tamamlaKitaplari(kitaplar) {
 
 /**
  * Yazma kapısı `webzVarliklari` → `tamamla` gövdesi (02.10, 45550): listedeki İmpark-dışı Web-Z
- * varlıkları (Games/Videos) — `{n, id, yol: 'config'|'ad', icerik, kapak}`. Sunucu liste kimliğini
+ * varlıkları (Games/Videos) — `{n, id, yol: 'config'|'ad'|'link', icerik, kapak}`. Sunucu liste kimliğini
  * `kitaplar ∪ webzVarliklari` içinde arar; alanı tanımayan (eski) sunucu yok sayar.
+ * `yol: 'link'` = index üretecinin link kartına çevirdiği liste öğesi (zip'i yok; build'de kitap değil).
  */
 function tamamlaWebzVarliklari(liste) {
   return (Array.isArray(liste) ? liste : [])
@@ -195,7 +196,7 @@ function tamamlaWebzVarliklari(liste) {
     .map((w) => ({
       n: w.n,
       id: String(w.id),
-      yol: w.yol === 'ad' ? 'ad' : 'config',
+      yol: w.yol === 'ad' || w.yol === 'link' ? w.yol : 'config',
       icerik: w.icerik === true,
       kapak: w.kapak === true,
     }));
@@ -299,8 +300,8 @@ function kaynakUcIstemcisi({
       const gecici = r.status >= 500 || r.status === 0 || r.status === 409;
       throw new KaynakR2Hatasi(`tamamla yanıtı beklenmedik: HTTP ${r.status} ${ozet(r.data)}`, { gecici });
     },
-    /** FIRLATMAZ — kilit sunucuda kurulumBitis'te kendiliğinden düşer. 409 (B2 kapı reddinden sonra
-     * kilidi zaten bırakmıştır) yalnız uyarıdır, hata DEĞİL. @returns {Promise<boolean>} */
+    /** FIRLATMAZ. 409 = kilit bu ajanda değil (sunucu zaten bırakmış ya da süresi dolup başka ajana
+     * geçmiş) — yalnız uyarı, hata DEĞİL. @returns {Promise<boolean>} */
     async birak({ bookId, platform, surum, sebep, uploadId, nedenler, nedenKodlari }) {
       const liste = (a) => (Array.isArray(a) ? a.map((x) => String(x).slice(0, 300)).slice(0, 20) : null);
       const nd = liste(nedenler);
@@ -311,7 +312,9 @@ function kaynakUcIstemcisi({
         ...(nd ? { nedenler: nd } : {}), ...(nk ? { nedenKodlari: nk } : {}),
       });
       if (r.status === 200) return true;
-      warn(`${R2_ISARETI} kaynak/birak HTTP ${r.status} — kilit kurulumBitis'te düşer: ${bookId} ${surum}`);
+      warn(r.status === 409
+        ? `${R2_ISARETI} kaynak/birak HTTP 409 — kilit bu ajanda değil (sunucu bırakmış): ${bookId} ${surum}`
+        : `${R2_ISARETI} kaynak/birak HTTP ${r.status} — kilit kurulumBitis'te düşer: ${bookId} ${surum}`);
       return false;
     },
   };
@@ -337,6 +340,7 @@ function kaynakUcIstemcisi({
 async function r2KurYayinla({
   job, zipYolu, setListesi = null, oncekiBoyut = null, vsler = {}, istemci, kapi, ozet,
   parcalariYukle, parcaBoyutu = 64 * 1024 * 1024, simdi = Date.now(), log = () => {}, tamamlaEki = {},
+  ekWebzVarliklari = [],
 }) {
   const surum = job.kaynakSurumu;
   const kimlik = { bookId: job.bookId, platform: job.platform, surum };
@@ -372,7 +376,9 @@ async function r2KurYayinla({
     return birakVeFirlat(new KaynakR2Hatasi(`yükleme düştü: ${String(e && e.message || e).slice(0, 300)}`, { gecici: true }));
   }
   const kitaplar = tamamlaKitaplari(k.kitaplar);
-  const webzVarliklari = tamamlaWebzVarliklari(k.webzVarliklari);
+  // Yazma kapısının eşledikleri + üretecin link kartları (aynı kimlik iki kez gitmez; kapınınki önce).
+  const webzVarliklari = tamamlaWebzVarliklari([...(k.webzVarliklari || []), ...(ekWebzVarliklari || [])])
+    .filter((w, i, a) => a.findIndex((x) => x.id === w.id) === i);
   if (Array.isArray(k.notlar) && k.notlar.length) {
     log(`${R2_ISARETI} yazma kapısı notları ${job.bookId} ${surum}: ${k.notlar.join(' | ')}`);
   }
@@ -389,7 +395,10 @@ async function r2KurYayinla({
   }
   if (t.durum === 'red') {
     const kodlar = t.nedenKodlari && t.nedenKodlari.length ? ` [${t.nedenKodlari.join(', ')}]` : '';
-    return birakVeFirlat(new KaynakR2Hatasi(`sunucu kapısı RED (HTTP 409)${kodlar} — build yüklendi ama geçerli sayılmadı, paket üretilmez: ${t.nedenler.join(' | ')}`, { nedenler: t.nedenler, nedenKodlari: t.nedenKodlari || [] }));
+    // Sunucu kapı reddinde kilidi AYNI istekte bırakır ve reddi yazar (Ö4) → ayrıca birak YOK
+    // (saha 02.10 59480: ikinci birak 409 kilit_yok döndü, "kilit asılı" diye yanlış okundu).
+    log(`${R2_ISARETI} r2-kur ${job.bookId} ${surum}: sunucu kapısı reddetti — kilit sunucuda bırakıldı`);
+    throw new KaynakR2Hatasi(`sunucu kapısı RED (HTTP 409)${kodlar} — build yüklendi ama geçerli sayılmadı, paket üretilmez: ${t.nedenler.join(' | ')}`, { nedenler: t.nedenler, nedenKodlari: t.nedenKodlari || [] });
   }
   log(`${R2_ISARETI} r2-kur ${job.bookId} ${surum}: tamamlandı (sha256 ${oz.sha256}, ${kitaplar.length} kitap)`);
   return {

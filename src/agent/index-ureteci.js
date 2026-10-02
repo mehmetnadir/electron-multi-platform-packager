@@ -689,7 +689,10 @@ async function uret(o) {
       donusum: donusumKaniti,
       kapak: temaAdi ? kapakSay : null,
       kitaplar: kitapRapor,
-      linkKarti: linkKarti.map((g) => ({ assetId: g.id, ad: g.ad, url: g.url, sebep: g.sebep })),
+      // n = liste satır sırası (link kartının dizini link<n>; bookN ile ORTAK sayaç — çakışmaz).
+      linkKarti: linkKarti.map((g) => ({
+        n: Number(String(g.anahtar || '').replace(/\D/g, '')) || null, assetId: g.id, ad: g.ad, url: g.url, sebep: g.sebep,
+      })),
       atlanan: atlanan.map((g) => ({ assetId: g.id, ad: g.ad, sebep: g.sebep })),
       linkler: plan.linkler.map((g) => ({ ad: g.ad, url: g.url })),
       kapiListesi,
@@ -698,6 +701,17 @@ async function uret(o) {
   } finally {
     if (!o.sahneyiTut) await fsp.rm(sahne, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * Link kartına çevrilen liste öğeleri → `tamamla` `webzVarliklari` (yol 'link'). Sunucu kapısı kendi
+ * (çevrilmemiş) listesindeki kimliği `kitaplar ∪ webzVarliklari` içinde arar; link kartı build'de
+ * kitap değildir, içerik/kapak beklenmez (saha 02.10, 59480 3100010 Games: 409 kitap-eksik). SAF.
+ */
+function linkVarliklari(r) {
+  return (r && Array.isArray(r.linkKarti) ? r.linkKarti : [])
+    .filter((g) => Number.isSafeInteger(g.n) && g.n >= 1 && g.assetId != null && String(g.assetId) !== '')
+    .map((g) => ({ n: g.n, id: String(g.assetId), yol: 'link', icerik: false, kapak: false }));
 }
 
 /** `tamamla` gövdesine giden üreteç özeti (sunucu bilinmeyen alanı atar; kayıt için book-update işi). SAF. */
@@ -716,5 +730,5 @@ module.exports = {
   ISARET, DUZEN, AKTIVASYON, KOD, UretecHatasi, planKur, grupOku, aktivasyonKarari, duzenKarari,
   kapiListesiKur, tekMotorMenuXml, webzMenuDosyalari, kalipOku, kabukGecerliMi, uret, uretecOzeti,
   KOK_MOTOR_EKLERI, MOTOR_HARIC, alanOku, logoGizle, logoDuzMu, tabanUcYaz, donusumDenetle,
-  motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO,
+  motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO, linkVarliklari,
 };
