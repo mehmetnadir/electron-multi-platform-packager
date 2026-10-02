@@ -70,6 +70,8 @@ const { artefaktOzeti } = require('./artefakt-kaniti');
 // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — uç istemcisi + yayın akışı tek modülde.
 const kaynakR2 = require('./kaynak-r2');
 const { yazmaKapisi } = require('./yazma-kapisi');
+// Çevrimdışı aktivasyon anahtarları (imKeys.dll) — güvenlik 02.10, bkz. imkeys.js başlığı.
+const imKeys = require('./imkeys');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -1938,6 +1940,9 @@ const kaynakIndirme = {
 const kaynakAdim = {
   merdiven: (...a) => icerikMerdiveni(...a),
   setEki: (...a) => setEk.setUyelikEki(...a),
+  // imKeys: bağımlılıklar exports üzerinden çözülür (test-yalitim sahtesini koyabilsin; üretimde
+  // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
+  imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
 };
 
 /** Kaynak uç istemcisi (B2) — runner'ın axios + ajan başlığıyla; biçim kaynak-r2.js'te. */
@@ -2401,6 +2406,24 @@ async function processJob(auth, job) {
     const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
     job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
 
+    // ÇEVRİMDIŞI AKTİVASYON (imKeys.dll, güvenlik 02.10 — imkeys.js): okuyucu imKeys.dll'i boş
+    // bulup çevrimdışıysa kitabı SABİT 123456 ile kendisi aktive ediyor; İmpark build'lerinde dosya
+    // hiç yok. Her kaynakta (r2-kur build'e yazılır → 4 platform aynısını alır; r2-al'de eksikse;
+    // arşiv/manuel'de taze) anahtarlı kapaklara key.ydspublishing.com kodları yazılır. Anahtar
+    // çekilemezse iş ERTELENİR; anahtarlı kapakta imKeys boş/yoksa paket YAYINLANMAZ (imkeys-yok).
+    let imk;
+    try {
+      imk = await kaynakAdim.imKeys({
+        zipYolu: zipPath, paketId: job.bookId, mod: kaynak.tur === 'r2-al' ? 'eksikse' : 'yaz',
+        calisma: work, log,
+      });
+    } catch (e) {
+      if (e && e.gecici) {
+        return r2Ertele(auth, job, `${imKeys.ISARET} ${e.message}`, { kilitBirak: kaynak.tur === 'r2-kur' });
+      }
+      throw e;
+    }
+
     // R2'YE YAZ (Dalga B, r2-kur): kurulan build yazma kapısından (B5) geçerse R2'ye yüklenir ve
     // `tamamla` ile sunucu kapısına sunulur. Kapı reddi / 409 → paket ÜRETİLMEZ (kalıcı: failed +
     // bildirim); ağ/5xx/kilit süresi → kira bırakılır (failed yok). Her düşüşte kurma kilidi bırakılır.
@@ -2410,7 +2433,8 @@ async function processJob(auth, job) {
         yayin = await kaynakR2.r2KurYayinla({
           job, zipYolu: zipPath, setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null,
           oncekiBoyut: r2OncekiBoyut, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
-          kapi: yazmaKapisi, ozet: ikiOzet, parcalariYukle, parcaBoyutu: MULTIPART_PART_SIZE, log,
+          kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
+          parcaBoyutu: MULTIPART_PART_SIZE, log,
         });
       } catch (e) {
         if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: false });
@@ -2418,6 +2442,10 @@ async function processJob(auth, job) {
       }
       // Arşiv = R2'nin yerel önbelleği: aynı Mac'teki diğer platformlar r2-al'de indirmesin.
       await r2ArsiveYaz(job.bookId, zipPath, { surum: yayin.surum, ...yayin.ozet, uyari: warn });
+    }
+    // imKeys kapısı (r2-kur'da yazma kapısında zaten RED olur): paketleyiciye gitmeden önce.
+    if (!imk.kapi.gecti) {
+      throw new Error(`${imKeys.ISARET} ${imKeys.NEDEN_KODU} — paket YAYINLANMAZ: ${imk.kapi.nedenler.join(' | ')}`);
     }
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten

@@ -83,6 +83,17 @@ function izoleOrtam() {
     process.env[env] = path.join(dir, dosyaAdi);
   }
 
+  // imKeys (güvenlik 02.10): runner testleri GERÇEK HasZKitapKey'e (internet) ve srv21 keypanel'ine
+  // (ssh) gitmesin. Sahte = "hiçbir kitap anahtarlı değil" → imKeys yazılmaz, kapı geçer (bugünkü
+  // davranış). Üretim kodunda env ile kapatma YOK; sahte yalnız bu test yardımcısından konur.
+  // imKeys'i ölçen testler (imkeys.test.js, runner-imkeys.test.js) kendi bağımlılığını verir.
+  const imKeysMod = require('./imkeys');
+  const eskiImKeysBag = imKeysMod.varsayilanBagimliliklar;
+  imKeysMod.varsayilanBagimliliklar = () => ({
+    anahtarliMi: async () => false,
+    kodCek: async () => { throw new Error('test-yalitim: keypanel çağrılmamalı'); },
+  });
+
   let configUygulandi = null;
   return {
     dir,
@@ -109,6 +120,7 @@ function izoleOrtam() {
         if (eski === undefined) delete process.env[env]; else process.env[env] = eski;
       }
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* zaten yok */ }
+      imKeysMod.varsayilanBagimliliklar = eskiImKeysBag;
       configUygulandi = null;
     },
   };
