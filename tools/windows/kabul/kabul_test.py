@@ -241,5 +241,38 @@ class KaldirmaYontemiTest(unittest.TestCase):
             self.assertNotEqual(kabul.kaldirma_yontemi(v), "rm")
 
 
+class YerelKipTest(unittest.TestCase):
+    """EMPP_KABUL_YEREL_DIZIN: runner kasa'nin kendisinde — ekran/rapor dizine yazilir, POST yok."""
+
+    def setUp(self):
+        import tempfile
+        self.dizin = tempfile.mkdtemp(prefix="kabul-yerel-")
+        self.eski = os.environ.get("EMPP_KABUL_YEREL_DIZIN")
+        os.environ["EMPP_KABUL_YEREL_DIZIN"] = self.dizin
+
+    def tearDown(self):
+        if self.eski is None:
+            os.environ.pop("EMPP_KABUL_YEREL_DIZIN", None)
+        else:
+            os.environ["EMPP_KABUL_YEREL_DIZIN"] = self.eski
+
+    def test_ekran_png_rapor_json(self):
+        self.assertEqual(kabul.yerel_ad("45538-k01"), "45538-k01.png")
+        self.assertEqual(kabul.yerel_ad("rapor-45538-a"), "rapor-45538-a.json")
+
+    def test_gonder_dosyaya_yazar_ag_yok(self):
+        import urllib.request
+        eski_ac = urllib.request.urlopen
+        urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(AssertionError("ag cagrildi"))
+        try:
+            self.assertTrue(kabul.gonder("rapor-x", b'{"sonuc":"GECTI"}'))
+            self.assertTrue(kabul.gonder("x-menu", b"\x89PNG"))
+        finally:
+            urllib.request.urlopen = eski_ac
+        with open(os.path.join(self.dizin, "rapor-x.json"), "rb") as f:
+            self.assertEqual(f.read(), b'{"sonuc":"GECTI"}')
+        self.assertTrue(os.path.exists(os.path.join(self.dizin, "x-menu.png")))
+
+
 if __name__ == "__main__":
     unittest.main()

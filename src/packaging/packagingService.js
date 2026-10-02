@@ -4310,11 +4310,12 @@ if (!window.cordova) {
   resolveElectronBuilderBinary() {
     let base;
     const localBin = path.resolve('node_modules/.bin/electron-builder');
-    if (fs.existsSync(localBin)) {
+    if (process.platform === 'win32') {
+      // Windows: `.bin/electron-builder` bir sh betiğidir, `.cmd` shell:false ile EINVAL verir —
+      // electron-builder'ın JS girişi Node ile koşar (gerekçe: electron-builder-ikili.js).
+      base = require('./electron-builder-ikili').windowsIkili({ kok: process.cwd(), execPath: process.execPath });
+    } else if (fs.existsSync(localBin)) {
       base = { command: localBin, args: [] };
-    } else if (process.platform === 'win32') {
-      const cmd = path.resolve('node_modules/.bin/electron-builder.cmd');
-      base = fs.existsSync(cmd) ? { command: cmd, args: [] } : { command: 'npx', args: ['electron-builder'] };
     } else {
       base = { command: 'npx', args: ['electron-builder'] };
     }

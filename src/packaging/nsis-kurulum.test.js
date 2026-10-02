@@ -74,6 +74,16 @@ test('customCheckAppRunning: kaldırıcıda yalnız şablon davranışı; yükle
   assert.ok(yuk.indexOf('_CHECK_APP_RUNNING') < yuk.indexOf('emppEskiSurum'));
 });
 
+test('customCheckAppRunning: Windows derlemesinde ters bölü KORUNUR (makensis win ileri bölüyü bulamaz)', () => {
+  // Ölçüm 2026-10-02 windows-kasa, makensis 3.0.4.1: "D:/…/inc.nsh" → could not find, "D:\…\inc.nsh" → OK.
+  const m = nk.customCheckAppRunningMakro('D:\\empp\\temp\\j\\app\\build\\empp-kurulum-ovr.nsh', 'win32');
+  assert.match(m, /!include "D:\\empp\\temp\\j\\app\\build\\empp-kurulum-ovr\.nsh"/);
+  assert.ok(!m.includes('D:/empp'), 'Windows yolunda ileri bölü kalmamalı');
+  // macOS/Linux: ileri bölü (değişmedi)
+  assert.match(nk.customCheckAppRunningMakro('C:\\x\\y.nsh', 'darwin'), /!include "C:\/x\/y\.nsh"/);
+  assert.match(nk.customCheckAppRunningMakro('/a/b.nsh', 'linux'), /!include "\/a\/b\.nsh"/);
+});
+
 test('ovr: doğrudan açma (ara dizin/CopyFiles YOK), yalnız $EXEPATH kopyası atlanır, üç mimari', () => {
   const o = nk.ovrIcerigi();
   const ac = o.slice(o.indexOf('!macro extractUsing7za'), o.indexOf('!macroend', o.indexOf('!macro extractUsing7za')));

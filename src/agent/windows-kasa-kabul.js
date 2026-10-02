@@ -58,9 +58,17 @@ const REPO_KOKU = path.join(__dirname, '..', '..');
 const ALTYAPI_SEBEPLERI = new Set(['INDIRILEMEDI', 'PE_DEGIL']);
 
 /** Runner CONFIG'ine eklenen alanlar (windows-serit varsayilanAyarlar içine yayılır). */
-function kasaAyarlari(env = process.env) {
+function kasaAyarlari(env = process.env, platform = process.platform) {
   const ev = path.join(os.homedir(), '.empp-agent');
   return {
+    // YEREL KİP (2026-10-02): runner windows-kasa'nın KENDİSİNDE koşuyorsa (win32) köprü/izleyici
+    // yoktur — kabul.py bu makinede doğrudan koşar. EMPP_WIN_KASA_YEREL=0/1 ile zorlanır.
+    winKasaYerel: env.EMPP_WIN_KASA_YEREL ? env.EMPP_WIN_KASA_YEREL === '1' : platform === 'win32',
+    winKasaPython: env.EMPP_WIN_KASA_PYTHON
+      || path.win32.join(env.LOCALAPPDATA || 'C:\\Users\\Administrator\\AppData\\Local',
+        'Programs', 'Python', 'Python313', 'python.exe'),
+    // kabul.py KOK sabiti (D:\\kabul): paket oraya `<anahtar>.exe` adıyla konur, kabul.py ONBELLEK görür.
+    winKasaYerelKok: env.EMPP_WIN_KASA_YEREL_KOK || 'D:\\kabul',
     // EMPP_WIN_KASA_KABUL=0 → kasa hiç denenmez (bugünkü başsız davranış). Varsayılan AÇIK.
     winKasaKabul: env.EMPP_WIN_KASA_KABUL !== '0',
     winKasaVmKok: env.EMPP_VM_KOK || path.join(os.homedir(), 'vm-kapi'),
@@ -208,6 +216,11 @@ function kalpYolu(cfg) {
 
 /** Anlık erişim ölçümü (yalnız dosya okur, süreç açmaz — heartbeat'te çağrılabilir). */
 function kasaErisimi(cfg, simdiMs = Date.now()) {
+  if (cfg.winKasaYerel) {
+    return cfg.winKasaKabul === false
+      ? { erisilir: false, sebep: 'EMPP_WIN_KASA_KABUL=0 (kapalı)' }
+      : { erisilir: true, sebep: 'yerel kip — runner windows-kasa\'nın kendisinde (kabul.py doğrudan)' };
+  }
   let kalpMetni = '';
   try { kalpMetni = fs.readFileSync(kalpYolu(cfg), 'utf8'); } catch (_) { kalpMetni = ''; }
   const bende = fs.existsSync(karar.bendeYolu(cfg.winKasaVmKok, MAKINE));
@@ -306,6 +319,7 @@ async function kasaKabulKapisi(p) {
   const sleep = p.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const e1 = kasaErisimi(cfg);
   if (!e1.erisilir) return { kullanildi: false, sebep: e1.sebep };
+  if (cfg.winKasaYerel && !p.aktivasyon) return yerelKabulKapisi(p);
   if (p.aktivasyon) {
     return {
       kullanildi: false,
@@ -391,7 +405,135 @@ async function kasaKabulKapisi(p) {
     + `iş ertelenmeli: ${k.sebep}; kanıt: ${kanitDizini}`);
 }
 
+// ---------------------------------------------------------------------------
+// YEREL KİP — runner windows-kasa'nın kendisinde (sözleşme exesiz-kaynak §2c, Nadir 02.10)
+// ---------------------------------------------------------------------------
+
+/** kabul.py komut satırı (yerel kip). Saf. URL yerine `yerel:` — kabul.py paketi KOK'ta bulur (ONBELLEK). */
+function yerelKabulArgv({ python, kabulPy, anahtar, exeHedef, baslik }) {
+  return [python, kabulPy, anahtar, `yerel:${exeHedef}`, baslik];
+}
+
+/**
+ * Makine geneli tek kabul kilidi (perl/flock yok): O_EXCL kilit dosyası. Bayat kilit (sahibi PID
+ * yaşamıyor ya da `bayatMs`'den eski) taşınır, yerine yenisi alınır. @returns {Promise<() => Promise<void>>}
+ */
+async function yerelKilitAl(cfg, { log, sleep, simdi = Date.now, pidYasiyor = varsayilanPidYasiyor }) {
+  await fsp.mkdir(path.dirname(cfg.winKasaKilit), { recursive: true });
+  const bitis = simdi() + cfg.winKasaKilitBeklemeMs;
+  const bayatMs = cfg.winKasaKabulTimeoutMs + 15 * 60 * 1000;
+  let ilk = true;
+  for (;;) {
+    try {
+      const fh = await fsp.open(cfg.winKasaKilit, 'wx');
+      await fh.writeFile(JSON.stringify({ pid: process.pid, zaman: new Date(simdi()).toISOString() }));
+      await fh.close();
+      return async () => {
+        try { await fsp.rename(cfg.winKasaKilit, `${cfg.winKasaKilit}.birakildi`); } catch (_) { /* yok */ }
+      };
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') {
+        throw new Error(`${WIN_KASA_KABUL_ISARETI} yerel kabul kilidi açılamadı (${(e && e.code) || e}) `
+          + '— paket kusuru DEĞİL, iş ertelenmeli');
+      }
+    }
+    let sahip = null;
+    try { sahip = JSON.parse(await fsp.readFile(cfg.winKasaKilit, 'utf8')); } catch (_) { sahip = null; }
+    const yas = sahip && sahip.zaman ? simdi() - Date.parse(sahip.zaman) : Infinity;
+    if (!sahip || !pidYasiyor(sahip.pid) || yas > bayatMs) {
+      log(`windows: yerel kabul kilidi bayat (pid ${sahip && sahip.pid}, yaş ${Math.round(yas / 1000)} sn) — devralınıyor`);
+      try { await fsp.rename(cfg.winKasaKilit, `${cfg.winKasaKilit}.bayat-${simdi()}`); } catch (_) { /* yarış */ }
+      continue;
+    }
+    if (ilk) { log('windows: yerel kabul kilidi dolu (makinede başka kabul var) — sıra bekleniyor'); ilk = false; }
+    if (simdi() > bitis) {
+      throw new Error(`${WIN_KASA_KABUL_ISARETI} yerel kabul kilidi `
+        + `${Math.round(cfg.winKasaKilitBeklemeMs / 60000)} dk boşalmadı — paket kusuru DEĞİL, iş ertelenmeli`);
+    }
+    await sleep(cfg.winKasaKilitAralikMs);
+  }
+}
+
+function varsayilanPidYasiyor(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; }
+}
+
+/**
+ * Yerel kabul kapısı: paket D:\\kabul\\<anahtar>.exe (aynı birimde sabit bağlantı) → kabul.py bu
+ * makinede (kur → aç → her kitap → ilk sayfa + thumbnail → ekran → kaldır); ekranlar ve rapor
+ * doğrudan kanıt dizinine yazılır (EMPP_KABUL_YEREL_DIZIN). Kararlar köprülü kapıyla AYNI
+ * (`raporKarari`): GECTI döner, KALDI/ÖLÇÜLEMEDİ fırlatır.
+ */
+async function yerelKabulKapisi(p) {
+  const { exe, bookId, etiket, cfg } = p;
+  const log = p.log || (() => {});
+  const sleep = p.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const birak = await (p.kilitAl || yerelKilitAl)(cfg, { log, sleep });
+  const anahtar = kabulAnahtari(bookId, etiket);
+  const exeHedef = path.join(cfg.winKasaYerelKok, `${anahtar}.exe`);
+  const kanitDizini = path.join(kanitKoku(), kanitAdi(bookId, 'windows'));
+  const tavanMs = cfg.winKasaKabulTimeoutMs;
+  const bas = Date.now();
+  let r = null;
+  let rapor = null;
+  let k = null;
+  try {
+    await fsp.mkdir(cfg.winKasaYerelKok, { recursive: true });
+    await fsp.mkdir(kanitDizini, { recursive: true });
+    const yol = await paketiSun(exe, exeHedef);
+    log(`windows: windows-kasa YEREL kabul başlıyor [${etiket}] — anahtar ${anahtar}, paket `
+      + `${yol === 'bag' ? 'bağlantı' : 'kopya'}, tavan ${Math.round(tavanMs / 60000)} dk `
+      + '(kur → aç → her kitap → ilk sayfa + thumbnail → kaldır)');
+    const argv = yerelKabulArgv({
+      python: cfg.winKasaPython, kabulPy: cfg.winKasaKabulPy, anahtar, exeHedef, baslik: p.baslik || String(bookId),
+    });
+    const calistir = p.calistir || require('./windows-serit').komutKos; // döngüsel require: çağrı anında
+    r = await calistir(argv, {
+      env: { EMPP_KABUL_YEREL_DIZIN: kanitDizini, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+      zamanAsimiMs: tavanMs,
+      satir: (s) => { if (/^(INDIRME|KURULUM|KITAP|RAPOR)/.test(s)) log('  [kasa]', s.slice(0, 240)); },
+    });
+    rapor = ciktidanJson(r && r.cikti);
+    k = raporKarari(rapor);
+    if (!rapor) {
+      const son = String((r && r.cikti) || '').split(/\r?\n/).filter(Boolean).slice(-2).join(' | ').slice(0, 200);
+      k.sebep = r && r.zamanAsimi ? `kabul.py ${Math.round(tavanMs / 60000)} dk içinde bitmedi`
+        : `rapor gelmedi (çıkış ${r ? r.kod : '?'}${r && r.hata ? `, ${r.hata}` : ''}): ${son}`;
+    }
+  } catch (e) {
+    k = { durum: 'OLCULEMEDI', sebep: `yerel kabul hazırlığı düştü: ${(e && e.message) || e}` };
+  } finally {
+    await sessizSil(exeHedef);
+    if (k) {
+      try {
+        let ekranlar = [];
+        try { ekranlar = (await fsp.readdir(kanitDizini)).filter((f) => f.endsWith('.png')); } catch (_) { ekranlar = []; }
+        if (rapor) await fsp.writeFile(path.join(kanitDizini, 'rapor.json'), `${JSON.stringify(rapor, null, 2)}\n`);
+        await fsp.writeFile(path.join(kanitDizini, 'kosu.log'), String((r && r.cikti) || ''));
+        await fsp.writeFile(path.join(kanitDizini, 'ozet.json'), `${JSON.stringify({
+          bookId: String(bookId), etiket, anahtar, makine: MAKINE, kip: 'yerel', karar: k.durum, sebep: k.sebep,
+          sureSn: Math.round((Date.now() - bas) / 1000), cikis: r ? r.kod : null, zaman: new Date().toISOString(),
+          ekranlar,
+        }, null, 2)}\n`);
+      } catch (e) { log('windows: UYARI yerel kabul kanıtı yazılamadı:', e.message); }
+    }
+    await birak();
+  }
+  if (k.durum === 'GECTI') {
+    log(`windows: windows-kasa YEREL kabul GEÇTİ [${etiket}] — ${k.sebep}; kanıt: ${kanitDizini}`);
+    return { kullanildi: true, durum: 'GECTI', sebep: k.sebep, kanitDizini };
+  }
+  if (k.durum === 'KALDI') {
+    throw new Error(`windows paketi windows-kasa kabul kapısından geçemedi (KALDI) — R2'ye YÜKLENMEDİ: `
+      + `${k.sebep}; kanıt: ${kanitDizini}`);
+  }
+  throw new Error(`${WIN_KASA_KABUL_ISARETI} windows-kasa kabulü ÖLÇÜLEMEDİ — paket kusuru DEĞİL, yükleme YOK, `
+    + `iş ertelenmeli: ${k.sebep}; kanıt: ${kanitDizini}`);
+}
+
 module.exports = {
+  yerelKabulArgv, yerelKilitAl, yerelKabulKapisi,
   MAKINE, kasaAyarlari, kasaErisimKarari, kasaErisimi, kabulAnahtari, psTirnak, sarmalayiciPs, guestKomutu,
   kabulPyHazirla, ciktidanJson, raporKarari, raporsuzSebep, kopruAdresiCoz, kasaKilidiAl, kasaKabulKapisi,
 };

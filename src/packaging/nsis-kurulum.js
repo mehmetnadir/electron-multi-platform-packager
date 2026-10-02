@@ -309,9 +309,16 @@ function customInitBasi() {
   Banner::show /set 76 "Kurulum hazırlanıyor…" "\${PRODUCT_NAME}"`;
 }
 
-/** customCheckAppRunning — SpiderBanner açıldıktan hemen sonra, eski sürümden önce. */
-function customCheckAppRunningMakro(ovrYolu) {
-  const yol = String(ovrYolu).replace(/\\/g, '/');
+/**
+ * customCheckAppRunning — SpiderBanner açıldıktan hemen sonra, eski sürümden önce.
+ *
+ * YOL AYRACI (2026-10-02, windows-kasa'da ölçüldü — makensis 3.0.4.1): Windows makensis'i
+ * `!include "D:/a/b.nsh"` (ileri bölü) için "could not find" verip derlemeyi düşürür; aynı dosya
+ * `D:\a\b.nsh` ile bulunur (dosya argümanı ve stdin, ikisi de). macOS/Linux makensis'i ileri bölü
+ * ister. Bu yüzden ayraç DERLEMENİN koştuğu platforma göre seçilir.
+ */
+function customCheckAppRunningMakro(ovrYolu, platform = process.platform) {
+  const yol = platform === 'win32' ? String(ovrYolu) : String(ovrYolu).replace(/\\/g, '/');
   return `
 !macro customCheckAppRunning
   !ifdef BUILD_UNINSTALLER

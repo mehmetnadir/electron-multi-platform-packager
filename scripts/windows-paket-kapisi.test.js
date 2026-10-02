@@ -1659,3 +1659,21 @@ test('S4 · madde 15 (G2): pakette storage.im varsa ya da shim pasifse FAIL', ()
   assert.strictEqual(K.maddeKurulumDiziniYazma({ asarOkundu: true, sozlesme: K.sozlesmeKanitiTopla(pasif.kok, pasif.yollar), anaJs: ANA_SOZ }).durum, K.FAIL);
   assert.match(K.maddeKurulumDiziniYazma({ asarOkundu: true, sozlesme: K.sozlesmeKanitiTopla(temiz.kok, temiz.yollar), anaJs: 'x' }).detay, /EMPP_WORK_DIR tanımlamıyor/);
 });
+
+test('yedizBul: Windows\'ta where kullanır, çok satırlı çıktının İLK yolunu alır (msys which yolu değil)', () => {
+  const cagri = [];
+  const kos = (komut, arg) => {
+    cagri.push([komut, arg[0]]);
+    if (arg[0] === '7z') return { status: 0, stdout: 'D:\\empp-ajan\\araclar\\7zip\\7z.exe\r\nC:\\Program Files\\7-Zip\\7z.exe\r\n' };
+    return { status: 1, stdout: '' };
+  };
+  assert.strictEqual(K.yedizBul({ platform: 'win32', kos }), 'D:\\empp-ajan\\araclar\\7zip\\7z.exe');
+  assert.deepStrictEqual(cagri[0], ['where', '7z']);
+});
+
+test('yedizBul: macOS/Linux which ile aynen; bulunamazsa null', () => {
+  const kos = (komut, arg) => (komut === 'which' && arg[0] === '7za'
+    ? { status: 0, stdout: '/opt/homebrew/bin/7za\n' } : { status: 1, stdout: '' });
+  assert.strictEqual(K.yedizBul({ platform: 'darwin', kos }), '/opt/homebrew/bin/7za');
+  assert.strictEqual(K.yedizBul({ platform: 'linux', kos: () => ({ status: 1, stdout: '' }) }), null);
+});

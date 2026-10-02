@@ -400,7 +400,8 @@ async function araclariDenetle(cfg, { yuva = true } = {}) {
   // sonra bekçi atar; burada aranmaz ki yuva kapalıyken üretim araç yüzünden durmasın.
   if (yuva) {
     if (!fs.existsSync(cfg.winImzaBetigi)) eksik.push(`imza betiği yok: ${cfg.winImzaBetigi}`);
-    const ossl = await komutKos(['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
+    const ossl = await komutKos(process.platform === 'win32' ? ['where', cfg.winOsslsigncode]
+      : ['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
     if (ossl.kod !== 0) eksik.push(`osslsigncode bulunamadı: ${cfg.winOsslsigncode}`);
     if (!(await imzaYuvasiErisilirMi(cfg))) eksik.push(`imza yuvası erişilemiyor (İmpark VPN / Storage7): ${cfg.winImzaYuvaKoku}`);
   }
@@ -421,14 +422,33 @@ async function imzaKipiSec(cfg) {
   return { kip: 'yuva', sebep: 'imza yuvası erişilemiyor, hazır kuyruk KAPALI (EMPP_WIN_IMZA_BEKLEME=0)' };
 }
 
+/**
+ * Yuva probu komutları. Saf. Windows (windows-kasa ajanı, 2026-10-02): `ping -n/-w` ve dizin
+ * denetimi Node ile (`/bin/test` yok) — SMB stat asılabileceği için yine ayrı süreç + zaman aşımı.
+ * macOS/Linux komutları AYNEN.
+ */
+function yuvaProbKomutlari(cfg, platform = process.platform, node = process.execPath) {
+  const k = [];
+  if (cfg.winImzaYuvaSunucu) {
+    k.push(platform === 'win32'
+      ? ['ping', '-n', '1', '-w', '2000', cfg.winImzaYuvaSunucu]
+      : ['ping', '-c', '1', '-W', '2000', cfg.winImzaYuvaSunucu]);
+  }
+  k.push(platform === 'win32'
+    ? [node, '-e', 'process.exit(require("fs").statSync(process.argv[1]).isDirectory()?0:1)', cfg.winImzaYuvaKoku]
+    : ['/bin/test', '-d', cfg.winImzaYuvaKoku]);
+  return k;
+}
+
 /** İmpark sunucusu ping'e cevap veriyor ve yuva kökü görünüyor mu (sınırlı süreli, asılmaz). */
 async function imzaYuvasiErisilirMi(cfg) {
-  if (cfg.winImzaYuvaSunucu) {
-    const p = await komutKos(['ping', '-c', '1', '-W', '2000', cfg.winImzaYuvaSunucu], { zamanAsimiMs: 5000 });
-    if (p.kod !== 0) return false;
+  const komutlar = yuvaProbKomutlari(cfg);
+  for (let i = 0; i < komutlar.length; i += 1) {
+    const son = i === komutlar.length - 1;
+    const r = await komutKos(komutlar[i], { zamanAsimiMs: son ? 8000 : 5000 });
+    if (r.kod !== 0) return false;
   }
-  const d = await komutKos(['/bin/test', '-d', cfg.winImzaYuvaKoku], { zamanAsimiMs: 8000 });
-  return d.kod === 0;
+  return true;
 }
 
 /** Statik kapı + kök index ölçümü. RED → fırlatır. */
@@ -780,6 +800,7 @@ module.exports = {
   ISARET, YUVA_ID, SURUM_DESENI, KAPI_ZORUNLU_PASS, KAPI_IZINLI_OLCULEMEDI, KOK_INDEX_YOLU,
   varsayilanAyarlar, onKosul, imzaDosyaAdi, kapiCiktisiniAyristir, kapiKarari, imzaDogrulamaKarari,
   peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
+  yuvaProbKomutlari,
   imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
   kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
   yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,

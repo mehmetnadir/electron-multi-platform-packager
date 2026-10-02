@@ -1506,10 +1506,17 @@ function maddeKurulumDiziniYazma(p = {}) {
  */
 const CIKARIM_DESENLERI = ['locales', 'resources/app.asar', 'resources/app', '*.exe'];
 
-function yedizBul() {
+/**
+ * 7z ikilisini PATH'te arar. Windows'ta `where` (yerel yol; birden çok satır → ilki). `which`
+ * Windows'ta YOK ya da PortableGit'in msys `which`'i `/d/...` biçiminde yol döndürür — spawnSync
+ * onu açamaz (windows-kasa ajanı, 2026-10-02). macOS/Linux davranışı aynen. `kos` testte sahtelenir.
+ */
+function yedizBul({ platform = process.platform, kos = spawnSync } = {}) {
+  const arayici = platform === 'win32' ? 'where' : 'which';
   for (const ad of ['7z', '7zz', '7za', '7zr']) {
-    const r = spawnSync('which', [ad], { encoding: 'utf8' });
-    if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
+    const r = kos(arayici, [ad], { encoding: 'utf8' });
+    const ilk = r && r.status === 0 ? String(r.stdout || '').split(/\r?\n/).map((x) => x.trim()).find(Boolean) : '';
+    if (ilk) return ilk;
   }
   return null;
 }
@@ -2175,7 +2182,7 @@ module.exports = {
   SET_KABUK, SET_KABUK_DIZINLERI, SET_KABUK_IMZASI,
   yolDizini, setHaritasiCoz, kabukSizintilari, setHaritasiKusurlari, maddeSetGuncelleme,
   ed25519AcikAnahtarMi, sozlesmeKanitiTopla, maddeIcerikKanali, maddeKurulumDiziniYazma,
-  yedizListeCoz, yukSec, arsivYolunuYerelYap, CIKARIM_DESENLERI, cikar, argumanCoz,
+  yedizBul, yedizListeCoz, yukSec, arsivYolunuYerelYap, CIKARIM_DESENLERI, cikar, argumanCoz,
   agactanTopla, maddeAsar, calis
 };
 

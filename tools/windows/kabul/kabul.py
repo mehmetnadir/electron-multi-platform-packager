@@ -47,7 +47,20 @@ def log(*p): print("|".join(str(x) for x in p), flush=True)
 
 def belirtec(): return open(r"C:\vm-kapi\belirtec.txt").read().strip()
 
+# YEREL KIP (2026-10-02, windows-kasa ajani): runner kasa'nin KENDISINDE kosarken kopru yoktur;
+# EMPP_KABUL_YEREL_DIZIN verilirse ekranlar/rapor o dizine YAZILIR (POST yok). Bos/yoksa eski davranis.
+def yerel_ad(ad):
+    return ad + (".json" if ad.startswith("rapor-") else ".png")
+
 def gonder(ad, veri):
+    yerel = os.environ.get("EMPP_KABUL_YEREL_DIZIN", "").strip()
+    if yerel:
+        try:
+            os.makedirs(yerel, exist_ok=True)
+            with open(os.path.join(yerel, yerel_ad(ad)), "wb") as f: f.write(veri)
+            return True
+        except Exception as e:
+            log("YAZMA-HATA", ad, str(e)[:80]); return False
     try:
         urllib.request.urlopen(urllib.request.Request(
             f"http://{MACIP}:8791/{belirtec()}/windows-kasa/ekran/{ad}",

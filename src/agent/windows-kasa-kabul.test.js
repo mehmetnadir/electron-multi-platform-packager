@@ -278,3 +278,93 @@ test('kosu.py ile AYNI kilit dosyası adı (elle koşu + runner aynı makineye b
   assert.equal(K.kasaAyarlari({ EMPP_WIN_KASA_KABUL: '0' }).winKasaKabul, false);
   assert.equal(K.kasaAyarlari({}).winKasaKabul, true, 'varsayılan AÇIK');
 });
+
+// ---------------------------------------------------------------------------
+// YEREL KİP (2026-10-02) — runner windows-kasa'nın kendisinde; köprü/izleyici yok.
+// ---------------------------------------------------------------------------
+
+function yerelOrtam({ ayar = {} } = {}) {
+  const d = tmp('yerel');
+  const exe = path.join(d, 'paket-Setup.exe');
+  fs.writeFileSync(exe, Buffer.concat([Buffer.from('MZ'), Buffer.alloc(4096, 7)]));
+  const cfg = {
+    ...K.kasaAyarlari({ EMPP_WIN_KASA_YEREL: '1' }),
+    winKasaYerelKok: tmp('kabulkok'), winKasaPython: 'python-sahte', winKasaKabulPy: 'kabul.py',
+    winKasaKilit: path.join(tmp('kilit'), 'yerel.kilit'), winKasaKilitAralikMs: 5, winKasaKilitBeklemeMs: 200,
+    ...ayar,
+  };
+  return { cfg, exe };
+}
+
+const raporCikti = (r) => `KURULUM|x\nRAPOR|x\nJSON>>>${JSON.stringify(r)}\n`;
+
+test('yerel: win32 varsayılan AÇIK, darwin KAPALI; env ile zorlanır', () => {
+  assert.equal(K.kasaAyarlari({}, 'win32').winKasaYerel, true);
+  assert.equal(K.kasaAyarlari({}, 'darwin').winKasaYerel, false);
+  assert.equal(K.kasaAyarlari({ EMPP_WIN_KASA_YEREL: '0' }, 'win32').winKasaYerel, false);
+  assert.equal(K.kasaAyarlari({ EMPP_WIN_KASA_YEREL: '1' }, 'darwin').winKasaYerel, true);
+});
+
+test('yerel: erişim kalp dosyası aramaz (köprü yok); EMPP_WIN_KASA_KABUL=0 yine kapatır', () => {
+  const { cfg } = yerelOrtam();
+  assert.equal(K.kasaErisimi({ ...cfg, winKasaVmKok: tmp('bos') }).erisilir, true);
+  assert.equal(K.kasaErisimi({ ...cfg, winKasaKabul: false }).erisilir, false);
+});
+
+test('yerel: argv kabul.py anahtar + yerel: + başlık; GECTI → kanıt dizininde rapor/özet, paket kopyası kalkar', async () => {
+  const { cfg, exe } = yerelOrtam();
+  let gelen = null;
+  const calistir = async (argv, o) => {
+    gelen = { argv, env: o.env };
+    // kabul.py yerel kipte ekranı kanıt dizinine yazar
+    fs.writeFileSync(path.join(o.env.EMPP_KABUL_YEREL_DIZIN, 'x-menu.png'), 'png');
+    return { kod: 0, cikti: raporCikti({ sonuc: 'GECTI', kitaplar: [{ sonuc: 'GECTI' }, { sonuc: 'GECTI' }] }) };
+  };
+  const r = await K.kasaKabulKapisi({ exe, bookId: 45538, etiket: 'imzasiz', cfg, calistir });
+  assert.equal(r.kullanildi, true);
+  assert.equal(r.durum, 'GECTI');
+  assert.equal(gelen.argv[0], 'python-sahte');
+  assert.equal(gelen.argv[1], 'kabul.py');
+  assert.match(gelen.argv[2], /^45538-imzasiz-\d{14}$/);
+  assert.match(gelen.argv[3], /^yerel:.*45538-imzasiz-\d{14}\.exe$/);
+  assert.equal(gelen.env.PYTHONIOENCODING, 'utf-8');
+  const ozet = JSON.parse(fs.readFileSync(path.join(r.kanitDizini, 'ozet.json'), 'utf8'));
+  assert.equal(ozet.kip, 'yerel');
+  assert.equal(ozet.karar, 'GECTI');
+  assert.deepEqual(ozet.ekranlar, ['x-menu.png']);
+  assert.ok(fs.existsSync(path.join(r.kanitDizini, 'rapor.json')));
+  assert.deepEqual(fs.readdirSync(cfg.winKasaYerelKok), [], 'paket kopyası (kendi geçici dosyası) kaldırılmalı');
+  assert.ok(fs.existsSync(exe), 'kaynak paket yerinde kalmalı');
+});
+
+test('yerel: KALDI → fırlatır (paket kusuru), ÖLÇÜLEMEDİ → ertelenebilir işaret', async () => {
+  const { cfg, exe } = yerelOrtam();
+  await assert.rejects(K.kasaKabulKapisi({
+    exe, bookId: 1, etiket: 'imzasiz', cfg,
+    calistir: async () => ({ kod: 0, cikti: raporCikti({ sonuc: 'KALDI', sebep: 'CDP_ACILMADI', kitaplar: [] }) }),
+  }), (e) => /KALDI/.test(e.message) && !e.message.includes(WIN_KASA_KABUL_ISARETI));
+  await assert.rejects(K.kasaKabulKapisi({
+    exe, bookId: 1, etiket: 'imzasiz', cfg, calistir: async () => ({ kod: 1, cikti: 'Traceback\nhata' }),
+  }), (e) => e.message.includes(WIN_KASA_KABUL_ISARETI) && /rapor gelmedi/.test(e.message));
+});
+
+test('yerel: aktivasyon kodlu seri yerel kipe girmez (başsız yedeğe düşer)', async () => {
+  const { cfg, exe } = yerelOrtam();
+  let cagrildi = false;
+  const r = await K.kasaKabulKapisi({
+    exe, bookId: 1, etiket: 'imzasiz', aktivasyon: true, cfg, calistir: async () => { cagrildi = true; return {}; },
+  });
+  assert.equal(r.kullanildi, false);
+  assert.equal(cagrildi, false);
+});
+
+test('yerel kilit: canlı sahip beklenir + tavanda ertelenebilir hata; ölü sahip devralınır', async () => {
+  const { cfg } = yerelOrtam();
+  fs.writeFileSync(cfg.winKasaKilit, JSON.stringify({ pid: 12345, zaman: new Date().toISOString() }));
+  await assert.rejects(K.yerelKilitAl(cfg, { log: () => {}, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), pidYasiyor: () => true }),
+    (e) => e.message.includes(WIN_KASA_KABUL_ISARETI));
+  const birak = await K.yerelKilitAl(cfg, { log: () => {}, sleep: async () => {}, pidYasiyor: () => false });
+  assert.equal(JSON.parse(fs.readFileSync(cfg.winKasaKilit, 'utf8')).pid, process.pid);
+  await birak();
+  assert.equal(fs.existsSync(cfg.winKasaKilit), false);
+});

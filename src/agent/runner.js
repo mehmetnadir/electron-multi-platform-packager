@@ -274,12 +274,18 @@ function ofisteMi() {
   const simdi = Date.now();
   if (simdi - _konum.t < 60000) return _konum.ofiste;
   let ofiste = false;
-  try {
-    // macOS `route`, Linux (ProBook ajanı, 02.10) `ip route` — ikisi de agGecidiAyikla'dan geçer.
-    const [komut, argv] = agGecidiKomutu();
-    const out = require('child_process').execFileSync(komut, argv, { timeout: 3000, encoding: 'utf8' });
-    ofiste = agGecidiAyikla(out) === CONFIG.ofisGw;
-  } catch (e) { ofiste = false; }
+  if (process.platform === 'win32') {
+    // windows-kasa (2026-10-02): Windows `route` BSD sözdizimini bilmez, her nabızda kullanım metnini
+    // günlüğe döker. Konum sabit bir makinede ayardan gelir (AGENT_OFISTE=1); yoksa ofis değil.
+    ofiste = process.env.AGENT_OFISTE === '1';
+  } else {
+    try {
+      // macOS `route`, Linux (ProBook ajanı, 02.10) `ip route` — ikisi de agGecidiAyikla'dan geçer.
+      const [komut, argv] = agGecidiKomutu();
+      const out = require('child_process').execFileSync(komut, argv, { timeout: 3000, encoding: 'utf8' });
+      ofiste = agGecidiAyikla(out) === CONFIG.ofisGw;
+    } catch (e) { ofiste = false; }
+  }
   _konum = { t: simdi, ofiste };
   return ofiste;
 }
