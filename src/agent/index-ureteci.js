@@ -71,9 +71,10 @@ const MOTOR_HARIC = Object.freeze(['assets', 'classlibraries', 'temp']);
  * scripts/* (7), styles/* (3); `language-loader.js` → languages/; `language-set.css` → images/bg.jpg;
  * Web-Z menü verisi config/settings.json + set-menu.json; Üretim Masası kabuk artıkları i18n/,
  * features/, assets2/ (YDS buton görselleri; hiçbir kök dosya başvurmuyor). Çalışma: electron.js
- * (giriş; favicon.ico'yu yükler), electronUpdate.js, old_app.config.js, set_app.config, version.txt,
- * core/ (logo/ikon/arka plan — icons.js/images.js/tour.js başvurur), hash'li motor paketleri,
- * 43e23fce…js, main.html, Main.xml, SET_BOOK.txt, Default.aspx, favicon.ico. `kurum.txt` ayrıca yazılır.
+ * (giriş; favicon.ico'yu yükler), electronUpdate.js, old_app.config.js, set_app.config,
+ * sürüm dosyası (kıyaslanmaz, aynen), core/ (logo/ikon/arka plan — icons.js/images.js/tour.js
+ * başvurur), hash'li motor paketleri, 43e23fce…js, main.html, Main.xml, SET_BOOK.txt, Default.aspx,
+ * favicon.ico. `kurum.txt` ayrıca yazılır.
  */
 const KOK_INDEX = Object.freeze({
   dosyalar: Object.freeze(['index.html', 'set-menu.json', 'kurum.txt']),
