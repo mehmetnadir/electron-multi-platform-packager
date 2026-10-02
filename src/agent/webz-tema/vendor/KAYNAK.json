@@ -1,0 +1,18 @@
+{
+  "fontawesome": {
+    "surum": "6.5.2",
+    "kaynak": "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2",
+    "woff2": [
+      "fa-brands-400.woff2",
+      "fa-regular-400.woff2",
+      "fa-solid-900.woff2",
+      "fa-v4compatibility.woff2"
+    ]
+  },
+  "googleFonts": {
+    "kaynak": "https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap",
+    "dosya": 7
+  },
+  "indirme": "2026-10-02",
+  "lisans": "FA Free: ikon CC BY 4.0, font OFL 1.1, kod MIT; Fraunces/Plus Jakarta Sans: OFL 1.1"
+}

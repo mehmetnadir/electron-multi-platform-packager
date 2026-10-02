@@ -29,9 +29,15 @@ function kacis(s) {
     .replace(/"/g, '&quot;');
 }
 
-/** Kök index.html masaüstünün (Üretim Masası `WebZTemaUretici`) ürettiği Web-Z kabuğu mu? */
+/**
+ * Kök index.html bir Web-Z kabuğu mu? İki üretici: masaüstü (Üretim Masası `WebZTemaUretici`,
+ * sf425 — `scripts/language-set.js`) ve runner'ın tema kabuğu (`src/agent/webz-tema-kabuk.js`,
+ * ör. Flashy `web-proxy-modern` — `<meta name="empp-webz-tema">`, 2026-10-02). İkisi de aynı
+ * menü sözleşmesini taşır (`scripts/cevrimdisi-yama.js` tek `__setSettings` + settings.json).
+ */
 function webZKabukIndexiMi(html) {
-  return typeof html === 'string' && html.includes('scripts/language-set.js');
+  return typeof html === 'string'
+    && (html.includes('scripts/language-set.js') || html.includes('name="empp-webz-tema"'));
 }
 
 /**

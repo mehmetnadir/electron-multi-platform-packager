@@ -1,0 +1,76 @@
+{
+  "tema": "web-proxy-modern",
+  "kaynak": "book-update services/cloudflare-worker/src/set-ui-templates.ts",
+  "satirlar": [
+    13340,
+    15049
+  ],
+  "commit": "e7b2da99 2026-09-22",
+  "eslenme": "2026-10-02",
+  "dosyalar": {
+    "_design/components.css": {
+      "boyut": 13144,
+      "sha256": "f9a226d96007e03fdd3f4b7caa42b31399f406a4444041f02e90a56d2ec33117"
+    },
+    "_design/components.js": {
+      "boyut": 5744,
+      "sha256": "fddacbf167081cfbc5d7e48d2a1429a347a62db53d26cfc254a6adaec4cb88ee"
+    },
+    "_design/tokens.css": {
+      "boyut": 996,
+      "sha256": "decf8a6e70965c31608986e26f5a2a56e8498e258a032887dcfb6373baf529fc"
+    },
+    "config/settings.json": {
+      "boyut": 1225,
+      "sha256": "43835988efb030ca857a2b0fd4b9c3905a743366f4f5f75cbcf4786b8e39cd46"
+    },
+    "covers/book1.svg": {
+      "boyut": 1101,
+      "sha256": "92998504e849478c7d70af20373fa9ca71a2c0a83b73c3f71c2c70748027132a"
+    },
+    "covers/book2.svg": {
+      "boyut": 1103,
+      "sha256": "3c20775319277caee64516dc9a27df328c702174c7c961d7755ee0923ac949f3"
+    },
+    "covers/book3.svg": {
+      "boyut": 1101,
+      "sha256": "6d2bc7d3fd4643618ae4519e4707ef3fa76c2756734a622d1ec88771b1cb5c46"
+    },
+    "covers/book4.svg": {
+      "boyut": 1101,
+      "sha256": "595f154fdacdbb16f4eefccebddb7a19f8845c6cecada4c07c0b7f4fc9ccb933"
+    },
+    "images/bg.jpg": {
+      "boyut": 177,
+      "sha256": "cd77b67cebeb00175fce72a2dea7633095b9ee406cb4a1767b0d348805dd1b48"
+    },
+    "images/logo.png": {
+      "boyut": 10979,
+      "sha256": "f1494ee353ebb9c57fbef9a36b0c10177981609a35f8481dce29e71dc19eafdc"
+    },
+    "index.html": {
+      "boyut": 6705,
+      "sha256": "e445c84cac73df1301f0c98b00147c3707dc8968b6e31a54396c61ef4a25d370"
+    },
+    "scripts/book-preloader.js": {
+      "boyut": 7749,
+      "sha256": "2ddf3c2cf4d1621fb05fae64c93d55d04d6ed6440e245376bc13c17b131c5a36"
+    },
+    "scripts/library.js": {
+      "boyut": 1203,
+      "sha256": "ccb26b65cdbf7aaa2bc71c890cc2311fbe0e8154bb9a0e39c8eb432a404bd3c5"
+    },
+    "scripts/xmlParser.js": {
+      "boyut": 1464,
+      "sha256": "9bc075cfa1439c842f2f7cbd2f9702d684c71fc9235db0c054b4e20020881c7b"
+    },
+    "theme.css": {
+      "boyut": 8381,
+      "sha256": "92ba4fb2b193da180fef850492ebfdd2eb2cb093f2af3091d7aca0d5d47d10b8"
+    },
+    "theme.js": {
+      "boyut": 14362,
+      "sha256": "984234fbff2acd87ae9cc8004a9ad8b934bfc26cf06f8d4ccfb1dbf847783fc2"
+    }
+  }
+}

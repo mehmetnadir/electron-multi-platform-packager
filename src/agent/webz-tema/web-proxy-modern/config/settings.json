@@ -1,0 +1,24 @@
+{
+  "publisher": {
+    "name": "Flashy",
+    "subName": "Web",
+    "hero": {
+      "title": "Hoş geldin.",
+      "em": "Kitabını aç, dersine başla.",
+      "sub": "Set içindeki kitaplardan birini seç, üniteyi aç, etkileşimli içeriklerle çalış."
+    }
+  },
+  "set": {
+    "title": "Flashy Grade 6 — Kitap Seti",
+    "books": [
+      { "id": "book1", "assetId": "59483", "title": "Main Book",    "sub": "Coursebook", "emoji": "📘", "c1": "#14b8a6", "c2": "#06b6d4", "cover": "covers/book1.svg" },
+      { "id": "book2", "assetId": "59480", "title": "Workbook",     "sub": "Practice",   "emoji": "✏️", "c1": "#a855f7", "c2": "#ec4899", "cover": "covers/book2.svg" },
+      { "id": "book3", "assetId": "59482", "title": "Activity Book","sub": "Games & Drills", "emoji": "🎯", "c1": "#f97316", "c2": "#ef4444", "cover": "covers/book3.svg" },
+      { "id": "book4", "assetId": "60114", "title": "Exam Prep",    "sub": "LGS hazırlık",   "emoji": "🏆", "c1": "#6366f1", "c2": "#14b8a6", "cover": "covers/book4.svg" }
+    ]
+  },
+  "i18n": {
+    "TR": { "eyebrow": "Akıllı Tahta · Web Sürümü", "cta": "Kitabı seç" },
+    "EN": { "eyebrow": "Smart Board · Web Edition", "cta": "Pick a book" }
+  }
+}

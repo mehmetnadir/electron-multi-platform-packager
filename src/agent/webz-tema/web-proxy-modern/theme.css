@@ -1,0 +1,234 @@
+/* Web-proxy-modern brand + local overrides */
+:root {
+  --brand: #14b8a6;
+  --brand-2: #06b6d4;
+  --accent: #f97316;
+  --blob-1: #5eead4;
+  --blob-2: #fda4af;
+  --blob-3: #c4b5fd;
+}
+
+/* Hero yerine kompakt set-head */
+.section--top { padding-top: 36px; }
+.set-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 0 auto 28px; max-width: 1100px;
+  padding: 0 4px;
+  flex-wrap: wrap;
+}
+.set-eyebrow {
+  margin: 0 0 4px; font-size: 12px; font-weight: 800;
+  letter-spacing: 0.2em; color: var(--brand);
+}
+.set-name {
+  margin: 0; font-family: var(--font-head);
+  font-size: clamp(28px, 3.6vw, 40px); font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Primary pill button (tüm seti ekle) */
+.pill-btn--primary {
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff !important;
+  border-color: transparent !important;
+  padding: 11px 18px;
+  box-shadow: 0 8px 20px -6px color-mix(in srgb, var(--brand) 55%, transparent);
+}
+.pill-btn--primary:hover { filter: brightness(1.05); box-shadow: 0 12px 26px -8px color-mix(in srgb, var(--brand) 70%, transparent); }
+
+/* Library count badge (topbar) */
+.pill-btn .badge {
+  display: inline-grid; place-items: center;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  border-radius: 999px; font-size: 11px; font-weight: 800;
+  background: var(--accent); color: #fff;
+  margin-left: 4px;
+}
+
+/* Kart üzerinde "Kütüphaneye Ekle" köşe butonu (hover'da görünür) */
+.flashy-card .fc-add {
+  position: absolute; top: 14px; right: 14px;
+  width: 34px; height: 34px; border-radius: 999px;
+  background: rgba(255,255,255,.9); color: var(--ink);
+  display: grid; place-items: center;
+  box-shadow: 0 4px 10px rgba(0,0,0,.08);
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity .2s ease, transform .2s ease, background .2s ease;
+  z-index: 2;
+}
+.flashy-card:hover .fc-add { opacity: 1; transform: translateY(0); }
+.flashy-card .fc-add:hover { background: #fff; }
+.flashy-card .fc-add.added {
+  background: var(--brand); color: #fff; opacity: 1; transform: none;
+}
+
+/* Drawer (sağdan açılan library) */
+.drawer-overlay {
+  position: fixed; inset: 0; z-index: 45;
+  background: rgba(15,23,42,.4); backdrop-filter: blur(6px);
+}
+.drawer {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  width: min(420px, 100%);
+  background: var(--surface);
+  box-shadow: -20px 0 40px -20px rgba(15,23,42,.3);
+  display: flex; flex-direction: column;
+  animation: slide-in .28s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 24px; border-bottom: 1px solid var(--line);
+}
+.drawer-head h3 {
+  margin: 0; font-family: var(--font-head); font-size: 20px; font-weight: 700;
+  display: flex; align-items: center; gap: 10px;
+}
+.drawer-body {
+  padding: 12px 16px; overflow-y: auto; flex: 1;
+}
+.drawer-foot {
+  padding: 16px 20px; border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, transparent, rgba(20,184,166,.05));
+}
+.drawer-hint { margin: 0 0 12px; font-size: 13px; color: var(--ink-soft); }
+.drawer-hint i { margin-right: 6px; color: var(--brand); }
+
+/* Library kitap satırı */
+.lib-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px; border-radius: var(--radius-md);
+  transition: background .15s ease;
+  cursor: pointer;
+}
+.lib-item:hover { background: #f9fafb; }
+.lib-thumb {
+  width: 44px; height: 56px; flex-shrink: 0;
+  border-radius: 8px; overflow: hidden;
+  background: linear-gradient(135deg, var(--c1, var(--brand)), var(--c2, var(--brand-2)));
+  display: grid; place-items: center; color: #fff; font-size: 22px;
+}
+.lib-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.lib-meta { flex: 1; }
+.lib-title { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+.lib-sub { margin: 0; font-size: 12px; color: var(--ink-soft); }
+.lib-remove {
+  width: 32px; height: 32px; border-radius: 8px;
+  color: #94a3b8;
+  display: grid; place-items: center;
+  transition: all .15s ease;
+}
+.lib-remove:hover { background: #fee2e2; color: #ef4444; }
+
+.lib-empty {
+  padding: 48px 16px; text-align: center; color: var(--ink-soft);
+}
+.lib-empty i { font-size: 44px; opacity: .3; margin-bottom: 12px; display: block; }
+.lib-empty p { margin: 0 0 4px; font-size: 14px; }
+.lib-empty small { font-size: 12px; opacity: .7; }
+
+/* Set-based library ───── */
+.lib-set {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  margin-bottom: 10px;
+  overflow: hidden;
+  transition: box-shadow .2s ease, border-color .2s ease;
+}
+.lib-set:hover { border-color: color-mix(in srgb, var(--brand) 30%, var(--line)); box-shadow: var(--shadow-sm); }
+.lib-set-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.lib-set-header .lib-thumb {
+  width: 48px; height: 62px; border-radius: 8px;
+}
+.lib-set-header .lib-meta { flex: 1; min-width: 0; }
+.lib-set-header .lib-meta p.lib-title { margin: 0 0 2px; font-size: 14px; font-weight: 700; }
+.lib-set-header .lib-meta p.lib-sub { margin: 0; font-size: 12px; color: var(--ink-soft); }
+.lib-caret, .lib-open, .lib-remove {
+  width: 32px; height: 32px; border-radius: 8px;
+  color: #94a3b8;
+  display: grid; place-items: center;
+  transition: all .15s ease;
+  flex-shrink: 0;
+}
+.lib-caret:hover { background: #f3f4f6; color: var(--ink); }
+.lib-caret i { transition: transform .25s ease; }
+.lib-set.open .lib-caret i { transform: rotate(180deg); }
+.lib-open:hover { background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); }
+.lib-remove:hover { background: #fee2e2; color: #ef4444; }
+
+.lib-set-books {
+  max-height: 0; overflow: hidden;
+  transition: max-height .3s ease;
+  padding: 0 12px;
+}
+.lib-set.open .lib-set-books {
+  max-height: 900px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--line);
+}
+.lib-book {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.lib-book:hover { background: #f9fafb; }
+.lib-book-thumb {
+  width: 28px; height: 36px; flex-shrink: 0;
+  border-radius: 5px; overflow: hidden;
+  background: linear-gradient(135deg, var(--c1), var(--c2));
+  display: grid; place-items: center; color: #fff; font-size: 14px;
+}
+.lib-book-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.lib-book-meta { flex: 1; min-width: 0; }
+.lib-book-meta p { margin: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-book-meta small { font-size: 11px; color: var(--ink-soft); }
+
+/* Ekli durumda "Kütüphaneme Ekle" butonu */
+.pill-btn--primary.added {
+  background: #10b981 !important;
+  box-shadow: 0 8px 20px -6px rgba(16,185,129,.55);
+}
+
+/* PWA banner (alt ortada, şık pill) */
+.pwa-banner {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 30;
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px 12px 18px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 18px 40px -14px rgba(15,23,42,.28), 0 4px 12px -4px rgba(15,23,42,.1);
+  max-width: calc(100% - 32px);
+  animation: rise .4s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes rise { from { transform: translate(-50%, 120%); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+.pwa-mark {
+  width: 36px; height: 36px; border-radius: 12px;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  color: #fff; display: grid; place-items: center;
+  font-size: 16px; transform: rotate(-6deg);
+}
+.pwa-text { display: flex; flex-direction: column; line-height: 1.25; }
+.pwa-text strong { font-size: 14px; font-weight: 700; }
+.pwa-text span { font-size: 12px; color: var(--ink-soft); }
+
+.cta--sm {
+  padding: 10px 18px; font-size: 14px;
+  box-shadow: 0 8px 18px -6px color-mix(in srgb, var(--brand) 55%, transparent);
+}
+.icon-btn {
+  width: 34px; height: 34px; border-radius: 999px;
+  color: var(--ink-soft); display: grid; place-items: center;
+  transition: background .15s ease;
+}
+.icon-btn:hover { background: #f3f4f6; color: var(--ink); }
+
+@media (max-width: 560px) {
+  .pwa-text span { display: none; }
+  .set-head { flex-direction: column; align-items: flex-start; }
+}
