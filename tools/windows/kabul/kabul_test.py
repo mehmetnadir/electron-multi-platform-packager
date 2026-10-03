@@ -370,8 +370,11 @@ class AktivasyonTest(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.d = tempfile.mkdtemp()
-        self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log", "ana_surec_ag_olc")}
+        self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log", "ana_surec_ag_olc",
+                                                    "ana_surec_profil_olc")}
         kabul.ana_surec_ag_olc = lambda *a, **k: "kapali:ECONNREFUSED"
+        self.userdata = {"userData": self.d, "work": os.path.join(self.d, "work")}
+        kabul.ana_surec_profil_olc = lambda *a, **k: self.userdata
         self._uyku, self._saat = kabul.time.sleep, kabul.time.time
         self.t = [1000.0]
         kabul.time.time = lambda: self.t[0]
@@ -514,6 +517,39 @@ class AktivasyonTest(unittest.TestCase):
         self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:9")
         self.assertEqual(env["NO_PROXY"], "")
         self.assertEqual(env["PATH"], "x")
+
+
+    def test_profil_disi_userdata_kod_girilmez_kuru_kosu_2_regresyonu(self):
+        # 03.10 kuru kosu 2: APPDATA verildi ama Electron Roaming'e yazdi; kuru kosu 1'in aktivasyonu
+        # tasindi, diyalog cikmadi. Artik userData profil disindaysa hicbir kod girilmez.
+        self.userdata = {"userData": r"C:\Users\Administrator\AppData\Roaming\impact-grade-12",
+                         "work": r"C:\Users\Administrator\AppData\Roaming\impact-grade-12\work"}
+        r, c = self.kos(tek_motor=True)
+        self.assertIs(r["aktivasyon"]["profilYalitik"], False)
+        self.assertIn("kodGirilmedi", r["aktivasyon"])
+        self.assertEqual(r["aktivasyon"]["adimlar"], {})
+        self.assertEqual([g for u in self.uygulamalar for g in u.girilen], [])
+
+    def test_profil_olculemezse_kod_girilmez(self):
+        self.userdata = None
+        r, c = self.kos()
+        self.assertIn("kodGirilmedi", r["aktivasyon"])
+        self.assertEqual([g for u in self.uygulamalar for g in u.girilen], [])
+
+    def test_profil_yalitik_mi_karar_tablosu(self):
+        k, p = kabul.profil_yalitik_mi, os.path.join(self.d, "akt-profil-1")
+        self.assertTrue(k({"userData": p}, p))
+        self.assertTrue(k({"userData": p, "work": os.path.join(p, "work")}, p))
+        self.assertFalse(k({"userData": p + "0"}, p), "kardes dizin onek benzerligiyle gecmez")
+        self.assertFalse(k({"userData": p, "work": os.path.join(self.d, "baska", "work")}, p))
+        self.assertFalse(k(None, p)); self.assertFalse(k({"userData": None}, p))
+
+    def test_argv_user_data_dir_ve_olu_proxy_tasir(self):
+        argv = kabul.akt_argv(r"C:\P\app.exe", r"D:\kabul\p")
+        self.assertEqual(argv[0], r"C:\P\app.exe")
+        self.assertIn(r"--user-data-dir=D:\kabul\p", argv)
+        self.assertIn("--proxy-server=http://127.0.0.1:9", argv)
+        self.assertIn(f"--inspect=127.0.0.1:{kabul.AKT_INSPECT_PORT}", argv)
 
 
 if __name__ == "__main__":

@@ -562,7 +562,7 @@ def kitap_kanit(c, kimlik, sira):
 # Nadir 03.10: "Windows'ta aktivasyonun nasil calistigini gormek istiyorum." Kapi aktivasyonlu
 # seride (EMPP_KABUL_AKTIVASYON=1) INTERNETSIZ (uygulama exe'sine giden cikis guvenlik duvarinda
 # kesik; okuyucu window.isOnline=false gorur -> imKeys.dll ile cevrimdisi dogrulama, koltuk
-# tuketilmez) ve TEMIZ profille (ayri APPDATA) bes adim olcer, her biri ekran goruntusuyle:
+# tuketilmez) ve TEMIZ profille (--user-data-dir, olculur) bes adim olcer, her biri ekran goruntusuyle:
 #   a) anahtarli kitap -> kod istenir   b) gecersiz kod -> "Aktivasyon kodu hatali!"
 #   c) gecerli kod -> kitap acilir      d) menu -> baska kitap -> kod ISTENMEZ
 #   e) uygulama kapatilip acilir -> kitap kodsuz acilir
@@ -608,8 +608,16 @@ def akt_ortami(taban, profil):
     env["NO_PROXY"] = ""; env["no_proxy"] = ""
     return env
 
-def ana_surec_ag_olc(port=AKT_INSPECT_PORT, hedef=AKT_DIS_ADRES):
-    """Ana surecten (Node https) dis adrese HEAD dener. 'kapali:<kod>' | 'acik:<http>' | None (olculemedi)."""
+def akt_argv(ana, profil):
+    """SAF: aktivasyon kipinde uygulama argv'si. --user-data-dir ZORUNLU: Windows'ta Electron userData'yi
+    APPDATA ortamindan DEGIL Known Folder API'sinden alir (olculdu 03.10: APPDATA=temiz profil verildi,
+    okuyucu yine %USERPROFILE%\\AppData\\Roaming\\<slug>\\work'e yazdi; kuru kosu 1'in cevrimici
+    aktivasyonu kuru kosu 2'ye tasindi, diyalog hic cikmadi -> a KALDI). Yalitim ayrica OLCULUR."""
+    return [ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*",
+            f"--inspect=127.0.0.1:{AKT_INSPECT_PORT}", f"--user-data-dir={profil}"] + AKT_PROXY_ARGV
+
+def ana_surec_degerlendir(ifade, port=AKT_INSPECT_PORT):
+    """Ana surecte (Node, --inspect) ifade degerlendirir. Deger | None (baglanilamadi)."""
     try:
         d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=5))
         ws = d[0]["webSocketDebuggerUrl"]
@@ -618,16 +626,44 @@ def ana_surec_ag_olc(port=AKT_INSPECT_PORT, hedef=AKT_DIS_ADRES):
     m = None
     try:
         m = CDP(ws)
-        ifade = ("new Promise(r=>{try{const req=(process.mainModule||module).require('https')"
-                 ".request(" + json.dumps(hedef) + ",{method:'HEAD',timeout:5000},s=>{r('acik:'+s.statusCode);s.resume();});"
-                 "req.on('timeout',()=>{req.destroy();r('kapali:zamanasimi');});"
-                 "req.on('error',e=>r('kapali:'+(e.code||e.message)));req.end();}catch(e){r('olculemedi:'+e.message);}})")
-        v = m.js(ifade)
-        return v if isinstance(v, str) and not v.startswith("olculemedi") else None
+        return m.js(ifade)
     except Exception:
         return None
     finally:
         if m: m.kapat()
+
+def ana_surec_ag_olc(port=AKT_INSPECT_PORT, hedef=AKT_DIS_ADRES):
+    """Ana surecten (Node https) dis adrese HEAD dener. 'kapali:<kod>' | 'acik:<http>' | None (olculemedi)."""
+    ifade = ("new Promise(r=>{try{const req=(process.mainModule||module).require('https')"
+             ".request(" + json.dumps(hedef) + ",{method:'HEAD',timeout:5000},s=>{r('acik:'+s.statusCode);s.resume();});"
+             "req.on('timeout',()=>{req.destroy();r('kapali:zamanasimi');});"
+             "req.on('error',e=>r('kapali:'+(e.code||e.message)));req.end();}catch(e){r('olculemedi:'+e.message);}})")
+    v = ana_surec_degerlendir(ifade, port)
+    return v if isinstance(v, str) and not v.startswith("olculemedi") else None
+
+JS_ANA_PROFIL = ("(()=>{try{const e=(process.mainModule||module).require('electron');"
+                 "return JSON.stringify({userData:e.app.getPath('userData'),work:process.env.EMPP_WORK_DIR||null});"
+                 "}catch(x){return null;}})()")
+
+def ana_surec_profil_olc(port=AKT_INSPECT_PORT):
+    """Ana surecin GERCEK userData'si ve fs-shim WORK dizini (aktivasyon kaydi ImWin32.dll buraya
+    yazilir). {'userData':..., 'work':...} | None (olculemedi)."""
+    v = ana_surec_degerlendir(JS_ANA_PROFIL, port)
+    try:
+        o = json.loads(v) if isinstance(v, str) else None
+    except ValueError:
+        return None
+    return o if isinstance(o, dict) and o.get("userData") else None
+
+def profil_yalitik_mi(olcum, profil):
+    """SAF KARAR: userData (ve varsa WORK) temiz profilin ICINDE mi. Olculemezse False -> kod girilmez
+    (onceki kosunun aktivasyon kaydi diyalogu gizler; olcum anlamsizlasir)."""
+    if not olcum or not olcum.get("userData"): return False
+    kok = os.path.normcase(os.path.abspath(profil)).rstrip("\\/")
+    def icinde(yol):
+        q = os.path.normcase(os.path.abspath(yol))
+        return q == kok or q.startswith(kok + os.sep)
+    return icinde(olcum["userData"]) and (not olcum.get("work") or icinde(olcum["work"]))
 
 def aktivasyon_kod_oku(yol):
     """Gecerli test kodunu okur (tek satir, bosluksuz). Yoksa/bossa None. DEGERI HIC YAZDIRMA."""
@@ -700,11 +736,10 @@ def akt_ekran(c, kimlik, adim, kayit):
         kayit["ekranHata"] = str(e)[:80]
 
 def uygulama_ac(ana, dizin, profil):
-    """Uygulamayi TEMIZ profille (APPDATA=profil), olu proxy ile (cevrimdisi) CDP portuyla acar."""
+    """Uygulamayi TEMIZ profille (--user-data-dir + APPDATA), olu proxy ile (cevrimdisi) CDP portuyla acar."""
     env = akt_ortami(os.environ, profil)
     os.makedirs(profil, exist_ok=True)
-    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*",
-                      f"--inspect=127.0.0.1:{AKT_INSPECT_PORT}"] + AKT_PROXY_ARGV, env=env)
+    subprocess.Popen(akt_argv(ana, profil), env=env)
     return hedef_sec(dizin)
 
 def akt_baglanti_bekle(c, tavan=20):
@@ -730,6 +765,16 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     log("AKTIVASYON", kimlik, "ana-surec", str(r["aktivasyon"]["anaSurecAg"]))
     r["aktivasyon"]["duzen"] = "menu" if kitaplar else "tek-motor"
     log("AKTIVASYON", kimlik, "baglanti", "online=" + str(ilk.get("online")), "kitap=" + str(len(kitaplar)))
+    # TEMIZ PROFIL OLCULUR (varsayilmaz): userData/WORK profil disindaysa onceki kosunun aktivasyon
+    # kaydi diyalogu gizler -> hicbir kod girilmez, sonuc OLCULEMEDI.
+    pr = ana_surec_profil_olc()
+    r["aktivasyon"]["profilYalitik"] = profil_yalitik_mi(pr, profil)
+    r["aktivasyon"]["userData"] = (pr or {}).get("userData")
+    log("AKTIVASYON", kimlik, "profil", "yalitik=" + str(r["aktivasyon"]["profilYalitik"]),
+        str(r["aktivasyon"]["userData"]))
+    if not r["aktivasyon"]["profilYalitik"]:
+        r["aktivasyon"]["kodGirilmedi"] = "temiz profil saglanamadi (userData/work profil disinda ya da olculemedi)"
+        return c, menuUrl, kitaplar
 
     def gir(kit, acilis=False):
         # acilis=True (a, e): diyalog acilista gorunduyse tiklamadan olc (set duzeyi)
@@ -779,6 +824,9 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     c, t, puan = uygulama_ac(ana, dizin, profil)
     if not c: A["e"] = {"sonuc": "KALDI", "sebep": "yeniden acilista CDP_ACILMADI"}; return None, menuUrl, kitaplar
     c.cmd("Page.enable"); time.sleep(10)
+    if not profil_yalitik_mi(ana_surec_profil_olc(), profil):
+        A["e"] = {"sonuc": "KALDI", "sebep": "yeniden acilista temiz profil olculemedi"}
+        akt_ekran(c, kimlik, "e", A["e"]); return c, menuUrl, kitaplar
     ilk = akt_baglanti_bekle(c)
     kitaplar = c.jsj(JS_MENU) or kitaplar
     o = gir(kitaplar[0] if kitaplar else None, acilis=True)
