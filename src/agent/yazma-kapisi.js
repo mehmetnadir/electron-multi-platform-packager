@@ -236,7 +236,13 @@ function sayfaTamMi(onceki, yeni) {
       sorunlar.push(`kitap ${id}: BookContent <Page> ${y.xml == null ? 'okunamadı' : y.xml} < önceki ${o.xml}`);
     }
   }
-  return sorunlar.length ? { tam: false, neden: sorunlar.slice(0, 5).join('; ') } : { tam: true, neden: '' };
+  if (sorunlar.length) return { tam: false, neden: sorunlar.slice(0, 5).join('; ') };
+  // Sunucuya giden kanıt: kapının kullandığı envanterin AYNISI (kitap başına önceki/yeni sayılar).
+  const kitaplar = Object.entries(onceki).map(([id, o]) => ({
+    kimlik: id, oncekiSayfa: o.pages, yeniSayfa: yeni[id].pages,
+    oncekiXmlPage: o.xml == null ? null : o.xml, yeniXmlPage: yeni[id].xml == null ? null : yeni[id].xml,
+  }));
+  return { tam: true, neden: '', kitaplar };
 }
 
 const metinOku = (okuyucu, yol) => {
@@ -338,6 +344,7 @@ function yazmaKapisi({
   const kodlar = new Set();
   const notlar = [];
   const uyarilar = [];
+  let boyutGerekce = null;
   const eksikKimlikler = []; // `kitap-eksik` verilen liste kimlikleri (taban kapsama ölçüsü bunu kullanır)
   let listeKitapSayisi = null;
   const ret = (kod, mesaj) => { kodlar.add(kod); nedenler.push(`${KAPI_ISARETI} ${mesaj}`); };
@@ -507,6 +514,7 @@ function yazmaKapisi({
     try { sk = sayfaTamMi(oncekiEnvanter, sayfaEnvanteri(yollar, oku)); } catch (_) { /* RED */ }
     if (sk.tam) {
       uyarilar.push(KOD.BOYUT_SAYFA_TAM);
+      boyutGerekce = { kod: 'sayfa-tam', kitaplar: sk.kitaplar };
       notlar.push(`UYARI ${KOD.BOYUT_SAYFA_TAM}: ${mesaj}; ${Object.keys(oncekiEnvanter).length} kitabın sayfaları tam`
         + ' (yeniden sıkıştırma) — geçti');
     } else {
@@ -517,6 +525,7 @@ function yazmaKapisi({
   return {
     gecti: nedenler.length === 0, kitaplar: denetlenecek, webzVarliklari, nedenler, nedenKodlari: [...kodlar], notlar,
     eksikKimlikler, listeKitapSayisi, buildKitapSayisi: kitaplar.length, uyarilar,
+    ...(boyutGerekce ? { boyutGerekce } : {}),
   };
 }
 

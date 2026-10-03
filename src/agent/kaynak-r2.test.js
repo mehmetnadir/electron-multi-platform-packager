@@ -414,3 +414,16 @@ test('kaynak-r2 yeteneği HER ZAMAN bildirilir — evde de ofiste de, kaynak-kur
     runner._konumAyarla(false);
   }
 });
+
+test('r2KurYayinla 03.10: kapı UYARI boyutGerekce verdiyse tamamla gövdesine girer; yoksa girmez', async () => {
+  const gerekce = { kod: 'sayfa-tam', kitaplar: [{ kimlik: '5', oncekiSayfa: 248, yeniSayfa: 248, oncekiXmlPage: 248, yeniXmlPage: 248 }] };
+  const a = akis({ kapi: {
+    gecti: true, kitaplar: [{ n: 1, id: '111', vs: 7, icerik: true, kapak: true }], nedenler: [],
+    uyarilar: ['boyut-dustu-sayfa-tam'], boyutGerekce: gerekce,
+  } });
+  await R.r2KurYayinla(a.o);
+  assert.deepEqual(a.s.cagrilar[1].govde.boyutGerekce, gerekce);
+  const b = akis();
+  await R.r2KurYayinla(b.o);
+  assert.equal('boyutGerekce' in b.s.cagrilar[1].govde, false);
+});

@@ -453,9 +453,14 @@ test('boyut-dustu: sayfa tam → UYARI boyut-dustu-sayfa-tam geçer; sayfa eksik
     zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => yeni.yollar, okuyucu: yeni.okuyucu,
     oncekiBoyut: 587262473, boyut: 273968994, oncekiEnvanter,
   });
+  const eksikYok = () => yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => sayfali(248).yollar,
+    okuyucu: sayfali(248).okuyucu, oncekiBoyut: 100, boyut: 100 });
   const tam = kos(sayfali(248), onceki);
   assert.equal(tam.gecti, true, tam.nedenler.join('|'));
   assert.deepEqual(tam.uyarilar, ['boyut-dustu-sayfa-tam']);
+  assert.deepEqual(tam.boyutGerekce, { kod: 'sayfa-tam', kitaplar: [
+    { kimlik: '5', oncekiSayfa: 248, yeniSayfa: 248, oncekiXmlPage: 248, yeniXmlPage: 248 }] });
+  assert.equal('boyutGerekce' in eksikYok(), false, 'uyarı yoksa gerekçe yok');
   assert.ok(tam.notlar.some((n) => /boyut-dustu-sayfa-tam/.test(n)));
   assert.equal(kos(sayfali(260), onceki).gecti, true, 'sayfa fazlası geçer');
   const eksik = kos(sayfali(247), onceki);

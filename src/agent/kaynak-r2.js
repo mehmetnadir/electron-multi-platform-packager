@@ -387,6 +387,7 @@ async function r2KurYayinla({
     t = await istemci.tamamla({
       ...kimlik, sha256: oz.sha256, boyut: oz.boyut, kitaplar,
       ...(webzVarliklari.length ? { webzVarliklari } : {}),
+      ...(k.boyutGerekce ? { boyutGerekce: k.boyutGerekce } : {}),
       uploadId, r2ObjectKey: basla.r2ObjectKey, parts, ...tamamlaEki,
     });
   } catch (e) {
