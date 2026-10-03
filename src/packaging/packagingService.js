@@ -21,6 +21,7 @@ const { applyPublisherDomainPatch } = require('./yayinci-domain-yamasi');
 const { readyToShowEkle } = require('./acilis-yamasi');
 const { yedekMainJs, basligiGuncelle } = require('./yedek-main');
 const sayfaWebp = require('./sayfa-webp');
+const pwaKacis = require('./pwa-kacis');
 const oluMotor = require('./olu-motor-temizligi');
 const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
 const agPolitikasi = require('./ag-politikasi-yamasi');
@@ -4079,23 +4080,15 @@ if (!window.cordova) {
       const cacheName = appName.toLowerCase().replace(/\s+/g, '-') + '-v' + appVersion;
       const cachePrefix = appName.toLowerCase().replace(/\s+/g, '-');
       
-      // Kritik dosyaları JSON array olarak formatla
-      const criticalFilesJson = criticalFiles
-        .map(file => `  '${file}'`)
-        .join(',\n');
-      
-      // Tüm dosyaları JSON array olarak formatla
-      const allFilesJson = relativeFiles
-        .map(file => `  '${file}'`)
-        .join(',\n');
-      
-      swContent = swContent
-        .replace(/{{APP_NAME}}/g, appName)
-        .replace(/{{APP_VERSION}}/g, appVersion)
-        .replace(/{{CACHE_NAME}}/g, cacheName)
-        .replace(/{{CACHE_PREFIX}}/g, cachePrefix)
-        .replace('{{CRITICAL_FILES_LIST}}', allFilesJson);
-      
+      // Şablon yer tutucuları güvenle doldurulur (tırnak/ters bölü/satır sonu kaçışı)
+      swContent = pwaKacis.swSablonDoldur(swContent, {
+        appName,
+        appVersion,
+        cacheName,
+        cachePrefix,
+        dosyalar: relativeFiles
+      });
+
       // Service Worker'ı yaz
       const swPath = path.join(pwaPath, 'sw.js');
       await fs.writeFile(swPath, swContent, 'utf-8');
@@ -5618,12 +5611,12 @@ $LocalAppData\\Programs\\dijitap\\${companyText}\\${appName}
     ).slice(0, 50); // İlk 50 kritik dosya
     
     return `
-// ${appName} - Service Worker v${appVersion}
+// ${pwaKacis.jsYorum(appName)} - Service Worker v${pwaKacis.jsYorum(appVersion)}
 // Gelişmiş offline support ve otomatik güncelleme
 
-const CACHE_NAME = '${cacheName}';
-const CRITICAL_CACHE = '${cacheName}-critical';
-const RUNTIME_CACHE = '${cacheName}-runtime';
+const CACHE_NAME = ${pwaKacis.jsStr(cacheName)};
+const CRITICAL_CACHE = ${pwaKacis.jsStr(cacheName + '-critical')};
+const RUNTIME_CACHE = ${pwaKacis.jsStr(cacheName + '-runtime')};
 
 // Kritik dosyalar (hemen cache'lenir)
 const CRITICAL_FILES = ${JSON.stringify(criticalFiles, null, 2)};
@@ -5658,7 +5651,7 @@ self.addEventListener('activate', (event) => {
         cacheNames.map((cacheName) => {
           if (cacheName !== CRITICAL_CACHE && 
               cacheName !== RUNTIME_CACHE &&
-              cacheName.startsWith('${appName.toLowerCase().replace(/\s+/g, '-')}')) {
+              cacheName.startsWith(${pwaKacis.jsStr(appName.toLowerCase().replace(/\s+/g, '-'))})) {
             console.log('[SW] Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
@@ -5731,7 +5724,7 @@ async function checkForUpdates() {
     const response = await fetch('/api/version');
     const { version } = await response.json();
     
-    if (version !== '${appVersion}') {
+    if (version !== ${pwaKacis.jsStr(appVersion)}) {
       console.log('[SW] New version available:', version);
       
       // Kullanıcıya bildirim göster
@@ -5767,13 +5760,13 @@ self.addEventListener('notificationclick', (event) => {
   }
 });
 
-console.log('[SW] Service Worker loaded - ${appName} v${appVersion}');
+console.log(${pwaKacis.jsStr('[SW] Service Worker loaded - ' + appName + ' v' + appVersion)});
 `;
   }
 
   generateInstallHelper(appName) {
     return `
-// ${appName} - PWA Install Helper
+// ${pwaKacis.jsYorum(appName)} - PWA Install Helper
 // Kullanıcıya "Masaüstüne Ekle" butonu gösterir
 
 let deferredPrompt;
@@ -5924,7 +5917,7 @@ function showSuccessMessage() {
         </svg>
         <div>
           <div style="font-weight: 600; margin-bottom: 4px;">Kurulum Başarılı!</div>
-          <div style="font-size: 14px; opacity: 0.9;">${appName} masaüstünüze eklendi</div>
+          <div style="font-size: 14px; opacity: 0.9;">${pwaKacis.jsSablonMetni(pwaKacis.htmlKacis(appName))} masaüstünüze eklendi</div>
         </div>
       </div>
     </div>
@@ -5962,7 +5955,7 @@ console.log('[Install] Install helper loaded');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${appName} - Çevrimdışı</title>
+    <title>${pwaKacis.htmlKacis(appName)} - Çevrimdışı</title>
     <style>
         * {
             margin: 0;
@@ -6058,7 +6051,7 @@ console.log('[Install] Install helper loaded');
         
         <h1>İnternet Bağlantısı Yok</h1>
         <p>
-            ${appName} çevrimdışı çalışabilir, ancak bazı özellikler internet bağlantısı gerektirebilir.
+            ${pwaKacis.htmlKacis(appName)} çevrimdışı çalışabilir, ancak bazı özellikler internet bağlantısı gerektirebilir.
             Lütfen internet bağlantınızı kontrol edin ve tekrar deneyin.
         </p>
         
