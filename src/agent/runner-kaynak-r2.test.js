@@ -38,6 +38,7 @@ const md5 = (b) => crypto.createHash('md5').update(b).digest('hex');
 function setBuildZip(kitaplar = [['111', 'v1']]) {
   const z = new AdmZip();
   z.addFile('index.html', Buffer.from('<html>set</html>'));
+  z.addFile('electron.js', Buffer.from('require("electron");'));
   kitaplar.forEach(([id, etiket], i) => {
     const b = `book${i + 1}/assets/${id}/`;
     z.addFile(`book${i + 1}/index.html`, Buffer.from('<html>kitap</html>'));

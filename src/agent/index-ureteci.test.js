@@ -63,7 +63,7 @@ async function ortam({ idler = ['501', '502', '503'], dataBos = [], bc = {} } = 
     'core/icons/ButtonHand.svg': '<svg/>', 'version.txt': '1.12.7', '2030d1504cb4d568b6da.main.js': '// motor paketi',
     'languages/tr.json': '{}', 'i18n/tr.js': '// i18n', 'features/live-test.html': '<html/>', 'assets2/book1.png': 'yds-buton',
     'styles/language-set.css': '/* sf425 */',
-    'book1/index.html': '<html>motor</html>',
+    'book1/index.html': '<html>motor</html>', 'book1/electron.js': 'require("electron");',
     'book1/app.config.js': `var AppConfig = { updateBookEndPoint: "${SABLON}" };`,
     'book1/43e23fce2b7009474555a77.js': '// motor',
     'book1/classlibraries/ImWin32.dll': ig.menuKodla(KALIP_XML, () => 0.5, BICIM),
@@ -253,7 +253,7 @@ test('uret: anahtarlı kapak bookN düzeninde reddedilir; otomatik ama anahtarli
 // ─── Yazma kapısı: tek motorlu set ──────────────────────────────────────────────────────────
 
 function tekMotorGirdileri(idler, { eksikKapak = null, eksikIcerik = null } = {}) {
-  const g = ['index.html', 'app.config.js', 'classlibraries/ImWin32.dll'];
+  const g = ['index.html', 'electron.js', 'app.config.js', 'classlibraries/ImWin32.dll'];
   for (const id of idler) {
     if (id !== eksikIcerik) g.push(`assets/${id}/data/BookContent.xml`, `assets/${id}/pages/1.png`);
     if (id !== eksikKapak) g.push(`assets/${id}/thumbs/1.jpg`);

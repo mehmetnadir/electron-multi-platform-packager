@@ -65,8 +65,25 @@ const KAPAK = 'thumbs/1.jpg';
 const KOD = Object.freeze({
   OKUNAMADI: 'giris-listesi-okunamadi', LISTE_YOK: 'liste-yok', KITAP_YOK: 'kitap-yok',
   KITAP_EKSIK: 'kitap-eksik', LISTE_DISI: 'liste-disi-kitap', ID_YOK: 'id-yok',
-  ICERIK_YOK: 'icerik-yok', KAPAK_YOK: 'kapak-yok', BOYUT: 'boyut-dustu',
+  ICERIK_YOK: 'icerik-yok', KAPAK_YOK: 'kapak-yok', BOYUT: 'boyut-dustu', GIRIS_YOK: 'giris-yok',
 });
+
+/**
+ * Build kökünün Electron giriş dosyası (03.10, saha 74430/59480): `main.js` | `electron.js` |
+ * `package.json` `main` alanının gösterdiği dosya. Yoksa paketleyici yedek main.js şablonuna düşer
+ * (nodeIntegration:false → okuyucu YÜKLENMEZ) — artık kabul edilmez. Bulunan yol ya da null. SAF.
+ */
+function girisDosyasi(kume, okuyucu) {
+  for (const y of ['main.js', 'electron.js']) if (kume.has(y)) return y;
+  if (kume.has('package.json')) {
+    try {
+      const m = JSON.parse(metinOku(okuyucu, 'package.json') || '{}').main;
+      const y = typeof m === 'string' ? m.replace(/^\.\//, '') : '';
+      if (y && kume.has(y)) return `package.json → ${y}`;
+    } catch (_) { /* bozuk package.json: giriş yok sayılır */ }
+  }
+  return null;
+}
 
 /** İmpark kimliği mi? `icerik-merdiven.imparkKimligiMi` ile BİREBİR (0, boş, sayısal değil → hayır). */
 function imparkKimligiMi(id) {
@@ -358,6 +375,12 @@ function yazmaKapisi({
     if (!k.kapak) ret(KOD.KAPAK_YOK, `${adi}: kapak yok (${KAPAK})`);
   }
 
+  // 2b. Electron giriş dosyası (yedek şablona düşmek kabul edilmez)
+  if (!girisDosyasi(kume, oku)) {
+    ret(KOD.GIRIS_YOK, 'build kökünde Electron giriş dosyası yok (main.js / electron.js / package.json main)'
+      + ' — paketleyici yedek şablona düşer, okuyucu yüklenmez');
+  }
+
   // 3. boyut
   let b = boyut;
   if (b == null && zipYolu) { try { b = fs.statSync(zipYolu).size; } catch (_) { b = null; } }
@@ -370,4 +393,6 @@ function yazmaKapisi({
   };
 }
 
-module.exports = { yazmaKapisi, imparkKimligiMi, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK };
+module.exports = {
+  yazmaKapisi, imparkKimligiMi, girisDosyasi, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
+};

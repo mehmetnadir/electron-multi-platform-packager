@@ -83,6 +83,8 @@ function kalipSec({ arsivKoku, kurum }) {
     let k;
     try { k = U.kalipOku(zip); } catch (_) { continue; }
     if (String(k.kurum || '') !== String(kurum)) continue;
+    // Arşive düşmüş üreteç build'i / girişsiz build kalıp OLMAZ (üreteç-üstüne-üreteç zinciri yok).
+    if (tabanUretecMi(zip).atla) continue;
     let zaman = 0;
     try {
       const kj = JSON.parse(fs.readFileSync(path.join(arsivKoku, d.name, 'kaynak.json'), 'utf8'));
@@ -179,6 +181,33 @@ function ornekKitap(listeHam) {
   return g ? String(g.assetId) : null;
 }
 
+/**
+ * Önceki build taban olmaya uygun mu (03.10, saha 74430/59480: yeni kur isteğine rağmen r2-kur önceki
+ * R2 build'ini taban aldı, üreteç HİÇ koşmadı, yeni build eskisiyle sha256 birebir — kökte giriş yok).
+ * ATLA: kökte üreteç işareti (`empp-uretec.json`) ya da Electron girişi yok (main.js / electron.js /
+ * package.json main; tek sarmalayıcı klasör tolere edilir — yazma kapısıyla aynı kural). Okunamazsa
+ * ATLAMAZ (taban akışı ve yazma kapısı karar verir). I/O: zip dizini okuma.
+ * @returns {{atla: boolean, sebep: string|null}}
+ */
+function tabanUretecMi(zipYolu) {
+  let ad;
+  try {
+    ad = [...M.zipDizini(zipYolu).values()].filter((g) => !g.dizin).map((g) => g.ad)
+      .filter((a) => !a.endsWith('/') && !/(^|\/)(__MACOSX|\._)/.test(a));
+  } catch (_) {
+    return { atla: false, sebep: null };
+  }
+  const kokler = [...new Set(ad.map((a) => a.split('/')[0]))];
+  const onEk = kokler.length === 1 && ad.every((a) => a.includes('/')) ? `${kokler[0]}/` : '';
+  const kume = new Set(ad.filter((a) => a.startsWith(onEk)).map((a) => a.slice(onEk.length)));
+  if (kume.has(U.URETEC_ISARETI)) return { atla: true, sebep: 'üreteç build\'i (işaret)' };
+  const K = require('./yazma-kapisi'); // tembel: kapı modülü yükleme sırasından bağımsız
+  if (!K.girisDosyasi(kume, K.varsayilanOkuyucu({ zipYolu, onEk }))) {
+    return { atla: true, sebep: 'kökte Electron girişi yok' };
+  }
+  return { atla: false, sebep: null };
+}
+
 /** Zip'i olmayan oyun/çalışma kâğıdı için çevrimiçi Web-Z adresi (kisaKod varsa). SAF. */
 function webzAdresiKur(job, workerKoku = WORKER_KOKU) {
   const kod = job && job.kisaKod ? String(job.kisaKod).trim() : '';
@@ -250,5 +279,5 @@ async function uretecKaynagi(o) {
 
 module.exports = {
   ISARET, YAYINCILAR, WORKER_KOKU, UretecKaynakHatasi, uretecAcik, yayinciBul, kalipSec,
-  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi, ucSec, ornekKitap, FLASHY,
+  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi, ucSec, ornekKitap, FLASHY, tabanUretecMi,
 };

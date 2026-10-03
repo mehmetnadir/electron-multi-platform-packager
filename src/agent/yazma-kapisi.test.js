@@ -123,6 +123,7 @@ test('zip: __MACOSX/._*/.DS_Store yok sayılır; sarmalayıcı klasör tolere ed
   const liste = [
     '__MACOSX/', '__MACOSX/sar/._index.html', 'sar/', 'sar/.DS_Store', 'sar/book1/._x',
     'sar/book1/assets/5/data/BookContent.xml', 'sar/book1/assets/5/pages/1.png', 'sar/book1/assets/5/thumbs/1.jpg',
+    'sar/electron.js',
   ];
   const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => liste });
   assert.equal(r.gecti, true, r.nedenler.join('|'));
@@ -136,6 +137,7 @@ test('2 GiB üstü seyrek zip: unzip -Z1 listeler, boyut stat edilir', () => {
     { ad: 'book1/assets/9/data/BookContent.xml', veri: Buffer.from('<b/>') },
     { ad: 'book1/assets/9/pages/1.jpg', boyut: IKI_GIB + 1024 * 1024 },
     { ad: 'book1/assets/9/thumbs/1.jpg', veri: Buffer.from('c') },
+    { ad: 'electron.js', veri: Buffer.from('require("electron");') },
   ];
   const fd = fs.openSync(yol, 'w');
   let ofs = 0; const merkez = [];
@@ -175,7 +177,7 @@ const kitapGirisleri = (n, id) => [
   `book${n}/assets/${id}/data/BookContent.xml`, `book${n}/assets/${id}/pages/1.png`, `book${n}/assets/${id}/thumbs/1.jpg`,
 ];
 const LISTE4 = '101|Bir\n102|Iki\n103|Uc\n104|Dort';
-const build4 = () => [101, 102, 103, 104].flatMap((id, i) => kitapGirisleri(i + 1, id));
+const build4 = () => ['electron.js', ...[101, 102, 103, 104].flatMap((id, i) => kitapGirisleri(i + 1, id))];
 
 test('45549 benzeri: 4 liste kimliği + book5 kimliği "0" → GEÇER, not düşer, ek sunucuya gitmez', () => {
   const r = yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: LISTE4, listele: () => [...build4(), ...kitapGirisleri(5, 0)] });
@@ -246,7 +248,7 @@ const menuDosyalari = (books) => {
 /** Geçici build dizini: {göreli yol: içerik}; kitap(n, dizin) içerik+kapak+ImWin32 ekler. */
 function buildKur(dosyalar) {
   const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'yazma-kapisi-webz-'));
-  for (const [y, v] of Object.entries(dosyalar)) {
+  for (const [y, v] of Object.entries({ 'electron.js': 'require("electron");', ...dosyalar })) {
     fs.mkdirSync(path.dirname(path.join(kok, y)), { recursive: true });
     fs.writeFileSync(path.join(kok, y), v);
   }
@@ -397,4 +399,21 @@ test('menü okunamazsa (okuyucu null döner) Web-Z eşlemesi yapılmaz → bugü
   assert.equal(r.gecti, false);
   assert.deepEqual(r.nedenKodlari, ['kitap-eksik']);
   assert.deepEqual(r.webzVarliklari, []);
+});
+
+// --- 03.10 saha 74430/59480: kökte Electron girişi yoksa paketleyici yedek şablona düşer → RED ---
+
+test('Electron giriş dosyası yoksa RED giris-yok; main.js / electron.js / package.json main yeterli', () => {
+  const temel = ['book1/assets/5/data/BookContent.xml', 'book1/assets/5/pages/1.png', 'book1/assets/5/thumbs/1.jpg'];
+  const kos = (ek, okuyucu = null) => yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => [...temel, ...ek],
+    ...(okuyucu ? { okuyucu } : {}) });
+  const yok = kos(['index.html', 'electronUpdate.js']);
+  assert.equal(yok.gecti, false);
+  assert.deepEqual(yok.nedenKodlari, ['giris-yok']);
+  assert.match(yok.nedenler.join('|'), /Electron giriş dosyası yok/);
+  for (const g of ['main.js', 'electron.js']) assert.equal(kos([g]).gecti, true, g);
+  const pj = (main) => ({ veri: (y) => (y === 'package.json' ? Buffer.from(JSON.stringify({ main })) : null), boyut: () => 1 });
+  assert.equal(kos(['package.json', 'app/giris.js'], pj('./app/giris.js')).gecti, true, 'package.json main → var olan dosya');
+  assert.deepEqual(kos(['package.json'], pj('yok.js')).nedenKodlari, ['giris-yok'], 'main gösterdiği dosya yoksa RED');
+  assert.deepEqual(kos(['book1/electron.js']).nedenKodlari, ['giris-yok'], 'bookN içindeki giriş kökü kurtarmaz');
 });

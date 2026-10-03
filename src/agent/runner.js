@@ -2116,10 +2116,10 @@ async function r2AlHazirla({ bookId, kaynak, zipPath, work }) {
  * (R2 tabanı ya da r2Surum'lu arşiv kaydı; elle yazılmış arşivde bilinmez → null).
  */
 async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null }) {
-  if (kaynak.taban.tur === 'uretec') {
-    // ÜRETEÇ: build'i Web-Z listesi + ZKitapZipH + kurum motoruyla kurar. Ertelenecek her durum
-    // (liste/kalıp/tema yok, kitap alınamadı, ağ) `gecici` → çağıranın catch'i r2Ertele (failed yok).
-    log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban YOK: build index üreteciyle kuruluyor`);
+  // ÜRETEÇ: build'i Web-Z listesi + ZKitapZipH + kurum motoruyla kurar. Ertelenecek her durum
+  // (liste/kalıp/tema yok, kitap alınamadı, ağ) `gecici` → çağıranın catch'i r2Ertele (failed yok).
+  const uretecleKur = async (neden) => {
+    log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — ${neden}: build index üreteciyle kuruluyor`);
     const { rapor, liste } = await kaynakAdim.uretec({ job, zipPath, work, arsivKoku: arsivKoku(), log });
     // Sonraki adımlar (set eki, yazma kapısı) AYNI listeyi görsün: kitap-dışı varlık link'e çevrilmiş hâli.
     job.setListesi = rapor.kapiListesi;
@@ -2127,15 +2127,22 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null }) 
     // Link kartına çevrilen öğeler sunucu kapısına `webzVarliklari` (yol 'link') olarak bildirilir.
     job.uretecWebzVarliklari = indexUreteci.linkVarliklari(rapor);
     return { oncekiBoyut: null };
-  }
+  };
+  // Üreteç build'i / girişsiz build TABAN OLMAZ (03.10 saha 74430/59480): üreteç her seferinde koşar.
+  const tabanAtla = (zip) => (uretecKaynak.uretecAcik() ? uretecKaynak.tabanUretecMi(zip) : { atla: false });
+  if (kaynak.taban.tur === 'uretec') return uretecleKur('taban YOK');
   if (kaynak.taban.tur === 'r2') {
     const indirilen = path.join(work, 'r2-taban.zip');
     log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: önceki geçerli R2 build (imzalı GET)`);
     const oz = await r2IndirDogrula(kaynak.taban.url, indirilen, { sha256: kaynak.taban.sha256 });
+    const d = tabanAtla(indirilen);
+    if (d.atla) return uretecleKur(`R2 tabanı ATLANDI (${d.sebep})`);
     await fsp.rename(indirilen, zipPath);
     return { oncekiBoyut: oz.boyut };
   }
   const { arsiv } = kaynak.taban;
+  const da = tabanAtla(arsiv.zip);
+  if (da.atla) return uretecleKur(`arşiv tabanı ATLANDI (${da.sebep})`);
   await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
   log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: ARŞİV (${arsiv.etiket || '-'}, md5 ${arsiv.md5}`
     + `${arsiv.r2Surum ? `, R2 ${arsiv.r2Surum}` : ', elle yazılmış'})`);

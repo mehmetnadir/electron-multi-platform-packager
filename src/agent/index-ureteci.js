@@ -77,9 +77,16 @@ const MOTOR_HARIC = Object.freeze(['assets', 'classlibraries', 'temp']);
  * favicon.ico. `kurum.txt` ayrıca yazılır.
  */
 const KOK_INDEX = Object.freeze({
-  dosyalar: Object.freeze(['index.html', 'set-menu.json', 'kurum.txt']),
+  dosyalar: Object.freeze(['index.html', 'set-menu.json', 'kurum.txt', 'empp-uretec.json']),
   dizinler: Object.freeze(['config', 'scripts', 'styles', 'images', 'languages', 'i18n', 'features', 'assets2']),
 });
+/**
+ * Üreteç İŞARETİ (03.10, saha 74430/59480): üretilen her build'in kökünde. Sonraki r2-kur önceki
+ * geçerli build'i (R2 tabanı / arşiv) taban almadan önce buna bakar: üreteç build'i taban OLMAZ,
+ * üreteç yeniden koşar (Web-Z listesi + İmpark içeriği her seferinde güncel, motor kalıptan).
+ */
+const URETEC_ISARETI = 'empp-uretec.json';
+
 /** Kök çalışma yapılandırmaları — `baseEndpointUrl` dönüşümü burada da uygulanır (varsa). */
 const KOK_YAPILANDIRMA = Object.freeze(['set_app.config', 'old_app.config.js']);
 
@@ -727,6 +734,11 @@ async function uret(o) {
     }
     if (kurum) await fsp.writeFile(path.join(kok, 'kurum.txt'), kurum);
     if (donusum) donusumKaniti = motorDonusumuDogrula(kok, motorlar, donusum);
+    // İşaret (zaman damgasız → aynı girdi aynı bayt): sonraki r2-kur bu build'i taban almaz.
+    await fsp.writeFile(path.join(kok, URETEC_ISARETI), `${JSON.stringify({
+      kaynak: 'uretec', setId: String(o.setId), duzen, aktivasyon, kalip: path.basename(path.dirname(o.kalipZip)),
+      kabuk: duzen === DUZEN.BOOKN ? (temaAdi ? `tema:${temaAdi}` : 'kalip') : null,
+    }, null, 2)}\n`);
 
     await fsp.mkdir(path.dirname(o.cikti), { recursive: true });
     const gecici = `${o.cikti}.yazim-${process.pid}`;
@@ -790,4 +802,5 @@ module.exports = {
   kapiListesiKur, tekMotorMenuXml, webzMenuDosyalari, kalipOku, kabukGecerliMi, uret, uretecOzeti,
   KOK_MOTOR_EKLERI, MOTOR_HARIC, alanOku, logoGizle, logoDuzMu, tabanUcYaz, donusumDenetle,
   motorDonusumuUygula, motorDonusumuDogrula, kapakCoz, KURUM_LOGO, linkVarliklari, KOK_INDEX, KOK_YAPILANDIRMA,
+  URETEC_ISARETI,
 };

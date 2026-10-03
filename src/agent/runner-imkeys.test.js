@@ -39,6 +39,7 @@ const KODLAR = ['AB3CD', 'PQ9RS'];
 function setBuildZip({ id = '111', imKeysVeri = null, dizin = null } = {}) {
   const z = new AdmZip();
   z.addFile('index.html', Buffer.from('<html>set</html>'));
+  z.addFile('electron.js', Buffer.from('require("electron");'));
   const b = `book1/assets/${dizin || id}/`;
   z.addFile('book1/index.html', Buffer.from('<html>kitap</html>'));
   z.addFile(`${b}data/BookContent.xml`, Buffer.from('<Book v="1"/>'));

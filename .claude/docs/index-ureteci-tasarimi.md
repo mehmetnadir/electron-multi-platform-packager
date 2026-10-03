@@ -184,5 +184,20 @@ Sonuç GEÇTİ: menü 2/2 kart, panel kapakları; book1 → `defaultPageNo=3` ("
 logosu. Bilinen gürültü: motorun `core/kurumLogo.png` (büyük L) isteği ERR_FILE_NOT_FOUND — kalıpta da var,
 paketleyici `harf-kapisi` çözer.
 
+## 12. Önceki build taban OLMAZ (03.10, dal `uretec-taban-20261003`)
+
+**Saha (ProBook, 74430/59480):** yeni kur isteğine rağmen r2-kur "taban: önceki geçerli R2 build" yolundan
+gitti, üreteç hiç koşmadı; yeni build eskisiyle sha256 birebir (kökte Electron girişi yok → paketleyici yedek
+`main.js` şablonuna düştü, okuyucu yüklenmedi). Claim taban build'in kaynağını taşımaz → karar zip'ten.
+
+- `uret` kökte `empp-uretec.json` işareti yazar (zaman damgasız; KOK_INDEX sınıfında).
+- `uretec-kaynak.tabanUretecMi(zip)`: işaret var YA DA Electron girişi yok (main.js / electron.js /
+  package.json main → var olan dosya; tek sarmalayıcı klasör tolere) → ATLA. Okunamayan zip atlamaz.
+- `r2KurTabanHazirla`: üreteç açıkken R2 tabanı (indirme + sha sonrası) ve arşiv tabanı bu kontrolden
+  geçer; ATLA ise üreteç yolu (log "R2/arşiv tabanı ATLANDI (<sebep>)"). `kalipSec` üreteç build'ini kalıp
+  seçmez (üreteç-üstüne-üreteç zinciri yok).
+- Yazma kapısı: build kökünde giriş yoksa RED `giris-yok` (üreteç kapalı olsa bile R2'ye yazılmaz).
+- Öneri (sunucu): claim'e taban build'in `kaynak`'ını eklemek indirmeyi de gereksizleştirir.
+
 ---
-Son Güncelleme: 2026-10-02 — faz 3 Flashy (§11); önceki: ilk sürüm + runner bağlantısı.
+Son Güncelleme: 2026-10-03 — taban kuralı (§12); önceki: faz 3 Flashy (§11), ilk sürüm + runner bağlantısı.

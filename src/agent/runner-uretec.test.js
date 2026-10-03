@@ -59,7 +59,7 @@ async function ortam({ kurum = '60', kabuk = true, idler = ['501', '502'] } = {}
       'index.html': '<title>Eski</title>', 'config/settings.json': JSON.stringify(ayar),
       'scripts/language-set.js': '//', 'scripts/cevrimdisi-yama.js': `window.__setSettings = ${JSON.stringify(ayar)};\n`,
     } : { 'index.html': '<html>motor kopyası</html>' }),
-    'kurum.txt': kurum, 'book1/kurum.txt': kurum, 'book1/index.html': '<html>motor</html>',
+    'kurum.txt': kurum, 'book1/kurum.txt': kurum, 'book1/index.html': '<html>motor</html>', 'book1/electron.js': 'require("electron");',
     'electron.js': 'const { app } = require("electron");\n', 'set_app.config': 'const AppConfig = {\n};\n',
     'book1/app.config.js': `var AppConfig = { updateBookEndPoint: "${SABLON}" };`,
     'book1/classlibraries/ImWin32.dll': ig.menuKodla(KALIP_XML, () => 0.5, { bas: 127, ara: 16, son: 127 }),
@@ -84,7 +84,7 @@ async function ortam({ kurum = '60', kabuk = true, idler = ['501', '502'] } = {}
   return { d, arsivKoku, getir, indir };
 }
 
-async function sahteSunucu() {
+async function sahteSunucu({ taban = null } = {}) {
   const kayit = { govdeler: {}, parcalar: [], uploadGovde: null };
   const s = http.createServer((req, res) => {
     const parca = [];
@@ -109,6 +109,9 @@ async function sahteSunucu() {
         res.writeHead(200, { ETag: `"etag-${yol.split('/').pop()}"` });
         return res.end();
       }
+      if (taban && req.method === 'GET' && yol === '/taban.zip') {
+        res.writeHead(200, { 'Content-Length': taban.length }); return res.end(taban);
+      }
       if (yol === '/api/upload-build') { kayit.uploadGovde = govde; return json(500, {}); }
       res.writeHead(404); return res.end();
     });
@@ -119,8 +122,8 @@ async function sahteSunucu() {
 }
 
 /** processJob'u yalıtılmış ortamda; üreteç adımı sahte İmpark + verilen anahtarlı kararıyla. */
-async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {}, ek = {} }) {
-  const sunucu = await sahteSunucu();
+async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {}, ek = {}, taban = null }) {
+  const sunucu = await sahteSunucu({ taban });
   const casus = { merdiven: 0, setEki: 0, uretec: 0 };
   const orj = { ...kaynakAdim };
   kaynakAdim.merdiven = async () => { casus.merdiven += 1; return { satirlar: [], s1: [] }; };
@@ -150,7 +153,8 @@ async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {},
   let hata = null;
   let donus;
   const is = { bookTitle: 'Marvel 11', publisherName: 'YDS Publishing', downloadUrl: '', platform: 'android',
-    bookId: '45480', kaynakTuru: 'r2-kur', kaynakSurumu: '2.0.1', kurulumBitis: '2099-01-01T00:00:00.000Z', ...job };
+    bookId: '45480', kaynakTuru: 'r2-kur', kaynakSurumu: '2.0.1', kurulumBitis: '2099-01-01T00:00:00.000Z',
+    ...(taban ? { tabanUrl: `${sunucu.url}/taban.zip?X-Amz-Signature=x`, tabanSha256: sha256(taban) } : {}), ...job };
   try {
     donus = await processJob({ agentId: 'test', token: 'x' }, is);
   } catch (e) { hata = e; } finally {
@@ -161,6 +165,16 @@ async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {},
     await sunucu.kapat();
   }
   return { hata, donus, casus, is, kayit: sunucu.kayit, loglar: loglar.join('\n') };
+}
+
+/** Önceki build (R2 tabanı / arşiv) — verilen kök dosyalarıyla; tek kitaplı İmpark ağacı. */
+async function tabanZip(kok) {
+  const d = tmp('taban');
+  await yaz(d, { 'index.html': '<html>eski</html>', 'kurum.txt': '60', 'book1/index.html': 'm',
+    'book1/assets/111/data/BookContent.xml': '<Book/>', 'book1/assets/111/pages/1.png': 'p', ...kok });
+  const z = path.join(tmp('taban-zip'), 'build.zip');
+  await zipla(d, z);
+  return fs.readFileSync(z);
 }
 
 const yuklenenZip = (g) => g.subarray(g.indexOf(Buffer.from('PK\u0003\u0004', 'latin1')),
@@ -290,6 +304,93 @@ test('r2-kur taban YOK, liste hiç yok (claim/dosya/kisaKod): ERTELENİR uretec-
   const r = await isKostur({ o, job: {} });
   assert.equal(r.donus.ertelendi, true);
   assert.match(r.donus.sebep, /uretec-liste-yok/);
+});
+
+// ─── Önceki build taban OLMAZ (03.10 saha 74430/59480: üreteç koşmadı, eski build birebir) ─────
+
+const LISTE2 = '501 | A |  |  | Books\n502 | B |  |  | Tests';
+for (const [ad, kok, sebep] of [
+  ['üreteç işaretli', { 'electron.js': 'x', 'empp-uretec.json': '{"kaynak":"uretec"}' }, /üreteç build'i \(işaret\)/],
+  ['girişsiz (main/electron/package.json main yok)', { 'package.json': '{"main":"yok.js"}' }, /kökte Electron girişi yok/],
+]) {
+  test(`r2-kur R2 tabanı ${ad}: taban ATLANIR, üreteç koşar → tamamla (+uretec), indirilen eski build yüklenmez`, async () => {
+    const o = await ortam();
+    const taban = await tabanZip(kok);
+    const r = await isKostur({ o, taban, anahtarli: (id) => id === '502', job: { setListesi: LISTE2 } });
+    assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+    assert.equal(r.casus.uretec, 1, 'üreteç koştu');
+    assert.match(r.loglar, new RegExp(`R2 tabanı ATLANDI \\(${sebep.source}\\)`));
+    const t = r.kayit.govdeler['kaynak/tamamla'][0];
+    assert.equal(t.uretec.kaynak, 'uretec');
+    assert.deepEqual(t.kitaplar.map((k) => k.id), ['501', '502']);
+    const yuklenen = Buffer.concat(r.kayit.parcalar);
+    assert.notEqual(sha256(yuklenen), sha256(taban), 'yeni build eskisiyle birebir DEĞİL');
+    const zipYolu = path.join(tmp('kontrol'), 'b.zip');
+    fs.writeFileSync(zipYolu, yuklenen);
+    const dz = M.zipDizini(zipYolu);
+    assert.equal(dz.has('electron.js') && dz.has('empp-uretec.json'), true, 'yeni build: giriş + üreteç işareti');
+    assert.equal(JSON.parse(M.zipGirdiOku(zipYolu, dz.get('empp-uretec.json'))).kaynak, 'uretec');
+  });
+}
+
+test('r2-kur ARŞİV tabanı girişsiz (eski üreteç build\'i arşive düşmüş): atlanır, üreteç koşar', async () => {
+  const o = await ortam();
+  const zip = await tabanZip({});
+  const ar = tmp('arsiv-girissiz');
+  fs.mkdirSync(path.join(ar, '45480'));
+  fs.writeFileSync(path.join(ar, '45480', 'build.zip'), zip);
+  fs.writeFileSync(path.join(ar, '45480', 'kaynak.json'), JSON.stringify({ dosya: 'build.zip',
+    md5: crypto.createHash('md5').update(zip).digest('hex'), boyut: zip.length, etiket: 'eski-uretec' }));
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, anahtarli: (id) => id === '502', job: { setListesi: LISTE2 } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+  assert.equal(r.casus.uretec, 1);
+  assert.match(r.loglar, /arşiv tabanı ATLANDI \(kökte Electron girişi yok\)/);
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'][0].uretec.kaynak, 'uretec');
+});
+
+test('r2-kur R2 tabanı girişli + işaretsiz (gerçek YDS build\'i): taban KORUNUR, üreteç koşmaz', async () => {
+  const o = await ortam();
+  const taban = await tabanZip({ 'electron.js': 'x' });
+  const r = await isKostur({ o, taban, job: { setListesi: LISTE2 } });
+  assert.equal(r.casus.uretec, 0);
+  assert.match(r.loglar, /taban: önceki geçerli R2 build/);
+  assert.doesNotMatch(r.loglar, /ATLANDI/);
+});
+
+test('r2-kur üreteç KAPALI + girişsiz R2 tabanı: taban alınır ama yazma kapısı RED giris-yok — R2\'ye yazılmaz', async () => {
+  const o = await ortam();
+  const taban = await tabanZip({});
+  const r = await isKostur({ o, taban, env: { EMPP_INDEX_URETECI: '0' }, job: { setListesi: LISTE2 } });
+  assert.equal(r.casus.uretec, 0);
+  assert.doesNotMatch(r.loglar, /ATLANDI/);
+  assert.match(`${r.loglar}\n${r.hata && r.hata.message}`, /giris-yok|Electron giriş dosyası yok/);
+  assert.equal(r.kayit.govdeler['kaynak/presign-multipart'], undefined, 'presign yok');
+  assert.equal(r.kayit.parcalar.length, 0, 'R2 PUT yok');
+});
+
+test('tabanUretecMi: işaret / giriş kuralı; tek sarmalayıcı klasör; okunamayan zip ATLAMAZ; kalipSec üreteç build\'ini almaz', async () => {
+  const z = async (kok) => { const p = path.join(tmp('tu'), 'b.zip'); fs.writeFileSync(p, await tabanZip(kok)); return p; };
+  assert.deepEqual(uk.tabanUretecMi(await z({ 'main.js': 'x' })), { atla: false, sebep: null });
+  assert.deepEqual(uk.tabanUretecMi(await z({ 'package.json': '{"main":"./app/giris.js"}', 'app/giris.js': 'x' })),
+    { atla: false, sebep: null });
+  assert.equal(uk.tabanUretecMi(await z({ 'book1/electron.js': 'x' })).atla, true, 'kitap motorunun girişi kökü kurtarmaz');
+  assert.equal(uk.tabanUretecMi(await z({ 'main.js': 'x', 'empp-uretec.json': '{}' })).atla, true);
+  const sar = tmp('sar');
+  await yaz(path.join(sar, 'build'), { 'electron.js': 'x', 'index.html': 'i' });
+  const sz = path.join(tmp('sarz'), 'b.zip');
+  await zipla(sar, sz);
+  assert.equal(uk.tabanUretecMi(sz).atla, false, 'tek sarmalayıcı klasör tolere edilir');
+  const bozuk = path.join(tmp('bozuk'), 'b.zip');
+  fs.writeFileSync(bozuk, 'zip değil');
+  assert.deepEqual(uk.tabanUretecMi(bozuk), { atla: false, sebep: null });
+  const a = await ortam({ kurum: '60' });
+  assert.equal(uk.kalipSec({ arsivKoku: a.arsivKoku, kurum: '60' }).set, '99999');
+  const zz = path.join(a.arsivKoku, '99999', 'build.zip');
+  const dz = tmp('isaret');
+  await yaz(dz, { 'empp-uretec.json': '{}' });
+  const r = await M.komut('zip', ['-q', path.resolve(zz), 'empp-uretec.json'], { cwd: dz });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(uk.kalipSec({ arsivKoku: a.arsivKoku, kurum: '60' }), null, 'üreteç build\'i kalıp olmaz');
 });
 
 // ─── uretec-kaynak saf parçalar ─────────────────────────────────────────────────────────────
