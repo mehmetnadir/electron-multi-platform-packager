@@ -279,6 +279,36 @@ JS_MENU = r"""
      return Object.assign({varyant:'C',id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40)},kutu(e));});
  return JSON.stringify(l.filter(o=>o.w>40&&o.h>40));})()"""
 
+# Menude kitap OLMAYAN ogeler: config/settings.json'da contentType/type "link" (45551 "Worksheets" ->
+# https://download.ydspublishing.com/...; tiklayinca tuval acilmaz). Olculdu 03.10: kabul bunu kitap
+# sayip "book5 ACILMADI" ile paketi KALDI yapti. Ayar okunamazsa null -> eski davranis (hepsi kitap).
+JS_BAGLANTILAR = r"""
+(async()=>{try{const y=await fetch(new URL('config/settings.json',location.href).href);
+ if(!y.ok) return null; const j=await y.json(); const bag=[],kit=[];
+ const gez=(o,d)=>{if(!o||typeof o!=='object'||d>6) return;
+   const tur=String(o.contentType||o.type||'').toLowerCase();
+   if(typeof o.title==='string'&&tur==='link') bag.push({ad:o.title.trim(),url:String(o.url||'')});
+   else if(typeof o.title==='string'&&tur==='book') kit.push(o.title.trim());
+   for(const v of Object.values(o)) gez(v,d+1);};
+ gez(j,0); return JSON.stringify({baglanti:bag,kitap:kit});}catch(e){return null;}})()"""
+
+def baglanti_ayir(kitaplar, ayar):
+    """SAF KARAR: menu ogelerinden settings.json'daki "link" ogelerini ayirir (adin ilk satiri, harf
+    buyuklugu yok sayilarak). Ayni ad bir kitapta da varsa AYRILMAZ (kitap kaniti atlanmasin).
+    Donen: (kitaplar, baglantilar[{ad,url,id}])."""
+    if not ayar or not isinstance(ayar, dict): return list(kitaplar), []
+    kitap_ad = {str(a).strip().casefold() for a in (ayar.get("kitap") or [])}
+    bag = {}
+    for b in ayar.get("baglanti") or []:
+        ad = str((b or {}).get("ad") or "").strip().casefold()
+        if ad and ad not in kitap_ad: bag[ad] = b.get("url") or ""
+    kalan, ayrilan = [], []
+    for k in kitaplar:
+        ad = str(k.get("ad") or "").split("\n")[0].strip().casefold()
+        if ad in bag: ayrilan.append({"ad": k.get("ad"), "url": bag[ad], "id": k.get("id")})
+        else: kalan.append(k)
+    return kalan, ayrilan
+
 def menu_varyant_sec(a_var, b_var, c_var):
     """SAF KARAR: JS_MENU'nun ayna/mirror'i (yukarida) — tarayici disi (Python) test icin.
     JS_MENU string'i DEGISMEDI; bu fonksiyon onun BELGELENEN A->B->C oncelik kuralini
@@ -759,7 +789,7 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     c.cmd("Page.enable"); time.sleep(10)
     menuUrl = c.js("location.href"); menuUrl = menuUrl if isinstance(menuUrl, str) else None
     ilk = akt_baglanti_bekle(c)
-    kitaplar = c.jsj(JS_MENU) or []
+    kitaplar, _ = baglanti_ayir(c.jsj(JS_MENU) or [], c.jsj(JS_BAGLANTILAR))
     r["aktivasyon"]["online"] = ilk.get("online")
     r["aktivasyon"]["anaSurecAg"] = ana_surec_ag_olc()
     log("AKTIVASYON", kimlik, "ana-surec", str(r["aktivasyon"]["anaSurecAg"]))
@@ -828,7 +858,7 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
         A["e"] = {"sonuc": "KALDI", "sebep": "yeniden acilista temiz profil olculemedi"}
         akt_ekran(c, kimlik, "e", A["e"]); return c, menuUrl, kitaplar
     ilk = akt_baglanti_bekle(c)
-    kitaplar = c.jsj(JS_MENU) or kitaplar
+    kitaplar = baglanti_ayir(c.jsj(JS_MENU) or [], c.jsj(JS_BAGLANTILAR))[0] or kitaplar
     o = gir(kitaplar[0] if kitaplar else None, acilis=True)
     A["e"] = {"sonuc": akt_karar("e", o)}
     akt_ekran(c, kimlik, "e", A["e"])
@@ -875,6 +905,10 @@ def main():
     return kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, c.jsj(JS_MENU) or [])
 
 def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
+    kitaplar, baglantilar = baglanti_ayir(kitaplar, c.jsj(JS_BAGLANTILAR))
+    if baglantilar:
+        r["menuBaglantilar"] = baglantilar
+        for b in baglantilar: log("BAGLANTI", bookId, str(b.get("ad")).split("\n")[0], b.get("url"))
     r["menuKitapSayisi"] = len(kitaplar)
     r["menuAdlar"] = [k.get("ad") or k.get("id") for k in kitaplar]
     # MENU EKRANI: "pakette var ama menude yok" sinifi ancak menuye BAKILARAK kanitlanir

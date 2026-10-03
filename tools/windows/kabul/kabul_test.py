@@ -552,5 +552,58 @@ class AktivasyonTest(unittest.TestCase):
         self.assertIn(f"--inspect=127.0.0.1:{kabul.AKT_INSPECT_PORT}", argv)
 
 
+class BaglantiAyirTest(unittest.TestCase):
+    """45551 (03.10): settings.json "link" ogesi (Worksheets -> URL) kitap sayilip book5 ACILMADI -> KALDI."""
+    MENU = [{"id": "book%d" % i, "ad": a, "x": i, "y": 1, "varyant": "B"} for i, a in enumerate(
+        ["Student's Book\nÜniteye Git", "Workbook\nÜniteye Git", "Key Words\nÜniteye Git",
+         "Test Book\nÜniteye Git", "Worksheets"], 1)]
+    AYAR = {"baglanti": [{"ad": "Worksheets", "url": "https://download.ydspublishing.com/worksheets/x/"}],
+            "kitap": ["Student's Book", "Workbook", "Key Words", "Test Book"]}
+
+    def test_45551_link_ogesi_ayrilir_dort_kitap_kalir(self):
+        kalan, bag = kabul.baglanti_ayir(self.MENU, self.AYAR)
+        self.assertEqual([k["id"] for k in kalan], ["book1", "book2", "book3", "book4"])
+        self.assertEqual(bag, [{"ad": "Worksheets", "url": "https://download.ydspublishing.com/worksheets/x/",
+                                "id": "book5"}])
+
+    def test_ayar_okunamazsa_eski_davranis(self):
+        self.assertEqual(kabul.baglanti_ayir(self.MENU, None), (self.MENU, []))
+        self.assertEqual(kabul.baglanti_ayir(self.MENU, {"__hata": "x"})[0], self.MENU)
+
+    def test_kitapla_ayni_adli_link_ayrilmaz(self):
+        ayar = {"baglanti": [{"ad": "Workbook", "url": "u"}], "kitap": ["Workbook"]}
+        self.assertEqual(kabul.baglanti_ayir(self.MENU, ayar), (self.MENU, []))
+
+    def test_kitaplari_olc_linki_olcmez_ve_raporlar(self):
+        yedek = {k: getattr(kabul, k) for k in ("kitap_kanit", "menuye_don", "oldur", "kaldir", "bitir",
+                                                 "gonder", "log", "time")}
+        tiklanan = []; loglar = []
+        class C:
+            def ekran(s): return b"p"
+            def kapat(s): pass
+            def tikla(s, x, y): tiklanan.append(x)
+            def js(s, e): return True
+            def jsj(s, e): return BaglantiAyirTest.AYAR if e is kabul.JS_BAGLANTILAR else None
+        class Saat:
+            @staticmethod
+            def sleep(_): pass
+            @staticmethod
+            def time(): return 0.0
+        try:
+            kabul.kitap_kanit = lambda c, b, i: {"sonuc": "GECTI"}
+            kabul.menuye_don = lambda c, u: True
+            kabul.oldur = lambda d: None; kabul.kaldir = lambda d: "KALDIRILDI"
+            kabul.bitir = lambda r: r; kabul.gonder = lambda a, v: True
+            kabul.log = lambda *p: loglar.append("|".join(map(str, p))); kabul.time = Saat
+            r = kabul.kitaplari_olc({}, C(), "45551", "Shall We", "d", "file:///m", list(self.MENU))
+        finally:
+            for k, v in yedek.items(): setattr(kabul, k, v)
+        self.assertEqual(r["sonuc"], "GECTI")
+        self.assertEqual((r["gecenKitap"], r["toplamKitap"]), (4, 4))
+        self.assertNotIn(5, tiklanan, "link ogesine tiklanmaz")
+        self.assertEqual(r["menuBaglantilar"][0]["ad"], "Worksheets")
+        self.assertTrue(any(l.startswith("BAGLANTI|45551|Worksheets|https://") for l in loglar))
+
+
 if __name__ == "__main__":
     unittest.main()
