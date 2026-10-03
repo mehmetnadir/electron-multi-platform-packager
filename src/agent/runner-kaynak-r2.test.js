@@ -275,7 +275,8 @@ test('r2-kur 409 (sunucu kapısı): yükleme yapılmış olsa da paket ÜRETİLM
 
 test('r2-kur kapı reddi: yükleme HİÇ başlamaz (presign yok), birak çağrılır, paket üretilmez', async () => {
   const zip = setBuildZip();
-  const r = await isKostur({ arsivKoku: arsivKur('45549', zip), merdivenDonus: MERDIVEN,
+  // Üreteç KAPALI: eksik kitaplı arşiv tabanı atlanmaz (aksi hâlde üreteç koşar), kapı RED vermeye devam eder.
+  const r = await isKostur({ arsivKoku: arsivKur('45549', zip), merdivenDonus: MERDIVEN, env: { EMPP_INDEX_URETECI: '0' },
     job: r2Kur({ setListesi: '111 | Kitap Bir\n222 | Kitap İki' }) });
   assert.match(r.hata.message, /yazma kapısı RED.*kitap sayısı 1 ≠ liste 2/);
   assert.equal(r.kayit.govdeler['kaynak/presign-multipart'], undefined);

@@ -350,7 +350,8 @@ test('r2-kur ARŞİV tabanı girişsiz (eski üreteç build\'i arşive düşmü�
 
 test('r2-kur R2 tabanı girişli + işaretsiz (gerçek YDS build\'i): taban KORUNUR, üreteç koşmaz', async () => {
   const o = await ortam();
-  const taban = await tabanZip({ 'electron.js': 'x' });
+  // liste (501, 502) tabanın kitaplarıyla örtüşür: kapsayan taban korunur
+  const { zip: taban } = await kitapliTaban(['501', '502'], { arsivde: false });
   const r = await isKostur({ o, taban, job: { setListesi: LISTE2 } });
   assert.equal(r.casus.uretec, 0);
   assert.match(r.loglar, /taban: önceki geçerli R2 build/);
@@ -366,6 +367,90 @@ test('r2-kur üreteç KAPALI + girişsiz R2 tabanı: taban alınır ama yazma ka
   assert.match(`${r.loglar}\n${r.hata && r.hata.message}`, /giris-yok|Electron giriş dosyası yok/);
   assert.equal(r.kayit.govdeler['kaynak/presign-multipart'], undefined, 'presign yok');
   assert.equal(r.kayit.parcalar.length, 0, 'R2 PUT yok');
+});
+
+/** Giriş + N kitaplı (book1..bookN, assets/<id>) taban build'i; kaynak arşivi dizini olarak da verilir. */
+async function kitapliTaban(idler, { arsivde = true } = {}) {
+  const dosyalar = { 'electron.js': 'x', 'index.html': '<html>elle</html>', 'kurum.txt': '60' };
+  idler.forEach((id, i) => {
+    dosyalar[`book${i + 1}/index.html`] = 'm';
+    dosyalar[`book${i + 1}/assets/${id}/data/BookContent.xml`] = '<Book/>';
+    dosyalar[`book${i + 1}/assets/${id}/thumbs/1.jpg`] = 'k';
+    dosyalar[`book${i + 1}/assets/${id}/pages/1.png`] = 'p';
+  });
+  const d = tmp('kitapli');
+  await yaz(d, dosyalar);
+  const z = path.join(tmp('kitapli-zip'), 'build.zip');
+  await zipla(d, z);
+  const zip = fs.readFileSync(z);
+  if (!arsivde) return { zip, z };
+  const ar = tmp('arsiv-kitapli');
+  fs.mkdirSync(path.join(ar, '45482'));
+  fs.writeFileSync(path.join(ar, '45482', 'build.zip'), zip);
+  fs.writeFileSync(path.join(ar, '45482', 'kaynak.json'), JSON.stringify({ dosya: 'build.zip',
+    md5: crypto.createHash('md5').update(zip).digest('hex'), boyut: zip.length, etiket: 'SW8-BUILD-20260925' }));
+  return { zip, z, ar };
+}
+const LISTE6 = ['501', '502', '503', '504', '505', '506'].map((i) => `${i} | K${i} |  |  | Books`).join('\n');
+const IDLER6 = ['501', '502', '503', '504', '505', '506'];
+
+test('r2-kur ARŞİV tabanı liste kitaplarını KAPSAMIYOR (4 kitap, liste 6; saha 45482): taban ATLANIR, üreteç koşar', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { ar } = await kitapliTaban(['501', '502', '503', '504']);
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, anahtarli: () => false, job: { bookId: '45482', setListesi: LISTE6 } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+  assert.equal(r.casus.uretec, 1, 'üreteç koştu');
+  assert.match(r.loglar, /taban ATLANDI \(liste 6 kitap, taban 4; eksik: 505, 506\)/);
+  const t = r.kayit.govdeler['kaynak/tamamla'][0];
+  assert.equal(t.uretec.kaynak, 'uretec');
+  assert.deepEqual(t.kitaplar.map((k) => k.id), IDLER6);
+});
+
+test('r2-kur R2 tabanı liste kitaplarını KAPSAMIYOR: taban ATLANIR, üreteç koşar', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { zip } = await kitapliTaban(['501', '502', '503', '504'], { arsivde: false });
+  const r = await isKostur({ o, taban: zip, anahtarli: () => false, job: { setListesi: LISTE6 } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
+  assert.equal(r.casus.uretec, 1);
+  assert.match(r.loglar, /R2 taban ATLANDI \(liste 6 kitap, taban 4; eksik: 505, 506\)/);
+});
+
+test('r2-kur arşiv tabanı listeyi KAPSIYOR / FAZLA kitap içeriyor: taban KORUNUR, üreteç koşmaz', async () => {
+  for (const [idler, liste] of [[IDLER6, LISTE6], [IDLER6, '501 | A |  |  | Books\n502 | B |  |  | Books']]) {
+    const o = await ortam({ idler: IDLER6 });
+    const { ar } = await kitapliTaban(idler);
+    const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, job: { bookId: '45482', setListesi: liste } });
+    assert.equal(r.casus.uretec, 0, 'üreteç koşmadı');
+    assert.doesNotMatch(r.loglar, /ATLANDI/);
+    assert.match(r.loglar, /taban: ARŞİV/);
+  }
+});
+
+test('r2-kur üreteç KAPALI + eksik kitaplı arşiv tabanı: taban ATLANMAZ, yazma kapısı kitap-eksik RED', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { ar } = await kitapliTaban(['501', '502', '503', '504']);
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar, EMPP_INDEX_URETECI: '0' }, job: { bookId: '45482', setListesi: LISTE6 } });
+  assert.equal(r.casus.uretec, 0);
+  assert.doesNotMatch(r.loglar, /ATLANDI/);
+  assert.match(`${r.loglar}\n${r.hata && r.hata.message}`, /kitap-eksik/);
+  assert.equal(r.kayit.parcalar.length, 0, 'R2 PUT yok');
+});
+
+test('tabanKitapEksik: kimlik bazlı eksik; fazla kitap/liste yok/okunamayan zip ATLATMAZ', async () => {
+  const { z } = await kitapliTaban(['501', '502', '503', '504'], { arsivde: false });
+  const d = uk.tabanKitapEksik(z, LISTE6);
+  assert.equal(d.atla, true);
+  assert.deepEqual(d.eksik, ['505', '506']);
+  assert.equal(d.sebep, 'liste 6 kitap, taban 4; eksik: 505, 506');
+  // sayı eşit ama kimlik farklı: yine eksik (yalnız sayıyla ölçülmez)
+  const e = uk.tabanKitapEksik(z, '501 | a\n502 | b\n503 | c\n999 | d');
+  assert.deepEqual(e.eksik, ['999']);
+  assert.equal(uk.tabanKitapEksik(z, '501 | a\n502 | b').atla, false, 'fazla kitap (liste dışı) atlatmaz');
+  assert.equal(uk.tabanKitapEksik(z, null).atla, false);
+  assert.equal(uk.tabanKitapEksik(z, '  ').atla, false);
+  const bozuk = path.join(tmp('bozuk2'), 'b.zip');
+  fs.writeFileSync(bozuk, 'zip değil');
+  assert.equal(uk.tabanKitapEksik(bozuk, LISTE6).atla, false);
 });
 
 test('tabanUretecMi: işaret / giriş kuralı; tek sarmalayıcı klasör; okunamayan zip ATLAMAZ; kalipSec üreteç build\'ini almaz', async () => {

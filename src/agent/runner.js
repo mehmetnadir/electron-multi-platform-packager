@@ -2129,20 +2129,28 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null }) 
     return { oncekiBoyut: null };
   };
   // Üreteç build'i / girişsiz build TABAN OLMAZ (03.10 saha 74430/59480): üreteç her seferinde koşar.
-  const tabanAtla = (zip) => (uretecKaynak.uretecAcik() ? uretecKaynak.tabanUretecMi(zip) : { atla: false });
+  // + taban claim'deki set listesini kapsamıyorsa (liste kimliği build'de yok) da taban OLMAZ (45482 saha).
+  // Üreteç KAPALIYSA hiçbiri uygulanmaz: yazma kapısı RED vermeye devam eder.
+  const tabanAtla = (zip) => {
+    if (!uretecKaynak.uretecAcik()) return { atla: false };
+    const d = uretecKaynak.tabanUretecMi(zip);
+    if (d.atla) return d;
+    const e = uretecKaynak.tabanKitapEksik(zip, (setEk.setListesiCoz({ job: job || {} }) || {}).ham || null);
+    return e.atla ? { atla: true, sebep: e.sebep, kitapEksik: true } : d;
+  };
   if (kaynak.taban.tur === 'uretec') return uretecleKur('taban YOK');
   if (kaynak.taban.tur === 'r2') {
     const indirilen = path.join(work, 'r2-taban.zip');
     log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: önceki geçerli R2 build (imzalı GET)`);
     const oz = await r2IndirDogrula(kaynak.taban.url, indirilen, { sha256: kaynak.taban.sha256 });
     const d = tabanAtla(indirilen);
-    if (d.atla) return uretecleKur(`R2 tabanı ATLANDI (${d.sebep})`);
+    if (d.atla) return uretecleKur(d.kitapEksik ? `R2 taban ATLANDI (${d.sebep})` : `R2 tabanı ATLANDI (${d.sebep})`);
     await fsp.rename(indirilen, zipPath);
     return { oncekiBoyut: oz.boyut };
   }
   const { arsiv } = kaynak.taban;
   const da = tabanAtla(arsiv.zip);
-  if (da.atla) return uretecleKur(`arşiv tabanı ATLANDI (${da.sebep})`);
+  if (da.atla) return uretecleKur(da.kitapEksik ? `arşiv taban ATLANDI (${da.sebep})` : `arşiv tabanı ATLANDI (${da.sebep})`);
   await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
   log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: ARŞİV (${arsiv.etiket || '-'}, md5 ${arsiv.md5}`
     + `${arsiv.r2Surum ? `, R2 ${arsiv.r2Surum}` : ', elle yazılmış'})`);

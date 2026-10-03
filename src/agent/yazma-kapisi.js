@@ -280,6 +280,8 @@ function yazmaKapisi({
   const nedenler = [];
   const kodlar = new Set();
   const notlar = [];
+  const eksikKimlikler = []; // `kitap-eksik` verilen liste kimlikleri (taban kapsama ölçüsü bunu kullanır)
+  let listeKitapSayisi = null;
   const ret = (kod, mesaj) => { kodlar.add(kod); nedenler.push(`${KAPI_ISARETI} ${mesaj}`); };
   let ham;
   try {
@@ -289,7 +291,7 @@ function yazmaKapisi({
   } catch (e) {
     const on = zipYolu ? OKUNAMADI_ISARETI : KAPI_ISARETI;
     return {
-      gecti: false, kitaplar: [], webzVarliklari: [], notlar,
+      gecti: false, kitaplar: [], webzVarliklari: [], notlar, eksikKimlikler, listeKitapSayisi,
       nedenler: [`${on} giriş listesi okunamadı: ${String(e && e.message || e).slice(0, 300)}`],
       nedenKodlari: [KOD.OKUNAMADI],
     };
@@ -342,6 +344,7 @@ function yazmaKapisi({
   const webzVarliklari = [];
   if (listeIdler != null) {
     const listeImpark = listeIdler.filter(imparkKimligiMi);
+    listeKitapSayisi = new Set(listeImpark).size;
     const buildIdler = new Set(kitaplar.map((k) => (k.id == null ? '' : String(k.id))));
     const ozet = kitaplar.length === listeIdler.length ? '' : ` (kitap sayısı ${kitaplar.length} ≠ liste ${listeIdler.length})`;
 
@@ -382,7 +385,10 @@ function yazmaKapisi({
     }
 
     for (const id of new Set(listeImpark)) {
-      if (!buildIdler.has(id)) ret(KOD.KITAP_EKSIK, `kitap-eksik: liste kimliği ${id} build'de yok${ozet}`);
+      if (!buildIdler.has(id)) {
+        eksikKimlikler.push(id);
+        ret(KOD.KITAP_EKSIK, `kitap-eksik: liste kimliği ${id} build'de yok${ozet}`);
+      }
     }
     const listeKume = new Set(listeImpark);
     denetlenecek = [];
@@ -441,9 +447,21 @@ function yazmaKapisi({
 
   return {
     gecti: nedenler.length === 0, kitaplar: denetlenecek, webzVarliklari, nedenler, nedenKodlari: [...kodlar], notlar,
+    eksikKimlikler, listeKitapSayisi, buildKitapSayisi: kitaplar.length,
   };
 }
 
+/**
+ * Taban kapsama ölçüsü: build'de bulunmayan liste kimlikleri — yazma kapısının `kitap-eksik`i ile AYNI
+ * hesap (kapıyı koşturur, `eksikKimlikler`ini döner). Liste yoksa/okunamazsa eksik yok sayılır.
+ * I/O: zip dizini okuma.
+ * @returns {{eksik: string[], listeKitapSayisi: number|null, buildKitapSayisi: number}}
+ */
+function eksikKitaplar({ zipYolu, setListesi = null } = {}) {
+  const k = yazmaKapisi({ zipYolu, setListesi });
+  return { eksik: k.eksikKimlikler, listeKitapSayisi: k.listeKitapSayisi, buildKitapSayisi: k.buildKitapSayisi };
+}
+
 module.exports = {
-  yazmaKapisi, imparkKimligiMi, girisDosyasi, indexYerelReferanslari, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
+  yazmaKapisi, eksikKitaplar, imparkKimligiMi, girisDosyasi, indexYerelReferanslari, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
 };

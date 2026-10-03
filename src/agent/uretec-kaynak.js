@@ -208,6 +208,29 @@ function tabanUretecMi(zipYolu) {
   return { atla: false, sebep: null };
 }
 
+/**
+ * Taban claim'deki set listesini KAPSIYOR mu (03.10, saha 45482 Shall We 8 Set: arşivdeki elle yazılmış
+ * 4 kitaplı build, liste 6 kitap → yazma kapısı `kitap-eksik`, runner her seferinde aynı tabanı seçip
+ * düşüyordu). ATLA: liste kimliklerinden build'de olmayan var. Ölçü yazma kapısınınkiyle AYNI
+ * (`yazma-kapisi.eksikKitaplar`, kimlik bazlı). Fazla kitap (liste dışı) ATLATMAZ; liste yoksa/okunamazsa
+ * ATLATMAZ. I/O: zip dizini okuma.
+ * @returns {{atla: boolean, sebep: string|null, eksik?: string[]}}
+ */
+function tabanKitapEksik(zipYolu, setListesi) {
+  if (setListesi == null || !String(setListesi).trim()) return { atla: false, sebep: null };
+  let o;
+  try {
+    o = require('./yazma-kapisi').eksikKitaplar({ zipYolu, setListesi });
+  } catch (_) {
+    return { atla: false, sebep: null };
+  }
+  if (!o.eksik.length) return { atla: false, sebep: null };
+  return {
+    atla: true, eksik: o.eksik,
+    sebep: `liste ${o.listeKitapSayisi} kitap, taban ${o.buildKitapSayisi}; eksik: ${o.eksik.join(', ')}`,
+  };
+}
+
 /** Zip'i olmayan oyun/çalışma kâğıdı için çevrimiçi Web-Z adresi (kisaKod varsa). SAF. */
 function webzAdresiKur(job, workerKoku = WORKER_KOKU) {
   const kod = job && job.kisaKod ? String(job.kisaKod).trim() : '';
@@ -279,5 +302,5 @@ async function uretecKaynagi(o) {
 
 module.exports = {
   ISARET, YAYINCILAR, WORKER_KOKU, UretecKaynakHatasi, uretecAcik, yayinciBul, kalipSec,
-  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi, ucSec, ornekKitap, FLASHY, tabanUretecMi,
+  ayarlardanListe, listeCoz, webzAdresiKur, uretecKaynagi, ucSec, ornekKitap, FLASHY, tabanUretecMi, tabanKitapEksik,
 };
