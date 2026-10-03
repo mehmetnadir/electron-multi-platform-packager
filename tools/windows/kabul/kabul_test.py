@@ -363,5 +363,118 @@ class IlkSayfayaGitTest(unittest.TestCase):
         self.assertEqual(kabul.geri_tiklama_sayisi(None), 0)
 
 
+class AktivasyonTest(unittest.TestCase):
+    """Aktivasyon senaryosu (Nadir 03.10): internetsiz + temiz profil, a..e, kod HICBIR ciktiya yazilmaz."""
+    KOD = "ZX9Q1"
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log")}
+        self._uyku, self._saat = kabul.time.sleep, kabul.time.time
+        self.t = [1000.0]
+        kabul.time.time = lambda: self.t[0]
+        kabul.time.sleep = lambda sn=0: self.t.__setitem__(0, self.t[0] + max(float(sn), 0.01))
+        self.ekranlar = []; self.loglar = []
+        kabul.gonder = lambda ad, veri: self.ekranlar.append(ad) or True
+        kabul.log = lambda *p: self.loglar.append("|".join(str(x) for x in p))
+        kabul.oldur = lambda dizin: None
+
+    def tearDown(self):
+        for k, v in self._yedek.items(): setattr(kabul, k, v)
+        kabul.time.sleep, kabul.time.time = self._uyku, self._saat
+
+    class Profil:
+        def __init__(self): self.aktif = False
+
+    class SahteUygulama:
+        KITAPLAR = [{"id": "book1", "x": 100, "y": 100, "varyant": "B", "ad": "B1"},
+                    {"id": "book2", "x": 300, "y": 100, "varyant": "B", "ad": "B2"}]
+        def __init__(self, profil, kod, online=False, gecerliyi_reddet=False):
+            self.p, self.kod, self.online, self.red = profil, kod, online, gecerliyi_reddet
+            self.sayfa = "menu"; self.diyalog = False; self.hata = 0; self.yazilan = ""
+        def cmd(self, *a, **k): return {}
+        def ekran(self): return b"png"
+        def kapat(self): pass
+        def js(self, e):
+            if e.startswith("location.href="): self.sayfa = "menu"; self.diyalog = False; return None
+            if e == "location.href": return "file:///menu/index.html"
+            return None
+        def jsj(self, e):
+            if e is kabul.JS_MENU: return self.KITAPLAR if self.sayfa == "menu" else None
+            if e is kabul.JS_AKT:
+                h = self.hata > 0
+                if self.hata: self.hata -= 1
+                return {"diyalog": self.diyalog, "girdi": {"x": 5, "y": 5} if self.diyalog else None,
+                        "hata": h, "kitapta": self.sayfa == "kitap", "online": self.online}
+            return None
+        def tikla(self, x, y):
+            if self.sayfa == "menu" and any((k["x"], k["y"]) == (x, y) for k in self.KITAPLAR):
+                self.sayfa = "kitap"; self.diyalog = not self.p.aktif
+        def tus(self, key, code, vk, modifiers=0, text=None):
+            if key == "a" and modifiers == 2: self.yazilan = ""
+            if key == "Enter" and self.diyalog:
+                if self.yazilan == self.kod and not self.red: self.p.aktif = True; self.diyalog = False
+                else: self.hata = 2
+        def yaz(self, m): self.yazilan += m
+
+    def kos(self, **kw):
+        profil = self.Profil()
+        kabul.uygulama_ac = lambda ana, dizin, prof: (self.SahteUygulama(profil, self.KOD, **kw), {}, 9)
+        r = {}
+        c, menuUrl, kitaplar = kabul.aktivasyon_senaryosu(r, "45449-imzasiz-x", "app.exe", "dizin", self.KOD, self.d)
+        return r, c
+
+    def test_tam_akis_a_e_gecti_ve_ekranlar(self):
+        r, c = self.kos()
+        A = r["aktivasyon"]["adimlar"]
+        self.assertEqual({k: A[k]["sonuc"] for k in "abcde"}, dict.fromkeys("abcde", "GECTI"))
+        self.assertEqual(kabul.aktivasyon_ozeti(A), ("GECTI", None))
+        self.assertEqual(self.ekranlar, [f"45449-imzasiz-x-akt-{a}" for a in "abcde"])
+        self.assertIs(r["aktivasyon"]["online"], False)
+
+    def test_kod_hicbir_ciktiya_yazilmaz(self):
+        r, c = self.kos()
+        import json as _j
+        metin = _j.dumps(r) + "\n".join(self.loglar) + "\n".join(self.ekranlar)
+        self.assertNotIn(self.KOD, metin)
+
+    def test_gecerli_kod_reddedilirse_c_kaldi_ve_kabul_kaldi(self):
+        r, c = self.kos(gecerliyi_reddet=True)
+        A = r["aktivasyon"]["adimlar"]
+        self.assertEqual(A["c"]["sonuc"], "KALDI")
+        self.assertEqual(kabul.aktivasyon_ozeti(A), ("KALDI", "aktivasyon-c KALDI"))
+
+    def test_karar_tablosu(self):
+        k = kabul.akt_karar
+        self.assertEqual(k("a", {"diyalog": True, "girdi": {"x": 1, "y": 1}}), "GECTI")
+        self.assertEqual(k("a", {"diyalog": False, "kitapta": True}), "KALDI")
+        self.assertEqual(k("b", {"hataGoruldu": True, "diyalog": True}), "GECTI")
+        self.assertEqual(k("b", {"hataGoruldu": False, "diyalog": True}), "KALDI")
+        self.assertEqual(k("c", {"diyalog": False, "kitapta": True}), "GECTI")
+        self.assertEqual(k("d", {"diyalog": True, "kitapta": True}), "KALDI")
+        self.assertEqual(k("d", {}, tek_kitap=True), "ATLANDI")
+        self.assertEqual(k("e", {"diyalog": False, "kitapta": False}), "KALDI")
+        self.assertEqual(kabul.aktivasyon_ozeti({"a": {"sonuc": "GECTI"}}), ("KALDI", "aktivasyon-b olculmedi"))
+        tam = {a: {"sonuc": "GECTI"} for a in "abce"}; tam["d"] = {"sonuc": "ATLANDI"}
+        self.assertEqual(kabul.aktivasyon_ozeti(tam), ("GECTI", None))
+
+    def test_kod_dosyasi_ve_guvenlik_duvari_komutlari(self):
+        yol = os.path.join(self.d, "kod.txt")
+        self.assertIsNone(kabul.aktivasyon_kod_oku(os.path.join(self.d, "yok.txt")))
+        with open(yol, "w", encoding="utf-8") as f: f.write("\ufeffAB12C\r\n")
+        self.assertEqual(kabul.aktivasyon_kod_oku(yol), "AB12C")
+        with open(yol, "w", encoding="utf-8") as f: f.write("A B\n")
+        self.assertIsNone(kabul.aktivasyon_kod_oku(yol))
+        with open(yol, "w", encoding="utf-8") as f: f.write("A\nB\n")
+        self.assertIsNone(kabul.aktivasyon_kod_oku(yol))
+        ad = kabul.gd_kural_adi('45449-imzasiz-x" & del')
+        self.assertRegex(ad, r"^empp-kabul-akt-[A-Za-z0-9-]+$")
+        ekle, kaldir = kabul.gd_kural_komutlari(ad, r"C:\P\Impact 12\Impact.exe")
+        self.assertIn("dir=out", ekle); self.assertIn("action=block", ekle)
+        self.assertIn(r"program=C:\P\Impact 12\Impact.exe", ekle)
+        self.assertEqual(kaldir[-1], "name=" + ad)
+
+
 if __name__ == "__main__":
     unittest.main()

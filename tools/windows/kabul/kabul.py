@@ -558,6 +558,157 @@ def kitap_kanit(c, kimlik, sira):
     kanit.pop("thumbEtiket", None)
     return kanit
 
+# ─────────────────────────── aktivasyon senaryosu ───────────────────────────
+# Nadir 03.10: "Windows'ta aktivasyonun nasil calistigini gormek istiyorum." Kapi aktivasyonlu
+# seride (EMPP_KABUL_AKTIVASYON=1) INTERNETSIZ (uygulama exe'sine giden cikis guvenlik duvarinda
+# kesik; okuyucu window.isOnline=false gorur -> imKeys.dll ile cevrimdisi dogrulama, koltuk
+# tuketilmez) ve TEMIZ profille (ayri APPDATA) bes adim olcer, her biri ekran goruntusuyle:
+#   a) anahtarli kitap -> kod istenir   b) gecersiz kod -> "Aktivasyon kodu hatali!"
+#   c) gecerli kod -> kitap acilir      d) menu -> baska kitap -> kod ISTENMEZ
+#   e) uygulama kapatilip acilir -> kitap kodsuz acilir
+# Okuyucu diyalogu (45550 book1 main.js): MUI Dialog "Aktivasyon", input type=password (ekranda
+# MASKELI), Enter gonderir; hata snackbar'i 1,5 sn'de kaybolur. GECERLI KOD dosyadan okunur ve
+# HICBIR log/rapor/dosya adina yazilmaz.
+AKT_KOD_DOSYASI = r"D:\empp-ajan\kabul\aktivasyon-test-kodu.txt"
+AKT_GECERSIZ_KOD = "KABULGECERSIZ0"
+AKT_ADIMLAR = ("a", "b", "c", "d", "e")
+
+JS_AKT = r"""
+(()=>{ const t=document.body?(document.body.innerText||''):'';
+ const d=[...document.querySelectorAll('[role=dialog],.MuiDialog-root,.MuiDialog-container')]
+   .some(e=>/aktivasyon/i.test(e.innerText||''));
+ const inp=[...document.querySelectorAll('input[type=password]')].find(e=>{const q=e.getBoundingClientRect();return q.width>0&&q.height>0;});
+ let g=null; if(inp){const q=inp.getBoundingClientRect(); g={x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)};}
+ return JSON.stringify({diyalog:d||(!!inp&&/aktivasyon/i.test(t)),girdi:g,hata:/aktivasyon kodu hatal/i.test(t),
+   kitapta:document.querySelectorAll('canvas.lower-canvas').length>0,
+   online:(typeof window.isOnline==='boolean')?window.isOnline:null});})()"""
+
+def aktivasyon_kod_oku(yol):
+    """Gecerli test kodunu okur (tek satir, bosluksuz). Yoksa/bossa None. DEGERI HIC YAZDIRMA."""
+    try:
+        with open(yol, "r", encoding="utf-8-sig") as f:
+            satirlar = [x.strip() for x in f.read().splitlines() if x.strip()]
+    except OSError:
+        return None
+    if len(satirlar) != 1 or any(ch.isspace() for ch in satirlar[0]): return None
+    return satirlar[0]
+
+def gd_kural_adi(anahtar):
+    """SAF: guvenlik duvari kural adi — yalniz [A-Za-z0-9-] (netsh argumanina enjeksiyon yok)."""
+    return "empp-kabul-akt-" + re.sub(r"[^A-Za-z0-9-]", "-", str(anahtar))[:60]
+
+def gd_kural_komutlari(ad, exe):
+    """SAF: (ekle, kaldir) netsh argv'leri — yalniz bu exe'nin CIKIS trafigini keser."""
+    return (["netsh", "advfirewall", "firewall", "add", "rule", "name=" + ad, "dir=out", "action=block",
+             "program=" + exe, "enable=yes", "profile=any"],
+            ["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + ad])
+
+def akt_karar(adim, olcum, tek_kitap=False):
+    """SAF KARAR: bir aktivasyon adiminin sonucu. olcum = JS_AKT ozeti (+ 'hataGoruldu')."""
+    o = olcum or {}
+    if adim == "a": return "GECTI" if (o.get("diyalog") and o.get("girdi")) else "KALDI"
+    if adim == "b": return "GECTI" if (o.get("hataGoruldu") and o.get("diyalog")) else "KALDI"
+    if adim == "c": return "GECTI" if (not o.get("diyalog") and o.get("kitapta")) else "KALDI"
+    if adim == "d" and tek_kitap: return "ATLANDI"
+    if adim in ("d", "e"): return "GECTI" if (not o.get("diyalog") and o.get("kitapta")) else "KALDI"
+    return "KALDI"
+
+def aktivasyon_ozeti(adimlar):
+    """SAF KARAR: a..e'den biri KALDI ya da eksikse KALDI (ATLANDI yalniz d/tek kitapta kabul)."""
+    for a in AKT_ADIMLAR:
+        s = (adimlar.get(a) or {}).get("sonuc")
+        if s == "GECTI" or (a == "d" and s == "ATLANDI"): continue
+        return "KALDI", f"aktivasyon-{a} {s or 'olculmedi'}"
+    return "GECTI", None
+
+def akt_durum_bekle(c, tavan=60, sakin=15):
+    """Diyalog gorunene ya da kitap diyalogsuz `sakin` sn acik kalana kadar yoklar."""
+    son = time.time() + tavan; kitap_ilk = None; o = {}
+    while time.time() < son:
+        o = c.jsj(JS_AKT) or {}
+        if o.get("diyalog"): return o
+        if o.get("kitapta"):
+            kitap_ilk = kitap_ilk or time.time()
+            if time.time() - kitap_ilk >= sakin: return o
+        time.sleep(1)
+    return o
+
+def akt_kod_gir(c, girdi, kod):
+    c.tikla(girdi["x"], girdi["y"]); time.sleep(0.5)
+    c.tus("a", "KeyA", 65, modifiers=2); c.yaz(kod)
+    c.tus("Enter", "Enter", 13, text="\r")
+
+def akt_ekran(c, kimlik, adim, kayit):
+    try:
+        ad = f"{kimlik}-akt-{adim}"; png = c.ekran(); gonder(ad, png); kayit["ekran"] = ad
+    except Exception as e:
+        kayit["ekranHata"] = str(e)[:80]
+
+def uygulama_ac(ana, dizin, profil):
+    """Uygulamayi TEMIZ profille (APPDATA=profil) CDP portuyla acar."""
+    env = dict(os.environ); env["APPDATA"] = profil
+    os.makedirs(profil, exist_ok=True)
+    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"], env=env)
+    return hedef_sec(dizin)
+
+def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
+    """a..e adimlari. Donen: (c, menuUrl, kitaplar) — normal kitap kaniti ayni oturumda surer."""
+    A = {}; r["aktivasyon"] = {"adimlar": A, "profil": os.path.basename(profil)}
+    c, t, puan = uygulama_ac(ana, dizin, profil)
+    if not c: A["a"] = {"sonuc": "KALDI", "sebep": "CDP_ACILMADI"}; return None, None, []
+    c.cmd("Page.enable"); time.sleep(10)
+    menuUrl = c.js("location.href"); menuUrl = menuUrl if isinstance(menuUrl, str) else None
+    kitaplar = c.jsj(JS_MENU) or []
+    ilk = c.jsj(JS_AKT) or {}
+    r["aktivasyon"]["online"] = ilk.get("online")
+    log("AKTIVASYON", kimlik, "baglanti", "online=" + str(ilk.get("online")), "kitap=" + str(len(kitaplar)))
+
+    def gir(kit):
+        if ilk.get("diyalog") or not kit: return c.jsj(JS_AKT) or {}
+        c.tikla(kit["x"], kit["y"]); return akt_durum_bekle(c)
+
+    # a) kod istenir (set duzeyinde menude de sorulabilir — o da GECTI, yer not edilir)
+    o = gir(kitaplar[0] if kitaplar else None)
+    A["a"] = {"sonuc": akt_karar("a", o), "yer": "menu" if ilk.get("diyalog") else "kitap"}
+    akt_ekran(c, kimlik, "a", A["a"])
+    if A["a"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
+    # b) gecersiz kod -> red mesaji (snackbar 1,5 sn — hizli yokla, gorunce ekran)
+    akt_kod_gir(c, o["girdi"], AKT_GECERSIZ_KOD)
+    b = {}; son = time.time() + 5
+    while time.time() < son:
+        b = c.jsj(JS_AKT) or {}
+        if b.get("hata"):
+            b["hataGoruldu"] = True; akt_ekran(c, kimlik, "b", A.setdefault("b", {})); break
+        time.sleep(0.15)
+    A.setdefault("b", {})["sonuc"] = akt_karar("b", dict(b, diyalog=(c.jsj(JS_AKT) or {}).get("diyalog")))
+    if "ekran" not in A["b"]: akt_ekran(c, kimlik, "b", A["b"])
+    # c) gecerli kod (girdi maskeli; ekran diyalog kapandiktan SONRA alinir)
+    g = (c.jsj(JS_AKT) or {}).get("girdi") or o["girdi"]
+    akt_kod_gir(c, g, kod); kod = None
+    time.sleep(3)
+    o = akt_durum_bekle(c, tavan=45)
+    A["c"] = {"sonuc": akt_karar("c", o)}
+    akt_ekran(c, kimlik, "c", A["c"])
+    if A["c"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
+    # d) menuye don, baska kitap -> kod istenmez
+    if len(kitaplar) >= 2 and menuUrl and menuye_don(c, menuUrl):
+        o = gir(kitaplar[1]); A["d"] = {"sonuc": akt_karar("d", o), "kitap": kitaplar[1].get("id")}
+    else:
+        A["d"] = {"sonuc": akt_karar("d", {}, tek_kitap=len(kitaplar) < 2) if len(kitaplar) < 2 else "KALDI",
+                  "sebep": "tek kitap" if len(kitaplar) < 2 else "menuye donulemedi"}
+    akt_ekran(c, kimlik, "d", A["d"])
+    # e) kapat-ac -> kodsuz
+    c.kapat(); oldur(dizin); time.sleep(3)
+    c, t, puan = uygulama_ac(ana, dizin, profil)
+    if not c: A["e"] = {"sonuc": "KALDI", "sebep": "yeniden acilista CDP_ACILMADI"}; return None, menuUrl, kitaplar
+    c.cmd("Page.enable"); time.sleep(10)
+    kitaplar = c.jsj(JS_MENU) or kitaplar
+    ilk = c.jsj(JS_AKT) or {}
+    o = gir(kitaplar[0] if kitaplar else None)
+    A["e"] = {"sonuc": akt_karar("e", o)}
+    akt_ekran(c, kimlik, "e", A["e"])
+    return c, menuUrl, kitaplar
+
 def menuye_don(c, menuUrl):
     c.js("location.href=" + json.dumps(menuUrl))
     for _ in range(25):
@@ -584,6 +735,8 @@ def main():
 
     dizin, ana = r["kurulum"]["dizin"], r["kurulum"]["exe"]
     tum_uygulamalari_oldur()
+    if os.environ.get("EMPP_KABUL_AKTIVASYON") == "1":
+        return aktivasyonlu_kabul(r, bookId, baslik, dizin, ana)
     subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"])
     c, t, puan = hedef_sec(dizin)
     if not c:
@@ -594,8 +747,9 @@ def main():
     time.sleep(10)
     menuUrl = c.js("location.href")
     r["menuUrl"] = menuUrl if isinstance(menuUrl, str) else None
+    return kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, c.jsj(JS_MENU) or [])
 
-    kitaplar = c.jsj(JS_MENU) or []
+def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
     r["menuKitapSayisi"] = len(kitaplar)
     r["menuAdlar"] = [k.get("ad") or k.get("id") for k in kitaplar]
     # MENU EKRANI: "pakette var ama menude yok" sinifi ancak menuye BAKILARAK kanitlanir
@@ -636,6 +790,43 @@ def main():
     c.kapat(); oldur(dizin)
     r["kaldirma"] = kaldir(dizin)
     return bitir(r)
+
+def aktivasyonlu_kabul(r, bookId, baslik, dizin, ana):
+    """Aktivasyon kipi: internetsiz + temiz profil; a..e, sonra ayni oturumda normal kitap kaniti."""
+    kod = aktivasyon_kod_oku(os.environ.get("EMPP_KABUL_AKTIVASYON_KOD_DOSYASI") or AKT_KOD_DOSYASI)
+    if not kod:
+        r["sonuc"] = "OLCULEMEDI"; r["sebep"] = "aktivasyon test kodu dosyasi yok/bos"
+        r["kaldirma"] = kaldir(dizin); return bitir(r)
+    kural = gd_kural_adi(bookId)
+    ekle, kaldir_k = gd_kural_komutlari(kural, ana)
+    subprocess.run(kaldir_k, capture_output=True)                 # onceki yarim kosudan kalmissa
+    gd = subprocess.run(ekle, capture_output=True)
+    r["internetsiz"] = {"kural": kural, "eklendi": gd.returncode == 0}
+    c = None
+    try:
+        if gd.returncode != 0:
+            r["sonuc"] = "OLCULEMEDI"; r["sebep"] = "guvenlik duvari kurali eklenemedi"
+            r["kaldirma"] = kaldir(dizin); return bitir(r)
+        profil = os.path.join(KOK, f"akt-profil-{bookId}-{time.strftime('%Y%m%d%H%M%S')}")
+        c, menuUrl, kitaplar = aktivasyon_senaryosu(r, bookId, ana, dizin, kod, profil)
+        kod = None
+        A = r["aktivasyon"]["adimlar"]
+        for a in AKT_ADIMLAR:
+            log("AKTIVASYON", bookId, a, (A.get(a) or {}).get("sonuc", "OLCULMEDI"))
+        sonuc, sebep = aktivasyon_ozeti(A)
+        r["aktivasyon"]["sonuc"] = sonuc
+        if r["aktivasyon"].get("online") is True:
+            sonuc, sebep = "KALDI", "uygulama cevrimici (window.isOnline=true) — internetsiz kosu saglanamadi"
+            r["aktivasyon"]["sonuc"] = sonuc
+        if sonuc != "GECTI" or not c:
+            r["sonuc"] = "KALDI"; r["sebep"] = sebep or "aktivasyon oturumu acilamadi"
+            if c: c.kapat()
+            oldur(dizin); r["kaldirma"] = kaldir(dizin); return bitir(r)
+        if menuUrl: menuye_don(c, menuUrl)
+        return kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, c.jsj(JS_MENU) or kitaplar)
+    finally:
+        k = subprocess.run(kaldir_k, capture_output=True)
+        r.setdefault("internetsiz", {})["kaldirildi"] = k.returncode == 0
 
 def bitir(r):
     r["bitti"] = time.strftime("%Y-%m-%dT%H:%M:%S")

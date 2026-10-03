@@ -69,6 +69,10 @@ function kasaAyarlari(env = process.env, platform = process.platform) {
         'Programs', 'Python', 'Python313', 'python.exe'),
     // kabul.py KOK sabiti (D:\\kabul): paket oraya `<anahtar>.exe` adıyla konur, kabul.py ONBELLEK görür.
     winKasaYerelKok: env.EMPP_WIN_KASA_YEREL_KOK || 'D:\\kabul',
+    // Aktivasyonlu seri (Nadir 03.10): geçerli test kodu dosyası (yalnız SYSTEM/Administrator okur;
+    // şef yazar). Varsa kabul.py internetsiz + temiz profille a..e senaryosunu koşar; yoksa bu seride
+    // kasa kullanılmaz (eski davranış: başsız kapı).
+    winKasaAktivasyonKod: env.EMPP_KABUL_AKTIVASYON_KOD_DOSYASI || 'D:\\empp-ajan\\kabul\\aktivasyon-test-kodu.txt',
     // EMPP_WIN_KASA_KABUL=0 → kasa hiç denenmez (bugünkü başsız davranış). Varsayılan AÇIK.
     winKasaKabul: env.EMPP_WIN_KASA_KABUL !== '0',
     winKasaVmKok: env.EMPP_VM_KOK || path.join(os.homedir(), 'vm-kapi'),
@@ -186,6 +190,14 @@ function raporKarari(rapor) {
   const kitaplar = Array.isArray(rapor.kitaplar) ? rapor.kitaplar : [];
   const gecen = kitaplar.filter((k) => k && k.sonuc === 'GECTI').length;
   const ozet = `${gecen}/${kitaplar.length} kitap GECTI`;
+  const akt = rapor.aktivasyon && rapor.aktivasyon.adimlar;
+  if (akt && rapor.sonuc === 'GECTI') { // savunma: a..e'den biri GECTI değilse rapor ne derse desin KALDI
+    const kotu = ['a', 'b', 'c', 'd', 'e'].find((a) => {
+      const s = akt[a] && akt[a].sonuc;
+      return !(s === 'GECTI' || (a === 'd' && s === 'ATLANDI'));
+    });
+    if (kotu) return { durum: 'KALDI', sebep: `aktivasyon-${kotu} ${(akt[kotu] && akt[kotu].sonuc) || 'ölçülmedi'}` };
+  }
   if (rapor.sonuc === 'GECTI') {
     if (kitaplar.length && gecen === kitaplar.length) return { durum: 'GECTI', sebep: ozet };
     return { durum: 'KALDI', sebep: `rapor GECTI diyor ama ${ozet}` };
@@ -320,6 +332,9 @@ async function kasaKabulKapisi(p) {
   const e1 = kasaErisimi(cfg);
   if (!e1.erisilir) return { kullanildi: false, sebep: e1.sebep };
   if (cfg.winKasaYerel && !p.aktivasyon) return yerelKabulKapisi(p);
+  if (cfg.winKasaYerel && p.aktivasyon && cfg.winKasaAktivasyonKod && fs.existsSync(cfg.winKasaAktivasyonKod)) {
+    return yerelKabulKapisi(p);
+  }
   if (p.aktivasyon) {
     return {
       kullanildi: false,
@@ -490,9 +505,12 @@ async function yerelKabulKapisi(p) {
     });
     const calistir = p.calistir || require('./windows-serit').komutKos; // döngüsel require: çağrı anında
     r = await calistir(argv, {
-      env: { EMPP_KABUL_YEREL_DIZIN: kanitDizini, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+      env: {
+        EMPP_KABUL_YEREL_DIZIN: kanitDizini, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1',
+        ...(p.aktivasyon ? { EMPP_KABUL_AKTIVASYON: '1', EMPP_KABUL_AKTIVASYON_KOD_DOSYASI: cfg.winKasaAktivasyonKod } : {}),
+      },
       zamanAsimiMs: tavanMs,
-      satir: (s) => { if (/^(INDIRME|KURULUM|KITAP|RAPOR)/.test(s)) log('  [kasa]', s.slice(0, 240)); },
+      satir: (s) => { if (/^(INDIRME|KURULUM|KITAP|AKTIVASYON|RAPOR)/.test(s)) log('  [kasa]', s.slice(0, 240)); },
     });
     rapor = ciktidanJson(r && r.cikti);
     k = raporKarari(rapor);

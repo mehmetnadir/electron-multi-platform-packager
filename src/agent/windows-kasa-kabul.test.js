@@ -348,8 +348,8 @@ test('yerel: KALDI → fırlatır (paket kusuru), ÖLÇÜLEMEDİ → ertelenebil
   }), (e) => e.message.includes(WIN_KASA_KABUL_ISARETI) && /rapor gelmedi/.test(e.message));
 });
 
-test('yerel: aktivasyon kodlu seri yerel kipe girmez (başsız yedeğe düşer)', async () => {
-  const { cfg, exe } = yerelOrtam();
+test('yerel: aktivasyon kodlu seri, test kodu dosyası YOKSA yerel kipe girmez (başsız yedeğe düşer)', async () => {
+  const { cfg, exe } = yerelOrtam({ ayar: { winKasaAktivasyonKod: path.join(tmp('kodyok'), 'yok.txt') } });
   let cagrildi = false;
   const r = await K.kasaKabulKapisi({
     exe, bookId: 1, etiket: 'imzasiz', aktivasyon: true, cfg, calistir: async () => { cagrildi = true; return {}; },
@@ -367,4 +367,35 @@ test('yerel kilit: canlı sahip beklenir + tavanda ertelenebilir hata; ölü sah
   assert.equal(JSON.parse(fs.readFileSync(cfg.winKasaKilit, 'utf8')).pid, process.pid);
   await birak();
   assert.equal(fs.existsSync(cfg.winKasaKilit), false);
+});
+
+test('yerel: aktivasyon kodlu seri, test kodu dosyası VARSA kabul.py aktivasyon kipinde koşar (kod env\'e girmez)', async () => {
+  const kodDosyasi = path.join(tmp('kod'), 'aktivasyon-test-kodu.txt');
+  fs.writeFileSync(kodDosyasi, 'GIZLI');
+  const { cfg, exe } = yerelOrtam({ ayar: { winKasaAktivasyonKod: kodDosyasi } });
+  let gelen = null;
+  const adimlar = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map((a) => [a, { sonuc: 'GECTI' }]));
+  const r = await K.kasaKabulKapisi({
+    exe, bookId: 45449, etiket: 'imzasiz', aktivasyon: true, cfg,
+    calistir: async (argv, o) => {
+      gelen = o.env;
+      return { kod: 0, cikti: raporCikti({ sonuc: 'GECTI', aktivasyon: { adimlar, online: false }, kitaplar: [{ sonuc: 'GECTI' }] }) };
+    },
+  });
+  assert.equal(r.kullanildi, true);
+  assert.equal(r.durum, 'GECTI');
+  assert.equal(gelen.EMPP_KABUL_AKTIVASYON, '1');
+  assert.equal(gelen.EMPP_KABUL_AKTIVASYON_KOD_DOSYASI, kodDosyasi);
+  assert.ok(!JSON.stringify(gelen).includes('GIZLI'), 'kodun DEĞERİ env\'e konmaz, yalnız dosya yolu');
+});
+
+test('raporKarari: aktivasyon adımlarından biri GECTI değilse rapor GECTI dese de KALDI; d tek kitapta ATLANDI kabul', () => {
+  const tam = (deg) => ({ sonuc: 'GECTI', kitaplar: [{ sonuc: 'GECTI' }],
+    aktivasyon: { adimlar: { a: { sonuc: 'GECTI' }, b: { sonuc: 'GECTI' }, c: { sonuc: 'GECTI' }, d: { sonuc: 'GECTI' }, e: { sonuc: 'GECTI' }, ...deg } } });
+  assert.equal(K.raporKarari(tam({})).durum, 'GECTI');
+  assert.equal(K.raporKarari(tam({ d: { sonuc: 'ATLANDI' } })).durum, 'GECTI');
+  const k = K.raporKarari(tam({ e: { sonuc: 'KALDI' } }));
+  assert.equal(k.durum, 'KALDI');
+  assert.match(k.sebep, /aktivasyon-e KALDI/);
+  assert.equal(K.raporKarari(tam({ b: undefined })).durum, 'KALDI');
 });
