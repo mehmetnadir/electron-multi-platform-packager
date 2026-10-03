@@ -417,3 +417,24 @@ test('Electron giriş dosyası yoksa RED giris-yok; main.js / electron.js / pack
   assert.deepEqual(kos(['package.json'], pj('yok.js')).nedenKodlari, ['giris-yok'], 'main gösterdiği dosya yoksa RED');
   assert.deepEqual(kos(['book1/electron.js']).nedenKodlari, ['giris-yok'], 'bookN içindeki giriş kökü kurtarmaz');
 });
+
+// --- 03.10 saha 59480 Flashy: index.html yerel başvuruları zip'te olmalı ---
+
+test('kök index.html yerel başvurusu zip\'te yoksa RED index-referans-eksik; var/dış/kök-mutlak/harf farkı geçer', () => {
+  const temel = ['main.js', 'book1/assets/5/data/BookContent.xml', 'book1/assets/5/pages/1.png',
+    'book1/assets/5/thumbs/1.jpg', 'theme.js', 'Core/Logo.png'];
+  const html = (g) => ({ veri: (y) => (y === 'index.html' ? Buffer.from(g) : null), boyut: () => 1 });
+  const kos = (g, ek = []) => yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: '5|Bir',
+    listele: () => [...temel, 'index.html', ...ek], okuyucu: html(g) });
+  const tam = '<link href="styles/tasarim/tokens.css?v=2"><script src="theme.js?v=2"></script>'
+    + '<script src="https://cdn.x/a.js"></script><img src="data:image/png;base64,AA"><a href="sayfa.html">'
+    + '<!-- <script src="yorum.js"></script> --><link href="/kok-mutlak.css"><img src="core/logo.png">';
+  const ok = kos(tam, ['styles/tasarim/tokens.css']);
+  assert.equal(ok.gecti, true, ok.nedenler.join('|'));
+  assert.ok(ok.notlar.some((n) => /harf farkıyla.*core\/logo\.png/.test(n)));
+  const yok = kos(tam); // tokens.css pakette yok
+  assert.equal(yok.gecti, false);
+  assert.deepEqual(yok.nedenKodlari, ['index-referans-eksik']);
+  assert.match(yok.nedenler.join('|'), /styles\/tasarim\/tokens\.css/);
+  assert.ok(!/yorum\.js|kok-mutlak|cdn\.x|sayfa\.html/.test(yok.nedenler.join('|')));
+});

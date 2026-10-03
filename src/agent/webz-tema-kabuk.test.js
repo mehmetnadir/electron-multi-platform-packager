@@ -60,11 +60,12 @@ function yamaOrtami(yamaMetni) {
 test('kabuk dosyaları: tema JS/CSS/görsel AYNEN, menü dosyaları + yerel vendor üretilir', () => {
   const { dosyalar } = K.kabukUret(temel());
   for (const y of K.TEMALAR['web-proxy-modern'].dosyalar) {
-    assert.ok(dosyalar.get(y).equals(fs.readFileSync(path.join(TEMA, y))), `${y} aynen değil`);
+    const hedef = K.hedefYolu(K.TEMALAR['web-proxy-modern'], y);
+    assert.ok(dosyalar.get(hedef).equals(fs.readFileSync(path.join(TEMA, y))), `${y} aynen değil`);
   }
   for (const y of ['index.html', K.YAMA, K.STIL, K.AYAR, K.TANIM,
-    '_vendor/fontawesome/css/all.min.css', '_vendor/fontawesome/webfonts/fa-solid-900.woff2',
-    '_vendor/fonts/fonts.css']) {
+    'styles/vendor/fontawesome/css/all.min.css', 'styles/vendor/fontawesome/webfonts/fa-solid-900.woff2',
+    'styles/vendor/fonts/fonts.css']) {
     assert.ok(dosyalar.has(y), `${y} yok`);
   }
   // Örnek kapaklar/ayar ve yüklenmeyen önyükleyici pakete girmez; kitap içeriğine dokunulmaz.
@@ -84,7 +85,7 @@ test('ağ adresi kalmaz: CDN/analitik/polyfill yok, fontlar yerel dosyaya çöz�
     assert.ok(!index.includes(yasak), `index.html'de ${yasak}`);
   }
   // Yerel stil dosyalarının başvurdukları font dosyaları pakette VAR.
-  for (const css of ['_vendor/fonts/fonts.css', '_vendor/fontawesome/css/all.min.css']) {
+  for (const css of ['styles/vendor/fonts/fonts.css', 'styles/vendor/fontawesome/css/all.min.css']) {
     const m = dosyalar.get(css).toString('utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     const urller = [...m.matchAll(/url\(([^)]+)\)/g)].map((x) => x[1].replace(/["']/g, ''));
     assert.ok(urller.length > 0, `${css}: url yok`);
@@ -259,4 +260,40 @@ test('kaynak paritesi: Worker teması (book-update) ile depo kopyası bayt bayt 
     assert.ok(buf.equals(fs.readFileSync(path.join(TEMA, ad))),
       `${ad} Worker'da değişmiş — node tools/webz-tema-esitle.js`);
   }
+});
+
+// --- 03.10 saha 59480 Flashy: `_design/` + `_vendor/` zip'te vardı, paketleyici `!_*` ile attı ---
+
+const PAKET_DISI = require('../packaging/paket-disi-liste');
+
+test('kök dizin `_` ile başlamaz: hiçbir kabuk dosyası dört platformda paket dışı listeye düşmez', () => {
+  const { dosyalar } = K.kabukUret(temel());
+  const yollar = [...dosyalar.keys()];
+  assert.ok(yollar.some((y) => y.startsWith('styles/vendor/')) && yollar.includes('scripts/tasarim/components.js'));
+  for (const y of yollar) {
+    assert.ok(!/^_/.test(y.split('/')[0]) || !y.includes('/'), `kök dizin "_" önekli: ${y}`);
+    for (const pl of PAKET_DISI.PLATFORMLAR) {
+      assert.equal(PAKET_DISI.dislayanMadde(y, pl), null, `${y} ${pl} paketinde dışlanır (${PAKET_DISI.dislayanMadde(y, pl)})`);
+    }
+  }
+  // Mutasyon tanığı: eski yerleşim (`_design/`) aynı süzgeçten düşer — bu test onu yakalar.
+  assert.equal(PAKET_DISI.dislayanMadde('_design/components.js', 'linux'), 'kok-yedek');
+  assert.equal(PAKET_DISI.dislayanMadde('_vendor/fonts/fonts.css', 'android'), 'kok-yedek');
+});
+
+test('index.html\'in tüm yerel başvuruları üretilen dosyalar arasında (FlashyUI/menü yüklenir)', () => {
+  const { indexYerelReferanslari } = require('./yazma-kapisi');
+  const { dosyalar } = K.kabukUret(temel());
+  const refler = indexYerelReferanslari(dosyalar.get('index.html').toString('utf8'));
+  assert.ok(refler.includes('scripts/tasarim/components.js') && refler.includes('styles/tasarim/tokens.css'));
+  assert.ok(refler.includes('styles/vendor/fonts/fonts.css') && refler.includes('theme.js'));
+  for (const y of refler) assert.ok(dosyalar.has(y), `index.html → ${y} yok`);
+  assert.ok(!dosyalar.get('index.html').toString('utf8').includes('"_design/'));
+});
+
+test('`_` önekli kök dizin yakalanır (kabukUret bunda DURUR: kod yedek-dizin)', () => {
+  assert.equal(K.yedekKokDizin(['index.html', '_design/tokens.css', 'styles/a.css']), '_design/tokens.css');
+  assert.equal(K.yedekKokDizin(['_x.js', 'book1/_motor/a.js', 'styles/vendor/a.css']), null,
+    'kök DOSYA ve iç `_` dizin paketleyicide de dışlanmaz');
+  assert.equal(K.yedekKokDizin(K.kabukUret(temel()).dosyalar.keys()), null);
 });

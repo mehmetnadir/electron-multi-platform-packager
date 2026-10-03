@@ -204,6 +204,34 @@ function konsolSiniflandir(satirlar = []) {
 }
 
 /**
+ * Menü/okuyucu TANINMADIĞINDA (kart 0, kapak 0, sayfa izi 0) konsol paket kusurunu gösteriyor mu?
+ * 03.10, 59480 Flashy: konsolda `ReferenceError: FlashyUI is not defined` + `_design/…`,
+ * `_vendor/…` ERR_FILE_NOT_FOUND vardı; kabul "OLCULEMEDI → paket kusuru DEĞİL, ertele" dedi —
+ * oysa kök sayfa kendi paketindeki betik/stile ulaşamıyordu (paket kusuru). Kural (yalnız menü
+ * tanınmadıysa çağrılır): (a) paketin KENDİ dosyasında (`app.asar/` ya da `file://` yerel) .js/.css/
+ * .json yüklemesi ERR_FILE_NOT_FOUND, ya da (b) ERR_FILE_NOT_FOUND + ReferenceError/"is not defined"
+ * birlikte → kusur. İkisi de yoksa null (gerçekten ölçülemedi: yavaş yükleme, ağ bekleyen sayfa).
+ * @param {Array<{seviye?:string|number, mesaj:string}>} satirlar
+ * @returns {string|null} RED sebebi ya da null
+ */
+function menuTaninmadiKusuru(satirlar = []) {
+  const k = konsolSiniflandir(satirlar);
+  const kaynakDosya = k.dosyaBulunamadi.filter((m) => {
+    const u = (/file:\/\/[^\s"')]+/.exec(m) || [''])[0].split('?')[0];
+    return /\.(?:js|css|json)$/i.test(u);
+  });
+  const tanimsiz = k.jsHatalari.filter((m) => /ReferenceError|is not defined/.test(m));
+  if (!kaynakDosya.length && !(k.dosyaBulunamadi.length && tanimsiz.length)) return null;
+  const dosyalar = (k.dosyaBulunamadi.length ? k.dosyaBulunamadi : kaynakDosya).slice(0, 6).map((m) => {
+    const u = (/file:\/\/[^\s"')]+/.exec(m) || [m])[0];
+    const i = u.indexOf('app.asar/');
+    return decodeURIComponent(i >= 0 ? u.slice(i + 9) : u.split('/').slice(-2).join('/'));
+  });
+  return `paket kusuru: menü çizilmedi; pakette olmayan dosya (ERR_FILE_NOT_FOUND ${k.dosyaBulunamadi.length}): `
+    + `${[...new Set(dosyalar)].join(', ')}${tanimsiz.length ? `; ${tanimsiz[0].split('\n')[0].slice(0, 120)}` : ''}`;
+}
+
+/**
  * Bir aşamanın (menü ya da kitap) DOM + piksel ölçümünü karara çevirir.
  *
  * @param {object|null} olcum  koşumun döndürdüğü aşama ölçümü
@@ -356,6 +384,7 @@ module.exports = {
   beklenenKartSayisi,
   menudeOlmayanKitapDizinleri,
   konsolSiniflandir,
+  menuTaninmadiKusuru,
   sayfaIzi,
   asamaKarari,
   genelKarar,

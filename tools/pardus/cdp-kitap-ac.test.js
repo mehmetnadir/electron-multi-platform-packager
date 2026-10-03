@@ -136,6 +136,12 @@ async function sahteTarayici(o = {}) {
         return o.base64
           ? { body: Buffer.from(o.govde || BOS).toString('base64'), base64Encoded: true }
           : { body: o.govde || BOS, base64Encoded: false };
+      case 'Runtime.enable':
+        if (o.acilisKonsol) {
+          o.acilisKonsol.forEach((v, i) => setTimeout(() => gonder({ method: 'Runtime.consoleAPICalled',
+            params: { type: 'error', args: [{ type: 'string', value: v }] } }), 5 + i));
+        }
+        return {};
       case 'Page.captureScreenshot':
         return { data: ekran };
       default:
@@ -341,6 +347,20 @@ test('taninmayan menu (kart/kapak/sayfa izi yok) → E6=OLCULEMEDI (cikis 4), RE
     assert.equal(r.kod, 4, r.cikti);
     assert.equal(r.v.E6, 'OLCULEMEDI');
     assert.match(r.v.E6_SEBEP, /kitap listesi\/okuyucu tanınmadı/);
+  } finally { await t.kapat(); }
+});
+
+test('taninmayan menu + konsolda pakette olmayan betik/stil + ReferenceError → E6=RED (59480 Flashy, ertelenmez)', async () => {
+  const APP = 'file:///home/e/ev/DijiTap/Flashy%20Set/resources/app.asar';
+  const t = await sahteTarayici({ baslangic: 'bilinmeyen', acilisKonsol: [
+    `ReferenceError: FlashyUI is not defined\n    at applyConfig (${APP}/theme.js?v=2:70:3)`,
+    `Failed to load resource: net::ERR_FILE_NOT_FOUND ${APP}/_design/components.js?v=2`,
+  ] });
+  try {
+    const r = await kos(t.port, ['--yeniden-yukle', '0']);
+    assert.equal(r.kod, 1, r.cikti);
+    assert.equal(r.v.E6, 'RED');
+    assert.match(r.v.E6_SEBEP, /paket kusuru.*_design\/components\.js.*FlashyUI is not defined/);
   } finally { await t.kapat(); }
 });
 

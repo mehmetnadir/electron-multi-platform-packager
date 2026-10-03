@@ -65,7 +65,7 @@ const {
   jsonGetir, wsBaglan, CdpOturum, hedefSec, wsAdresiniCevir,
 } = require('../kabul/cdp-istemci');
 const { domYokla } = require('../kabul/kosum/dom-yoklama');
-const { sayfaIzi, konsolSiniflandir } = require('../kabul/olcutler');
+const { sayfaIzi, konsolSiniflandir, menuTaninmadiKusuru } = require('../kabul/olcutler');
 const setTum = require('../kabul/set-guncellik');
 const { guncelDegilOneri } = require('../kabul/guncel-degil-oneri');
 
@@ -664,6 +664,14 @@ async function kos(a, sonuc) {
     sayfaIzi: sayfaIzi(yoklama), yukleniyor: yoklama.yukleniyor, yoklamaHatasi: yoklama.yoklamaHatasi,
   } : null;
   if (!tur) {
+    // Konsol paket kusurunu gösteriyorsa (pakette olmayan betik/stil + ReferenceError) bu ölçülemedi
+    // DEĞİL, paket kusurudur → RED (03.10, 59480 Flashy: `_design/` pakette yoktu, kabul erteledi).
+    const kusur = menuTaninmadiKusuru(konsol);
+    if (kusur) {
+      sonuc.e6 = { durum: 'RED', sebep: kusur };
+      await kanitYaz(cdp, a, 'kitap-cdp', true);
+      return;
+    }
     sonuc.e6 = {
       durum: 'OLCULEMEDI',
       sebep: `kitap listesi/okuyucu tanınmadı (${a.menuSn} sn: kart 0, kapak 0, sayfa izi 0${yoklama && yoklama.yoklamaHatasi ? `, ${yoklama.yoklamaHatasi}` : ''})`,

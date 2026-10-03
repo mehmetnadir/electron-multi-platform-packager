@@ -38,6 +38,11 @@
  *      sırası), içerik/kapak `assets/<kapak ID>/` altında ölçülür; listesiz otomatik tür = ret.
  *   2. her kitapta içerik (`assets/<id>/data/BookContent.xml` + ilk sayfa `pages/1.*`) VE kapak
  *      (`assets/<id>/thumbs/1.jpg`) — set-uyelik-ek kapısıyla aynı ölçüt.
+ *   2c. kök `index.html`'in YEREL başvuruları (script src, link href, img src; göreli yol) zip'te var
+ *      olmalı (03.10, 59480 Flashy: `_design/`, `_vendor/` pakette yoktu, menü açılmadı). http(s), `//`,
+ *      `data:`, `#`, kök-mutlak `/…` ve betik/mailto şemaları sayılmaz. RED `index-referans-eksik`.
+ *      NOT: bu kapı ZIP'i ölçer; paketleyicinin sonradan dışladığı dosyayı (`!_*`) görmez — o sınıf
+ *      için `webz-tema-kabuk` üretimi `_` önekli kök dizini reddeder + paket-disi-liste sözleşme testi.
  *   3. boyut ≥ oncekiBoyut × 0,8 (oncekiBoyut ya da boyut yoksa atlanır).
  * Zip listesi `icerik-kapisi.zipGirisAdlariniOku` (= `unzip -Z1`) ile okunur; adm-zip KULLANILMAZ
  * (2 GiB+ zip'te ERR_FS_FILE_TOO_LARGE). `__MACOSX`, `._*`, `.DS_Store` yok sayılır; tek sarmalayıcı
@@ -66,7 +71,34 @@ const KOD = Object.freeze({
   OKUNAMADI: 'giris-listesi-okunamadi', LISTE_YOK: 'liste-yok', KITAP_YOK: 'kitap-yok',
   KITAP_EKSIK: 'kitap-eksik', LISTE_DISI: 'liste-disi-kitap', ID_YOK: 'id-yok',
   ICERIK_YOK: 'icerik-yok', KAPAK_YOK: 'kapak-yok', BOYUT: 'boyut-dustu', GIRIS_YOK: 'giris-yok',
+  REFERANS_EKSIK: 'index-referans-eksik',
 });
+
+/**
+ * Kök index.html'in YEREL başvuruları (script src / link href / img src). Yorumlar yok sayılır;
+ * `?sorgu` ve `#parça` atılır, `%xx` çözülür. Yalnız göreli yollar (http(s), `//`, `/…`, `data:`,
+ * `#`, `javascript:`, `mailto:` ve diğer şemalar dışarıda). SAF.
+ * @returns {string[]} kökten göreli, normalleştirilmiş, tekilleştirilmiş yollar
+ */
+function indexYerelReferanslari(html) {
+  const m = String(html || '').replace(/<!--[\s\S]*?-->/g, '');
+  const out = new Set();
+  const al = (adres) => {
+    let a = String(adres || '').trim();
+    if (!a || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(a)) return;
+    a = a.split('#')[0].split('?')[0];
+    try { a = decodeURIComponent(a); } catch (_) { /* olduğu gibi */ }
+    a = path.posix.normalize(a);
+    if (!a || a === '.' || a.startsWith('..')) return;
+    out.add(a);
+  };
+  for (const t of m.matchAll(/<(script|link|img)\b[^>]*>/gi)) {
+    const oz = t[1].toLowerCase() === 'link' ? 'href' : 'src';
+    const x = new RegExp(`\\s${oz}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(t[0]);
+    if (x) al(x[1] != null ? x[1] : x[2]);
+  }
+  return [...out];
+}
 
 /**
  * Build kökünün Electron giriş dosyası (03.10, saha 74430/59480): `main.js` | `electron.js` |
@@ -381,6 +413,25 @@ function yazmaKapisi({
       + ' — paketleyici yedek şablona düşer, okuyucu yüklenmez');
   }
 
+  // 2c. kök index.html yerel başvuruları zip'te var mı
+  if (kume.has('index.html')) {
+    const ham = oku.veri('index.html');
+    if (ham) {
+      const kucuk = new Set(yollar.map((y) => y.toLowerCase()));
+      const yok = indexYerelReferanslari(ham.toString('utf8')).filter((y) => !kume.has(y));
+      // Yalnız BÜYÜK/küçük harf farkı (45478 `core/kurumLogo.png` ↔ `kurumlogo.png`; macOS/Windows'ta
+      // çalışır, süs dosyası) RED değil not; gerçek eksik RED.
+      const eksik = yok.filter((y) => !kucuk.has(y.toLowerCase()));
+      for (const y of yok.filter((x) => kucuk.has(x.toLowerCase()))) {
+        notlar.push(`index.html başvurusu harf farkıyla eşleşiyor (Linux'ta açılmaz): ${y}`);
+      }
+      if (eksik.length) {
+        ret(KOD.REFERANS_EKSIK, `index-referans-eksik: kök index.html ${eksik.length} yerel dosyaya başvuruyor,`
+          + ` zip'te yok: ${eksik.slice(0, 5).join(', ')}${eksik.length > 5 ? ', …' : ''}`);
+      }
+    }
+  }
+
   // 3. boyut
   let b = boyut;
   if (b == null && zipYolu) { try { b = fs.statSync(zipYolu).size; } catch (_) { b = null; } }
@@ -394,5 +445,5 @@ function yazmaKapisi({
 }
 
 module.exports = {
-  yazmaKapisi, imparkKimligiMi, girisDosyasi, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
+  yazmaKapisi, imparkKimligiMi, girisDosyasi, indexYerelReferanslari, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
 };

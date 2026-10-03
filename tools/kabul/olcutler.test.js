@@ -377,3 +377,25 @@ test('beklenenKartSayisi: link kartları (settings.json type=link) beklentiye ek
   assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1'], setMenu, linkKart: 1, elle: 3 }), 3);
   assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1', 'book2'], setMenu: null }), 2);
 });
+
+// --- 03.10 saha 59480 Flashy: menü tanınmadı + pakette olmayan dosya + ReferenceError = RED (ertelenmez) ---
+
+test('menuTaninmadiKusuru: 59480 gerçek konsolu → paket kusuru; yavaş/boş konsol → null (ölçülemedi)', () => {
+  const APP = 'file:///home/e/kabul-ev/ev-1/DijiTap/DijiTap/Flashy%20Grade%208%20Set/resources/app.asar';
+  const konsol = [
+    { seviye: 'error', mesaj: `ReferenceError: FlashyUI is not defined\n    at applyConfig (${APP}/theme.js?v=2:70:3)` },
+    { seviye: 'error', mesaj: `Failed to load resource: net::ERR_FILE_NOT_FOUND ${APP}/_design/components.js?v=2` },
+    { seviye: 'error', mesaj: `Failed to load resource: net::ERR_FILE_NOT_FOUND ${APP}/_vendor/fonts/fonts.css` },
+  ];
+  const s = O.menuTaninmadiKusuru(konsol);
+  assert.match(s, /^paket kusuru: menü çizilmedi/);
+  assert.match(s, /_design\/components\.js/);
+  assert.match(s, /_vendor\/fonts\/fonts\.css/);
+  assert.match(s, /FlashyUI is not defined/);
+  // (b) yalnız ERR_FILE_NOT_FOUND (.png) + ReferenceError birlikte de kusur; tek başına png/ReferenceError değil.
+  assert.ok(O.menuTaninmadiKusuru([konsol[0], { seviye: 'error', mesaj: `ERR_FILE_NOT_FOUND ${APP}/images/a.png` }]));
+  assert.equal(O.menuTaninmadiKusuru([{ seviye: 'error', mesaj: `ERR_FILE_NOT_FOUND ${APP}/images/a.png` }]), null);
+  assert.equal(O.menuTaninmadiKusuru([konsol[0]]), null);
+  assert.equal(O.menuTaninmadiKusuru([]), null);
+  assert.equal(O.menuTaninmadiKusuru([{ seviye: 'info', mesaj: 'Electron Security Warning' }]), null);
+});

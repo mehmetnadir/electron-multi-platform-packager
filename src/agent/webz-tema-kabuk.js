@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const gMenu = require('../../tools/g-yayin/menu');
+const { kokYedekDizinAdiMi } = require('../packaging/kok-yedek-dizin-disla');
 
 const ISARET = '[webz-tema]';
 const TEMA_KOKU = path.join(__dirname, 'webz-tema');
@@ -36,7 +37,11 @@ const YAMA = 'scripts/cevrimdisi-yama.js';
 const STIL = 'styles/cevrimdisi.css';
 const AYAR = 'config/settings.json';
 const TANIM = 'set-menu.json';
-const VENDOR = '_vendor';
+// DİKKAT (03.10, 59480 kabul): kök dizin adı `_` ile BAŞLAYAMAZ. Paketleyici (paket-disi-liste
+// `kok-yedek`, `!_*`) `_` önekli kök dizinleri yedek sayıp dört platformda pakete ALMAZ; `_design/` ve
+// `_vendor/` zip'te vardı ama pardus asar'ında yoktu (FlashyUI is not defined, menü açılmadı).
+// Bu yüzden kabuk yardımcıları güncelleyicinin de kabuk saydığı `styles/` ve `scripts/` altına konur.
+const VENDOR = 'styles/vendor';
 const KAPAK = 'thumbs/1.jpg';
 const IMZA_META = 'empp-webz-tema';
 
@@ -49,6 +54,13 @@ const TEMALAR = Object.freeze({
   'web-proxy-modern': Object.freeze({
     yayinci: 'Flashy ELT',
     kurum: '310',
+    // Tema kaynağındaki `_` önekli dizin → pakette `_`siz yer (yukarıdaki not). index.html başvuruları
+    // `metin` kurallarıyla aynı yere çevrilir; bulunmazsa üretim durur.
+    tasi: Object.freeze({
+      '_design/components.css': 'styles/tasarim/components.css',
+      '_design/tokens.css': 'styles/tasarim/tokens.css',
+      '_design/components.js': 'scripts/tasarim/components.js',
+    }),
     dosyalar: Object.freeze([
       '_design/components.css', '_design/components.js', '_design/tokens.css', 'theme.css',
       'theme.js', 'scripts/library.js', 'scripts/xmlParser.js', 'images/bg.jpg',
@@ -66,6 +78,8 @@ const TEMALAR = Object.freeze({
     // kalır). Desen bulunmazsa üretim DURUR (tema kaydı → sessiz kayma yok).
     metin: Object.freeze([
       [/<span>Akıllı Tahta · Web Sürümü<\/span>/g, '<span>Akıllı Tahta</span>'],
+      [/href="_design\/(tokens|components)\.css/g, 'href="styles/tasarim/$1.css'],
+      [/src="_design\/components\.js/g, 'src="scripts/tasarim/components.js'],
     ]),
     yamaOncesi: '<script src="theme.js?v=2"></script>',
   }),
@@ -335,6 +349,15 @@ function indexUret(ham, tema, setAdi) {
   return s;
 }
 
+/** Kök dizini `_` önekli ilk yol (paketleyici bunu pakete almaz); yoksa null. SAF. */
+function yedekKokDizin(yollar) {
+  for (const y of yollar) if (y.includes('/') && kokYedekDizinAdiMi(y.split('/')[0])) return y;
+  return null;
+}
+
+/** Tema kaynağındaki yolun pakette konacağı yer (`tasi` yoksa aynı). SAF. */
+const hedefYolu = (t, y) => (t.tasi && t.tasi[y]) || y;
+
 function vendorDosyalari() {
   const kok = path.join(TEMA_KOKU, 'vendor');
   const out = new Map();
@@ -426,7 +449,9 @@ function kabukUret(o) {
 
   const temaDizini = path.join(TEMA_KOKU, tema);
   const dosyalar = new Map();
-  for (const y of t.dosyalar) dosyalar.set(y, fs.readFileSync(path.join(temaDizini, y)));
+  for (const y of t.dosyalar) {
+    dosyalar.set(hedefYolu(t, y), fs.readFileSync(path.join(temaDizini, y)));
+  }
   dosyalar.set('index.html', Buffer.from(indexUret(
     fs.readFileSync(path.join(temaDizini, 'index.html'), 'utf8'), tema, setAdi)));
   dosyalar.set(YAMA, Buffer.from(yamaUret({ ayarlar, uniteler })));
@@ -448,6 +473,11 @@ function kabukUret(o) {
   for (const [y, b] of kapaklar) dosyalar.set(y, b);
   for (const [y, b] of vendorDosyalari()) dosyalar.set(y, b);
 
+  // Kök dizin `_` ile başlarsa paketleyici onu pakete almaz (bkz. VENDOR notu) → üretim DURUR.
+  const yedekKok = yedekKokDizin(dosyalar.keys());
+  if (yedekKok) {
+    throw new KabukHatasi(`kök dizin "_" ile başlıyor, pakete girmez: ${yedekKok}`, 'yedek-dizin');
+  }
   sozdizimiDenetle(dosyalar);
   const ag = agBagimliliklari(dosyalar);
   if (ag.length) {
@@ -460,5 +490,5 @@ function kabukUret(o) {
 module.exports = {
   ISARET, TEMALAR, KabukHatasi, YAMA, STIL, AYAR, TANIM, VENDOR, IMZA_META, TEMA_KOKU,
   temaSec, gorselUzanti, dataUriCoz, bookContentMetni, uniteleriAyristir, kitaplariKur,
-  ayarUret, yamaUret, indexUret, agBagimliliklari, sozdizimiDenetle, kabukUret,
+  hedefYolu, yedekKokDizin, ayarUret, yamaUret, indexUret, agBagimliliklari, sozdizimiDenetle, kabukUret,
 };
