@@ -594,6 +594,40 @@ JS_AKT = r"""
 # "LocalFirewallRules N/A (GPO-store only)"). Asil yontem: Chromium'a olu proxy — renderer'in
 # fetch'i (okuyucunun isOnline probu + aktivasyon istegi) agaa CIKAMAZ; CDP/file:// etkilenmez.
 AKT_PROXY_ARGV = ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]
+AKT_OLU_PROXY = "http://127.0.0.1:9"
+AKT_INSPECT_PORT = 9334    # ana surec (Node) olcumu icin; renderer CDP portu ayri (PORT)
+AKT_DIS_ADRES = "https://akillitahta.ydspublishing.com/"
+
+def akt_ortami(taban, profil):
+    """SAF: uygulama ortami — temiz APPDATA + ana surec icin olu proxy (HTTP(S)_PROXY, NO_PROXY bos).
+    Not: Electron 27'nin Node'u HTTPS_PROXY'yi kendiliginden UYGULAMAZ; ana surecin gercekten
+    kapali olup olmadigi ana_surec_ag_olc() ile OLCULUR, varsayilmaz."""
+    env = dict(taban); env["APPDATA"] = profil
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"):
+        env[k] = AKT_OLU_PROXY
+    env["NO_PROXY"] = ""; env["no_proxy"] = ""
+    return env
+
+def ana_surec_ag_olc(port=AKT_INSPECT_PORT, hedef=AKT_DIS_ADRES):
+    """Ana surecten (Node https) dis adrese HEAD dener. 'kapali:<kod>' | 'acik:<http>' | None (olculemedi)."""
+    try:
+        d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=5))
+        ws = d[0]["webSocketDebuggerUrl"]
+    except Exception:
+        return None
+    m = None
+    try:
+        m = CDP(ws)
+        ifade = ("new Promise(r=>{try{const req=(process.mainModule||module).require('https')"
+                 ".request(" + json.dumps(hedef) + ",{method:'HEAD',timeout:5000},s=>{r('acik:'+s.statusCode);s.resume();});"
+                 "req.on('timeout',()=>{req.destroy();r('kapali:zamanasimi');});"
+                 "req.on('error',e=>r('kapali:'+(e.code||e.message)));req.end();}catch(e){r('olculemedi:'+e.message);}})")
+        v = m.js(ifade)
+        return v if isinstance(v, str) and not v.startswith("olculemedi") else None
+    except Exception:
+        return None
+    finally:
+        if m: m.kapat()
 
 def aktivasyon_kod_oku(yol):
     """Gecerli test kodunu okur (tek satir, bosluksuz). Yoksa/bossa None. DEGERI HIC YAZDIRMA."""
@@ -667,9 +701,10 @@ def akt_ekran(c, kimlik, adim, kayit):
 
 def uygulama_ac(ana, dizin, profil):
     """Uygulamayi TEMIZ profille (APPDATA=profil), olu proxy ile (cevrimdisi) CDP portuyla acar."""
-    env = dict(os.environ); env["APPDATA"] = profil
+    env = akt_ortami(os.environ, profil)
     os.makedirs(profil, exist_ok=True)
-    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"] + AKT_PROXY_ARGV, env=env)
+    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*",
+                      f"--inspect=127.0.0.1:{AKT_INSPECT_PORT}"] + AKT_PROXY_ARGV, env=env)
     return hedef_sec(dizin)
 
 def akt_baglanti_bekle(c, tavan=20):
@@ -691,6 +726,8 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     ilk = akt_baglanti_bekle(c)
     kitaplar = c.jsj(JS_MENU) or []
     r["aktivasyon"]["online"] = ilk.get("online")
+    r["aktivasyon"]["anaSurecAg"] = ana_surec_ag_olc()
+    log("AKTIVASYON", kimlik, "ana-surec", str(r["aktivasyon"]["anaSurecAg"]))
     r["aktivasyon"]["duzen"] = "menu" if kitaplar else "tek-motor"
     log("AKTIVASYON", kimlik, "baglanti", "online=" + str(ilk.get("online")), "kitap=" + str(len(kitaplar)))
 

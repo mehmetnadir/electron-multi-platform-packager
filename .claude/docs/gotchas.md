@@ -191,3 +191,18 @@
   düzeltme "içeriksiz kaynak kapısı" (kökte `assets/` yok VE `setKitapDizinleri` boşsa iş paketlemeye
   girmeden `failed` olur) henüz KOD DEĞİL — teşhis raporu, `dusur` kipine geçiş için erken (yanlış-pozitif riski
   yüksek, bkz. rapor §"dusur kipine geçişin yanlış-pozitif riski").
+
+## windows-kasa: Symantec güvenlik duvarını yönetiyor — netsh kuralları UYGULANMIYOR (2026-10-03, ölçüldü)
+
+- Kasada Symantec Endpoint Protection kurulu (SecurityCenter2 `FirewallProduct`). `netsh advfirewall`
+  profilleri "State ON" görünse de `LocalFirewallRules N/A (GPO-store only)`: `netsh advfirewall firewall add rule
+  ... action=block` hata vermeden ekleniyor ama ETKİSİZ. Kanıt: `curl.exe` için çıkış blok kuralı kondu, bağlantı yine
+  HTTP 302 döndü.
+- Sonuç: 45449 aktivasyon kuru koşusu kuralı "internetsiz" sandı; uygulama `window.isOnline=true` ile açıldı ve
+  test kodu çevrimiçi yoldan sunucuya gitti (kod stoktaydı, müşteri etkilenmedi; İmpark'ta bir koltuk kasaya bağlanmış
+  olabilir).
+- Kural: kasada bir süreci internetsiz koşturmak için güvenlik duvarına GÜVENME. Kabul (tools/windows/kabul/kabul.py)
+  artık Chromium'a ölü proxy verir (`--proxy-server=http://127.0.0.1:9`), ana sürece `HTTP(S)_PROXY` + boş `NO_PROXY`
+  verir ve KOD GİRMEDEN ÖNCE `window.isOnline === false` şartı arar; ölçülemezse ya da true ise hiçbir kod girilmez
+  (ÖLÇÜLEMEDİ). Electron 27'nin Node'u `HTTPS_PROXY`'yi kendiliğinden uygulamaz; ana sürecin ağa çıkıp çıkmadığı
+  `--inspect` ile ÖLÇÜLÜR (`anaSurecAg` rapor alanı), varsayılmaz.

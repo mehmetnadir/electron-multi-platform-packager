@@ -370,7 +370,8 @@ class AktivasyonTest(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.d = tempfile.mkdtemp()
-        self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log")}
+        self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log", "ana_surec_ag_olc")}
+        kabul.ana_surec_ag_olc = lambda *a, **k: "kapali:ECONNREFUSED"
         self._uyku, self._saat = kabul.time.sleep, kabul.time.time
         self.t = [1000.0]
         kabul.time.time = lambda: self.t[0]
@@ -507,6 +508,12 @@ class AktivasyonTest(unittest.TestCase):
 
     def test_uygulama_olu_proxy_ile_acilir(self):
         self.assertIn("--proxy-server=http://127.0.0.1:9", kabul.AKT_PROXY_ARGV)
+        env = kabul.akt_ortami({"PATH": "x", "NO_PROXY": "*"}, r"D:\kabul\p")
+        self.assertEqual(env["APPDATA"], r"D:\kabul\p")
+        self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:9")
+        self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:9")
+        self.assertEqual(env["NO_PROXY"], "")
+        self.assertEqual(env["PATH"], "x")
 
 
 if __name__ == "__main__":
