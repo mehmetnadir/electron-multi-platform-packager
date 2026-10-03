@@ -71,6 +71,8 @@ const { spawnSync } = require('child_process');
 const SET_KABUK = require('../src/packaging/set-kabuk');
 // Kanal Ş işaretinin/tehlike ölçütünün TEK kaynağı — kapı kendi kopyasını tutmaz.
 const ICERIK = require('../src/packaging/icerik-guncelleme');
+// Kök menü (ImWin32.dll) çözümü — çalışma anı modülü, yalnız stdlib (tembel require).
+const IG_RUNTIME = require('../src/runtime/icerik-guncelleme');
 
 // ---------------------------------------------------------------------------
 // 0. Sonuç modeli
@@ -1191,8 +1193,125 @@ function setHaritasiCoz(metin) {
  */
 const kabukSizintilari = SET_KABUK.kabukSizintilari;
 
+// --- TEK-MOTOR düzeni (index üreteci, 02.10) -------------------------------
+// Aktivasyonlu setler TEK kitap motoruyla kurulur: kökte `bookN/` YOK; kitaplar
+// `assets/<kapak ID>/` altında, kök menü (`classlibraries/ImWin32.dll`) her kapağı
+// listeler. Üyelik `bookN` ile değil MENÜ ile tanımlıdır → `kitapDizinleri[]` boş
+// OLMAK ZORUNDA. Bu düzende `assets/` kitap içeriğidir: bookN gibi set kanalının
+// KAPSAMI DIŞINDA kalır (kitabın kendi kanalı günceller), "bilinmeyen dal" değildir.
+// Aynı şekilde kök `classlibraries/` (menü) K kanalının malıdır.
+const TEK_MOTOR_ISARET_ADI = 'empp-uretec.json';
+const TEK_MOTOR_MENU = 'classlibraries/ImWin32.dll';
+const TEK_MOTOR_ICERIK_DIZINI = 'assets';
+// Tek-motorda set kanalı DIŞINDA kalan, K (kitap içerik) kanalının sahibi olduğu kök dizinler:
+// kitaplar (`assets/`) + kök menü (`classlibraries/ImWin32.dll`, kapak listesi/sürümler).
+const TEK_MOTOR_K_DIZINLERI = Object.freeze(['assets', 'classlibraries']);
+const TEK_MOTOR_ICERIK_SONEKI = 'data/BookContent.xml';
+const TEK_MOTOR_IMKEYS_ADI = 'imKeys.dll';
+
+/** Etiketten öznitelik. Saf. */
+function etiketOznitelik(etiket, ad) {
+  const m = new RegExp(`\\s${ad}="([^"]*)"`).exec(String(etiket || ''));
+  return m ? m[1] : null;
+}
+
+/**
+ * Tek-motor kanıtını TOPLAR. Saf (I/O yok): ağaç yolları + menü baytları + işaret metni.
+ * Okunamayan her şey `null`/`false` kalır — tahmin yok.
+ * @param {{yollar:string[]|null, menuHam?:Buffer|string|null, isaretMetin?:string|null}} g
+ */
+function tekMotorKanitiTopla(g = {}) {
+  const yollar = Array.isArray(g.yollar) ? g.yollar.map((y) => String(y).replace(/\\/g, '/')) : [];
+  const var_ = new Set(yollar);
+  const bookDizinleri = [...new Set(yollar.map((y) => y.split('/'))
+    .filter((p) => p.length > 1 && SET_KABUK.KITAP_DIZIN_DESENI.test(p[0])).map((p) => p[0]))].sort();
+  let isaret = null;
+  if (typeof g.isaretMetin === 'string') {
+    try { isaret = JSON.parse(g.isaretMetin); } catch (e) { isaret = { cozulemedi: true }; }
+  }
+  const k = {
+    bookDizinleri, isaret, menuVar: var_.has(TEK_MOTOR_MENU), menuCozuldu: false,
+    ana: null, kapaklar: [],
+  };
+  if (g.menuHam == null) return k;
+  let xml = null;
+  try { xml = IG_RUNTIME.menuCoz(g.menuHam); } catch (e) { xml = null; }
+  if (!xml) return k;
+  k.menuCozuldu = true;
+  const ana = (String(xml).match(/<main\b[^>]*>/) || [''])[0];
+  k.ana = { activation: etiketOznitelik(ana, 'activation'), key: etiketOznitelik(ana, 'key') };
+  for (const c of IG_RUNTIME.kapaklar(xml)) {
+    const id = c.ID == null ? '' : String(c.ID);
+    const xs = etiketOznitelik(c.etiket, 'xmlSource');
+    const icerikYolu = xs ? xs.replace(/^\/+/, '')
+      : `${TEK_MOTOR_ICERIK_DIZINI}/${id}/${TEK_MOTOR_ICERIK_SONEKI}`;
+    const imKeysYolu = icerikYolu.endsWith(TEK_MOTOR_ICERIK_SONEKI)
+      ? icerikYolu.slice(0, -TEK_MOTOR_ICERIK_SONEKI.length) + TEK_MOTOR_IMKEYS_ADI : null;
+    k.kapaklar.push({
+      id, icerikYolu, icerikVar: var_.has(icerikYolu),
+      imKeysYolu, imKeysVar: imKeysYolu ? var_.has(imKeysYolu) : false,
+    });
+  }
+  return k;
+}
+
+/**
+ * Bu ağaç TEK-MOTOR mu? Üretecin yazdığı işaret (`empp-uretec.json` → `duzen`) VARSA o
+ * karar verir; yoksa (işaret pakete girmemiş) YAPISAL: kökte bookN yok + çözülmüş kök menüde
+ * ≥2 kapak. Saf.
+ */
+function tekMotorMu(k) {
+  if (!k) return false;
+  const d = k.isaret && typeof k.isaret.duzen === 'string' ? k.isaret.duzen : null;
+  if (d === 'tek-motor') return true;
+  if (d) return false;
+  return !k.bookDizinleri.length && k.menuCozuldu && k.kapaklar.length >= 2;
+}
+
+/**
+ * Tek-motor sözleşmesi kusurları. Saf. `{kusur, olculemedi}`.
+ *   · kökte bookN YOK · tek kitap motoru kökte (menü çözülmüş)
+ *   · her kapağın içeriği üretecin koyduğu yerde (`xmlSource`, yoksa assets/<ID>/data/BookContent.xml)
+ *   · activation="true" ⇒ main.key boş (kod ilk açılışta sorulur) VE ilk kapağın imKeys.dll'i yazılı
+ *   · activation true/false dışı bir değer = tutarsız
+ */
+function tekMotorKusurlari(k) {
+  const kusur = [];
+  const olculemedi = [];
+  if (k.bookDizinleri.length) {
+    kusur.push(`tek-motor ama kökte bookN dizini var (${k.bookDizinleri.join(', ')}) — iki düzen karışmış`);
+  }
+  if (!k.menuVar && !k.menuCozuldu) {
+    kusur.push(`kitap motoru menüsü YOK (${TEK_MOTOR_MENU}) — kapak listesi/üyelik tanımsız`);
+    return { kusur, olculemedi };
+  }
+  if (!k.menuCozuldu) {
+    olculemedi.push(`kök menü (${TEK_MOTOR_MENU}) çözülemedi — kapak/aktivasyon ÖLÇÜLEMEDİ`);
+    return { kusur, olculemedi };
+  }
+  if (!k.kapaklar.length) kusur.push('kök menüde hiç kapak yok — tek-motor setinde kitap yok');
+  const eksik = k.kapaklar.filter((c) => !c.icerikVar);
+  if (eksik.length) {
+    const ilk = eksik.slice(0, 6).map((c) => `${c.id} (${c.icerikYolu})`).join(', ');
+    kusur.push(`kitap içeriği EKSİK: ${eksik.length}/${k.kapaklar.length} kapağın ` +
+      `BookContent.xml'i pakette yok — ${ilk}${eksik.length > 6 ? ' …' : ''}`);
+  }
+  const act = k.ana ? k.ana.activation : null;
+  if (act !== 'true' && act !== 'false') {
+    kusur.push(`main.activation "${act}" — true/false değil`);
+  } else if (act === 'true') {
+    if (k.ana.key) kusur.push('main.activation="true" ama main.key dolu — kod sorulmaz, anahtar menüye gömülmüş');
+    const ilk = k.kapaklar[0];
+    if (ilk && !ilk.imKeysVar) {
+      kusur.push(`main.activation="true" ama ilk kapağın ${ilk.imKeysYolu || TEK_MOTOR_IMKEYS_ADI} ` +
+        'yazılı değil — aktivasyon diyaloğu açılışta düşer');
+    }
+  }
+  return { kusur, olculemedi };
+}
+
 /** `empp-set.json` gövdesinin tutarlılık kusurları. Saf. Boş dizi = tutarlı. */
-function setHaritasiKusurlari(harita) {
+function setHaritasiKusurlari(harita, secenek = {}) {
   const kusur = [];
   const h = harita && typeof harita === 'object' ? harita : {};
 
@@ -1212,7 +1331,13 @@ function setHaritasiKusurlari(harita) {
   if (!Array.isArray(h.kabukDosyalari) || !h.kabukDosyalari.length) {
     kusur.push('kabukDosyalari[] boş — güncellenecek kabuk envanteri yok');
   }
-  if (!Array.isArray(h.kitapDizinleri) || !h.kitapDizinleri.length) {
+  if (secenek.tekMotor) {
+    // Tek-motor: üyelik bookN değil MENÜ — dizin listesi boş OLMALI (dolu = iki düzen karışmış).
+    if (Array.isArray(h.kitapDizinleri) && h.kitapDizinleri.length) {
+      kusur.push(`tek-motor düzeninde kitapDizinleri[] dolu (${h.kitapDizinleri.join(', ')}) — ` +
+        'üyelik menüyle tanımlı, bookN dizini olmamalı');
+    }
+  } else if (!Array.isArray(h.kitapDizinleri) || !h.kitapDizinleri.length) {
     kusur.push('kitapDizinleri[] boş — üyelik listesi yok');
   }
   return kusur;
@@ -1249,6 +1374,7 @@ function maddeSetGuncelleme(p = {}) {
   const olculemedi = [];
   const gecen = [];
   const nerede = p.setNerede ? ` (${p.setNerede})` : '';
+  const tekMotor = tekMotorMu(p.tekMotor);
 
   // --- A) empp-set.json -----------------------------------------------------
   let harita = null;
@@ -1264,12 +1390,13 @@ function maddeSetGuncelleme(p = {}) {
       fail.push(`A) ${c.sebep}${nerede}`);
     } else {
       harita = c.harita;
-      const kusur = setHaritasiKusurlari(harita);
+      const kusur = setHaritasiKusurlari(harita, { tekMotor });
       if (kusur.length) fail.push(`A) ${SET_DOSYA_ADI} tutarsız${nerede}: ${kusur.join(' · ')}`);
       else {
         gecen.push(`A) ${SET_DOSYA_ADI} tutarlı${nerede}: setKimligi="${harita.setKimligi}", ` +
           `taban=${harita.taban}, ${harita.kabukDosyalari.length} kabuk dosyası, ` +
-          `${harita.kitapDizinleri.length} kitap üye`);
+          (tekMotor ? `tek-motor (üyelik menüde, ${p.tekMotor.kapaklar.length} kapak)`
+            : `${harita.kitapDizinleri.length} kitap üye`));
       }
     }
   }
@@ -1337,12 +1464,20 @@ function maddeSetGuncelleme(p = {}) {
     if (!Array.isArray(harita.kapsamDisiDallar)) {
       olculemedi.push('C2) kapsamDisiDallar[] alanı yok (şema < 2) — kabuk tanımının ' +
         'bu ağacı kapsayıp kapsamadığı ÖLÇÜLEMEDİ');
-    } else if (harita.kapsamDisiDallar.length) {
-      fail.push(`C2) KABUK TANIMI BU AĞACI KAPSAMIYOR — beyaz listede olmayan kök ` +
-        `dizin(ler): ${harita.kapsamDisiDallar.join(', ')}. O dizinlerdeki dosyalar ` +
-        `güncelleme kanalına HİÇ girmez; tanım (set-kabuk.js) güncellenmeli`);
     } else {
-      gecen.push('C2) kapsam tam — kabuk tanımı dışında kalan kök dizin yok');
+      // Tek-motor'da `assets/` kitap içeriğidir (bookN gibi kanal kapsamı DIŞI, bilerek);
+      // geri kalan her bilinmeyen kök dizin yine FAIL — gevşetme yalnız bu tek ad için.
+      const dis = harita.kapsamDisiDallar.filter((d) => !(tekMotor && TEK_MOTOR_K_DIZINLERI.includes(d)));
+      if (dis.length) {
+        fail.push(`C2) KABUK TANIMI BU AĞACI KAPSAMIYOR — beyaz listede olmayan kök ` +
+          `dizin(ler): ${dis.join(', ')}. O dizinlerdeki dosyalar ` +
+          `güncelleme kanalına HİÇ girmez; tanım (set-kabuk.js) güncellenmeli`);
+      } else if (tekMotor && harita.kapsamDisiDallar.length) {
+        gecen.push(`C2) kapsam tam — tek-motor: ${harita.kapsamDisiDallar.join(', ')} K kanalının ` +
+          '(kitap içeriği + kök menü; set kanalı kapsamı dışı, bilerek); başka bilinmeyen kök dizin yok');
+      } else {
+        gecen.push('C2) kapsam tam — kabuk tanımı dışında kalan kök dizin yok');
+      }
     }
 
     // C3 — üreticinin tanımı ile kapının tanımı aynı mı?
@@ -1355,6 +1490,23 @@ function maddeSetGuncelleme(p = {}) {
         `kabuğu ölçmüyor; kapının GEÇTİ'si bu paket için geçersizdir`);
     } else {
       gecen.push(`C3) tanım aynı (${SET_KABUK_IMZASI})`);
+    }
+  }
+
+  // --- E) tek-motor sözleşmesi (yalnız tek-motor düzeninde) -----------------
+  if (p.tekMotor && p.tekMotor.isaret && p.tekMotor.isaret.duzen === 'tek-motor' &&
+      !tekMotor) {
+    fail.push('E) işaret tek-motor diyor ama ağaç tek-motor değil');
+  }
+  if (tekMotor) {
+    const e = tekMotorKusurlari(p.tekMotor);
+    for (const x of e.kusur) fail.push(`E) ${x}`);
+    for (const x of e.olculemedi) olculemedi.push(`E) ${x}`);
+    if (!e.kusur.length && !e.olculemedi.length) {
+      const imk = p.tekMotor.kapaklar.filter((c) => c.imKeysVar).length;
+      gecen.push(`E) tek-motor sözleşmesi tamam: bookN yok, ${p.tekMotor.kapaklar.length}/` +
+        `${p.tekMotor.kapaklar.length} kapağın içeriği yerinde, main.activation=` +
+        `"${p.tekMotor.ana.activation}" key="${p.tekMotor.ana.key || ''}", imKeys ${imk} kapakta`);
     }
   }
 
@@ -1682,6 +1834,7 @@ function agactanTopla(kok, secenek = {}) {
     setNerede: null,
     setModulYollari: null,
     setModulIcerik: null,
+    tekMotor: null,
     sozlesme: null,
     asarOkundu: false,
     // Uygulama içeriğinin KABI: 'app.asar' (asar açık) | 'resources/app' (asar kapalı)
@@ -1823,6 +1976,16 @@ function agactanTopla(kok, secenek = {}) {
           sonuc.setModulIcerik = mb ? mb.toString('utf8') : null;
         }
 
+        {
+          const menuG = girdiler.find((g) => g.yol === TEK_MOTOR_MENU);
+          const isaretG = girdiler.find((g) => g.yol === TEK_MOTOR_ISARET_ADI);
+          const mb = menuG ? asarGirdiOku(fd, coz.veriOfseti, menuG, 8 * 1024 * 1024) : null;
+          const ib = isaretG ? asarGirdiOku(fd, coz.veriOfseti, isaretG, 64 * 1024) : null;
+          sonuc.tekMotor = tekMotorKanitiTopla({
+            yollar: girdiler.map((g) => g.yol), menuHam: mb,
+            isaretMetin: ib ? ib.toString('utf8') : null,
+          });
+        }
         const kokler = kitapKokleri(girdiler.map((g) => g.yol));
         const isaretli = [];
         for (const k of kokler) {
@@ -1928,6 +2091,14 @@ function agactanTopla(kok, secenek = {}) {
       } catch (e) { sonuc.setModulIcerik = null; }
     }
     sonuc.sozlesme = sozlesmeKanitiTopla(acikApp, yollar);
+    {
+      const oku = (g) => { try { return fs.readFileSync(path.join(acikApp, ...g.split('/'))); } catch (e) { return null; } };
+      const ib = yollar.includes(TEK_MOTOR_ISARET_ADI) ? oku(TEK_MOTOR_ISARET_ADI) : null;
+      sonuc.tekMotor = tekMotorKanitiTopla({
+        yollar, menuHam: yollar.includes(TEK_MOTOR_MENU) ? oku(TEK_MOTOR_MENU) : null,
+        isaretMetin: ib ? ib.toString('utf8') : null,
+      });
+    }
     const kokler = kitapKokleri(yollar);
     const isaretli = [];
     for (const k of kokler) {
@@ -2126,7 +2297,8 @@ function calis(argv, yazici) {
     anaJsYolu: toplam ? toplam.anaJsYolu : null,
     anaJsDizini: toplam ? toplam.anaJsDizini : null,
     setModulYollari: toplam ? toplam.setModulYollari : null,
-    setModulIcerik: toplam ? toplam.setModulIcerik : null
+    setModulIcerik: toplam ? toplam.setModulIcerik : null,
+    tekMotor: toplam ? toplam.tekMotor : null
   }));
   const sozlesmeGirdi = {
     asarOkundu: !!(toplam && toplam.asarOkundu),
@@ -2181,6 +2353,7 @@ module.exports = {
   SET_DOSYA_ADI, SET_MODUL_ADI, ISARET_SET_GUNCELLEME,
   SET_KABUK, SET_KABUK_DIZINLERI, SET_KABUK_IMZASI,
   yolDizini, setHaritasiCoz, kabukSizintilari, setHaritasiKusurlari, maddeSetGuncelleme,
+  tekMotorKanitiTopla, tekMotorMu, tekMotorKusurlari,
   ed25519AcikAnahtarMi, sozlesmeKanitiTopla, maddeIcerikKanali, maddeKurulumDiziniYazma,
   yedizBul, yedizListeCoz, yukSec, arsivYolunuYerelYap, CIKARIM_DESENLERI, cikar, argumanCoz,
   agactanTopla, maddeAsar, calis
