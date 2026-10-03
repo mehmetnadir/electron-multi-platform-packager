@@ -371,7 +371,8 @@ class AktivasyonTest(unittest.TestCase):
         import tempfile
         self.d = tempfile.mkdtemp()
         self._yedek = {k: getattr(kabul, k) for k in ("uygulama_ac", "oldur", "gonder", "log", "ana_surec_ag_olc",
-                                                    "ana_surec_profil_olc")}
+                                                    "ana_surec_profil_olc", "ana_surec_pencere_goster")}
+        kabul.ana_surec_pencere_goster = lambda *a, **k: {"pencere": 1, "once": [{"gorunur": True, "kucuk": False}]}
         kabul.ana_surec_ag_olc = lambda *a, **k: "kapali:ECONNREFUSED"
         self.userdata = {"userData": self.d, "work": os.path.join(self.d, "work")}
         kabul.ana_surec_profil_olc = lambda *a, **k: self.userdata
@@ -444,6 +445,26 @@ class AktivasyonTest(unittest.TestCase):
         self.assertEqual(kabul.aktivasyon_ozeti(A), ("GECTI", None))
         self.assertEqual(self.ekranlar, [f"45449-imzasiz-x-akt-{a}" for a in "abcde"])
         self.assertIs(r["aktivasyon"]["online"], False)
+
+    def test_adim_olcum_ozeti_rapora_yazilir_raf_sayi(self):
+        r, c = self.kos(tek_motor=True)
+        A = r["aktivasyon"]["adimlar"]
+        self.assertTrue(A["a"]["olcum"]["diyalog"])
+        self.assertEqual(A["c"]["olcum"]["raf"], 2)
+        self.assertIs(A["c"]["olcum"]["online"], False)
+        self.assertEqual(kabul.olcum_ozeti({"raf": [{"x": 1}], "hata": False}), {"hata": False, "raf": 1})
+
+    def test_gizli_pencere_ekran_oncesi_geri_getirilir_ve_raporlanir(self):
+        kabul.ana_surec_pencere_goster = lambda *a, **k: {"pencere": 1, "once": [{"gorunur": False, "kucuk": False}]}
+        r, c = self.kos()
+        self.assertEqual(r["aktivasyon"]["adimlar"]["a"]["pencere"]["once"][0]["gorunur"], False)
+        self.assertTrue(kabul.pencere_sorunlu_mu({"once": [{"gorunur": True, "kucuk": True}]}))
+        self.assertFalse(kabul.pencere_sorunlu_mu({"once": [{"gorunur": True, "kucuk": False}]}))
+        self.assertFalse(kabul.pencere_sorunlu_mu(None))
+
+    def test_pencere_normalse_rapora_pencere_yazilmaz(self):
+        r, c = self.kos()
+        self.assertNotIn("pencere", r["aktivasyon"]["adimlar"]["a"])
 
     def test_kod_hicbir_ciktiya_yazilmaz(self):
         r, c = self.kos()

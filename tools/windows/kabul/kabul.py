@@ -617,7 +617,7 @@ JS_AKT = r"""
    .map(e=>(e.innerText||'').trim()).filter(Boolean).join(' | ').slice(0,120);
  return JSON.stringify({diyalog:d||(!!inp&&/aktivasyon/i.test(t)),girdi:g,hata:/aktivasyon kodu hatal/i.test(t),
    kitapta:document.querySelectorAll('canvas.lower-canvas').length>0,raf:raf.slice(0,10),snack:sn||null,
-   online:(typeof window.isOnline==='boolean')?window.isOnline:null});})()"""
+   online:(typeof window.isOnline==='boolean')?window.isOnline:null,gorunur:document.visibilityState});})()"""
 
 # Cevrimdisi kara delik: Symantec Endpoint Protection kasada Windows Guvenlik Duvari kurallarini
 # UYGULATMIYOR (olculdu 03.10: curl'e blok kurali kondu, baglanti yine 302 dondu; profil
@@ -685,6 +685,27 @@ def ana_surec_profil_olc(port=AKT_INSPECT_PORT):
         return None
     return o if isinstance(o, dict) and o.get("userData") else None
 
+JS_ANA_PENCERE = ("(()=>{try{const {BrowserWindow}=(process.mainModule||module).require('electron');"
+                  "const w=BrowserWindow.getAllWindows();"
+                  "const once=w.map(x=>({gorunur:x.isVisible(),kucuk:x.isMinimized(),odak:x.isFocused()}));"
+                  "w.forEach(x=>{if(x.isMinimized())x.restore();if(!x.isVisible())x.show();});"
+                  "return JSON.stringify({pencere:w.length,once:once});}catch(e){return null;}})()")
+
+def ana_surec_pencere_goster(port=AKT_INSPECT_PORT):
+    """Kuru kosu 3 (03.10): uc ekran goruntusu de 120 sn'de dondu (Page.captureScreenshot cevapsiz),
+    gecerli koddan sonra diyalog kapanmadi (MUI cikis gecisi rAF ister) -> c KALDI; kod imKeys'te
+    VARDI (28/28 kabul). Kare uretmeyen pencere belirtisi: ana surecten gizli/kucuk pencere geri
+    getirilir ve onceki durum rapora yazilir. {'pencere':n,'once':[...]} | None."""
+    v = ana_surec_degerlendir(JS_ANA_PENCERE, port)
+    try:
+        return json.loads(v) if isinstance(v, str) else None
+    except ValueError:
+        return None
+
+def pencere_sorunlu_mu(durum):
+    """SAF: once-durumunda gizli ya da kucultulmus pencere var mi (None -> olculemedi = False)."""
+    return any((not w.get("gorunur")) or w.get("kucuk") for w in ((durum or {}).get("once") or []))
+
 def profil_yalitik_mi(olcum, profil):
     """SAF KARAR: userData (ve varsa WORK) temiz profilin ICINDE mi. Olculemezse False -> kod girilmez
     (onceki kosunun aktivasyon kaydi diyalogu gizler; olcum anlamsizlasir)."""
@@ -729,6 +750,14 @@ def akt_karar(adim, olcum, tek_kitap=False):
     if adim == "e": return "GECTI" if (not o.get("diyalog") and icerik) else "KALDI"
     return "KALDI"
 
+def olcum_ozeti(o):
+    """SAF: adimin teshis ozeti (rapora) — kod icermez; raf yalniz sayi."""
+    o = o or {}
+    r = {k: o.get(k) for k in ("diyalog", "hata", "kitapta", "online", "snack", "gorunur", "hataGoruldu")
+         if o.get(k) is not None}
+    r["raf"] = len(o.get("raf") or [])
+    return r
+
 def cevrimdisi_mi(olcum):
     """SAF KARAR: kod girmeden ONCE zorunlu — yalniz window.isOnline === False ise kod girilir.
     True ya da olculemedi (None) -> kod GIRILMEZ (gercek koltuk tuketilmesin)."""
@@ -760,6 +789,10 @@ def akt_kod_gir(c, girdi, kod):
     c.tus("Enter", "Enter", 13, text="\r")
 
 def akt_ekran(c, kimlik, adim, kayit):
+    p = ana_surec_pencere_goster()
+    if p is None or pencere_sorunlu_mu(p):
+        kayit["pencere"] = p if p is not None else "olculemedi"
+        if p is not None: time.sleep(1)
     try:
         ad = f"{kimlik}-akt-{adim}"; png = c.ekran(); gonder(ad, png); kayit["ekran"] = ad
     except Exception as e:
@@ -813,7 +846,8 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
 
     # a) kod istenir (set duzeyinde acilista da sorulabilir — o da GECTI, yer not edilir)
     o = gir(kitaplar[0] if kitaplar else None, acilis=True)
-    A["a"] = {"sonuc": akt_karar("a", o), "yer": "acilis" if ilk.get("diyalog") else "kitap"}
+    A["a"] = {"sonuc": akt_karar("a", o), "yer": "acilis" if ilk.get("diyalog") else "kitap",
+              "olcum": olcum_ozeti(o)}
     akt_ekran(c, kimlik, "a", A["a"])
     if A["a"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
     # KOD GIRMEDEN ONCE: cevrimdisi olmali. Degilse hicbir kod (gecersiz bile) GIRILMEZ.
@@ -830,13 +864,14 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
         if b.get("snack"): A.setdefault("b", {})["mesaj"] = b["snack"]
         time.sleep(0.15)
     A.setdefault("b", {})["sonuc"] = akt_karar("b", dict(b, diyalog=(c.jsj(JS_AKT) or {}).get("diyalog")))
+    A["b"]["olcum"] = olcum_ozeti(b)
     if "ekran" not in A["b"]: akt_ekran(c, kimlik, "b", A["b"])
     # c) gecerli kod (girdi maskeli; ekran diyalog kapandiktan SONRA alinir)
     g = (c.jsj(JS_AKT) or {}).get("girdi") or o["girdi"]
     akt_kod_gir(c, g, kod); kod = None
     time.sleep(3)
     o = akt_durum_bekle(c, tavan=45)
-    A["c"] = {"sonuc": akt_karar("c", o)}
+    A["c"] = {"sonuc": akt_karar("c", o), "olcum": olcum_ozeti(o)}
     akt_ekran(c, kimlik, "c", A["c"])
     if A["c"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
     # d) menuye don, baska kitap -> kod istenmez
@@ -860,7 +895,7 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     ilk = akt_baglanti_bekle(c)
     kitaplar = baglanti_ayir(c.jsj(JS_MENU) or [], c.jsj(JS_BAGLANTILAR))[0] or kitaplar
     o = gir(kitaplar[0] if kitaplar else None, acilis=True)
-    A["e"] = {"sonuc": akt_karar("e", o)}
+    A["e"] = {"sonuc": akt_karar("e", o), "olcum": olcum_ozeti(o)}
     akt_ekran(c, kimlik, "e", A["e"])
     return c, menuUrl, kitaplar
 
