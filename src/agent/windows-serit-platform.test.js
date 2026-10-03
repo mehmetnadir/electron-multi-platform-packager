@@ -58,7 +58,7 @@ test('macOS varsayılanları değişmedi: bash betiği, osslsigncode, yayincilik
   assert.equal(c.winImzaIstekDizini, '');
   assert.match(c.winImzaYuvaKoku, /Impark[\\/]Storage7[\\/]/);
   assert.deepEqual(c.winImzaTetik, ['yayincilikadm', 'book', 'exe-create', '66902', '--wait', '0']);
-  assert.deepEqual(W.imzaEnv('/w', c), { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: '/w/imzali' });
+  assert.deepEqual(W.imzaEnv('/w', c), { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: require('path').join('/w', 'imzali') });
 });
 
 test('win32 tetik ve imzaEnv: tetik İSTEK dosyası olur (yayincilikadm çağrılmaz), env istek dizinini taşır', () => {
@@ -71,7 +71,7 @@ test('win32 tetik ve imzaEnv: tetik İSTEK dosyası olur (yayincilikadm çağrı
   assert.equal(ist.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(d, ist[0]), 'utf8')).exe, 'a.exe');
   assert.match(loglar.join('\n'), /İSTEK olarak bırakıldı/);
-  assert.deepEqual(W.imzaEnv('/w', cfg), { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: '/w/imzali', EMPP_IMZA_ISTEK_DIZINI: d, EMPP_IMZA_YUVA_KOKU: 'Y' });
+  assert.deepEqual(W.imzaEnv('/w', cfg), { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: path.join('/w', 'imzali'), EMPP_IMZA_ISTEK_DIZINI: d, EMPP_IMZA_YUVA_KOKU: 'Y' });
 });
 
 test('win32 dosya kilidi: ikinci alma 75; sahibi ölmüş kilit devralınır; bırakınca yeniden alınır', async () => {
