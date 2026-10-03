@@ -141,12 +141,25 @@ function kokEnvanteri(kok, asarMi) {
   let setMenu = null;
   const sm = oku('set-menu.json');
   if (sm) { try { setMenu = JSON.parse(sm); } catch (_) { setMenu = null; } }
+  // Menüde çizilen LİNK kartları (Web-Z `type:'link'`, set-listesi `linkN`) set-menu.json
+  // `kitaplar`ında YOKTUR (webz-tema-kabuk tanımdan süzer) ama menüde kart olarak görünür.
+  let linkKartSayisi = 0;
+  const st = oku('config/settings.json');
+  if (st) {
+    try {
+      const b = (JSON.parse(st) || {}).books;
+      if (b && typeof b === 'object') {
+        linkKartSayisi = Object.values(b).filter((k) => k && k.type === 'link').length;
+      }
+    } catch (_) { linkKartSayisi = 0; }
+  }
   const indexHtml = oku('index.html') || '';
   const kokAppConfig = liste.includes('app.config.js');
   return {
     kitapDizinleri,
     setMi: kitapDizinleri.length > 0,
     setMenu,
+    linkKartSayisi,
     indexHtml,
     kokAppConfig,
     setBookIsareti: liste.includes('SET_BOOK.txt'),

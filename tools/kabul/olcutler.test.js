@@ -369,3 +369,11 @@ test('asamaKarari aktivasyon: hata ekranı metni artık diyalog SAYILMAZ → say
   const iyiOlcum = { ...hataOlcum, gorunurMetin: AKT_METIN };
   assert.notEqual(O.asamaKarari(iyiOlcum, b).durum, 'RED');
 });
+
+test('beklenenKartSayisi: link kartları (settings.json type=link) beklentiye eklenir (45504/45551)', () => {
+  const setMenu = { kitaplar: [{ klasor: 'book1' }, { klasor: 'book2' }, { klasor: 'book3' }, { klasor: 'book4' }] };
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1', 'book2', 'book3', 'book4'], setMenu, linkKart: 1 }), 5);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1', 'book2'], linkKart: 2 }), 4);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1'], setMenu, linkKart: 1, elle: 3 }), 3);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: ['book1', 'book2'], setMenu: null }), 2);
+});

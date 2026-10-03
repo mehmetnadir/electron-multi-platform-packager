@@ -339,6 +339,7 @@ async function calis(argv, yazici) {
       const envanter = kokEnvanteri(acilis.kok, acilis.asar);
       const beklenenKart = O.beklenenKartSayisi({
         kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu, elle: s.kitapSayisi,
+        linkKart: envanter.linkKartSayisi,
       });
       const menuDisi = O.menudeOlmayanKitapDizinleri({
         kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu,

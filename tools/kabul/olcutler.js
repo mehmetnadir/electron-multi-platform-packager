@@ -137,11 +137,14 @@ function okuyucuBasligiMi(baslik) {
  * menüsü (set-menu.json + config/settings.json) onu bilinçli listelemiyordu; kabul 5 kart
  * bekleyip 4'ü RED saydı. Menü dışı dizin RED değil, `menudeOlmayanKitapDizinleri` notudur.
  *
- * @param {{kitapDizinleri?: string[], setMenu?: object|null, elle?: number|null}} p
+ * LİNK kartları (`config/settings.json` books[].type='link', 45504/45551 'Worksheets' kısayolu,
+ * 03.10) tanımda yoktur ama menüde çizilir → `linkKart` beklentiye eklenir.
+ * @param {{kitapDizinleri?: string[], setMenu?: object|null, elle?: number|null, linkKart?: number}} p
  * @returns {number}
  */
-function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null } = {}) {
+function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null, linkKart = 0 } = {}) {
   if (Number.isInteger(elle) && elle >= 0) return elle;
+  const lk = Number.isInteger(linkKart) && linkKart > 0 ? linkKart : 0;
   const kitaplar = setMenu && Array.isArray(setMenu.kitaplar) ? setMenu.kitaplar : null;
   if (kitaplar && kitaplar.length) {
     const gruplar = new Set();
@@ -150,9 +153,9 @@ function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null }
       const g = String((k && k.grup) || '').trim();
       if (g) gruplar.add(g); else grupsuz += 1;
     }
-    return gruplar.size + grupsuz;
+    return gruplar.size + grupsuz + lk;
   }
-  return kitapDizinleri.length;
+  return kitapDizinleri.length + lk;
 }
 
 /**
