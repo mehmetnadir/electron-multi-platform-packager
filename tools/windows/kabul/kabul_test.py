@@ -390,9 +390,11 @@ class AktivasyonTest(unittest.TestCase):
     class SahteUygulama:
         KITAPLAR = [{"id": "book1", "x": 100, "y": 100, "varyant": "B", "ad": "B1"},
                     {"id": "book2", "x": 300, "y": 100, "varyant": "B", "ad": "B2"}]
-        def __init__(self, profil, kod, online=False, gecerliyi_reddet=False):
-            self.p, self.kod, self.online, self.red = profil, kod, online, gecerliyi_reddet
-            self.sayfa = "menu"; self.diyalog = False; self.hata = 0; self.yazilan = ""
+        RAF = [{"id": "kapak", "x": 400, "y": 400}, {"id": "kapak", "x": 700, "y": 400}]
+        def __init__(self, profil, kod, online=False, gecerliyi_reddet=False, tek_motor=False):
+            self.p, self.kod, self.online, self.red, self.tek = profil, kod, online, gecerliyi_reddet, tek_motor
+            self.sayfa = "raf" if tek_motor else "menu"; self.hata = 0; self.yazilan = ""
+            self.diyalog = tek_motor and not profil.aktif; self.girilen = []
         def cmd(self, *a, **k): return {}
         def ekran(self): return b"png"
         def kapat(self): pass
@@ -401,26 +403,32 @@ class AktivasyonTest(unittest.TestCase):
             if e == "location.href": return "file:///menu/index.html"
             return None
         def jsj(self, e):
-            if e is kabul.JS_MENU: return self.KITAPLAR if self.sayfa == "menu" else None
+            if e is kabul.JS_MENU: return self.KITAPLAR if (self.sayfa == "menu" and not self.tek) else None
             if e is kabul.JS_AKT:
                 h = self.hata > 0
                 if self.hata: self.hata -= 1
                 return {"diyalog": self.diyalog, "girdi": {"x": 5, "y": 5} if self.diyalog else None,
-                        "hata": h, "kitapta": self.sayfa == "kitap", "online": self.online}
+                        "hata": h, "kitapta": self.sayfa == "kitap", "online": self.online,
+                        "raf": self.RAF if (self.sayfa == "raf" and not self.diyalog) else []}
             return None
         def tikla(self, x, y):
             if self.sayfa == "menu" and any((k["x"], k["y"]) == (x, y) for k in self.KITAPLAR):
                 self.sayfa = "kitap"; self.diyalog = not self.p.aktif
+            if self.sayfa == "raf" and not self.diyalog and any((k["x"], k["y"]) == (x, y) for k in self.RAF):
+                self.sayfa = "kitap"
         def tus(self, key, code, vk, modifiers=0, text=None):
             if key == "a" and modifiers == 2: self.yazilan = ""
             if key == "Enter" and self.diyalog:
+                self.girilen.append(self.yazilan)
                 if self.yazilan == self.kod and not self.red: self.p.aktif = True; self.diyalog = False
                 else: self.hata = 2
         def yaz(self, m): self.yazilan += m
 
     def kos(self, **kw):
-        profil = self.Profil()
-        kabul.uygulama_ac = lambda ana, dizin, prof: (self.SahteUygulama(profil, self.KOD, **kw), {}, 9)
+        profil = self.Profil(); self.uygulamalar = []
+        def ac(ana, dizin, prof):
+            u = self.SahteUygulama(profil, self.KOD, **kw); self.uygulamalar.append(u); return (u, {}, 9)
+        kabul.uygulama_ac = ac
         r = {}
         c, menuUrl, kitaplar = kabul.aktivasyon_senaryosu(r, "45449-imzasiz-x", "app.exe", "dizin", self.KOD, self.d)
         return r, c
@@ -474,6 +482,31 @@ class AktivasyonTest(unittest.TestCase):
         self.assertIn("dir=out", ekle); self.assertIn("action=block", ekle)
         self.assertIn(r"program=C:\P\Impact 12\Impact.exe", ekle)
         self.assertEqual(kaldir[-1], "name=" + ad)
+
+
+    def test_cevrimici_ise_hicbir_kod_girilmez(self):
+        r, c = self.kos(online=True)
+        self.assertEqual(r["aktivasyon"]["adimlar"]["a"]["sonuc"], "GECTI")
+        self.assertIn("kodGirilmedi", r["aktivasyon"])
+        self.assertEqual([g for u in self.uygulamalar for g in u.girilen], [], "cevrimiciyken kod (gecersiz bile) girilmez")
+        self.assertNotIn("b", r["aktivasyon"]["adimlar"])
+
+    def test_online_olculemezse_de_kod_girilmez(self):
+        r, c = self.kos(online=None)
+        self.assertIn("kodGirilmedi", r["aktivasyon"])
+        self.assertFalse(kabul.cevrimdisi_mi({"online": None}))
+        self.assertTrue(kabul.cevrimdisi_mi({"online": False}))
+
+    def test_tek_motor_duzen_diyalog_acilista_raf_sonra_a_e_gecti(self):
+        r, c = self.kos(tek_motor=True)
+        A = r["aktivasyon"]["adimlar"]
+        self.assertEqual(r["aktivasyon"]["duzen"], "tek-motor")
+        self.assertEqual(A["a"]["yer"], "acilis")
+        self.assertEqual({k: A[k]["sonuc"] for k in "abcde"}, dict.fromkeys("abcde", "GECTI"))
+        self.assertEqual(A["d"]["kitap"], "raf-kapak")
+
+    def test_uygulama_olu_proxy_ile_acilir(self):
+        self.assertIn("--proxy-server=http://127.0.0.1:9", kabul.AKT_PROXY_ARGV)
 
 
 if __name__ == "__main__":

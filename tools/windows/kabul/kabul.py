@@ -579,9 +579,21 @@ JS_AKT = r"""
    .some(e=>/aktivasyon/i.test(e.innerText||''));
  const inp=[...document.querySelectorAll('input[type=password]')].find(e=>{const q=e.getBoundingClientRect();return q.width>0&&q.height>0;});
  let g=null; if(inp){const q=inp.getBoundingClientRect(); g={x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)};}
+ const H=window.innerHeight;
+ const raf=[...document.images].filter(i=>{const q=i.getBoundingClientRect();
+   return i.naturalWidth>0&&q.width>=120&&q.height>=150&&q.y>=0&&q.y<H;})
+   .map(i=>{const q=i.getBoundingClientRect();return {id:'kapak',x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)};});
+ const sn=[...document.querySelectorAll('[role=alert],.MuiSnackbarContent-message,.notistack-Snackbar')]
+   .map(e=>(e.innerText||'').trim()).filter(Boolean).join(' | ').slice(0,120);
  return JSON.stringify({diyalog:d||(!!inp&&/aktivasyon/i.test(t)),girdi:g,hata:/aktivasyon kodu hatal/i.test(t),
-   kitapta:document.querySelectorAll('canvas.lower-canvas').length>0,
+   kitapta:document.querySelectorAll('canvas.lower-canvas').length>0,raf:raf.slice(0,10),snack:sn||null,
    online:(typeof window.isOnline==='boolean')?window.isOnline:null});})()"""
+
+# Cevrimdisi kara delik: Symantec Endpoint Protection kasada Windows Guvenlik Duvari kurallarini
+# UYGULATMIYOR (olculdu 03.10: curl'e blok kurali kondu, baglanti yine 302 dondu; profil
+# "LocalFirewallRules N/A (GPO-store only)"). Asil yontem: Chromium'a olu proxy — renderer'in
+# fetch'i (okuyucunun isOnline probu + aktivasyon istegi) agaa CIKAMAZ; CDP/file:// etkilenmez.
+AKT_PROXY_ARGV = ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]
 
 def aktivasyon_kod_oku(yol):
     """Gecerli test kodunu okur (tek satir, bosluksuz). Yoksa/bossa None. DEGERI HIC YAZDIRMA."""
@@ -604,14 +616,23 @@ def gd_kural_komutlari(ad, exe):
             ["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + ad])
 
 def akt_karar(adim, olcum, tek_kitap=False):
-    """SAF KARAR: bir aktivasyon adiminin sonucu. olcum = JS_AKT ozeti (+ 'hataGoruldu')."""
+    """SAF KARAR: bir aktivasyon adiminin sonucu. olcum = JS_AKT ozeti (+ 'hataGoruldu').
+    Icerik = okuyucu tuvali (kitapta) YA DA tek-motor raf kapaklari (45449: set duzeyinde diyalog
+    acilista, menu yok; gecerli koddan sonra raf gorunur)."""
     o = olcum or {}
+    icerik = bool(o.get("kitapta") or o.get("raf"))
     if adim == "a": return "GECTI" if (o.get("diyalog") and o.get("girdi")) else "KALDI"
     if adim == "b": return "GECTI" if (o.get("hataGoruldu") and o.get("diyalog")) else "KALDI"
-    if adim == "c": return "GECTI" if (not o.get("diyalog") and o.get("kitapta")) else "KALDI"
+    if adim == "c": return "GECTI" if (not o.get("diyalog") and not o.get("hata") and icerik) else "KALDI"
     if adim == "d" and tek_kitap: return "ATLANDI"
-    if adim in ("d", "e"): return "GECTI" if (not o.get("diyalog") and o.get("kitapta")) else "KALDI"
+    if adim == "d": return "GECTI" if (not o.get("diyalog") and o.get("kitapta")) else "KALDI"
+    if adim == "e": return "GECTI" if (not o.get("diyalog") and icerik) else "KALDI"
     return "KALDI"
+
+def cevrimdisi_mi(olcum):
+    """SAF KARAR: kod girmeden ONCE zorunlu — yalniz window.isOnline === False ise kod girilir.
+    True ya da olculemedi (None) -> kod GIRILMEZ (gercek koltuk tuketilmesin)."""
+    return (olcum or {}).get("online") is False
 
 def aktivasyon_ozeti(adimlar):
     """SAF KARAR: a..e'den biri KALDI ya da eksikse KALDI (ATLANDI yalniz d/tek kitapta kabul)."""
@@ -645,11 +666,20 @@ def akt_ekran(c, kimlik, adim, kayit):
         kayit["ekranHata"] = str(e)[:80]
 
 def uygulama_ac(ana, dizin, profil):
-    """Uygulamayi TEMIZ profille (APPDATA=profil) CDP portuyla acar."""
+    """Uygulamayi TEMIZ profille (APPDATA=profil), olu proxy ile (cevrimdisi) CDP portuyla acar."""
     env = dict(os.environ); env["APPDATA"] = profil
     os.makedirs(profil, exist_ok=True)
-    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"], env=env)
+    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"] + AKT_PROXY_ARGV, env=env)
     return hedef_sec(dizin)
+
+def akt_baglanti_bekle(c, tavan=20):
+    """window.isOnline belirlenene kadar (okuyucunun probu 5 sn) yoklar."""
+    son = time.time() + tavan; o = {}
+    while time.time() < son:
+        o = c.jsj(JS_AKT) or {}
+        if o.get("online") is not None: return o
+        time.sleep(1)
+    return o
 
 def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     """a..e adimlari. Donen: (c, menuUrl, kitaplar) — normal kitap kaniti ayni oturumda surer."""
@@ -658,27 +688,34 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     if not c: A["a"] = {"sonuc": "KALDI", "sebep": "CDP_ACILMADI"}; return None, None, []
     c.cmd("Page.enable"); time.sleep(10)
     menuUrl = c.js("location.href"); menuUrl = menuUrl if isinstance(menuUrl, str) else None
+    ilk = akt_baglanti_bekle(c)
     kitaplar = c.jsj(JS_MENU) or []
-    ilk = c.jsj(JS_AKT) or {}
     r["aktivasyon"]["online"] = ilk.get("online")
+    r["aktivasyon"]["duzen"] = "menu" if kitaplar else "tek-motor"
     log("AKTIVASYON", kimlik, "baglanti", "online=" + str(ilk.get("online")), "kitap=" + str(len(kitaplar)))
 
-    def gir(kit):
-        if ilk.get("diyalog") or not kit: return c.jsj(JS_AKT) or {}
+    def gir(kit, acilis=False):
+        # acilis=True (a, e): diyalog acilista gorunduyse tiklamadan olc (set duzeyi)
+        if (acilis and ilk.get("diyalog")) or not kit: return c.jsj(JS_AKT) or {}
         c.tikla(kit["x"], kit["y"]); return akt_durum_bekle(c)
 
-    # a) kod istenir (set duzeyinde menude de sorulabilir — o da GECTI, yer not edilir)
-    o = gir(kitaplar[0] if kitaplar else None)
-    A["a"] = {"sonuc": akt_karar("a", o), "yer": "menu" if ilk.get("diyalog") else "kitap"}
+    # a) kod istenir (set duzeyinde acilista da sorulabilir — o da GECTI, yer not edilir)
+    o = gir(kitaplar[0] if kitaplar else None, acilis=True)
+    A["a"] = {"sonuc": akt_karar("a", o), "yer": "acilis" if ilk.get("diyalog") else "kitap"}
     akt_ekran(c, kimlik, "a", A["a"])
     if A["a"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
+    # KOD GIRMEDEN ONCE: cevrimdisi olmali. Degilse hicbir kod (gecersiz bile) GIRILMEZ.
+    if not cevrimdisi_mi(dict(ilk, **{k: v for k, v in o.items() if k == "online" and v is not None})):
+        r["aktivasyon"]["kodGirilmedi"] = "uygulama cevrimdisi degil (window.isOnline != false)"
+        return c, menuUrl, kitaplar
     # b) gecersiz kod -> red mesaji (snackbar 1,5 sn — hizli yokla, gorunce ekran)
     akt_kod_gir(c, o["girdi"], AKT_GECERSIZ_KOD)
-    b = {}; son = time.time() + 5
+    b = {}; son = time.time() + 10
     while time.time() < son:
         b = c.jsj(JS_AKT) or {}
         if b.get("hata"):
             b["hataGoruldu"] = True; akt_ekran(c, kimlik, "b", A.setdefault("b", {})); break
+        if b.get("snack"): A.setdefault("b", {})["mesaj"] = b["snack"]
         time.sleep(0.15)
     A.setdefault("b", {})["sonuc"] = akt_karar("b", dict(b, diyalog=(c.jsj(JS_AKT) or {}).get("diyalog")))
     if "ekran" not in A["b"]: akt_ekran(c, kimlik, "b", A["b"])
@@ -691,7 +728,10 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     akt_ekran(c, kimlik, "c", A["c"])
     if A["c"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar
     # d) menuye don, baska kitap -> kod istenmez
-    if len(kitaplar) >= 2 and menuUrl and menuye_don(c, menuUrl):
+    raf = (c.jsj(JS_AKT) or {}).get("raf") or []
+    if not kitaplar and len(raf) >= 1:
+        o = gir(raf[1] if len(raf) >= 2 else raf[0]); A["d"] = {"sonuc": akt_karar("d", o), "kitap": "raf-kapak"}
+    elif len(kitaplar) >= 2 and menuUrl and menuye_don(c, menuUrl):
         o = gir(kitaplar[1]); A["d"] = {"sonuc": akt_karar("d", o), "kitap": kitaplar[1].get("id")}
     else:
         A["d"] = {"sonuc": akt_karar("d", {}, tek_kitap=len(kitaplar) < 2) if len(kitaplar) < 2 else "KALDI",
@@ -702,9 +742,9 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     c, t, puan = uygulama_ac(ana, dizin, profil)
     if not c: A["e"] = {"sonuc": "KALDI", "sebep": "yeniden acilista CDP_ACILMADI"}; return None, menuUrl, kitaplar
     c.cmd("Page.enable"); time.sleep(10)
+    ilk = akt_baglanti_bekle(c)
     kitaplar = c.jsj(JS_MENU) or kitaplar
-    ilk = c.jsj(JS_AKT) or {}
-    o = gir(kitaplar[0] if kitaplar else None)
+    o = gir(kitaplar[0] if kitaplar else None, acilis=True)
     A["e"] = {"sonuc": akt_karar("e", o)}
     akt_ekran(c, kimlik, "e", A["e"])
     return c, menuUrl, kitaplar
@@ -804,9 +844,9 @@ def aktivasyonlu_kabul(r, bookId, baslik, dizin, ana):
     r["internetsiz"] = {"kural": kural, "eklendi": gd.returncode == 0}
     c = None
     try:
-        if gd.returncode != 0:
-            r["sonuc"] = "OLCULEMEDI"; r["sebep"] = "guvenlik duvari kurali eklenemedi"
-            r["kaldirma"] = kaldir(dizin); return bitir(r)
+        # Kural ek emniyettir (SEP'li kasada uygulanmiyor); asil cevrimdisi yontem AKT_PROXY_ARGV
+        # ve kod girmeden once window.isOnline === false olcumu (cevrimdisi_mi).
+        r["internetsiz"]["yontem"] = "olu-proxy + gd-kurali; kod oncesi isOnline=false sarti"
         profil = os.path.join(KOK, f"akt-profil-{bookId}-{time.strftime('%Y%m%d%H%M%S')}")
         c, menuUrl, kitaplar = aktivasyon_senaryosu(r, bookId, ana, dizin, kod, profil)
         kod = None
@@ -815,18 +855,32 @@ def aktivasyonlu_kabul(r, bookId, baslik, dizin, ana):
             log("AKTIVASYON", bookId, a, (A.get(a) or {}).get("sonuc", "OLCULMEDI"))
         sonuc, sebep = aktivasyon_ozeti(A)
         r["aktivasyon"]["sonuc"] = sonuc
-        if r["aktivasyon"].get("online") is True:
-            sonuc, sebep = "KALDI", "uygulama cevrimici (window.isOnline=true) — internetsiz kosu saglanamadi"
-            r["aktivasyon"]["sonuc"] = sonuc
+        if r["aktivasyon"].get("kodGirilmedi"):
+            # cevrimdisi saglanamadi: paket kusuru DEGIL, olcum olmadi -> ertelenir
+            r["aktivasyon"]["sonuc"] = "OLCULEMEDI"
+            r["sonuc"] = "OLCULEMEDI"; r["sebep"] = r["aktivasyon"]["kodGirilmedi"]
+            if c: c.kapat()
+            oldur(dizin); r["kaldirma"] = kaldir(dizin); return None
         if sonuc != "GECTI" or not c:
             r["sonuc"] = "KALDI"; r["sebep"] = sebep or "aktivasyon oturumu acilamadi"
             if c: c.kapat()
-            oldur(dizin); r["kaldirma"] = kaldir(dizin); return bitir(r)
+            oldur(dizin); r["kaldirma"] = kaldir(dizin); return None
+        if not (c.jsj(JS_MENU) or kitaplar):   # tek-motor: raf kanitini kitap kaniti yerine yaz
+            r["kitaplar"] = [{"sira": 1, "id": "raf", "ad": baslik, "sonuc": "GECTI", "kaynak": "tek-motor-raf",
+                              "not": "aktivasyon a..e raf+okuyucu ile olculdu"}]
+            r["gecenKitap"] = 1; r["toplamKitap"] = 1; r["sonuc"] = "GECTI"
+            c.kapat(); oldur(dizin); r["kaldirma"] = kaldir(dizin); return None
         if menuUrl: menuye_don(c, menuUrl)
-        return kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, c.jsj(JS_MENU) or kitaplar)
+        r["_kitapOlc"] = (c, menuUrl, c.jsj(JS_MENU) or kitaplar)
+        return None
     finally:
         k = subprocess.run(kaldir_k, capture_output=True)
         r.setdefault("internetsiz", {})["kaldirildi"] = k.returncode == 0
+        if "_kitapOlc" in r:
+            c2, mu, kt = r.pop("_kitapOlc")
+            kitaplari_olc(r, c2, bookId, baslik, dizin, mu, kt)
+        else:
+            bitir(r)
 
 def bitir(r):
     r["bitti"] = time.strftime("%Y-%m-%dT%H:%M:%S")
