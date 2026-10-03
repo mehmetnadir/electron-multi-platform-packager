@@ -646,5 +646,17 @@ class BaglantiAyirTest(unittest.TestCase):
         self.assertTrue(any(l.startswith("BAGLANTI|45551|Worksheets|https://") for l in loglar))
 
 
+class NormalArgvTest(unittest.TestCase):
+    """73768 (03.10): Roaming profilindeki eski okuyucu durumu kabulu belirsizlestiriyordu."""
+    def test_varsayilan_taze_profil(self):
+        argv = kabul.normal_argv("app.exe", '73768-imzasiz-x" &', {}, simdi="20261003")
+        self.assertEqual(argv[:3], ["app.exe", f"--remote-debugging-port={kabul.PORT}", "--remote-allow-origins=*"])
+        self.assertEqual(argv[3], "--user-data-dir=" + os.path.join(kabul.KOK, "kabul-profil-73768-imzasiz-x----20261003"))
+
+    def test_bayrak_sifirsa_eski_davranis(self):
+        self.assertEqual(kabul.normal_argv("app.exe", "1", {"EMPP_KABUL_TAZE_PROFIL": "0"}),
+                         ["app.exe", f"--remote-debugging-port={kabul.PORT}", "--remote-allow-origins=*"])
+
+
 if __name__ == "__main__":
     unittest.main()

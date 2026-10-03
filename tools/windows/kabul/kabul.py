@@ -921,6 +921,18 @@ def menuye_don(c, menuUrl):
     return False
 
 # ─────────────────────────── ana akis ───────────────────────────
+def normal_argv(ana, bookId, env, simdi=None):
+    """SAF: normal kabulde uygulama argv'si. Varsayilan TAZE PROFIL (--user-data-dir): kasada gercek
+    Roaming profili onceki kosularin okuyucu durumunu (son sayfa, serit acik/kapali, aktivasyon)
+    tasiyor — 73768 (03.10) book1/book3 serit kapali + 2/N'de acildi, book2 seridi acik geldi;
+    kabul yeni bir kullanicinin ilk acilisini olcmeli. EMPP_KABUL_TAZE_PROFIL=0 eski davranis."""
+    argv = [ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"]
+    if str(env.get("EMPP_KABUL_TAZE_PROFIL", "1")).strip() != "0":
+        damga = simdi or time.strftime("%Y%m%d%H%M%S")
+        guvenli = re.sub(r"[^A-Za-z0-9-]", "-", str(bookId))[:60]
+        argv.append("--user-data-dir=" + os.path.join(KOK, f"kabul-profil-{guvenli}-{damga}"))
+    return argv
+
 def main():
     bookId, url, baslik = sys.argv[1], sys.argv[2], sys.argv[3]
     r = {"bookId": bookId, "baslik": baslik, "basladi": time.strftime("%Y-%m-%dT%H:%M:%S")}
@@ -941,7 +953,7 @@ def main():
     tum_uygulamalari_oldur()
     if os.environ.get("EMPP_KABUL_AKTIVASYON") == "1":
         return aktivasyonlu_kabul(r, bookId, baslik, dizin, ana)
-    subprocess.Popen([ana, f"--remote-debugging-port={PORT}", "--remote-allow-origins=*"])
+    subprocess.Popen(normal_argv(ana, bookId, os.environ))
     c, t, puan = hedef_sec(dizin)
     if not c:
         r["sonuc"] = "KALDI"; r["sebep"] = "CDP_ACILMADI"
