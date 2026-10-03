@@ -46,6 +46,8 @@ const { spawn } = require('child_process');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
 const kasaKabul = require('./windows-kasa-kabul');
 const hazir = require('./windows-hazir');
+const authenticode = require('./authenticode-win');
+const imzaIstek = require('./imza-istek');
 
 const ISARET = '[windows-serit]';
 /** İmza eşiği (runner imzayı beklemeden paketi hazır kuyruğa alır) hata işareti. */
@@ -67,20 +69,30 @@ const KOK_INDEX_YOLU = 'resources/app/index.html';
 const REPO_KOKU = path.join(__dirname, '..', '..');
 const CANLI_YUVA_KOKU = path.join(os.homedir(), 'Impark', 'Storage7', 'vhosts',
   'akillitahta.ydspublishing.com', 'httpdocs', 'Uploads', 'KitapTekExe');
+// windows-kasa (win32): Storage7 172.17.2.23'te (impark-diskler.sh SHARES; .21 Storage1-2'dir).
+const WIN_YUVA_KOKU = '\\\\172.17.2.23\\Storage7\\vhosts\\akillitahta.ydspublishing.com\\httpdocs\\Uploads\\KitapTekExe';
 
 /** Runner CONFIG'ine eklenen şerit ayarları. Testler CONFIG alanlarını doğrudan ezer. */
-function varsayilanAyarlar() {
+function varsayilanAyarlar(platform = process.platform, env = process.env) {
   const ev = path.join(os.homedir(), '.empp-agent');
   const agir = path.join(ev, 'agir.sh');
+  // windows-kasa: imza gözcüsü Node (imza-yuva-win.js), tetik/temizlik İSTEK DOSYASI (yayincilikadm
+  // panel oturumu Mac'te; köprü tools/windows/imza-tetik-koprusu.js), doğrulama Get-AuthenticodeSignature.
+  const win = platform === 'win32';
   return {
-    winImzaBetigi: path.join(REPO_KOKU, 'scripts', 'imza-yuva-smb.sh'),
-    winImzaKabuk: 'bash',
-    winImzaYuvaKoku: CANLI_YUVA_KOKU,
+    winImzaBetigi: win ? path.join(__dirname, 'imza-yuva-win.js') : path.join(REPO_KOKU, 'scripts', 'imza-yuva-smb.sh'),
+    winImzaKabuk: win ? process.execPath : 'bash',
+    // KAPI (win32): yuva kökü YALNIZ açıkça verilirse (EMPP_IMZA_YUVA_KOKU, kanonik değer WIN_YUVA_KOKU).
+    // Mac runner aynı tek yuvayı besliyor ve kilit makine başına — iki makine arası yuva kilidi
+    // kurulmadan kasa yuvaya yazarsa takaslar çakışır. Boş kök = erişilemez → 'hazir' kipi (bugünkü).
+    winImzaYuvaKoku: win ? (env.EMPP_IMZA_YUVA_KOKU || '') : CANLI_YUVA_KOKU,
+    winImzaIstekDizini: win ? imzaIstek.varsayilanIstekDizini(env) : '', // boş = yayincilikadm'ı kendisi çağırır
+    winImzaDogrulama: win ? 'authenticode' : 'osslsigncode',
     winImzaYuvaSunucu: '172.17.2.21', // İmpark Storage7; boş = ping atlanır
     winImzaTetik: ['yayincilikadm', 'book', 'exe-create', YUVA_ID, '--wait', '0'],
     winImzaYuvaTemizle: ['yayincilikadm', 'book', 'exe-remove', '--windows', '--yes', YUVA_ID],
     winImzaKilit: path.join(ev, 'imza-yuva.kilit'),
-    winImzaYabanciDesen: 'imza-yuva-smb\\.sh (bekle-ve-tak|toplu)',
+    winImzaYabanciDesen: win ? '' : 'imza-yuva-smb\\.sh (bekle-ve-tak|toplu)',
     winImzaKilitBeklemeMs: 6 * 3600 * 1000,
     winImzaKilitAralikMs: 60 * 1000,
     winImzaHazirlaTimeoutMs: 3 * 3600 * 1000,
@@ -400,9 +412,11 @@ async function araclariDenetle(cfg, { yuva = true } = {}) {
   // sonra bekçi atar; burada aranmaz ki yuva kapalıyken üretim araç yüzünden durmasın.
   if (yuva) {
     if (!fs.existsSync(cfg.winImzaBetigi)) eksik.push(`imza betiği yok: ${cfg.winImzaBetigi}`);
-    const ossl = await komutKos(process.platform === 'win32' ? ['where', cfg.winOsslsigncode]
-      : ['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
-    if (ossl.kod !== 0) eksik.push(`osslsigncode bulunamadı: ${cfg.winOsslsigncode}`);
+    if (cfg.winImzaDogrulama !== 'authenticode') {
+      const ossl = await komutKos(process.platform === 'win32' ? ['where', cfg.winOsslsigncode]
+        : ['/bin/sh', '-c', 'command -v "$1"', 'sh', cfg.winOsslsigncode], { zamanAsimiMs: 10000 });
+      if (ossl.kod !== 0) eksik.push(`osslsigncode bulunamadı: ${cfg.winOsslsigncode}`);
+    }
     if (!(await imzaYuvasiErisilirMi(cfg))) eksik.push(`imza yuvası erişilemiyor (İmpark VPN / Storage7): ${cfg.winImzaYuvaKoku}`);
   }
   if (eksik.length) throw new Error(`${ISARET} ön koşul: ${eksik.join('; ')} — üretim BAŞLAMADI`);
@@ -442,6 +456,7 @@ function yuvaProbKomutlari(cfg, platform = process.platform, node = process.exec
 
 /** İmpark sunucusu ping'e cevap veriyor ve yuva kökü görünüyor mu (sınırlı süreli, asılmaz). */
 async function imzaYuvasiErisilirMi(cfg) {
+  if (!cfg.winImzaYuvaKoku) return false; // win32 kapısı: kök verilmedi
   const komutlar = yuvaProbKomutlari(cfg);
   for (let i = 0; i < komutlar.length; i += 1) {
     const son = i === komutlar.length - 1;
@@ -516,8 +531,36 @@ async function basliksizKabul({ exe, job, work, cfg, log, aktivasyon, etiket }) 
 const PERL_KILIT = 'open(my $f, ">>", $ARGV[0]) or exit 74; flock($f, LOCK_EX | LOCK_NB) or exit 75; '
   + '$| = 1; print "KILIT-ALINDI\\n"; 1 while <STDIN>; exit 0;';
 
-/** flock tutucu süreç: runner ölünce stdin kapanır, kilit kendiliğinden boşalır. */
+/**
+ * win32 kilidi (perl/flock yok): O_EXCL kilit dosyası {pid, zaman}. Sahibi ölmüşse (pid yok) bayat sayılır,
+ * kenara taşınır (silme yok) ve bir kez yeniden denenir. Dolu → {kod: 75} (perl ile aynı sözleşme).
+ */
+async function dosyaKilidiDene(yol, { pidYasiyor = pidCanliMi } = {}) {
+  for (let deneme = 0; deneme < 2; deneme += 1) {
+    try {
+      const fh = await fsp.open(yol, 'wx');
+      await fh.writeFile(JSON.stringify({ pid: process.pid, zaman: new Date().toISOString() }));
+      await fh.close();
+      return { tutucu: { dosyaKilidi: yol } };
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') return { kod: 74, hata: (e && e.message) || String(e) };
+    }
+    let sahip = null;
+    try { sahip = JSON.parse(await fsp.readFile(yol, 'utf8')); } catch (_) { sahip = null; }
+    if (sahip && pidYasiyor(sahip.pid)) return { kod: 75 };
+    try { await fsp.rename(yol, `${yol}.bayat-${Date.now()}`); } catch (_) { /* yarış: başkası aldı */ }
+  }
+  return { kod: 75 };
+}
+
+function pidCanliMi(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return Boolean(e && e.code === 'EPERM'); }
+}
+
+/** flock tutucu süreç: runner ölünce stdin kapanır, kilit kendiliğinden boşalır. win32: dosya kilidi. */
 function kilitDene(yol) {
+  if (process.platform === 'win32') return dosyaKilidiDene(yol);
   return new Promise((coz) => {
     let bitti = false;
     const c = spawn('/usr/bin/perl', ['-MFcntl=:flock', '-e', PERL_KILIT, yol], { stdio: ['pipe', 'pipe', 'ignore'] });
@@ -531,6 +574,9 @@ function kilitDene(yol) {
 }
 
 function kilitBirak(c) {
+  if (c && c.dosyaKilidi) {
+    return fsp.rename(c.dosyaKilidi, `${c.dosyaKilidi}.birakildi`).catch(() => {});
+  }
   return new Promise((coz) => {
     if (c.exitCode !== null || c.signalCode !== null) { coz(); return; }
     const t = setTimeout(() => { try { c.kill('SIGKILL'); } catch (_) { /* ölü */ } coz(); }, 5000);
@@ -540,6 +586,7 @@ function kilitBirak(c) {
 }
 
 async function yabanciImzaSurecleri(desen) {
+  if (!desen || process.platform === 'win32') return []; // win32: elle akış yok, tek yol kilitli gözcü
   const r = await komutKos(['pgrep', '-f', desen], { zamanAsimiMs: 10000 });
   return r.kod === 0 ? r.cikti.split('\n').map((s) => s.trim()).filter(Boolean) : [];
 }
@@ -583,7 +630,14 @@ async function imzaKilidiAl(cfg, { log, sleep, esikBitisMs = 0 }) {
   return birak;
 }
 
-function tetikCek(cfg, work, log) {
+function tetikCek(cfg, work, log, exe) {
+  if (cfg.winImzaIstekDizini) {
+    try {
+      const yol = imzaIstek.istekYazSenkron(cfg.winImzaIstekDizini, 'exe-create', { exe });
+      log('windows: imza tetiği İSTEK olarak bırakıldı (Mac köprüsü exe-create çeker):', yol);
+    } catch (e) { log('windows: imza tetiği isteği yazılamadı:', e.message); }
+    return;
+  }
   try {
     const fd = fs.openSync(path.join(work, 'imza-tetik.log'), 'a');
     const p = spawn(cfg.winImzaTetik[0], cfg.winImzaTetik.slice(1), { detached: true, stdio: ['ignore', fd, fd] });
@@ -596,8 +650,13 @@ function tetikCek(cfg, work, log) {
   }
 }
 
-function imzaEnv(work) {
-  return { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: path.join(work, 'imzali') };
+function imzaEnv(work, cfg = {}) {
+  const e = { SMB_SHA: '0', TETIK: '1', IMZALI_DIZIN: path.join(work, 'imzali') };
+  if (cfg.winImzaIstekDizini) {
+    e.EMPP_IMZA_ISTEK_DIZINI = cfg.winImzaIstekDizini;
+    e.EMPP_IMZA_YUVA_KOKU = cfg.winImzaYuvaKoku;
+  }
+  return e;
 }
 
 /** Toplu akış 2: `_hazir`'a kopyala + geri oku (yuvaya dokunmaz → kilitsiz). */
@@ -607,7 +666,7 @@ async function imzaHazirla({ exe, work, cfg, log, esikBitisMs = 0 }) {
   const kalan = esikBitisMs > 0 ? Math.max(1000, esikBitisMs - Date.now()) : 0;
   const sure = kalan > 0 ? Math.min(cfg.winImzaHazirlaTimeoutMs, kalan) : cfg.winImzaHazirlaTimeoutMs;
   const r = await komutKos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'hazirla', exe], {
-    env: imzaEnv(work), zamanAsimiMs: sure, satir: (s) => log('  [imza]', s),
+    env: imzaEnv(work, cfg), zamanAsimiMs: sure, satir: (s) => log('  [imza]', s),
   });
   if (r.zamanAsimi && kalan > 0 && kalan < cfg.winImzaHazirlaTimeoutMs) {
     throw imzaEsigiHatasi('_hazir kopyası eşik süresinde bitmedi');
@@ -625,11 +684,11 @@ async function imzaBekleVeTak({ exe, work, cfg, log, esikBitisMs = 0 }) {
   let takasBasladi = false;
   const satir = (s) => {
     log('  [imza]', s);
-    if (!tetik && s.includes('PENCERE BEKLENİYOR')) { tetik = true; tetikCek(cfg, work, log); }
+    if (!tetik && s.includes('PENCERE BEKLENİYOR')) { tetik = true; tetikCek(cfg, work, log, exe); }
     if (!takasBasladi && /PENCERE: |takas \d\/3/.test(s)) takasBasladi = true;
   };
   const r = await komutKos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'bekle-ve-tak', exe], {
-    env: imzaEnv(work), zamanAsimiMs: cfg.winImzaTimeoutMs, satir,
+    env: imzaEnv(work, cfg), zamanAsimiMs: cfg.winImzaTimeoutMs, satir,
     yumusak: esikBitisMs > 0
       ? { ms: Math.max(1, esikBitisMs - Date.now()), uygun: () => !takasBasladi, aralikMs: 1000 } : null,
   });
@@ -645,7 +704,7 @@ async function imzaBekleVeTak({ exe, work, cfg, log, esikBitisMs = 0 }) {
   if (r.kod !== 0) {
     throw new Error(`${ISARET} imza adımı çıkış ${r.kod} (4: takas/imza kimliği) — R2'ye YAZILMADI`);
   }
-  const imzali = path.join(imzaEnv(work).IMZALI_DIZIN, `${path.basename(exe, '.exe')}-imzali.exe`);
+  const imzali = path.join(imzaEnv(work, cfg).IMZALI_DIZIN, `${path.basename(exe, '.exe')}-imzali.exe`);
   if (!fs.existsSync(imzali)) throw new Error(`${ISARET} imza betiği başarı dedi ama imzalı kopya yok: ${imzali}`);
   return imzali;
 }
@@ -667,6 +726,13 @@ async function yuvayiArsivle({ exe, cfg, log }) {
   } else {
     log(`windows: UYARI yuva son hızlı kontrolü çıkış ${hk.kod} — _imzali/'ye taşınmadı (yayın yerel doğrulanmış kopyadan)`);
   }
+  if (cfg.winImzaIstekDizini) {
+    try {
+      const yol = await imzaIstek.istekYaz(cfg.winImzaIstekDizini, 'exe-remove', { exe, sebep: 'imzalı arşivlendi' });
+      log('windows: yuva temizliği İSTEK olarak bırakıldı (Mac köprüsü exe-remove çeker):', yol);
+    } catch (e) { log('windows: UYARI yuva temizliği isteği yazılamadı:', e.message); }
+    return;
+  }
   const t = await komutKos(cfg.winImzaYuvaTemizle, { zamanAsimiMs: 5 * 60000 });
   if (t.kod !== 0) log(`windows: UYARI yuva temizliği çıkış ${t.kod}: ${String(t.hata || t.cikti).trim().slice(-160)}`);
 }
@@ -680,8 +746,10 @@ async function imzaDogrula({ imzasiz, imzali, cfg, log }) {
   }
   const g = await govdeEsitMi(imzasiz, imzali);
   if (!g.esit) throw new Error(`${ISARET} imzalı dosya bizim exe'miz değil (${g.sebep}) — R2'ye YAZILMADI`);
-  const r = await komutKos([cfg.winOsslsigncode, 'verify', '-in', imzali], { zamanAsimiMs: 10 * 60000 });
-  const karar = imzaDogrulamaKarari(r, cfg.winImzaBeklenenImzaci);
+  const karar = cfg.winImzaDogrulama === 'authenticode'
+    ? await authenticode.authenticodeDogrula(imzali, { komutKos, beklenenImzaci: cfg.winImzaBeklenenImzaci })
+    : imzaDogrulamaKarari(await komutKos([cfg.winOsslsigncode, 'verify', '-in', imzali], { zamanAsimiMs: 10 * 60000 }),
+      cfg.winImzaBeklenenImzaci);
   if (!karar.gecti) {
     throw new Error(`${ISARET} Authenticode doğrulaması BAŞARISIZ — ${karar.sebep}; R2'ye YAZILMADI`);
   }
@@ -802,6 +870,6 @@ module.exports = {
   peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
   yuvaProbKomutlari,
   imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
-  kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
+  kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, dosyaKilidiDene, tetikCek, imzaEnv, WIN_YUVA_KOKU, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
   yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,
 };

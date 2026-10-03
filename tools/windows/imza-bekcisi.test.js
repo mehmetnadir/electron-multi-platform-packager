@@ -286,3 +286,12 @@ test('imza hatası (KALDI değil) → failed YAZILMAZ: kayıt yerinde, tutma sü
   }));
   assert.equal(basarisizlar.length, 0);
 });
+
+test('win32: bekçi VPN/disk bağlamaz (servis + cmdkey), ping -n kullanır', async () => {
+  const komutlar = [];
+  const komutKos = async (argv) => { komutlar.push(argv.join(' ')); return { kod: 1, cikti: '' }; };
+  const r = await B.diskBagla({ bekciDiskBetigi: __filename }, { komutKos, log: () => {}, platform: 'win32' });
+  assert.equal(r.denendi, false);
+  assert.match(r.sebep, /win32/);
+  assert.deepEqual(komutlar, [], 'win32\'de ne ping ne sudo ne disk betiği');
+});

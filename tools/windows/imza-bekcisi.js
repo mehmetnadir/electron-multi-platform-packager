@@ -67,15 +67,19 @@ function kiraBizdeDegilMi(hata) {
   return /HTTP 409|lease_not_held/.test(String((hata && hata.message) || hata || ''));
 }
 
-async function pingVar(komutKos, ip) {
-  const r = await komutKos(['ping', '-c', '1', '-W', '2000', ip], { zamanAsimiMs: 5000 });
+async function pingVar(komutKos, ip, platform = process.platform) {
+  const r = await komutKos(platform === 'win32' ? ['ping', '-n', '1', '-w', '2000', ip]
+    : ['ping', '-c', '1', '-W', '2000', ip], { zamanAsimiMs: 5000 });
   return r.kod === 0;
 }
 
 /**
  * Diskleri bağlamayı dener (yuva erişilemezken). @returns {Promise<{denendi:boolean, sebep:string}>}
  */
-async function diskBagla(cfg, { komutKos, log }) {
+async function diskBagla(cfg, { komutKos, log, platform = process.platform }) {
+  // windows-kasa: VPN = OpenVPNService (config-auto, açılışta kalkar), SMB = Administrator kimlik
+  // kasası (cmdkey). Bekçi ne VPN açar ne disk bağlar; yalnız ölçer.
+  if (platform === 'win32') return { denendi: false, sebep: 'win32: VPN servisi + cmdkey ile kalıcı — bekçi bağlamaz' };
   if (!fs.existsSync(cfg.bekciDiskBetigi)) return { denendi: false, sebep: `disk betiği yok: ${cfg.bekciDiskBetigi}` };
   let vpn = false;
   for (const ip of IMPARK_PROBLARI) {
@@ -170,6 +174,10 @@ async function kaydiIsle(giris, d) {
 
 async function bildirimGonder(d, karar, durum) {
   const { cfg, komutKos, log } = d;
+  if (!fs.existsSync(cfg.bekciBildirIkili)) { // windows-kasa'da bildir yok (şef 03.10: ENOENT yutulur)
+    log(`imza-bekçisi: bildir yok (${cfg.bekciBildirIkili}) — bildirim atlandı: ${karar.mesaj}`);
+    return;
+  }
   const r = await komutKos([cfg.bekciBildirIkili, 'paket', karar.mesaj, '-p', 'yuksek'], { zamanAsimiMs: 20000 });
   log(`imza-bekçisi: bildirim ${r.kod === 0 ? 'gönderildi' : `GÖNDERİLEMEDİ (çıkış ${r.kod})`}: ${karar.mesaj}`);
   if (r.kod === 0) await H.bildirimDurumuYaz(cfg, { ...durum, [karar.anahtar]: d.simdi() });
