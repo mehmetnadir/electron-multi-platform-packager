@@ -85,7 +85,12 @@ async function calistir({ cikisKodu, oncedenVarOlanExe, derlemedeUretilenExe }) 
   await fs.ensureDir(outputPath);
   await fs.ensureDir(path.join(dizin, 'app')); // cwd=path.join(dirname(configPath),'app') spawn için şart
   if (oncedenVarOlanExe) {
-    await fs.writeFile(path.join(outputPath, oncedenVarOlanExe), 'ESKI-ICERIK');
+    const eskiYol = path.join(outputPath, oncedenVarOlanExe);
+    await fs.writeFile(eskiYol, 'ESKI-ICERIK');
+    // 03.10: yazıp hemen spawn edince mtimeMs (ns çözünürlük) Date.now()'u (ms) aşabiliyordu → ara sıra
+    // "eski exe taze sayıldı" sahte FAIL. Önceki derlemeden kalma = açıkça geçmişte.
+    const gecmis = new Date(Date.now() - 60000);
+    await fs.utimes(eskiYol, gecmis, gecmis);
   }
   const configPath = path.join(dizin, 'electron-builder-win.json');
   await fs.writeJson(configPath, { fake: true });
