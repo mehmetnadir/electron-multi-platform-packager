@@ -283,12 +283,19 @@ function teklifYorumla(kapak, cevap) {
  * iç sayfayla ayrılır). SAF.
  * @param {Array<{ad: string, arsiv: string|null, impark: string|null}>} ornekler ilk öğe kapak
  */
-function kimlikKarari(ornekler) {
+function kimlikKarari(ornekler, kitapIdler = null) {
   const [kapak, ...ic] = ornekler || [];
   if (!kapak || kapak.ad !== '1.jpg') return { eslesti: false, neden: 'kapak örneği yok' };
   if (!kapak.arsiv) return { eslesti: false, neden: 'kaynakta thumbs/1.jpg yok' };
   if (!kapak.impark) return { eslesti: false, neden: "İmpark zip'inde thumbs/1.jpg yok" };
   if (kapak.arsiv !== kapak.impark) {
+    // 03.10 (59835 book3 58237: kapak yeniden kodlanmış 641x797 aynı görsel; 73581 book4 73710:
+    // kaynak v1 boş yer tutucu sayfalar, İmpark v2 gerçek içerik): görsel md5 sürüm arası
+    // değişebilir. BookContent.xml `kitapId` (İmpark kitap kimliği) iki tarafta eşitse AYNI kitaptır.
+    const a = kitapIdler && kitapIdler.arsiv;
+    if (a && a.length >= 4 && a === kitapIdler.impark) {
+      return { eslesti: true, neden: `kapak md5 farklı ama BookContent kitapId eşit (${a})` };
+    }
     return { eslesti: false, neden: 'kapak thumbs/1.jpg md5 farklı' };
   }
   const olculen = ic.filter((o) => o.arsiv && o.impark);
@@ -600,6 +607,12 @@ function acmaDogrula(guncellemeZip, gDizin, hedefDizin) {
   return { bookContentMd5: md5(bc), girdi: gDizin.size };
 }
 
+/** BookContent.xml `<Book kitapId="…">` değeri (yoksa null). SAF. */
+function kitapIdOku(xmlBuf) {
+  const m = /<Book\b[^>]*?\bkitapId="([^"]+)"/i.exec(String(xmlBuf || ''));
+  return m ? m[1] : null;
+}
+
 /** KİMLİK: kaynaktaki kitap klasörü gerçekten bu kitap mı? (yanlış kitabı ezme) */
 function kimlikOlc({ zip, once, kok, id, guncellemeZip, gDizin }) {
   const onek = `${kok}assets/${id}/thumbs/`;
@@ -616,7 +629,13 @@ function kimlikOlc({ zip, once, kok, id, guncellemeZip, gDizin }) {
       impark: i ? md5(zipGirdiOku(guncellemeZip, i)) : null,
     };
   });
-  return kimlikKarari(ornekler);
+  const kb = once.get(`${kok}assets/${id}/data/BookContent.xml`);
+  const ib = gDizin.get('data/BookContent.xml');
+  const kitapIdler = {
+    arsiv: kb ? kitapIdOku(zipGirdiOku(zip, kb).toString('utf8')) : null,
+    impark: ib ? kitapIdOku(zipGirdiOku(guncellemeZip, ib).toString('utf8')) : null,
+  };
+  return kimlikKarari(ornekler, kitapIdler);
 }
 
 /**
@@ -787,7 +806,7 @@ async function icerikMerdiveni(o) {
 
 module.exports = {
   ISARET, DURUM, merdivenAcik, icerikMerdiveni, s0Olc, s0Kaynaktan, s1Uygula,
-  menuKonumlari, ucSablonu, teklifUrl, teklifYorumla, imparkKimligiMi, kimlikKarari, ornekAdlari,
+  menuKonumlari, ucSablonu, teklifUrl, teklifYorumla, imparkKimligiMi, kimlikKarari, kitapIdOku, ornekAdlari,
   yazmaIzinliMi, kokKorumaIhlalleri, zipDizini, zipGirdiOku, satirMetni, varsayilanGetir,
   icerikOnbellekKoku, kanitKoku,
   // set-uyelik-ek.js (2026-09-30) eksik set kitabını AYNI indirme/önbellek yolundan alır.

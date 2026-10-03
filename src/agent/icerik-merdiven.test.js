@@ -572,3 +572,15 @@ test('runner (gerçek processJob): anahtar KAPALI → merdiven koşmaz (bugünk�
     assert.deepEqual(r.istekler, ['/api/upload-build']);
   } finally { imp.kapat(); }
 });
+
+test('kimlikKarari: kapak md5 farklı ama BookContent kitapId eşitse eşleşir (59835/73581, 03.10)', () => {
+  const o = (ad, a, i) => ({ ad, arsiv: a, impark: i });
+  const k = [o('1.jpg', 'a', 'x'), o('2.jpg', 'b', 'y')];
+  assert.equal(M.kimlikKarari(k).eslesti, false);
+  assert.equal(M.kimlikKarari(k, { arsiv: '06003150', impark: '06003150' }).eslesti, true);
+  assert.equal(M.kimlikKarari(k, { arsiv: '06003150', impark: '0603062' }).eslesti, false);
+  assert.equal(M.kimlikKarari(k, { arsiv: null, impark: '06003150' }).eslesti, false);
+  assert.equal(M.kimlikKarari(k, { arsiv: '1', impark: '1' }).eslesti, false, 'çok kısa kimlik kanıt değil');
+  assert.equal(M.kitapIdOku('﻿<?xml version="1.0"?>\n<Book hashed="true" kitapId="06003150" width="1">'), '06003150');
+  assert.equal(M.kitapIdOku('<Book width="1">'), null);
+});
