@@ -122,12 +122,12 @@ async function sahteSunucu({ taban = null } = {}) {
 }
 
 /** processJob'u yalıtılmış ortamda; üreteç adımı sahte İmpark + verilen anahtarlı kararıyla. */
-async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {}, ek = {}, taban = null }) {
+async function isKostur({ job, o, anahtarli = () => false, listeCozFn, env = {}, ek = {}, taban = null, setEkiFn = null }) {
   const sunucu = await sahteSunucu({ taban });
   const casus = { merdiven: 0, setEki: 0, uretec: 0 };
   const orj = { ...kaynakAdim };
   kaynakAdim.merdiven = async () => { casus.merdiven += 1; return { satirlar: [], s1: [] }; };
-  kaynakAdim.setEki = async () => { casus.setEki += 1; return { eklenen: [] }; };
+  kaynakAdim.setEki = async (a) => { casus.setEki += 1; if (setEkiFn) await setEkiFn(a); return { eklenen: [] }; };
   kaynakAdim.uretec = async (a) => {
     casus.uretec += 1;
     return uk.uretecKaynagi({ ...a, arsivKoku: o.arsivKoku, getir: o.getir, indir: o.indir,
@@ -400,7 +400,8 @@ test('r2-kur ARŞİV tabanı liste kitaplarını KAPSAMIYOR (4 kitap, liste 6; s
   const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, anahtarli: () => false, job: { bookId: '45482', setListesi: LISTE6 } });
   assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
   assert.equal(r.casus.uretec, 1, 'üreteç koştu');
-  assert.match(r.loglar, /taban ATLANDI \(liste 6 kitap, taban 4; eksik: 505, 506\)/);
+  assert.match(r.loglar, /taban ATLANDI — set eki sonrası eksik: 505, 506 \(liste 6 kitap, taban 4; eksik: 505, 506\)/);
+  assert.equal(r.casus.setEki, 2, 'set eki taban üzerinde denendi, üreteç build\'ine yeniden uygulandı');
   const t = r.kayit.govdeler['kaynak/tamamla'][0];
   assert.equal(t.uretec.kaynak, 'uretec');
   assert.deepEqual(t.kitaplar.map((k) => k.id), IDLER6);
@@ -412,7 +413,20 @@ test('r2-kur R2 tabanı liste kitaplarını KAPSAMIYOR: taban ATLANIR, üreteç 
   const r = await isKostur({ o, taban: zip, anahtarli: () => false, job: { setListesi: LISTE6 } });
   assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata && r.hata.stack);
   assert.equal(r.casus.uretec, 1);
-  assert.match(r.loglar, /R2 taban ATLANDI \(liste 6 kitap, taban 4; eksik: 505, 506\)/);
+  assert.match(r.loglar, /taban ATLANDI — set eki sonrası eksik: 505, 506/);
+});
+
+test('r2-kur set eki eksiği TAMAMLIYOR (taban 4, liste 6, set eki 6 kitaplı yapıyor): taban KORUNUR, üreteç koşmaz', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { ar } = await kitapliTaban(['501', '502', '503', '504']);
+  const tam = (await kitapliTaban(IDLER6, { arsivde: false })).z;
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, job: { bookId: '45482', setListesi: LISTE6 },
+    setEkiFn: (a) => fsp.copyFile(tam, a.zip) });
+  assert.equal(r.casus.setEki, 1, 'set eki denendi');
+  assert.equal(r.casus.uretec, 0, 'set eki sonrası kapsıyor → üreteç koşmadı');
+  assert.doesNotMatch(r.loglar, /ATLANDI/);
+  assert.match(r.loglar, /taban: ARŞİV/);
+  assert.doesNotMatch(r.loglar + String(r.hata && r.hata.message), /kitap-eksik/);
 });
 
 test('r2-kur arşiv tabanı listeyi KAPSIYOR / FAZLA kitap içeriyor: taban KORUNUR, üreteç koşmaz', async () => {
