@@ -609,10 +609,17 @@ JS_AKT = r"""
    .some(e=>/aktivasyon/i.test(e.innerText||''));
  const inp=[...document.querySelectorAll('input[type=password]')].find(e=>{const q=e.getBoundingClientRect();return q.width>0&&q.height>0;});
  let g=null; if(inp){const q=inp.getBoundingClientRect(); g={x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)};}
- const H=window.innerHeight;
- const raf=[...document.images].filter(i=>{const q=i.getBoundingClientRect();
-   return i.naturalWidth>0&&q.width>=120&&q.height>=150&&q.y>=0&&q.y<H;})
-   .map(i=>{const q=i.getBoundingClientRect();return {id:'kapak',x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)};});
+ const H=window.innerHeight, W=window.innerWidth;
+ // Raf kapagi IKI bicimde: <img> YA DA background-image tasiyan DIV (45449 tek-motor raf, olculdu
+ // 03.10: kapaklar div.style-212 'url(.../assets/<id>/<guid>.png)', document.images bos -> raf=0,
+ // aktivasyon gercekten basariliyken c KALDI). Boyut: kapak olcusu, sayfa arka plani degil.
+ const kapakMi=q=>q.width>=120&&q.height>=150&&q.width<=W*0.5&&q.height<=H*0.8&&q.y>=0&&q.y<H;
+ const merkez=q=>({id:'kapak',x:Math.round(q.x+q.width/2),y:Math.round(q.y+q.height/2)});
+ const raf=[...document.images].filter(i=>i.naturalWidth>0&&kapakMi(i.getBoundingClientRect()))
+   .map(i=>merkez(i.getBoundingClientRect()))
+   .concat([...document.querySelectorAll('div,a,span,button')].filter(e=>{
+     const b=getComputedStyle(e).backgroundImage; return b&&b.indexOf('url(')>=0&&kapakMi(e.getBoundingClientRect());})
+     .map(e=>merkez(e.getBoundingClientRect())));
  const sn=[...document.querySelectorAll('[role=alert],.MuiSnackbarContent-message,.notistack-Snackbar')]
    .map(e=>(e.innerText||'').trim()).filter(Boolean).join(' | ').slice(0,120);
  return JSON.stringify({diyalog:d||(!!inp&&/aktivasyon/i.test(t)),girdi:g,hata:/aktivasyon kodu hatal/i.test(t),
@@ -771,15 +778,22 @@ def aktivasyon_ozeti(adimlar):
         return "KALDI", f"aktivasyon-{a} {s or 'olculmedi'}"
     return "GECTI", None
 
-def akt_durum_bekle(c, tavan=60, sakin=15):
-    """Diyalog gorunene ya da kitap diyalogsuz `sakin` sn acik kalana kadar yoklar."""
-    son = time.time() + tavan; kitap_ilk = None; o = {}
+def akt_durum_bekle(c, tavan=60, sakin=15, raf_yeter=False, raf_sakin=3):
+    """Diyalog gorunene ya da kitap diyalogsuz `sakin` sn acik kalana kadar yoklar.
+    raf_yeter=True (c adimi, tek-motor): diyalogsuz raf `raf_sakin` sn kararli kalinca da doner
+    (eskiden raf hic erken donus saymiyordu; 45 sn tavana kadar bekleyip son olcumu donuyordu)."""
+    son = time.time() + tavan; kitap_ilk = None; raf_ilk = None; o = {}
     while time.time() < son:
         o = c.jsj(JS_AKT) or {}
         if o.get("diyalog"): return o
         if o.get("kitapta"):
             kitap_ilk = kitap_ilk or time.time()
             if time.time() - kitap_ilk >= sakin: return o
+        if raf_yeter and o.get("raf"):
+            raf_ilk = raf_ilk or time.time()
+            if time.time() - raf_ilk >= raf_sakin: return o
+        else:
+            raf_ilk = None
         time.sleep(1)
     return o
 
@@ -870,7 +884,7 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     g = (c.jsj(JS_AKT) or {}).get("girdi") or o["girdi"]
     akt_kod_gir(c, g, kod); kod = None
     time.sleep(3)
-    o = akt_durum_bekle(c, tavan=45)
+    o = akt_durum_bekle(c, tavan=45, raf_yeter=True)
     A["c"] = {"sonuc": akt_karar("c", o), "olcum": olcum_ozeti(o)}
     akt_ekran(c, kimlik, "c", A["c"])
     if A["c"]["sonuc"] != "GECTI": return c, menuUrl, kitaplar

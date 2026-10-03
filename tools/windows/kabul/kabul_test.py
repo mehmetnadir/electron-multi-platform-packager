@@ -466,6 +466,26 @@ class AktivasyonTest(unittest.TestCase):
         r, c = self.kos()
         self.assertNotIn("pencere", r["aktivasyon"]["adimlar"]["a"])
 
+    def test_raf_dedektoru_background_image_kapaklari_tanir(self):
+        # 45449 kuru kosu 4 (03.10): kapaklar background-image DIV; document.images bos -> raf=0, c KALDI
+        self.assertIn("backgroundImage", kabul.JS_AKT)
+        self.assertIn("url(", kabul.JS_AKT)
+        self.assertIn("document.images", kabul.JS_AKT, "img kapaklar da tanınmaya devam eder")
+
+    def test_c_adimi_raf_gorunce_erken_doner(self):
+        class C:
+            n = 0
+            def jsj(s, e):
+                s.n += 1
+                return {"diyalog": False, "kitapta": False, "raf": [{"x": 1, "y": 1}] if s.n >= 3 else []}
+        c = C(); t0 = self.t[0]
+        o = kabul.akt_durum_bekle(c, tavan=45, raf_yeter=True)
+        self.assertTrue(o["raf"])
+        self.assertLess(self.t[0] - t0, 10, "raf kararlıysa 45 sn tavan beklenmez")
+        c2 = C(); t1 = self.t[0]
+        kabul.akt_durum_bekle(c2, tavan=45)
+        self.assertGreaterEqual(self.t[0] - t1, 45, "raf_yeter yoksa (d adımı) raf erken dönüş sayılmaz")
+
     def test_kod_hicbir_ciktiya_yazilmaz(self):
         r, c = self.kos()
         import json as _j
