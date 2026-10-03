@@ -98,6 +98,13 @@ class CDP:
     def tikla(self, x, y):
         for t in ("mousePressed", "mouseReleased"):
             self.cmd("Input.dispatchMouseEvent", type=t, x=x, y=y, button="left", clickCount=1)
+    def tus(self, key, code, vk, modifiers=0, text=None):
+        for t in ("keyDown", "keyUp"):
+            p = dict(type=t, key=key, code=code, windowsVirtualKeyCode=vk, nativeVirtualKeyCode=vk,
+                     modifiers=modifiers)
+            if text and t == "keyDown": p["text"] = text
+            self.cmd("Input.dispatchKeyEvent", **p)
+    def yaz(self, metin): self.cmd("Input.insertText", text=metin)
     def ekran(self): return base64.b64decode(self.cmd("Page.captureScreenshot", format="png")["data"])
     def kapat(self):
         try: self.ws.close()
@@ -356,6 +363,15 @@ JS_KANIT = r"""
  let en=[]; for(const k in kume) if(kume[k].length>en.length) en=kume[k];
  en.sort((a,b)=>a.getBoundingClientRect().x-b.getBoundingClientRect().x);
  const ilkR=en.length?en[0].getBoundingClientRect():null;
+ // Thumb ETIKETLERI (altindaki sayfa numarasi): serit o anki sayfaya KAYDIRILMIS olabilir —
+ // en soldaki thumb 1. sayfa DEGILDIR (olculdu 73768/book3: serit 8-12, 3 tiklama 8/136'da kaldi).
+ const yapraklar=[...document.querySelectorAll('div,span,p,small,label')].filter(e=>e.children.length===0
+   && /^\d{1,4}$/.test((e.innerText||e.textContent||'').trim()));
+ const etiket=[];
+ for(const i of en){const r=i.getBoundingClientRect();
+   const y=yapraklar.find(e=>{const q=e.getBoundingClientRect();const cx=q.x+q.width/2;
+     return cx>=r.x&&cx<=r.x+r.width&&q.y>=r.bottom-4&&q.y<=r.bottom+70;});
+   if(y) etiket.push({n:Number((y.innerText||y.textContent).trim()),x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});}
  const cvs=[...document.querySelectorAll('canvas.lower-canvas')];
  let enDolu=0,enRenk=0,cw=0,ch=0;
  for(const cv of cvs){try{const g=cv.getContext('2d');const w=cv.width,h=cv.height;
@@ -376,7 +392,28 @@ JS_KANIT = r"""
   thumbBoyut:ilkR?Math.round(ilkR.width)+'x'+Math.round(ilkR.height):null,
   canvasSayi:cvs.length,canvasDolu:enDolu,canvasRenk:enRenk,canvasW:cw,canvasH:ch,
   sayfa:m?m[0]:null,toplamSayfa:m?Number(m[2]):null,modal,
-  thumbIlk:ilkR?{x:Math.round(ilkR.x+ilkR.width/2),y:Math.round(ilkR.y+ilkR.height/2)}:null});})()"""
+  thumbIlk:ilkR?{x:Math.round(ilkR.x+ilkR.width/2),y:Math.round(ilkR.y+ilkR.height/2)}:null,
+  thumbEtiket:etiket});})()"""
+
+JS_SAYFA_KUTUSU = r"""
+(()=>{ // Sayfa gostergesi ("8/136") — seritten BAGIMSIZ 1. sayfaya gitmek icin. Kutuya tiklanir,
+ // 1 yazilip Enter'a basilir; olmazsa kutunun solundaki 'geri' dugmesi kullanilir.
+ const H=window.innerHeight,W=window.innerWidth;
+ const desen=/^\s*\d+\s*\/\s*\d+\s*$/;
+ let k=[...document.querySelectorAll('input')].find(e=>desen.test(e.value||''))
+   ||[...document.querySelectorAll('*')].find(e=>e.children.length===0&&desen.test((e.innerText||e.textContent||'')));
+ if(!k) return null;
+ const r=k.getBoundingClientRect(); if(!r.width||!r.height) return null;
+ const cx=r.x+r.width/2, cy=r.y+r.height/2;
+ let geri=null,en=1e9;
+ for(const e of document.querySelectorAll('button,a,div,span,svg,img')){
+   const q=e.getBoundingClientRect();
+   if(q.width<16||q.height<16||q.width>90||q.height>90) continue;
+   const qx=q.x+q.width/2, qy=q.y+q.height/2, dx=cx-qx;
+   if(dx<r.width/2+4||dx>r.width/2+110||Math.abs(qy-cy)>20) continue;
+   if(dx<en){en=dx;geri={x:Math.round(qx),y:Math.round(qy)};}}
+ return JSON.stringify({x:Math.round(cx),y:Math.round(cy),tag:k.tagName,
+   input:k.tagName==='INPUT',metin:(k.value||k.innerText||'').trim(),geri});})()"""
 
 JS_KITAPTA = "document.querySelectorAll('canvas.lower-canvas').length>0"
 
@@ -387,6 +424,63 @@ def ilk_sayfada_mi(sayfa):
     ile aciliyor), seritteki ilk thumb'a tiklanip 1'e gidilir (bkz. kitap_kanit())."""
     sy = str(sayfa or "")
     return bool(sy.startswith("1/") or sy.startswith("1 /"))
+
+def ilk_sayfa_plani(kanit):
+    """SAF KARAR: 1. sayfaya gitme yollari, sirayla (2026-10-03, 73768 kaniti).
+    Serit o anki sayfaya kaydirilmis olabilir: EN SOLDAKI thumb 1. sayfa DEGILDIR (book3: serit
+    8-12'yi gosteriyordu, en soldakine 3 kez tiklandi, 8/136'da kaldi). Bu yuzden:
+      - etiketi '1' olan thumb gorunuyorsa ona tikla ('etiket1');
+      - etiketler var ama 1 yoksa en soldakine TIKLAMA — sayfa kutusu ('kutu'), sonra geri
+        dugmesi ('geri');
+      - etiket hic okunamadiysa (baska tema) eski yol ('thumbIlk') once denenir, sonra kutu/geri."""
+    etiket = [e for e in (kanit.get("thumbEtiket") or []) if isinstance(e, dict)]
+    if any(e.get("n") == 1 for e in etiket): return ["etiket1"]
+    if etiket: return ["kutu", "geri"]
+    return (["thumbIlk"] if kanit.get("thumbIlk") else []) + ["kutu", "geri"]
+
+def geri_tiklama_sayisi(sayfa, tavan=40):
+    """SAF KARAR: '8/136' -> 7 geri tiklamasi (1. sayfaya); okunamazsa/zaten 1 ise 0; tavanla sinirli."""
+    m = re.match(r"^\s*(\d+)\s*/\s*\d+", str(sayfa or ""))
+    if not m: return 0
+    return max(0, min(int(m.group(1)) - 1, tavan))
+
+def ilk_sayfa_tamam(kanit):
+    """SAF KARAR: 1/N gosteriliyor VE tuval cizili (acilista 1/N olsa da tuval SEFFAF olabilir —
+    olculen gercek 5: thumb'a tiklanmadan cizilmez; o durumda gezinme yine yapilir)."""
+    return bool(ilk_sayfada_mi(kanit.get("sayfa")) and (kanit.get("canvasDolu") or 0) > 50
+                and (kanit.get("canvasRenk") or 0) > 1)
+
+def ilk_sayfaya_git(c, kanit, olc):
+    """ilk_sayfa_plani() sirasiyla dener; her adimdan sonra olcer, 1/N + cizili tuvalde durur."""
+    def yeni(y, yol):
+        y = y or {}
+        y["seritAnahtari"] = kanit.get("seritAnahtari"); y["ilkSayfaYolu"] = yol
+        return y
+    for yol in ilk_sayfa_plani(kanit):
+        if ilk_sayfa_tamam(kanit): break
+        if yol == "etiket1":
+            e = next(e for e in kanit["thumbEtiket"] if e.get("n") == 1)
+            c.tikla(e["x"], e["y"]); time.sleep(7); kanit = yeni(olc(), yol)
+        elif yol == "thumbIlk":
+            for _ in range(3):
+                if not kanit.get("thumbIlk"): break
+                c.tikla(kanit["thumbIlk"]["x"], kanit["thumbIlk"]["y"]); time.sleep(7)
+                kanit = yeni(olc(), yol)
+                if ilk_sayfa_tamam(kanit): break
+        elif yol == "kutu":
+            k = c.jsj(JS_SAYFA_KUTUSU)
+            if not k: kanit["kutuYok"] = True; continue
+            c.tikla(k["x"], k["y"]); time.sleep(1)
+            c.tus("a", "KeyA", 65, modifiers=2); c.yaz("1"); c.tus("Enter", "Enter", 13, text="\r")
+            time.sleep(7); kanit = yeni(olc(), yol)
+        elif yol == "geri":
+            k = c.jsj(JS_SAYFA_KUTUSU)
+            n = geri_tiklama_sayisi(kanit.get("sayfa"))
+            if not k or not k.get("geri") or not n: continue
+            for _ in range(n):
+                c.tikla(k["geri"]["x"], k["geri"]["y"]); time.sleep(1.2)
+            time.sleep(5); kanit = yeni(olc(), yol)
+    return kanit
 
 def kanit_sonucu(thumbOK, canvasDolu, canvasRenk, toplamSayfa, ilkSayfada):
     """SAF KARAR: kanit esigi (2026-09-22, EN YENI 02:42 — tek sayfa muafiyeti ile).
@@ -441,16 +535,10 @@ def kitap_kanit(c, kimlik, sira):
             if kanit.get("thumbOK", 0) >= 3: break
             if y: kanit = y
 
-    # ILK SAYFA: seritteki 1. kucuk gorsele tikla, sayfa gostergesi 1/N olana kadar dene
-    if kanit.get("thumbIlk"):
-        for _ in range(3):
-            c.tikla(kanit["thumbIlk"]["x"], kanit["thumbIlk"]["y"])
-            time.sleep(7)
-            y = olc()
-            if y:
-                y["seritAnahtari"] = kanit.get("seritAnahtari"); kanit = y
-            if ilk_sayfada_mi(kanit.get("sayfa")): break
-            if not kanit.get("thumbIlk"): break
+    # ILK SAYFA: seritten BAGIMSIZ (etiketi 1 olan thumb > sayfa kutusu > geri dugmesi);
+    # en soldaki thumb'a korlemesine tiklamak kaydirilmis seritte 1. sayfaya GOTURMEZ.
+    if not ilk_sayfa_tamam(kanit):
+        kanit = ilk_sayfaya_git(c, kanit, olc)
 
     kanit["atlandi"] = atlandi
     png = c.ekran()
@@ -467,6 +555,7 @@ def kitap_kanit(c, kimlik, sira):
     if muafiyet:
         kanit["muafiyet"] = muafiyet
     kanit.pop("thumbIlk", None)
+    kanit.pop("thumbEtiket", None)
     return kanit
 
 def menuye_don(c, menuUrl):

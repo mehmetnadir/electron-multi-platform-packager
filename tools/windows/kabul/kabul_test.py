@@ -274,5 +274,94 @@ class YerelKipTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.dizin, "x-menu.png")))
 
 
+class IlkSayfayaGitTest(unittest.TestCase):
+    """73768 kaniti (03.10, windows-kasa): serit 8-12'ye kaydirilmisti; en soldaki thumb'a 3 kez
+    tiklandi ve gosterge 8/136'da kaldi (book3), book1 12/172. 1. sayfaya seritten BAGIMSIZ gidilir."""
+
+    def setUp(self):
+        self._uyku = kabul.time.sleep
+        kabul.time.sleep = lambda *_: None
+
+    def tearDown(self):
+        kabul.time.sleep = self._uyku
+
+    class SahteOkuyucu:
+        """Kaydirilmis serit: gorunen thumb'lar [ilk..ilk+4]; kutu: (900,955), geri: (880,955)."""
+        def __init__(self, sayfa, toplam=136, serit_ilk=None, kutu_calisir=True, etiket=True):
+            self.sayfa, self.toplam, self.kutu_calisir, self.etiket = sayfa, toplam, kutu_calisir, etiket
+            self.serit_ilk = serit_ilk or sayfa
+            self.odak = False; self.yazilan = ""; self.tiklar = []
+        def thumblar(self):
+            return [{"n": self.serit_ilk + i, "x": 300 + 330 * i, "y": 720} for i in range(5)]
+        def olc(self):
+            t = self.thumblar()
+            k = {"sayfa": f"{self.sayfa}/{self.toplam}", "toplamSayfa": self.toplam, "thumbOK": 5,
+                 "canvasDolu": 3274, "canvasRenk": 170, "thumbIlk": {"x": t[0]["x"], "y": t[0]["y"]}}
+            if self.etiket: k["thumbEtiket"] = t
+            return k
+        # CDP yuzeyi
+        def tikla(self, x, y):
+            self.tiklar.append((x, y))
+            for t in self.thumblar():
+                if (x, y) == (t["x"], t["y"]): self.sayfa = t["n"]; return
+            if (x, y) == (900, 955): self.odak = True; return
+            if (x, y) == (880, 955) and self.sayfa > 1: self.sayfa -= 1
+        def tus(self, key, code, vk, modifiers=0, text=None):
+            if key == "a" and modifiers == 2: self.yazilan = ""
+            if key == "Enter" and self.odak and self.kutu_calisir and self.yazilan.isdigit():
+                self.sayfa = int(self.yazilan); self.serit_ilk = self.sayfa
+        def yaz(self, m): self.yazilan += m
+        def jsj(self, js):
+            if js is kabul.JS_SAYFA_KUTUSU:
+                return {"x": 900, "y": 955, "input": True, "geri": {"x": 880, "y": 955}}
+            return None
+
+    def test_plan_etiket_1_gorunuyorsa_dogrudan_ona(self):
+        k = self.SahteOkuyucu(sayfa=3, serit_ilk=1).olc()
+        self.assertEqual(kabul.ilk_sayfa_plani(k), ["etiket1"])
+
+    def test_plan_kaydirilmis_seritte_en_soldakine_tiklamaz(self):
+        k = self.SahteOkuyucu(sayfa=8).olc()
+        self.assertEqual(kabul.ilk_sayfa_plani(k), ["kutu", "geri"])
+
+    def test_plan_etiket_okunamazsa_eski_yol_once(self):
+        k = self.SahteOkuyucu(sayfa=8, etiket=False).olc()
+        self.assertEqual(kabul.ilk_sayfa_plani(k), ["thumbIlk", "kutu", "geri"])
+
+    def test_book3_kaniti_kutu_ile_1_136(self):
+        o = self.SahteOkuyucu(sayfa=8)
+        k = kabul.ilk_sayfaya_git(o, o.olc(), o.olc)
+        self.assertEqual(k["sayfa"], "1/136")
+        self.assertEqual(k["ilkSayfaYolu"], "kutu")
+        self.assertNotIn((300, 720), o.tiklar, "en soldaki (8) thumb'a korlemesine tiklanmadi")
+
+    def test_kutu_tutmazsa_geri_dugmesi(self):
+        o = self.SahteOkuyucu(sayfa=12, toplam=172, kutu_calisir=False)
+        k = kabul.ilk_sayfaya_git(o, o.olc(), o.olc)
+        self.assertEqual(k["sayfa"], "1/172")
+        self.assertEqual(k["ilkSayfaYolu"], "geri")
+
+    def test_eski_davranis_regresyonu_en_soldaki_thumb_8de_kalir(self):
+        # Eski kod: en soldakine 3 kez tikla. Kaydirilmis seritte 8/136'da kalir — kanitin aynisi.
+        o = self.SahteOkuyucu(sayfa=8)
+        for _ in range(3):
+            t = o.olc()["thumbIlk"]; o.tikla(t["x"], t["y"])
+        self.assertEqual(o.olc()["sayfa"], "8/136")
+
+    def test_acilista_1_sayfada_ama_tuval_seffafsa_yine_tiklanir(self):
+        o = self.SahteOkuyucu(sayfa=1, serit_ilk=1)
+        bos = dict(o.olc(), canvasDolu=0, canvasRenk=0)
+        self.assertFalse(kabul.ilk_sayfa_tamam(bos))
+        k = kabul.ilk_sayfaya_git(o, bos, o.olc)
+        self.assertEqual(k["ilkSayfaYolu"], "etiket1")
+        self.assertTrue(kabul.ilk_sayfa_tamam(k))
+
+    def test_geri_tiklama_sayisi(self):
+        self.assertEqual(kabul.geri_tiklama_sayisi("8/136"), 7)
+        self.assertEqual(kabul.geri_tiklama_sayisi("1/136"), 0)
+        self.assertEqual(kabul.geri_tiklama_sayisi("120/172"), 40)
+        self.assertEqual(kabul.geri_tiklama_sayisi(None), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
