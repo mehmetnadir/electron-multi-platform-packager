@@ -514,8 +514,10 @@ async function varsayilanKapakGetir(url) {
 function icerikDenetle(gDizin, id) {
   const eksik = [];
   if (!gDizin.has(ICERIK)) eksik.push(ICERIK);
-  if (!gDizin.has(KAPAK)) eksik.push(KAPAK);
-  if (!ILK_SAYFA.some((p) => gDizin.has(p))) eksik.push('pages/1.*');
+  const ilkSayfa = ILK_SAYFA.some((p) => gDizin.has(p));
+  // Kapak yoksa ilk sayfa kapak yerine geçer (11840 Games: thumbs/1.jpg yok) — icerikAc kopyalar.
+  if (!gDizin.has(KAPAK) && !ilkSayfa) eksik.push(`${KAPAK} (ya da pages/1.*)`);
+  if (!ilkSayfa && !eksik.length) eksik.push('pages/1.*');
   if (eksik.length) throw new Error(`${id} içerik zip'inde ${eksik.join(', ')} yok`);
   for (const ad of gDizin.keys()) {
     const rel = ig.girdiGoreli(path, ad);
@@ -569,6 +571,13 @@ async function icerikAc(k, hedef, komut) {
     try { return fs.statSync(path.join(hedef, g.ad)).size !== g.boyut; } catch (_) { return true; }
   });
   if (bozuk) throw new UretecHatasi(`${k.id} açma eksik: ${bozuk.ad}`, { kod: KOD.IO });
+  // Kapaksız içerik: ilk sayfa thumbs/1.jpg olarak kopyalanır (menü kartı + yazma kapısı KAPAK ölçütü aynı kalır).
+  if (!k.gDizin.has(KAPAK)) {
+    const ilk = ILK_SAYFA.find((p) => k.gDizin.has(p));
+    if (!ilk) throw new UretecHatasi(`${k.id} kapak ve ilk sayfa yok`, { kod: KOD.IO });
+    await fsp.mkdir(path.join(hedef, 'thumbs'), { recursive: true });
+    await fsp.copyFile(path.join(hedef, ilk), path.join(hedef, KAPAK));
+  }
 }
 
 async function menuYaz(kok, xml, menuBicimi, tohum) {

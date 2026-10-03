@@ -44,7 +44,7 @@ const icerik = (id) => ({
 });
 
 /** Kalıp build (Web-Z kabuğu + bookN motoru) ve içerik zip'leri; sahte getir/indir. */
-async function ortam({ idler = ['501', '502', '503'], dataBos = [], bc = {} } = {}) {
+async function ortam({ idler = ['501', '502', '503'], dataBos = [], bc = {}, kapaksiz = [], sayfasiz = [] } = {}) {
   const d = await fsp.mkdtemp(path.join(os.tmpdir(), 'uretec-test-'));
   const kalipDiz = path.join(d, 'kalip');
   const yamaAyar = { bookCount: 1, books: { book1: { assetId: '111', title: 'Eski', coverUrl: 'images/book1.png' } }, setTitle: 'Eski Set' };
@@ -75,7 +75,10 @@ async function ortam({ idler = ['501', '502', '503'], dataBos = [], bc = {} } = 
   const icerikler = {};
   for (const id of idler) {
     const k = path.join(d, `ic-${id}`);
-    await yaz(k, { ...icerik(id), ...(bc[id] ? { 'data/BookContent.xml': bc[id] } : {}) });
+    const ic = { ...icerik(id), ...(bc[id] ? { 'data/BookContent.xml': bc[id] } : {}) };
+    if (kapaksiz.includes(id)) delete ic['thumbs/1.jpg'];
+    if (sayfasiz.includes(id)) delete ic['pages/1.png'];
+    await yaz(k, ic);
     icerikler[id] = path.join(d, `${id}.zip`);
     await zipla(k, icerikler[id]);
   }
@@ -226,6 +229,31 @@ test('uret bookN: Web-Z kabuğu kökte, her kitap ayrı motor, eski kapak/kitap 
   assert.match(M.zipGirdiOku(cikti, dz.get('index.html')).toString(), /<title>Flashy Grade 4 Set<\/title>/);
   const kapi = yazmaKapisi({ zipYolu: cikti, setListesi: liste, tur: 'otomatik' });
   assert.equal(kapi.gecti, true, kapi.nedenler.join(' | '));
+});
+
+test('uret: kapaksız içerik (thumbs/1.jpg yok, pages/1 var) KABUL — ilk sayfa kapak olur; kapıdan GEÇER', async () => {
+  const o = await ortam({ kapaksiz: ['502'] });
+  const cikti = path.join(o.d, 'out', 'build.zip');
+  const liste = LISTE.split('\n').slice(0, 4).join('\n');
+  await U.uret({
+    setId: '74431', listeHam: liste, duzen: 'bookN', kabuk: 'kalip', kalipZip: o.kalipZip, cikti,
+    calisma: path.join(o.d, 'w'), onbellek: path.join(o.d, 'onb'), getir: o.getir, indir: o.indir, bekleMs: 0,
+  });
+  const dz = M.zipDizini(cikti);
+  assert.equal(M.zipGirdiOku(cikti, dz.get('book2/assets/502/thumbs/1.jpg')).toString(), 'sayfa-502');
+  assert.equal(M.zipGirdiOku(cikti, dz.get('book1/assets/501/thumbs/1.jpg')).toString(), 'kapak-501', 'kapaklı kitap aynen');
+  const kapi = yazmaKapisi({ zipYolu: cikti, setListesi: liste, tur: 'otomatik' });
+  assert.equal(kapi.gecti, true, kapi.nedenler.join(' | '));
+});
+
+test('uret: kapak da ilk sayfa da yoksa RED (kitap-eksik), build yazılmaz', async () => {
+  const o = await ortam({ kapaksiz: ['502'], sayfasiz: ['502'] });
+  const cikti = path.join(o.d, 'out', 'build.zip');
+  await assert.rejects(U.uret({
+    setId: '1', listeHam: LISTE, duzen: 'tek-motor', kalipZip: o.kalipZip, cikti, calisma: path.join(o.d, 'w'),
+    onbellek: path.join(o.d, 'onb'), getir: o.getir, indir: o.indir, bekleMs: 0,
+  }), (e) => e.kod === 'kitap-eksik' && e.eksik.some((x) => x.id === '502' && /thumbs\/1\.jpg/.test(x.sebep)));
+  assert.equal(fs.existsSync(cikti), false);
 });
 
 test('uret YA HEP YA HİÇ: bir kitap İmpark\'ta yoksa build YAZILMAZ (kitap-eksik)', async () => {
