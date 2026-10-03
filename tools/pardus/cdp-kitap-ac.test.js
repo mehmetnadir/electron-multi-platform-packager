@@ -117,8 +117,15 @@ async function sahteTarayici(o = {}) {
         if (e.includes('function domYokla')) return { result: { type: 'object', value: yoklama() } };
         if (e === 'location.href') return { result: { type: 'string', value: k.url } };
         if (e.includes('outerHTML')) return { result: { type: 'string', value: '<html><body>sahte</body></html>' } };
+        if (e.includes('#unitModal')) {
+          if (!k.modal) return { result: { type: 'boolean', value: false } };
+          k.uniteTiklama = (k.uniteTiklama || 0) + 1;
+          kitabaGec();
+          return { result: { type: 'boolean', value: true } };
+        }
         if (e.includes('el.click()')) {
           k.tiklama += 1;
+          if (o.uniteModali && e.includes('book1')) { k.modal = true; return { result: { type: 'boolean', value: true } }; }
           if (e.includes('book1') && o.tiklamaGezinir !== false) kitabaGec();
           return { result: { type: 'boolean', value: true } };
         }
@@ -361,6 +368,24 @@ test('taninmayan menu + konsolda pakette olmayan betik/stil + ReferenceError →
     assert.equal(r.kod, 1, r.cikti);
     assert.equal(r.v.E6, 'RED');
     assert.match(r.v.E6_SEBEP, /paket kusuru.*_design\/components\.js.*FlashyUI is not defined/);
+  } finally { await t.kapat(); }
+});
+
+test('ünite seçicili tema (Flashy): kart tıklaması modal açar, kabul ilk üniteye tıklar → E6=GECTI (59480)', async () => {
+  const t = await sahteTarayici({ baslangic: 'set', uniteModali: true });
+  try {
+    const r = await kos(t.port, ['--gezinme-sn', '1']);
+    assert.equal(r.v.E6, 'GECTI', r.cikti);
+    assert.match(r.v.E6_SEBEP || '', /okuyucu açıldı/);
+  } finally { await t.kapat(); }
+});
+
+test('kart tıklaması hiçbir şey açmıyorsa (modal da yok) RED kalır: ünite yolu sahte yeşil üretmez', async () => {
+  const t = await sahteTarayici({ baslangic: 'set', tiklamaGezinir: false, fareGezinir: false });
+  try {
+    const r = await kos(t.port, ['--gezinme-sn', '1']);
+    assert.equal(r.v.E6, 'RED', r.cikti);
+    assert.match(r.v.E6_SEBEP, /okuyucu açılmadı/);
   } finally { await t.kapat(); }
 });
 

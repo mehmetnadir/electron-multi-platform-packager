@@ -217,6 +217,14 @@ function tiklamaIfadesi(kart) {
     + 'if (!el) return false; el.click(); return true; })()';
 }
 
+/**
+ * Tema ÜNİTE SEÇİCİ (Flashy web-proxy-modern, `FlashyUI.Modal`): üniteli kitapta kart tıklaması
+ * kitabı açmaz, `#unitModal` içinde ünite listesi açar; kitap ilk ünite öğesine tıklanınca açılır
+ * (03.10, 59480: kart tıklandı, URL değişmedi → yanlış RED; menü doğruydu). Açık modal yoksa false.
+ */
+const UNITE_TIKLAMA_IFADESI = '(() => { const el = document.querySelector('
+  + '\'#unitModal:not([hidden]) .unit-item\'); if (!el) return false; el.click(); return true; })()';
+
 const bekle = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** sessionStorage anahtarı — kaydedici yazar, `kaydediciOku` okur. */
@@ -696,6 +704,14 @@ async function kos(a, sonuc) {
     let tiklandi = false;
     try { tiklandi = await cdp.degerlendir(tiklamaIfadesi(kart), 5000); } catch (_) { tiklandi = false; }
     let url = tiklandi ? await kitapAdresiBekle(cdp, a, bas) : '';
+    if (!url) {
+      let unite = false;
+      try { unite = await cdp.degerlendir(UNITE_TIKLAMA_IFADESI, 5000); } catch (_) { unite = false; }
+      if (unite) {
+        adim.yontem = 'dom+unite';
+        url = await kitapAdresiBekle(cdp, a, bas);
+      }
+    }
     if (!url && kart && Number.isFinite(kart.x) && Number.isFinite(kart.y)) {
       adim.yontem = tiklandi ? 'dom+cdp-fare' : 'cdp-fare (dom öğesi bulunamadı)';
       try { await fareTikla(cdp, kart.x, kart.y); } catch (_) { /* aşağıda URL söyler */ }
