@@ -69,7 +69,7 @@ const {
 const { artefaktOzeti } = require('./artefakt-kaniti');
 // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — uç istemcisi + yayın akışı tek modülde.
 const kaynakR2 = require('./kaynak-r2');
-const { yazmaKapisi } = require('./yazma-kapisi');
+const { yazmaKapisi, zipSayfaEnvanteri } = require('./yazma-kapisi');
 // Çevrimdışı aktivasyon anahtarları (imKeys.dll) — güvenlik 02.10, bkz. imkeys.js başlığı.
 const imKeys = require('./imkeys');
 
@@ -2110,6 +2110,11 @@ async function r2AlHazirla({ bookId, kaynak, zipPath, work }) {
   return { onbellek: false };
 }
 
+/** Önceki build (taban zip, henüz değiştirilmemiş iş kopyası) sayfa envanteri; okunamazsa null (kapı RED kalır). */
+function oncekiEnvanterOku(zip) {
+  try { return zipSayfaEnvanteri(zip); } catch (_) { return null; }
+}
+
 /**
  * r2-kur: TABANI iş kopyasına koyar — `tabanUrl` (önceki geçerli R2 build, sha doğrulanır) ya da
  * Mac arşivi. Dönüş `oncekiBoyut`: yazma kapısının %80 ölçütü için önceki geçerli build boyutu
@@ -2141,7 +2146,7 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null, ur
     const d = tabanAtla(indirilen);
     if (d.atla) return uretecleKur(`R2 tabanı ATLANDI (${d.sebep})`);
     await fsp.rename(indirilen, zipPath);
-    return { oncekiBoyut: oz.boyut };
+    return { oncekiBoyut: oz.boyut, oncekiEnvanter: oncekiEnvanterOku(zipPath) };
   }
   const { arsiv } = kaynak.taban;
   const da = tabanAtla(arsiv.zip);
@@ -2149,7 +2154,7 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null, ur
   await fsp.copyFile(arsiv.zip, zipPath, fs.constants.COPYFILE_FICLONE);
   log(`kaynak r2-kur ${kaynak.surum} (${bookId}) — taban: ARŞİV (${arsiv.etiket || '-'}, md5 ${arsiv.md5}`
     + `${arsiv.r2Surum ? `, R2 ${arsiv.r2Surum}` : ', elle yazılmış'})`);
-  return { oncekiBoyut: arsiv.r2Surum ? arsiv.boyut : null };
+  return { oncekiBoyut: arsiv.r2Surum ? arsiv.boyut : null, oncekiEnvanter: oncekiEnvanterOku(zipPath) };
 }
 
 /** (r2-kur ise) R2 kurma kilidini bırak + işin kirasını bırak (failed YAZILMAZ). @returns {Promise<{ertelendi: true, sebep: string}>} */
@@ -2494,12 +2499,15 @@ async function processJob(auth, job) {
     // DALGA B (B4): r2-al → hazır build (önbellek ya da imzalı GET + sha256/boyut doğrulama), olduğu
     // gibi; r2-kur → taban (R2 önceki geçerli build ya da arşiv). Kalanı aşağıdaki zincir.
     let r2OncekiBoyut = null;
+    let r2OncekiEnvanter = null;
     try {
       if (kaynak.tur === 'r2-al') {
         await r2AlHazirla({ bookId: job.bookId, kaynak, zipPath, work });
       }
       if (kaynak.tur === 'r2-kur') {
-        r2OncekiBoyut = (await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job })).oncekiBoyut;
+        const taban = await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job });
+        r2OncekiBoyut = taban.oncekiBoyut;
+        r2OncekiEnvanter = taban.oncekiEnvanter || null;
       }
     } catch (e) {
       // R2 indirmesi ağ hatasıyla tükendi → failed YAZILMAZ: (r2-kur ise kilit) + kira bırakılır.
@@ -2572,6 +2580,7 @@ async function processJob(auth, job) {
           throw e;
         }
         r2OncekiBoyut = null;
+        r2OncekiEnvanter = null;
         if (kaynak.merdiven && merdivenAcik()) {
           merdivenSonuc = await kaynakAdim.merdiven({
             zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
@@ -2610,7 +2619,7 @@ async function processJob(auth, job) {
       try {
         yayin = await kaynakR2.r2KurYayinla({
           job, zipYolu: zipPath, setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null,
-          oncekiBoyut: r2OncekiBoyut, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
+          oncekiBoyut: r2OncekiBoyut, oncekiEnvanter: r2OncekiEnvanter, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
           // Üreteç özeti `tamamla`ya (sunucu bilinmeyen alanı atar; kayıt `kaynak='uretec'` book-update işi).
           tamamlaEki: job.uretecOzeti ? { uretec: job.uretecOzeti } : {},

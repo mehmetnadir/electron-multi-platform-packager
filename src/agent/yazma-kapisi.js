@@ -43,7 +43,8 @@
  *      `data:`, `#`, kök-mutlak `/…` ve betik/mailto şemaları sayılmaz. RED `index-referans-eksik`.
  *      NOT: bu kapı ZIP'i ölçer; paketleyicinin sonradan dışladığı dosyayı (`!_*`) görmez — o sınıf
  *      için `webz-tema-kabuk` üretimi `_` önekli kök dizini reddeder + paket-disi-liste sözleşme testi.
- *   3. boyut ≥ oncekiBoyut × 0,8 (oncekiBoyut ya da boyut yoksa atlanır).
+ *   3. boyut ≥ oncekiBoyut × 0,8 (oncekiBoyut ya da boyut yoksa atlanır). Altındaysa ve önceki build
+ *      sayfa envanteri (`oncekiEnvanter`) kitap başına sayfa-tam ise RED değil UYARI `boyut-dustu-sayfa-tam`.
  * Zip listesi `icerik-kapisi.zipGirisAdlariniOku` (= `unzip -Z1`) ile okunur; adm-zip KULLANILMAZ
  * (2 GiB+ zip'te ERR_FS_FILE_TOO_LARGE). `__MACOSX`, `._*`, `.DS_Store` yok sayılır; tek sarmalayıcı
  * klasör bir seviye tolere edilir (icerik-kapisi ile aynı).
@@ -70,7 +71,7 @@ const KAPAK = 'thumbs/1.jpg';
 const KOD = Object.freeze({
   OKUNAMADI: 'giris-listesi-okunamadi', LISTE_YOK: 'liste-yok', KITAP_YOK: 'kitap-yok',
   KITAP_EKSIK: 'kitap-eksik', LISTE_DISI: 'liste-disi-kitap', ID_YOK: 'id-yok',
-  ICERIK_YOK: 'icerik-yok', KAPAK_YOK: 'kapak-yok', BOYUT: 'boyut-dustu', GIRIS_YOK: 'giris-yok',
+  ICERIK_YOK: 'icerik-yok', KAPAK_YOK: 'kapak-yok', BOYUT: 'boyut-dustu', BOYUT_SAYFA_TAM: 'boyut-dustu-sayfa-tam', GIRIS_YOK: 'giris-yok',
   REFERANS_EKSIK: 'index-referans-eksik',
 });
 
@@ -182,6 +183,62 @@ function varsayilanOkuyucu({ zipYolu, buildDizini, onEk }) {
   };
 }
 
+/**
+ * Kitap başına sayfa envanteri (boyut-düştü kararı için, 03.10 72380 dersi): `assets/<id>/pages/*`
+ * dosya sayısı + `data/BookContent.xml` `<Page>` sayısı. İmpark sayfaları yeniden sıkıştırınca
+ * boyut düşer ama sayfa sayısı düşmez; içerik kaybında sayı düşer. SAF (okuyucu verilir).
+ * @param {string[]} yollar kök-göreli dosya yolları (dizin girişleri atılmış)
+ * @returns {Record<string, {pages: number, xml: number|null}>}
+ */
+function sayfaEnvanteri(yollar, okuyucu) {
+  const env = {};
+  const al = (id) => { if (!env[id]) env[id] = { pages: 0, xml: null }; return env[id]; };
+  for (const y of yollar) {
+    const m = /^(?:book\d+\/)?assets\/([^/]+)\/pages\/.+$/.exec(y);
+    if (m) al(m[1]).pages += 1;
+  }
+  for (const y of yollar) {
+    const m = /^(?:(book\d+)\/)?assets\/([^/]+)\/data\/BookContent\.xml$/.exec(y);
+    if (!m) continue;
+    const b = okuyucu.veri(y);
+    if (b == null) continue;
+    const say = (b.toString('utf8').match(/<Page(?=[\s>/])/g) || []).length;
+    const e = al(m[2]);
+    e.xml = Math.max(e.xml == null ? 0 : e.xml, say);
+  }
+  return env;
+}
+
+/** Zip'ten envanter (önceki build için runner çağırır). Okunamazsa null → kapı fail-closed. I/O. */
+function zipSayfaEnvanteri(zipYolu, { listele = zipGirisAdlariniOku } = {}) {
+  try {
+    const { yollar, onEk } = kokuBul(girisleriTemizle(listele(zipYolu)).filter((y) => !y.endsWith('/')));
+    const env = sayfaEnvanteri(yollar, varsayilanOkuyucu({ zipYolu, onEk }));
+    return Object.keys(env).length ? env : null;
+  } catch (_) { return null; }
+}
+
+/**
+ * Boyut düşüşünde sayfa karşılaştırması. @returns {{tam: boolean, neden: string}}
+ * Fail-closed: önceki envanter yok/boş, kitap eksik, sayfa azalmış ya da sayılamıyor → tam=false.
+ */
+function sayfaTamMi(onceki, yeni) {
+  if (!onceki || typeof onceki !== 'object' || !Object.keys(onceki).length) {
+    return { tam: false, neden: 'önceki build sayfa envanteri yok' };
+  }
+  const sorunlar = [];
+  for (const [id, o] of Object.entries(onceki)) {
+    const y = yeni[id];
+    if (!y) { sorunlar.push(`kitap ${id} yeni build'de yok`); continue; }
+    if (!(o.pages > 0) && !(o.xml > 0)) { sorunlar.push(`kitap ${id}: önceki sayfa sayısı ölçülemedi`); continue; }
+    if (y.pages < o.pages) sorunlar.push(`kitap ${id}: pages/ ${y.pages} < önceki ${o.pages}`);
+    if (o.xml != null && (y.xml == null || y.xml < o.xml)) {
+      sorunlar.push(`kitap ${id}: BookContent <Page> ${y.xml == null ? 'okunamadı' : y.xml} < önceki ${o.xml}`);
+    }
+  }
+  return sorunlar.length ? { tam: false, neden: sorunlar.slice(0, 5).join('; ') } : { tam: true, neden: '' };
+}
+
 const metinOku = (okuyucu, yol) => {
   const b = okuyucu.veri(yol);
   return b == null ? null : b.toString('utf8');
@@ -274,12 +331,13 @@ function listeGirdileri(setListesi) {
  *   nedenler: string[], nedenKodlari: string[], notlar: string[] }}
  */
 function yazmaKapisi({
-  buildDizini, zipYolu, setListesi = null, oncekiBoyut = null, boyut = null, tur = 'otomatik',
-  vsler = {}, listele = zipGirisAdlariniOku, okuyucu = null,
+  buildDizini, zipYolu, setListesi = null, oncekiBoyut = null, oncekiEnvanter = null, boyut = null,
+  tur = 'otomatik', vsler = {}, listele = zipGirisAdlariniOku, okuyucu = null,
 } = {}) {
   const nedenler = [];
   const kodlar = new Set();
   const notlar = [];
+  const uyarilar = [];
   const eksikKimlikler = []; // `kitap-eksik` verilen liste kimlikleri (taban kapsama ölçüsü bunu kullanır)
   let listeKitapSayisi = null;
   const ret = (kod, mesaj) => { kodlar.add(kod); nedenler.push(`${KAPI_ISARETI} ${mesaj}`); };
@@ -442,12 +500,23 @@ function yazmaKapisi({
   let b = boyut;
   if (b == null && zipYolu) { try { b = fs.statSync(zipYolu).size; } catch (_) { b = null; } }
   if (oncekiBoyut != null && b != null && b < oncekiBoyut * BOYUT_ORANI) {
-    ret(KOD.BOYUT, `boyut ${b} < önceki ${oncekiBoyut} × ${BOYUT_ORANI}`);
+    const mesaj = `boyut ${b} < önceki ${oncekiBoyut} × ${BOYUT_ORANI}`;
+    // İmpark yeniden sıkıştırması (72380, PNG 531→142 MB) meşru: kitap başına sayfa sayısı önceki
+    // build'e eşit/fazlaysa UYARI; envanter yoksa ya da sayfa eksikse RED (fail-closed).
+    let sk = { tam: false, neden: 'yeni build envanteri okunamadı' };
+    try { sk = sayfaTamMi(oncekiEnvanter, sayfaEnvanteri(yollar, oku)); } catch (_) { /* RED */ }
+    if (sk.tam) {
+      uyarilar.push(KOD.BOYUT_SAYFA_TAM);
+      notlar.push(`UYARI ${KOD.BOYUT_SAYFA_TAM}: ${mesaj}; ${Object.keys(oncekiEnvanter).length} kitabın sayfaları tam`
+        + ' (yeniden sıkıştırma) — geçti');
+    } else {
+      ret(KOD.BOYUT, `${mesaj} (sayfa doğrulaması geçmedi: ${sk.neden})`);
+    }
   }
 
   return {
     gecti: nedenler.length === 0, kitaplar: denetlenecek, webzVarliklari, nedenler, nedenKodlari: [...kodlar], notlar,
-    eksikKimlikler, listeKitapSayisi, buildKitapSayisi: kitaplar.length,
+    eksikKimlikler, listeKitapSayisi, buildKitapSayisi: kitaplar.length, uyarilar,
   };
 }
 
@@ -463,5 +532,5 @@ function eksikKitaplar({ zipYolu, setListesi = null } = {}) {
 }
 
 module.exports = {
-  yazmaKapisi, eksikKitaplar, imparkKimligiMi, girisDosyasi, indexYerelReferanslari, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
+  yazmaKapisi, eksikKitaplar, sayfaEnvanteri, zipSayfaEnvanteri, sayfaTamMi, imparkKimligiMi, girisDosyasi, indexYerelReferanslari, varsayilanOkuyucu, KOD, KAPI_ISARETI, BOYUT_ORANI, ILK_SAYFA, KAPAK, ICERIK,
 };

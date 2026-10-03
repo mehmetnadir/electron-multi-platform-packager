@@ -278,7 +278,7 @@ test('r2KurYayinla 200: tamamla gövdesi {surum, sha256, boyut, kitaplar(vs merd
     kitaplar: [{ n: 1, id: '111', vs: 7, icerik: true, kapak: true }],
     uploadId: 'U1', r2ObjectKey: 'kaynak/45549/2.51.10/build.zip', parts: [{ partNumber: 1, etag: '"e1"' }],
   });
-  assert.deepEqual(a.sayac.kapiGirdi, { zipYolu: '/is/build.zip', setListesi: '111 | Kitap', oncekiBoyut: 100, tur: 'otomatik', vsler: { 1: 7 } });
+  assert.deepEqual(a.sayac.kapiGirdi, { zipYolu: '/is/build.zip', setListesi: '111 | Kitap', oncekiBoyut: 100, oncekiEnvanter: null, tur: 'otomatik', vsler: { 1: 7 } });
 });
 
 test('r2KurYayinla 45550: kapının webzVarliklari\'ı tamamla gövdesine ayrı alanda gider (kitaplar\'a karışmaz); notlar loglanır', async () => {

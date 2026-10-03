@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { yazmaKapisi } = require('./yazma-kapisi');
+const { yazmaKapisi, zipSayfaEnvanteri } = require('./yazma-kapisi');
 
 const FIK = path.join(__dirname, 'fixtures', 'yazma-kapisi');
 const f = (ad) => path.join(FIK, ad);
@@ -437,4 +437,53 @@ test('kök index.html yerel başvurusu zip\'te yoksa RED index-referans-eksik; v
   assert.deepEqual(yok.nedenKodlari, ['index-referans-eksik']);
   assert.match(yok.nedenler.join('|'), /styles\/tasarim\/tokens\.css/);
   assert.ok(!/yorum\.js|kok-mutlak|cdn\.x|sayfa\.html/.test(yok.nedenler.join('|')));
+});
+
+// --- 03.10 72380: İmpark yeniden sıkıştırması boyutu düşürür, sayfa sayısı düşmez ---
+
+test('boyut-dustu: sayfa tam → UYARI boyut-dustu-sayfa-tam geçer; sayfa eksik / envanter yok → RED', () => {
+  const sayfali = (sayi, xml = sayi) => {
+    const yollar = ['main.js', 'book1/assets/5/thumbs/1.jpg', 'book1/assets/5/data/BookContent.xml'];
+    for (let i = 1; i <= sayi; i += 1) yollar.push(`book1/assets/5/pages/${i}.png`);
+    const govde = Buffer.from(`<Book><Pages>${'<Page n="1"/>'.repeat(xml)}</Pages></Book>`);
+    return { yollar, okuyucu: { veri: (y) => (y.endsWith('BookContent.xml') ? govde : null), boyut: () => 1 } };
+  };
+  const onceki = { 5: { pages: 248, xml: 248 } };
+  const kos = (yeni, oncekiEnvanter) => yazmaKapisi({
+    zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => yeni.yollar, okuyucu: yeni.okuyucu,
+    oncekiBoyut: 587262473, boyut: 273968994, oncekiEnvanter,
+  });
+  const tam = kos(sayfali(248), onceki);
+  assert.equal(tam.gecti, true, tam.nedenler.join('|'));
+  assert.deepEqual(tam.uyarilar, ['boyut-dustu-sayfa-tam']);
+  assert.ok(tam.notlar.some((n) => /boyut-dustu-sayfa-tam/.test(n)));
+  assert.equal(kos(sayfali(260), onceki).gecti, true, 'sayfa fazlası geçer');
+  const eksik = kos(sayfali(247), onceki);
+  assert.equal(eksik.gecti, false);
+  assert.deepEqual(eksik.nedenKodlari, ['boyut-dustu']);
+  assert.equal(kos(sayfali(248, 247), onceki).gecti, false, 'XML <Page> eksik → RED');
+  assert.equal(kos(sayfali(247, 248), onceki).gecti, false, 'pages/ dosyası eksik (XML tam) → RED');
+  assert.equal(kos(sayfali(248), { 5: onceki[5], 6: { pages: 10, xml: 10 } }).gecti, false, 'önceki kitap yok → RED');
+  for (const yok of [null, {}]) {
+    const r = kos(sayfali(248), yok);
+    assert.equal(r.gecti, false, 'envanter yok → RED');
+    assert.deepEqual(r.nedenKodlari, ['boyut-dustu']);
+  }
+  // boyut düşmediyse envanter hiç bakılmaz
+  assert.equal(yazmaKapisi({ zipYolu: 'sahte.zip', setListesi: '5|Bir', listele: () => sayfali(248).yollar,
+    okuyucu: sayfali(248).okuyucu, oncekiBoyut: 100, boyut: 100 }).uyarilar.length, 0);
+});
+
+test('zipSayfaEnvanteri: gerçek zip\'ten kitap başına pages/ + <Page> sayısı; okunamayan zip null', () => {
+  const dizin = fs.mkdtempSync(path.join(os.tmpdir(), 'env-'));
+  const k = path.join(dizin, 'book1', 'assets', '7');
+  fs.mkdirSync(path.join(k, 'pages'), { recursive: true });
+  fs.mkdirSync(path.join(k, 'data'), { recursive: true });
+  for (const i of [1, 2, 3]) fs.writeFileSync(path.join(k, 'pages', `${i}.png`), 'x');
+  fs.writeFileSync(path.join(k, 'data', 'BookContent.xml'), '<Book><Pages><Page/><Page id="2"/><Page>a</Page></Pages></Book>');
+  const zip = path.join(dizin, 'b.zip');
+  const r = spawnSync('zip', ['-qr', zip, 'book1'], { cwd: dizin });
+  assert.equal(r.status, 0);
+  assert.deepEqual(zipSayfaEnvanteri(zip), { 7: { pages: 3, xml: 3 } });
+  assert.equal(zipSayfaEnvanteri(path.join(dizin, 'yok.zip')), null);
 });

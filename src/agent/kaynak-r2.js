@@ -338,7 +338,7 @@ function kaynakUcIstemcisi({
  *   ozet: object}>} `ozet` = `ozet()` dönüşü (md5 dahil — arşive yazım yeniden okumasın)
  */
 async function r2KurYayinla({
-  job, zipYolu, setListesi = null, oncekiBoyut = null, vsler = {}, istemci, kapi, ozet,
+  job, zipYolu, setListesi = null, oncekiBoyut = null, oncekiEnvanter = null, vsler = {}, istemci, kapi, ozet,
   parcalariYukle, parcaBoyutu = 64 * 1024 * 1024, simdi = Date.now(), log = () => {}, tamamlaEki = {},
   ekWebzVarliklari = [],
 }) {
@@ -350,7 +350,7 @@ async function r2KurYayinla({
     throw hata;
   };
 
-  const k = kapi({ zipYolu, setListesi, oncekiBoyut, tur: 'otomatik', vsler });
+  const k = kapi({ zipYolu, setListesi, oncekiBoyut, oncekiEnvanter, tur: 'otomatik', vsler });
   if (!k.gecti) {
     return birakVeFirlat(
       new KaynakR2Hatasi(`yazma kapısı RED — R2'ye yazılmadı, eski sürüm geçerli kalır: ${k.nedenler.join(' | ')}`, { nedenler: k.nedenler }),
