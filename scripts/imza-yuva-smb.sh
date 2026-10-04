@@ -19,6 +19,9 @@ hata() { log "HATA: $2" >&2; exit "$1"; }
 ms() { perl -MTime::HiRes=time -e 'printf("%d\n", time() * 1000)'; }
 boyut() { stat -f %z "$1" 2>/dev/null; }
 smb_mi() { case "$1" in ''|"$HOME"/Impark*|/Volumes/*) return 0 ;; esac; return 1; }
+# 04.10: yol ADI kanıt değil — Storage7 düşükken ~/Impark/... yerel diskte kalır, mkdir -p yerel
+# sahte yuva açar (45540 saatlerce yerel kopyada "imza bekledi"). Gerçek bağlılık: df kaynağı //…
+smb_bagli() { [ -d "$1" ] && df -P "$1" 2>/dev/null | tail -1 | grep -q '^//'; }
 ayni_mi() { # $1 bizim exe mi? boyut + (SMB_SHA=1 ise) F_NOCACHE ile tam sha256 geri okuma
   [ "$(boyut "$1")" = "$YEREL_BOYUT" ] || return 1
   [ "$SMB_SHA" = 0 ] || [ "$(py sha "$1")" = "$YEREL_SHA" ]; }
@@ -151,6 +154,7 @@ else
   TETIK_KOMUTU="yayincilikadm book exe-create $YUVA_ID --wait 0" # SABİT
   EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove --windows --yes $YUVA_ID"  # SABİT (--yes: onaysız no-op) — 2. denemeden önce yuva temizliği
   BILDIR_KOMUTU="bildir"                                         # SABİT — 2 denemede de tavan dolarsa
+  smb_bagli "$KOK" || hata 2 "yuva kökü SMB'ye bağlı değil (Storage7 düşük?) — yerel yola YAZILMAZ: $KOK"
   log "CANLI KİP — yuva: $KOK/$YUVA_ID/windows.exe"
   sleep 5
 fi

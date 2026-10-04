@@ -10,11 +10,21 @@ const W = require('./windows-serit');
 
 const cfg = { winImzaYuvaSunucu: '172.17.2.21', winImzaYuvaKoku: '/Users/x/Impark/Storage7/KitapTekExe' };
 
-test('yuva probu macOS: ping -c 1 -W 2000 + /bin/test -d (değişmedi)', () => {
+test('yuva probu macOS: ping -c 1 -W 2000 + /bin/test -d + SMB bağlama kanıtı (df kaynağı //)', () => {
   assert.deepEqual(W.yuvaProbKomutlari(cfg, 'darwin', '/node'), [
     ['ping', '-c', '1', '-W', '2000', '172.17.2.21'],
     ['/bin/test', '-d', cfg.winImzaYuvaKoku],
+    ['/bin/sh', '-c', 'df -P "$1" | tail -1 | grep -q "^//"', 'sh', cfg.winImzaYuvaKoku],
   ]);
+});
+
+test('GERİLEME 04.10: yerel dizin (SMB değil) yuva sayılmaz — Storage7 düşükken ~/Impark yerel kalır', async () => {
+  if (process.platform === 'win32') return;
+  const yerel = { winImzaYuvaSunucu: '', winImzaYuvaKoku: __dirname };
+  const k = W.yuvaProbKomutlari(yerel, process.platform, process.execPath);
+  assert.equal((await W.komutKos(k[0], { zamanAsimiMs: 8000 })).kod, 0, 'dizin var');
+  assert.notEqual((await W.komutKos(k[1], { zamanAsimiMs: 8000 })).kod, 0, 'ama SMB bağlaması değil');
+  assert.equal(await W.imzaYuvasiErisilirMi(yerel), false);
 });
 
 test('yuva probu Windows: ping -n 1 -w 2000 + node statSync (bash/test yok)', () => {

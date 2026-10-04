@@ -389,5 +389,14 @@ kontrol "(v) --tavan-dk/--tavan2-dk yanlış değer → çıkış 2" bash -c \
 kontrol "(vi) CANLI exe-remove komutu onaylı (--yes) ve yalnız windows" \
   grep -q 'EXE_REMOVE_KOMUTU="yayincilikadm book exe-remove --windows --yes \$YUVA_ID"' "$BETIK"
 
+# (vii) GERİLEME 04.10: Storage7 bağlı değilken ~/Impark/... yerel diskteydi; smb_mi yol ADINA bakıp
+# SMB saydı, hazırla mkdir -p ile YEREL sahte yuva açtı (45540 saatlerce yerelde "imza bekledi").
+SAHTE_EV="$TMP/sahte-ev"; SAHTE_KOK="$SAHTE_EV/Impark/Storage7/vhosts/akillitahta.ydspublishing.com/httpdocs/Uploads/KitapTekExe"
+mkdir -p "$SAHTE_KOK"; SON_LOG="$TMP/l-vii"
+HOME="$SAHTE_EV" bash "$BETIK" hazirla "$F/kitap.exe" > "$SON_LOG" 2>&1; RC_VII=$?
+kontrol "(vii) CANLI, yerel ~/Impark (SMB değil) → çıkış 2" [ "$RC_VII" = 2 ]
+kontrol "(vii) sebep: SMB'ye bağlı değil" icerir "$SON_LOG" "SMB'ye bağlı değil"
+kontrol "(vii) yerel sahte _hazir AÇILMADI" [ ! -e "$SAHTE_KOK/_hazir" ]
+
 echo "SONUÇ: $PASS PASS / $FAIL FAIL"
 [ "$FAIL" = 0 ]
