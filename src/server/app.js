@@ -504,7 +504,9 @@ app.post('/api/package', async (req, res) => {
       guncellemeTabani,
       // Paketin G sürümü (claim `surum`, G3 — 2026-09-26 madde 3): empp-set.json `surum` →
       // istemcinin monoton tabanı. appVersion'dan AYRI (sürüm etkisi ayrı karar).
-      surum
+      surum,
+      // Üretim ajanı (runner) işi: kanonik kabuk/motor yoksa paket DÜŞER (kanonik-sart.js).
+      kanonikSart
     } = req.body;
     
     // Debug: PWA config kontrolü
@@ -574,6 +576,7 @@ app.post('/api/package', async (req, res) => {
       setKimligi: setKimligiGecerli ? String(setKimligi).trim() : null,
       guncellemeTabani: guncellemeTabaniGecerli ? guncellemeTabani.trim() : null,
       surum: surumCozum.surum,
+      kanonikSart: kanonikSart === true,
       setKimligiSebebi: setKimligiSebepleri.length ? setKimligiSebepleri.join('; ') : null,
       priority,
       status: 'queued',

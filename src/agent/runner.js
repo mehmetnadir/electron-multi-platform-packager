@@ -1162,6 +1162,8 @@ async function packagerStartPackage(sessionId, packagerPlatform, appName, appVer
     joinUrl(CONFIG.packagerApi, 'api/package'),
     {
       sessionId, platforms: [packagerPlatform], appName, appVersion,
+      // Üretim ajanı işi: kanonik kabuk/motor yoksa paketleme DÜŞER (src/packaging/kanonik-sart.js).
+      kanonikSart: true,
       ...(logoId ? { logoId } : {}),
       // SET güncelleme kanalı (2026-09-23): claim'den geldiyse packagingService'e
       // AYNI istekte iletilir — packager TÜM yamalardan sonra guncelleme paketini

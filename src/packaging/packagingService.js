@@ -35,6 +35,7 @@ const paketManifesti = require('./paket-manifesti');
 const motorSurumu = require('./motor-surumu');
 const okuyucuKabugu = require('./okuyucu-kabugu');
 const setKimligi = require('./set-kimligi');
+const kanonikSart = require('./kanonik-sart');
 const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
 const icerikGuncelleme = require('./icerik-guncelleme');
 const windowsMimari = require('./windows-mimari');
@@ -690,6 +691,8 @@ MimeType=application/x-electron;
           console.warn('⚠️ Okuyucu kabuğu değiştirme başarısız (paketleme devam ediyor):', kabukError.message);
           kabukDamgasiSonucu = { durum: 'hata', hata: kabukError.message };
         }
+        // FAIL-CLOSED (2026-10-04): üretim işinde kanonik yoksa sessiz eski format YOK.
+        kanonikSart.sartiUygula('kabuk', kabukDamgasiSonucu, jobInfo);
       }
 
       // MOTOR "ESKİYSE DEĞİŞTİR" (Faz 3b, 2026-09-24, Nadir: "bizim derlediğimiz motor
@@ -712,6 +715,7 @@ MimeType=application/x-electron;
           console.warn('⚠️ Motor değiştirme başarısız (paketleme devam ediyor):', motorError.message);
           motorDamgasiSonucu = { durum: 'hata', hata: motorError.message };
         }
+        kanonikSart.sartiUygula('motor', motorDamgasiSonucu, jobInfo);
       }
       // Makine-okur tek satır (2026-09-26, E3/D-1): Pardus derleme betikleri (docker + ProBook)
       // bunu `tools/pardus/motor-kanonik.js son` ile okuyup ajan log'una taşır — kanonik

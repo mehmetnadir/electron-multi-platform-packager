@@ -24,6 +24,7 @@ function jobInfoKur(argv, env) {
     setKimligi: al('EMPP_G_SET_KIMLIGI'),
     guncellemeTabani: al('EMPP_G_GUNCELLEME_TABANI'),
     surum: al('EMPP_G_SURUM'),
+    kanonikSart: true, // üretim işi: kanonik kabuk/motor yoksa düşer (kanonik-sart.js)
   };
 }
 

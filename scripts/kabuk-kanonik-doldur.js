@@ -131,7 +131,7 @@ async function ana(argv) {
     zaman: new Date().toISOString(), dosyalar, cekirdek };
   await fs.writeFile(path.join(dizin, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await fs.writeFile(path.join(hedefKok, 'kanonik.json'),
-    `${JSON.stringify({ surum: bulunanSurum, dizin, kaynak: url, zaman: manifest.zaman }, null, 2)}\n`);
+    `${JSON.stringify({ surum: bulunanSurum, dizin: path.basename(dizin), kaynak: url, zaman: manifest.zaman }, null, 2)}\n`);
   console.log(`kanonik kabuk: ${bulunanSurum} (${dosyalar.length} dosya, main ${js}) → ${dizin}`);
   return manifest;
 }

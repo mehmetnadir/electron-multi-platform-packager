@@ -27,6 +27,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const fs = require('fs-extra');
+const { dizinCoz } = require('./kanonik-sart');
 const { surumKiyasla, surumParcala, rozetSurumuOku } = require('./motor-surumu');
 
 const KANONIK_YOLU_VARSAYILAN = process.env.EMPP_KABUK_KANONIK
@@ -50,6 +51,9 @@ async function kanonikKabukYukle(yol = KANONIK_YOLU_VARSAYILAN) {
   try {
     const k = JSON.parse(await fs.readFile(yol, 'utf8'));
     if (!k || !surumParcala(k.surum) || typeof k.dizin !== 'string') return null;
+    // TAŞINABİLİR (2026-10-04): göreli dizin kanonik.json'a göre; mutlak kayıt (başka makineden
+    // kopyalanmış) yoksa aynı adlı yerel alt dizine düşer. sha doğrulaması aynen sürer.
+    k.dizin = await dizinCoz(yol, k.dizin, (d) => fs.pathExists(d));
     const m = JSON.parse(await fs.readFile(path.join(k.dizin, 'manifest.json'), 'utf8'));
     if (m.surum !== k.surum || !/^[0-9a-f]{20}\.main\.js$/.test(m.main || '')) return null;
     if (!Array.isArray(m.dosyalar) || !m.dosyalar.some((d) => d.ad === m.main)) return null;
