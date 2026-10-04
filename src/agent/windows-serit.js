@@ -449,7 +449,7 @@ function yuvaProbKomutlari(cfg, platform = process.platform, node = process.exec
       : ['ping', '-c', '1', '-W', '2000', cfg.winImzaYuvaSunucu]);
   }
   k.push(platform === 'win32'
-    ? [node, '-e', 'process.exit(require("fs").statSync(process.argv[1]).isDirectory()?0:1)', cfg.winImzaYuvaKoku]
+    ? [node, '-e', WIN_YUVA_PROBU, cfg.winImzaYuvaKoku, YUVA_ID]
     : ['/bin/test', '-d', cfg.winImzaYuvaKoku]);
   // 04.10: dizinin VARLIĞI kanıt değil — Storage7 düşükken ~/Impark/... yerel diskte kalır (45540
   // yerel sahte yuvada saatlerce bekledi). macOS/Linux'ta kök gerçekten SMB bağlamasında mı (df kaynağı //…).
@@ -460,9 +460,25 @@ function yuvaProbKomutlari(cfg, platform = process.platform, node = process.exec
   return k;
 }
 
+/**
+ * win32 dizin probu (FAIL-CLOSED, 04.10): "yol var" yetmez — kök LİSTELENEBİLMELİ ve içinde 66902
+ * klasörü görünmeli, 66902 de listelenebilmeli. Mac'te Storage7 bağlı değilken yerel diske yazılan
+ * "yuva" saatlerce beklendi (yol var diye erişilebilir sayıldı); kasada aynı sınıf açılmasın.
+ */
+const WIN_YUVA_PROBU = 'const fs=require("fs"),p=require("path");try{const k=process.argv[1],y=process.argv[2];'
+  + 'if(!fs.readdirSync(k).includes(y))process.exit(2);fs.readdirSync(p.join(k,y));process.exit(0)}'
+  + 'catch(e){process.exit(1)}';
+
+/** SAF: win32'de yuva kökü gerçek bir UNC paylaşımı mı (\\\\sunucu\\paylaşım\\…). Yerel yol → false. */
+function yuvaKokuUncMu(kok) {
+  return /^\\\\[^\\/]+[\\/][^\\/]+/.test(String(kok || ''));
+}
+
 /** İmpark sunucusu ping'e cevap veriyor ve yuva kökü görünüyor mu (sınırlı süreli, asılmaz). */
 async function imzaYuvasiErisilirMi(cfg) {
   if (!cfg.winImzaYuvaKoku) return false; // win32 kapısı: kök verilmedi
+  // FAIL-CLOSED: win32'de yerel bir yol "yuva" sayılmaz (yerel diske yazıp imza beklemek = sessiz duruş).
+  if (process.platform === 'win32' && !yuvaKokuUncMu(cfg.winImzaYuvaKoku)) return false;
   const komutlar = yuvaProbKomutlari(cfg);
   for (let i = 0; i < komutlar.length; i += 1) {
     const son = i === komutlar.length - 1;
@@ -874,6 +890,7 @@ module.exports = {
   ISARET, YUVA_ID, SURUM_DESENI, KAPI_ZORUNLU_PASS, KAPI_IZINLI_OLCULEMEDI, KOK_INDEX_YOLU,
   varsayilanAyarlar, onKosul, imzaDosyaAdi, kapiCiktisiniAyristir, kapiKarari, imzaDogrulamaKarari,
   peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
+  yuvaKokuUncMu, WIN_YUVA_PROBU,
   yuvaProbKomutlari,
   imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
   kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, dosyaKilidiDene, tetikCek, imzaEnv, WIN_YUVA_KOKU, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,

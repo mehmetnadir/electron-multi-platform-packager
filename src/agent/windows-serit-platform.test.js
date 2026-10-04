@@ -39,11 +39,26 @@ test('yuva probu: sunucu boşsa ping atlanır', () => {
   assert.equal(W.yuvaProbKomutlari({ ...cfg, winImzaYuvaSunucu: '' }, 'win32', 'n').length, 1);
 });
 
-test('Windows dizin probu gerçekten çalışır: var olan dizin 0, olmayan ≠0 (bu makinenin node\'u ile)', async () => {
-  const [, prob] = W.yuvaProbKomutlari({ ...cfg, winImzaYuvaKoku: __dirname }, 'win32', process.execPath);
-  assert.equal((await W.komutKos(prob, { zamanAsimiMs: 8000 })).kod, 0);
-  const [, yok] = W.yuvaProbKomutlari({ ...cfg, winImzaYuvaKoku: `${__dirname}/yok-boyle-dizin` }, 'win32', process.execPath);
-  assert.notEqual((await W.komutKos(yok, { zamanAsimiMs: 8000 })).kod, 0);
+test('Windows yuva probu FAIL-CLOSED: kök + 66902 listelenebilmeli; "yol var" yetmez (04.10)', async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'yuva-prob-'));
+  const kos = async (k) => {
+    const [, prob] = W.yuvaProbKomutlari({ ...cfg, winImzaYuvaKoku: k }, 'win32', process.execPath);
+    return (await W.komutKos(prob, { zamanAsimiMs: 8000 })).kod;
+  };
+  assert.notEqual(await kos(kok), 0, 'kök var ama 66902 yok → erişilemez');
+  fs.mkdirSync(path.join(kok, W.YUVA_ID));
+  assert.equal(await kos(kok), 0, 'kök + 66902 listelenebilir → erişilir');
+  assert.notEqual(await kos(path.join(kok, 'yok-boyle-dizin')), 0);
+});
+
+test('yuvaKokuUncMu: yalnız \\\\sunucu\\paylaşım kabul; yerel yol ve yarım UNC red', () => {
+  assert.equal(W.yuvaKokuUncMu(W.WIN_YUVA_KOKU), true);
+  assert.equal(W.yuvaKokuUncMu('\\\\172.17.2.23\\Storage7'), true);
+  assert.equal(W.yuvaKokuUncMu('C:\\Users\\Administrator\\yuva'), false);
+  assert.equal(W.yuvaKokuUncMu('D:\\empp-ajan\\Storage7'), false);
+  assert.equal(W.yuvaKokuUncMu('\\\\sunucu'), false);
+  assert.equal(W.yuvaKokuUncMu(''), false);
 });
 
 test('win32 varsayılanları: Node gözcü + istek dosyası + Authenticode; yuva kökü kapılı (boş → hazır kip)', async () => {

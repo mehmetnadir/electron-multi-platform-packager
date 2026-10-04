@@ -82,6 +82,9 @@ function ayarlar(env, bayrak, platform = process.platform) {
     o.authenticode = false;
   } else {
     o.kok = env.EMPP_IMZA_YUVA_KOKU || (platform === 'win32' ? UNC_KOK : MAC_KOK);
+    // FAIL-CLOSED (04.10): win32 canlı kipte yuva kökü UNC olmalı — yerel yola 'yuva' yazıp imza beklemek
+    // sessiz duruştur (Mac'te Storage7 bağlı değilken yaşandı). Yerel deneme yalnız KURU kipte.
+    if (platform === 'win32' && !W.yuvaKokuUncMu(o.kok)) hata(2, `win32 canlı kipte yuva kökü UNC olmalı: ${o.kok}`);
     o.imzaliDizin = env.IMZALI_DIZIN || null; // null → yerel exe'nin yanında imzali/
     o.istekDizini = I.varsayilanIstekDizini(env);
     o.authenticode = platform === 'win32';

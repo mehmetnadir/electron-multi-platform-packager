@@ -167,6 +167,13 @@ test('canlı win32 varsayılan kökü Storage7 UNC (172.17.2.23), Authenticode a
   assert.equal(o.tavan2Sn, 60 * 60);
 });
 
+test('canlı win32 FAIL-CLOSED: yerel yuva kökü reddedilir (çıkış 2); macOS ve KURU etkilenmez (04.10)', () => {
+  assert.throws(() => Y.ayarlar({ EMPP_IMZA_YUVA_KOKU: 'C:\\Users\\Administrator\\yuva' }, {}, 'win32'),
+    (e) => e instanceof Y.CikisHatasi && e.kod === 2 && /UNC olmalı/.test(e.message));
+  assert.equal(Y.ayarlar({ EMPP_IMZA_YUVA_KOKU: Y.UNC_KOK }, {}, 'win32').kok, Y.UNC_KOK);
+  assert.doesNotThrow(() => Y.ayarlar({ EMPP_IMZA_YUVA_KOKU: '/tmp/yerel-yuva' }, {}, 'darwin'));
+});
+
 test('hizli-kontrol: imzalı+bizim 0 · imzasız 3 · yabancı imzacı 4 · gövde farklı 4 · BMPString imzacı 0', async () => {
   const o = ortam();
   const yaz = (ad, b) => { const p = path.join(o.is, ad); fs.writeFileSync(p, b); return p; };
