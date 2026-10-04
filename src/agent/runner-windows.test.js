@@ -267,6 +267,7 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false
   Object.assign(CONFIG, {
     apiBase: api.url, packagerApi: paketleyici.url,
     winImzaBetigi: araclar.imzaSh, winImzaKabuk: 'bash', winImzaYuvaKoku: yuvaKok, winImzaYuvaSunucu: '',
+    winYuvaSmbSart: false, // sahte YEREL yuva (gerçek SMB değil) — 04.10 df kanıtı testte kapalı
     winImzaTetik: araclar.tetik, winImzaYuvaTemizle: araclar.temizle,
     winImzaKilit: path.join(tmp('kilit'), 'imza-yuva.kilit'),
     winImzaYabanciDesen: `rwin-yok-boyle-bir-surec-${crypto.randomBytes(6).toString('hex')}`,

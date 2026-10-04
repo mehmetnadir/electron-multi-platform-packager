@@ -453,7 +453,8 @@ function yuvaProbKomutlari(cfg, platform = process.platform, node = process.exec
     : ['/bin/test', '-d', cfg.winImzaYuvaKoku]);
   // 04.10: dizinin VARLIĞI kanıt değil — Storage7 düşükken ~/Impark/... yerel diskte kalır (45540
   // yerel sahte yuvada saatlerce bekledi). macOS/Linux'ta kök gerçekten SMB bağlamasında mı (df kaynağı //…).
-  if (platform !== 'win32') {
+  // Varsayılan ŞART; yalnız sahte yerel yuvayla koşan testler `winYuvaSmbSart: false` verir.
+  if (platform !== 'win32' && cfg.winYuvaSmbSart !== false) {
     k.push(['/bin/sh', '-c', 'df -P "$1" | tail -1 | grep -q "^//"', 'sh', cfg.winImzaYuvaKoku]);
   }
   return k;
