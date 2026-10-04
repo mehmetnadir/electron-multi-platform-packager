@@ -64,7 +64,7 @@ test('eski kabuk → her bookN değişir, rozet kanonik; içerik/app.config DOKU
     assert.equal(await fs.readFile(path.join(b, 'icons.js'), 'utf8'), 'YENI-IKON');
     assert.equal(await fs.readFile(path.join(b, 'app.config.js'), 'utf8'), 'KITABA-OZGU');
     assert.equal(await fs.readFile(path.join(b, 'assets/1/pages/1.png'), 'utf8'), 'SAYFA');
-    assert.ok(await fs.pathExists(path.join(b, `${H('a')}.main.js`)), 'eski hash dosyası yerinde (çakışmaz)');
+    assert.equal(await fs.pathExists(path.join(b, `${H('a')}.main.js`)), false, 'ölü eski main.js kökte yok');
     const yedek = path.join(tmp, '.empp-eski', 'paket', 'book1');
     assert.equal(await fs.readFile(path.join(yedek, 'icons.js'), 'utf8'), 'ESKI-IKON');
     assert.ok((await fs.readFile(path.join(yedek, 'index.html'), 'utf8')).includes(H('a')));
@@ -192,5 +192,41 @@ test('ÇEKİRDEK: kabuk zaten kanonikse yalnız eksik varlık eklenir, başka do
     assert.equal(await fs.readFile(path.join(kok, 'book1/core/jump-to-page-icon.png'), 'utf8'), 'PNG');
     assert.equal(await fs.readFile(path.join(kok, 'book1/icons.js'), 'utf8'), 'ESKI-IKON');
     assert.equal(await fs.pathExists(path.join(tmp, '.empp-eski')), false);
+  } finally { await fs.remove(tmp); }
+});
+
+test('indexMainReferanslari: ./önek, ?v= sorgusu, link href → taban adlar', () => {
+  const html = '<script defer src="./abc123.main.js"></script><script src="def.main.js?v=3"></script>'
+    + '<link href="x9.main.css" rel=stylesheet><script src="app.config.js"></script>';
+  assert.deepEqual(K.indexMainReferanslari(html), { js: ['abc123.main.js', 'def.main.js'], css: ['x9.main.css'] });
+  assert.deepEqual(K.indexMainReferanslari('<head></head>'), { js: [], css: [] });
+});
+
+test('ESKİ MAIN: değişim sonrası eski main.js/main.css yedeğe taşınır, kökte kalmaz', async () => {
+  const { tmp, kok, kYol } = await alanKur();
+  try {
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.ok(d.kitaplar.every((k) => k.karar === 'degisti' && k.eskiMainTasinan === 2));
+    const b = path.join(kok, 'book1');
+    const yedek = path.join(tmp, '.empp-eski', 'paket', 'book1');
+    for (const ad of [`${H('a')}.main.js`, `${H('c')}.main.css`]) {
+      assert.equal(await fs.pathExists(path.join(b, ad)), false, `${ad} kökte yok`);
+      assert.ok(await fs.pathExists(path.join(yedek, ad)), `${ad} yedekte var`);
+    }
+  } finally { await fs.remove(tmp); }
+});
+
+test('ESKİ MAIN: eski ad kanonikle aynıysa taşınmaz', async () => {
+  const { tmp, kok, kYol, main, mainCss } = await alanKur({ kitapSayisi: 1 });
+  try {
+    const b = path.join(kok, 'book1');
+    await fs.copy(path.join(b, `${H('a')}.main.js`), path.join(b, main));
+    await fs.copy(path.join(b, `${H('c')}.main.css`), path.join(b, mainCss));
+    await fs.writeFile(path.join(b, 'index.html'),
+      `<head><script defer src="./${main}"></script><link href="./${mainCss}" rel="stylesheet"></head>`);
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.kitaplar[0].karar, 'degisti');
+    assert.equal(d.kitaplar[0].eskiMainTasinan, 0);
+    assert.ok(await fs.pathExists(path.join(b, main)) && await fs.pathExists(path.join(b, mainCss)));
   } finally { await fs.remove(tmp); }
 });

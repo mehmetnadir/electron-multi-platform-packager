@@ -108,6 +108,16 @@ function indexYenidenYaz(html, main, mainCss) {
   return yeni;
 }
 
+/** index.html'in referans verdiği *.main.js / *.main.css taban adları. SAF. */
+function indexMainReferanslari(html) {
+  const al = (re) => [...String(html).matchAll(re)].map((m) => m[1]);
+  const benzersiz = (a) => [...new Set(a)];
+  return {
+    js: benzersiz(al(/src\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.js)(?:[?#][^"']*)?["']/g)),
+    css: benzersiz(al(/href\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.css)(?:[?#][^"']*)?["']/g)),
+  };
+}
+
 /** Tek kitap kararı. SAF. */
 function kabukKarari(kopyaSurum, kanonik) {
   if (!kanonik || !surumParcala(kanonik.surum)) return 'bilinmiyor';
@@ -178,6 +188,7 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
         const idx = path.join(dir, 'index.html');
         const html = await fs.readFile(idx, 'utf8');
         const yeniHtml = indexYenidenYaz(html, kanonik.main, kanonik.mainCss);
+        const eskiRef = indexMainReferanslari(html);
         await yedekle(idx);
         await fs.writeFile(idx, yeniHtml, 'utf8');
         const vt = path.join(dir, 'version.txt');
@@ -187,6 +198,19 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
         }
         const sonra = await rozetSurumuOku(dir);
         if (sonra.surum !== kanonik.surum) throw new Error(`rozet ${sonra.surum} ≠ ${kanonik.surum}`);
+        // ölü kalan eski main.js/main.css: yedeğe TAŞI (silme yok), hata dalı geri koyar
+        let eskiMain = 0;
+        const eskiAdlar = [
+          ...eskiRef.js.filter((a) => a !== kanonik.main),
+          ...eskiRef.css.filter((a) => a !== kanonik.mainCss),
+        ];
+        for (const ad of eskiAdlar) {
+          const hedef = path.join(dir, ad);
+          if (!(await fs.pathExists(hedef))) continue;
+          await yedekle(hedef);
+          eskiMain += 1;
+        }
+        kayit.eskiMainTasinan = eskiMain;
         kayit.karar = 'degisti';
         kayit.sonraSurum = sonra.surum;
         kayit.tasinan = tasinan.length;
@@ -256,6 +280,7 @@ module.exports = {
   kitapDizinleri,
   tamAdlaVarMi,
   indexYenidenYaz,
+  indexMainReferanslari,
   kabukKarari,
   okuyucuKabuguDegistir,
   kabukKapisi,
