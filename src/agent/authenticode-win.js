@@ -9,10 +9,22 @@
  *
  * PowerShell çıktısı UTF-8 JSON'un base64'ü olarak alınır: konsol kod sayfası (cp857/cp1254)
  * "İm Park Bilişim"i bozamaz.
+ *
+ * Kasa ölçümü (04.10, ilk canlı imza 72378): imza Valid iken hüküm "çıktısı çözülemedi" dedi. İki kök:
+ *   1) windows-serit.komutKos `detached: true` ile başlatır; Windows'ta bu, powershell'e ayrı konsol
+ *      verir ve stdout boru'ya hiç düşmez (ölçüm: detached → 0 B, değil → 1188 B).
+ *   2) powershell ilk kullanımda stderr'e CLIXML ilerleme kaydı yazar ("Preparing modules for first
+ *      use", 616 B); komutKos stdout+stderr'i birleştirdiği için "son kelime" base64 değildi.
+ * Bu yüzden: kendi ayrık-olmayan koşucusu (yalnız stdout çözülür), `$ProgressPreference` kapalı ve
+ * base64 `EMPPAC:` işaretiyle aranır.
  */
+const { spawn } = require('child_process');
+
+const ISARET = 'EMPPAC:';
 
 const PS_BETIK = [
   "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
   '$s = Get-AuthenticodeSignature -LiteralPath $env:EMPP_AUTHENTICODE_YOL',
   '$zincir = @()',
   'if ($s.SignerCertificate) {',
@@ -31,7 +43,7 @@ const PS_BETIK = [
   '  Zincir = $zincir',
   '}',
   '$j = $o | ConvertTo-Json -Compress -Depth 4',
-  '[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j)))',
+  "[Console]::Out.Write('EMPPAC:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j)))",
 ].join('\n');
 
 /** powershell argv'si (-EncodedCommand: UTF-16LE base64 — tırnak/kaçış sorunu yok). Saf. */
@@ -40,9 +52,12 @@ function authenticodeArgv(powershell = 'powershell.exe') {
     '-EncodedCommand', Buffer.from(PS_BETIK, 'utf16le').toString('base64')];
 }
 
-/** Base64 çıktıyı nesneye çevirir; çözülemezse null. Saf. */
+/** Base64 çıktıyı nesneye çevirir; çözülemezse null. Saf. Önce `EMPPAC:` işareti (araya stderr
+ *  karışsa da bulunur), yoksa eski biçim: son boşluksuz kelime. */
 function authenticodeCozumle(cikti) {
-  const s = String(cikti || '').trim().split(/\s+/).pop() || '';
+  const ham = String(cikti || '');
+  const m = new RegExp(`${ISARET}([A-Za-z0-9+/=]+)`).exec(ham);
+  const s = m ? m[1] : (ham.trim().split(/\s+/).pop() || '');
   if (!/^[A-Za-z0-9+/=]+$/.test(s)) return null;
   try {
     const o = JSON.parse(Buffer.from(s, 'base64').toString('utf8'));
@@ -83,10 +98,50 @@ function authenticodeKarari(r, beklenenImzaci) {
   return sonuc(true, 'ok');
 }
 
-/** Dosyayı doğrular (yalnız win32). komutKos: windows-serit.komutKos imzası. */
-async function authenticodeDogrula(dosya, { komutKos, beklenenImzaci, powershell, zamanAsimiMs = 10 * 60000 }) {
-  const r = await komutKos(authenticodeArgv(powershell), { env: { EMPP_AUTHENTICODE_YOL: dosya }, zamanAsimiMs });
+/**
+ * powershell koşucusu: AYRIK DEĞİL (detached Windows'ta stdout'u boru dışına atar) ve yalnız stdout
+ * çözülür; stderr ayrı tutulur, çıkış kodu ≠ 0 ise sebebe eklenir. komutKos ile aynı sonuç biçimi.
+ */
+function psKos(argv, { env = {}, zamanAsimiMs = 0, kosucu = spawn } = {}) {
+  return new Promise((coz) => {
+    let bitti = false;
+    const bitir = (v) => { if (!bitti) { bitti = true; coz(v); } };
+    let cocuk;
+    try {
+      cocuk = kosucu(argv[0], argv.slice(1), {
+        env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      });
+    } catch (e) { bitir({ kod: -1, hata: e.message, cikti: '', zamanAsimi: false }); return; }
+    let out = '';
+    let err = '';
+    let zamanAsimi = false;
+    cocuk.stdout.on('data', (d) => { out += d.toString(); });
+    cocuk.stderr.on('data', (d) => { err += d.toString(); });
+    const t = zamanAsimiMs > 0 ? setTimeout(() => {
+      zamanAsimi = true;
+      try { cocuk.kill(); } catch (_) { /* ölü */ }
+    }, zamanAsimiMs) : null;
+    cocuk.on('error', (e) => { if (t) clearTimeout(t); bitir({ kod: -1, hata: e.message, cikti: out, zamanAsimi }); });
+    cocuk.on('close', (kod) => {
+      if (t) clearTimeout(t);
+      const k = kod == null ? -1 : kod;
+      bitir({ kod: k, cikti: k === 0 ? out : `${out}${err}`, hataCikti: err, zamanAsimi });
+    });
+  });
+}
+
+/**
+ * Dosyayı doğrular (yalnız win32). `komutKos` geriye uyum için kabul edilir ama KULLANILMAZ
+ * (ayrık başlatır → stdout kaybolur, yukarıdaki ölçüm); `kos` test için enjekte edilebilir.
+ */
+// eslint-disable-next-line no-unused-vars
+async function authenticodeDogrula(dosya, {
+  komutKos, beklenenImzaci, powershell, zamanAsimiMs = 10 * 60000, kos = psKos,
+}) {
+  const r = await kos(authenticodeArgv(powershell), { env: { EMPP_AUTHENTICODE_YOL: dosya }, zamanAsimiMs });
   return authenticodeKarari(r, beklenenImzaci);
 }
 
-module.exports = { PS_BETIK, authenticodeArgv, authenticodeCozumle, cnAl, authenticodeKarari, authenticodeDogrula };
+module.exports = {
+  PS_BETIK, ISARET, authenticodeArgv, authenticodeCozumle, cnAl, authenticodeKarari, psKos, authenticodeDogrula,
+};

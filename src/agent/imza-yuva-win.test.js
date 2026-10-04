@@ -219,6 +219,53 @@ test('Authenticode hükmü: gerçek kasa çıktısı geçer; Status/imzacı/zama
   assert.match(A.authenticodeKarari({ hata: 'ENOENT' }, CN).sebep, /başlatılamadı/);
 });
 
+test('Authenticode çıktısı: EMPPAC işareti, araya stderr CLIXML karışsa da çözülür (kasa 04.10 ölçümü)', () => {
+  const clixml = '#< CLIXML\r\n<Objs Version="1.1.0.1"><Obj S="progress"><AV>Preparing modules for first use.</AV></Obj></Objs>';
+  const isaretli = `${A.ISARET}${b64(GERCEK_AC)}`;
+  assert.equal(A.authenticodeKarari({ kod: 0, cikti: `${isaretli}${clixml}` }, CN).gecti, true);
+  assert.equal(A.authenticodeKarari({ kod: 0, cikti: `${clixml}\r\n${isaretli}` }, CN).gecti, true);
+  // eski biçim (işaretsiz, tek base64) hâlâ çözülür
+  assert.equal(A.authenticodeKarari({ kod: 0, cikti: b64(GERCEK_AC) }, CN).gecti, true);
+  // işaretsiz + arkada CLIXML → çözülemez (eski hatanın kendisi; işaret bunun için var)
+  assert.match(A.authenticodeKarari({ kod: 0, cikti: `${b64(GERCEK_AC)}${clixml}` }, CN).sebep, /çözülemedi/);
+  // boş çıktı (detached powershell: stdout boru dışına) → çözülemedi, asla geçmez
+  assert.match(A.authenticodeKarari({ kod: 0, cikti: '' }, CN).sebep, /çözülemedi/);
+  assert.match(A.PS_BETIK, /\$ProgressPreference = 'SilentlyContinue'/);
+  assert.match(A.PS_BETIK, /'EMPPAC:' \+ \[Convert\]::ToBase64String/);
+});
+
+test('psKos: ayrık değil, yalnız stdout çözülür; stderr karışmaz; çıkış ≠ 0 ise stderr sebebe girer', async () => {
+  const b = b64(GERCEK_AC);
+  const ok = await A.psKos([process.execPath, '-e',
+    `process.stderr.write('#< CLIXML <Objs/>');process.stdout.write('${A.ISARET}${b}')`]);
+  assert.equal(ok.kod, 0);
+  assert.equal(ok.cikti, `${A.ISARET}${b}`);
+  assert.match(ok.hataCikti, /CLIXML/);
+  assert.equal(A.authenticodeKarari(ok, CN).gecti, true);
+  const kotu = await A.psKos([process.execPath, '-e', "process.stderr.write('patladi');process.exit(3)"]);
+  assert.equal(kotu.kod, 3);
+  assert.match(A.authenticodeKarari(kotu, CN).sebep, /powershell çıkış 3: patladi/);
+  let secenek = null;
+  await A.psKos(['x'], { kosucu: (k, a, o) => { secenek = o; throw new Error('yok'); } });
+  assert.equal(secenek.detached, undefined, 'detached Windows\'ta stdout\'u kaybettirir');
+  const za = await A.psKos([process.execPath, '-e', 'setTimeout(()=>{},5000)'], { zamanAsimiMs: 200 });
+  assert.equal(za.zamanAsimi, true);
+});
+
+test('authenticodeDogrula: komutKos (ayrık) VERİLSE DE kullanılmaz; psKos/kos ile koşar, yol ortamdan', async () => {
+  let komutKosCagrildi = false;
+  let gelen = null;
+  const k = await A.authenticodeDogrula('C:\\x\\k.exe', {
+    komutKos: async () => { komutKosCagrildi = true; return { kod: 0, cikti: '' }; },
+    beklenenImzaci: CN,
+    kos: async (argv, o) => { gelen = { argv, o }; return { kod: 0, cikti: `${A.ISARET}${b64(GERCEK_AC)}` }; },
+  });
+  assert.equal(komutKosCagrildi, false);
+  assert.equal(k.gecti, true, k.sebep);
+  assert.equal(gelen.o.env.EMPP_AUTHENTICODE_YOL, 'C:\\x\\k.exe');
+  assert.equal(gelen.argv[0], 'powershell.exe');
+});
+
 test('Authenticode argv: -EncodedCommand UTF-16LE, yol ortamdan (argv\'de dosya yolu yok)', () => {
   const argv = A.authenticodeArgv();
   assert.equal(argv[0], 'powershell.exe');
