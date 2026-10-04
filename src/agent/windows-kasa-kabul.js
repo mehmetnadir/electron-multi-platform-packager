@@ -67,12 +67,15 @@ function kasaAyarlari(env = process.env, platform = process.platform) {
     winKasaPython: env.EMPP_WIN_KASA_PYTHON
       || path.win32.join(env.LOCALAPPDATA || 'C:\\Users\\Administrator\\AppData\\Local',
         'Programs', 'Python', 'Python313', 'python.exe'),
-    // kabul.py KOK sabiti (D:\\kabul): paket oraya `<anahtar>.exe` adıyla konur, kabul.py ONBELLEK görür.
-    winKasaYerelKok: env.EMPP_WIN_KASA_YEREL_KOK || 'D:\\kabul',
+    // kabul.py KOK'u: paket oraya `<anahtar>.exe` adıyla konur, kabul.py ONBELLEK görür. İki taraf AYNI
+    // kökü görmeli (04.10: ortam KABUL_KOK=C:\\kabul, runner D:\\kabul → kabul.py paketi bulamadı, curl 3);
+    // kabul.py'ye KABUL_KOK olarak bu değer geçirilir.
+    winKasaYerelKok: env.EMPP_WIN_KASA_YEREL_KOK || env.KABUL_KOK || 'D:\\kabul',
     // Aktivasyonlu seri (Nadir 03.10): geçerli test kodu dosyası (yalnız SYSTEM/Administrator okur;
     // şef yazar). Varsa kabul.py internetsiz + temiz profille a..e senaryosunu koşar; yoksa bu seride
     // kasa kullanılmaz (eski davranış: başsız kapı).
-    winKasaAktivasyonKod: env.EMPP_KABUL_AKTIVASYON_KOD_DOSYASI || 'D:\\empp-ajan\\kabul\\aktivasyon-test-kodu.txt',
+    winKasaAktivasyonKod: env.EMPP_KABUL_AKTIVASYON_KOD_DOSYASI || env.KABUL_AKT_KOD_DOSYASI
+      || 'D:\\empp-ajan\\kabul\\aktivasyon-test-kodu.txt',
     // EMPP_WIN_KASA_KABUL=0 → kasa hiç denenmez (bugünkü başsız davranış). Varsayılan AÇIK.
     winKasaKabul: env.EMPP_WIN_KASA_KABUL !== '0',
     winKasaVmKok: env.EMPP_VM_KOK || path.join(os.homedir(), 'vm-kapi'),
@@ -507,6 +510,7 @@ async function yerelKabulKapisi(p) {
     r = await calistir(argv, {
       env: {
         EMPP_KABUL_YEREL_DIZIN: kanitDizini, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1',
+        KABUL_KOK: cfg.winKasaYerelKok, KABUL_AKT_KOD_DOSYASI: cfg.winKasaAktivasyonKod,
         ...(p.aktivasyon ? { EMPP_KABUL_AKTIVASYON: '1', EMPP_KABUL_AKTIVASYON_KOD_DOSYASI: cfg.winKasaAktivasyonKod } : {}),
       },
       zamanAsimiMs: tavanMs,

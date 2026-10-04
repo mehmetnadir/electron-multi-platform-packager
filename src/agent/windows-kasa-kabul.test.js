@@ -305,6 +305,16 @@ test('yerel: win32 varsayılan AÇIK, darwin KAPALI; env ile zorlanır', () => {
   assert.equal(K.kasaAyarlari({ EMPP_WIN_KASA_YEREL: '1' }, 'darwin').winKasaYerel, true);
 });
 
+test('yerel: kabul kökü ve aktivasyon kod dosyası KABUL_* ortamından (C: taşıması), yoksa D:', () => {
+  const c = K.kasaAyarlari({ KABUL_KOK: 'C:\\kabul', KABUL_AKT_KOD_DOSYASI: 'C:\\empp-ajan\\kabul\\k.txt' }, 'win32');
+  assert.equal(c.winKasaYerelKok, 'C:\\kabul');
+  assert.equal(c.winKasaAktivasyonKod, 'C:\\empp-ajan\\kabul\\k.txt');
+  const d = K.kasaAyarlari({}, 'win32');
+  assert.equal(d.winKasaYerelKok, 'D:\\kabul');
+  assert.equal(d.winKasaAktivasyonKod, 'D:\\empp-ajan\\kabul\\aktivasyon-test-kodu.txt');
+  assert.equal(K.kasaAyarlari({ EMPP_WIN_KASA_YEREL_KOK: 'E:\\k', KABUL_KOK: 'C:\\kabul' }).winKasaYerelKok, 'E:\\k');
+});
+
 test('yerel: erişim kalp dosyası aramaz (köprü yok); EMPP_WIN_KASA_KABUL=0 yine kapatır', () => {
   const { cfg } = yerelOrtam();
   assert.equal(K.kasaErisimi({ ...cfg, winKasaVmKok: tmp('bos') }).erisilir, true);
@@ -328,6 +338,10 @@ test('yerel: argv kabul.py anahtar + yerel: + başlık; GECTI → kanıt dizinin
   assert.match(gelen.argv[2], /^45538-imzasiz-\d{14}$/);
   assert.match(gelen.argv[3], /^yerel:.*45538-imzasiz-\d{14}\.exe$/);
   assert.equal(gelen.env.PYTHONIOENCODING, 'utf-8');
+  // 04.10: paket kabul.py'nin KOK'una konmalı; kabul.py aynı kökü KABUL_KOK'tan okur.
+  assert.equal(gelen.env.KABUL_KOK, cfg.winKasaYerelKok);
+  assert.ok(gelen.argv[3].slice('yerel:'.length).startsWith(cfg.winKasaYerelKok), gelen.argv[3]);
+  assert.equal(gelen.env.KABUL_AKT_KOD_DOSYASI, cfg.winKasaAktivasyonKod);
   const ozet = JSON.parse(fs.readFileSync(path.join(r.kanitDizini, 'ozet.json'), 'utf8'));
   assert.equal(ozet.kip, 'yerel');
   assert.equal(ozet.karar, 'GECTI');
