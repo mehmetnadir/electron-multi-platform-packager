@@ -1,6 +1,6 @@
 ﻿# windows-kasa ajan ortamı (ajan-baslat.ps1 ve duman testleri dot-source eder). Sır YOK.
 $ErrorActionPreference = 'Continue'
-$K = 'D:\empp-ajan'
+$K = 'C:\empp-ajan'   # 04.10: D: (HDD) ölüyor, üretim C: (SSD); D: yalnız arşiv
 $R = "$K\paketleyici"
 $L = "$K\log"
 $env:PATH = "$K\araclar\node;$K\araclar\git\cmd;$K\araclar\7zip;" + $env:PATH + ";$K\araclar\git\usr\bin"
@@ -31,3 +31,5 @@ $env:AGENT_PACKAGE_TIMEOUT_MS = '3600000'
 $env:NODE_OPTIONS = '--dns-result-order=ipv4first --no-network-family-autoselection'
 Set-Location $R
 $env:EMPP_IMZA_YUVA_KOKU = '\\172.17.2.23\Storage7\vhosts\akillitahta.ydspublishing.com\httpdocs\Uploads\KitapTekExe'   # 04.10 imza kapısı AÇIK: kasa tek imzacı (şef: AÇ)
+$env:KABUL_KOK = 'C:\kabul'   # kabul.py exe önbelleği + profiller (04.10 C: taşıması)
+$env:KABUL_AKT_KOD_DOSYASI = "$K\kabul\aktivasyon-test-kodu.txt"

@@ -36,8 +36,9 @@ import websocket
 try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception: pass
 
-KOK = r"D:\kabul"
-YEDEK = r"D:\kabul\.empp-yedek-20260922"     # silmek YASAK (Nadir kurali) — kullanilan kurulum TASINIR
+# Kok dizinler ortamdan (04.10: D: diski olurken uretim C:'ye tasindi; varsayilan eski yerlesim).
+KOK = os.environ.get("KABUL_KOK") or r"D:\kabul"
+YEDEK = KOK + r"\.empp-yedek-20260922"     # silmek YASAK (Nadir kurali) — kullanilan kurulum TASINIR
 DIJITAP = r"C:\DijiTap"
 PROGRAMS = os.path.join(os.environ["LOCALAPPDATA"], "Programs")
 PORT = 9333
@@ -772,7 +773,7 @@ def kitap_kanit(c, kimlik, sira):
 # Okuyucu diyalogu (45550 book1 main.js): MUI Dialog "Aktivasyon", input type=password (ekranda
 # MASKELI), Enter gonderir; hata snackbar'i 1,5 sn'de kaybolur. GECERLI KOD dosyadan okunur ve
 # HICBIR log/rapor/dosya adina yazilmaz.
-AKT_KOD_DOSYASI = r"D:\empp-ajan\kabul\aktivasyon-test-kodu.txt"
+AKT_KOD_DOSYASI = os.environ.get("KABUL_AKT_KOD_DOSYASI") or r"D:\empp-ajan\kabul\aktivasyon-test-kodu.txt"
 AKT_GECERSIZ_KOD = "KABULGECERSIZ0"
 AKT_ADIMLAR = ("a", "b", "c", "d", "e")
 

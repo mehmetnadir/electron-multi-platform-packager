@@ -843,5 +843,39 @@ class SayfalarKartiTest(unittest.TestCase):
         self.assertEqual(k, {"thumbOK": 1})
 
 
+class KokDizinOrtamTest(unittest.TestCase):
+    """KOK/YEDEK/AKT_KOD_DOSYASI ortamdan gelir (04.10 C: tasimasi); yoksa eski D: yerlesimi."""
+
+    def _yukle(self, ortam):
+        import importlib
+        eski = {k: os.environ.get(k) for k in ("KABUL_KOK", "KABUL_AKT_KOD_DOSYASI")}
+        try:
+            for k in eski:
+                os.environ.pop(k, None)
+            os.environ.update(ortam)
+            return importlib.reload(kabul)
+        finally:
+            for k, v in eski.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+
+    def tearDown(self):
+        import importlib
+        importlib.reload(kabul)
+
+    def test_varsayilan_d_yerlesimi(self):
+        m = self._yukle({})
+        self.assertEqual(m.KOK, r"D:\kabul")
+        self.assertEqual(m.YEDEK, r"D:\kabul\.empp-yedek-20260922")
+        self.assertEqual(m.AKT_KOD_DOSYASI, r"D:\empp-ajan\kabul\aktivasyon-test-kodu.txt")
+
+    def test_ortamdan_c_yerlesimi(self):
+        m = self._yukle({"KABUL_KOK": r"C:\kabul",
+                         "KABUL_AKT_KOD_DOSYASI": r"C:\empp-ajan\kabul\aktivasyon-test-kodu.txt"})
+        self.assertEqual(m.KOK, r"C:\kabul")
+        self.assertEqual(m.YEDEK, r"C:\kabul\.empp-yedek-20260922")
+        self.assertEqual(m.AKT_KOD_DOSYASI, r"C:\empp-ajan\kabul\aktivasyon-test-kodu.txt")
+
+
 if __name__ == "__main__":
     unittest.main()

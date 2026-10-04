@@ -1,7 +1,7 @@
 ﻿# windows-kasa build ajanı — paketleyici (127.0.0.1:3001) + runner döngüsü.
 # Zamanlanmış Görev "empp-ajan" (Administrator, etkileşimli oturum: kabul GUI'si masaüstünde açılır)
 # bu betiği koşturur. SSH oturumundan bağımsızdır (Job Object tuzağı). Silme yok.
-. D:\empp-ajan\ortam.ps1
+. C:\empp-ajan\ortam.ps1
 
 function Damga { Get-Date -Format 'yyyy-MM-ddTHH:mm:ss' }
 function PaketleyiciAyakta {
@@ -16,7 +16,7 @@ while ($true) {
   }
   # Ortam HER runner başlangıcında yeniden okunur (04.10): ortam.ps1'e eklenen değişken (ör.
   # EMPP_IMZA_YUVA_KOKU) yeniden-baslat.istek ile devreye girer; görevi yeniden başlatmak gerekmez.
-  . D:\empp-ajan\ortam.ps1
+  . C:\empp-ajan\ortam.ps1
   "$(Damga) runner başlıyor (paketleyici: $(PaketleyiciAyakta))" | Out-File -Append -Encoding utf8 "$L\baslat.log"
   & cmd.exe /d /c "node src\agent\runner.js >> `"$L\agent.log`" 2>&1"
   "$(Damga) runner çıktı rc=$LASTEXITCODE — 15 sn sonra yeniden" | Out-File -Append -Encoding utf8 "$L\baslat.log"
