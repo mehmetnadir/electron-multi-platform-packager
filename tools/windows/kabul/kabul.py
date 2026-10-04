@@ -455,6 +455,46 @@ def ilk_sayfada_mi(sayfa):
     sy = str(sayfa or "")
     return bool(sy.startswith("1/") or sy.startswith("1 /"))
 
+JS_SAYFA_TUSLARI = r"""
+(()=>{ // Sayfa kutusu (BUTTON '12/172') tiklaninca ekran tus takimli 'Sayfa numarasi' acilir; klavye
+ // girdisi alanı DOLDURMAZ (olculdu 03.10, 73768 probe: '1'+Enter sonrasi 12/172'de kaldi).
+ // Gorunur kisa-metinli dugmeler dokulur; hangisine tiklanacagina Python karar verir (tus_takimi_sec).
+ const o=[];
+ for(const e of document.querySelectorAll('button,[role=button],div,span')){
+   const r=e.getBoundingClientRect(); if(r.width<20||r.height<20||r.width>200||r.height>120) continue;
+   const t=(e.innerText||e.textContent||'').trim(); if(t.length>1) continue;
+   if(e.tagName!=='BUTTON'&&e.getAttribute('role')!=='button'&&e.children.length>1) continue;
+   o.push({t:t,x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),b:e.tagName==='BUTTON'});}
+ return JSON.stringify(o);})()"""
+
+def tus_takimi_sec(dugmeler):
+    """SAF KARAR: ekran tus takimindan {'bir':(x,y), 'tamam':(x,y)}; tus takimi yoksa None.
+    Tus takimi = 0..9 rakamlarinin hepsi gorunur. 'tamam' (✓, metinsiz) = '0' ile ayni satirda,
+    '0'in sagindaki en sagdaki metinsiz dugme (73768 probe ekrani: [⌫] [0] [✓])."""
+    d = [x for x in (dugmeler or []) if isinstance(x, dict) and "x" in x and "y" in x]
+    rakam = {}
+    for x in d:
+        t = str(x.get("t") or "")
+        if t.isdigit() and len(t) == 1 and (t not in rakam or x.get("b")): rakam[t] = x
+    if len(rakam) < 10: return None
+    sifir = rakam["0"]
+    sag = [x for x in d if not str(x.get("t") or "").strip() and abs(x["y"] - sifir["y"]) <= 12
+           and x["x"] > sifir["x"] + 10]
+    if not sag: return None
+    tamam = max(sag, key=lambda x: (x["x"], bool(x.get("b"))))
+    return {"bir": (rakam["1"]["x"], rakam["1"]["y"]), "tamam": (tamam["x"], tamam["y"])}
+
+def tanitimi_kapat(c, tur=4):
+    """42 adimlik tanitim balonu kitap acildiktan SONRA (sn'ler icinde) gelir ve tiklamalari yutar
+    (73768 probe 03.10: 'Sayfalar' tiklamasi seridi acmadi, balonu 2/42'ye ilerletti). Her gezinme
+    adimindan once cagrilir; kapatilan balon metinleri doner."""
+    kapanan = []
+    for _ in range(tur):
+        a = c.jsj(JS_ATLA)
+        if not a: break
+        kapanan.append(a.get("t")); time.sleep(2)
+    return kapanan
+
 def ilk_sayfa_plani(kanit):
     """SAF KARAR: 1. sayfaya gitme yollari, sirayla (2026-10-03, 73768 kaniti).
     Serit o anki sayfaya kaydirilmis olabilir: EN SOLDAKI thumb 1. sayfa DEGILDIR (book3: serit
@@ -488,6 +528,7 @@ def ilk_sayfaya_git(c, kanit, olc):
         return y
     for yol in ilk_sayfa_plani(kanit):
         if ilk_sayfa_tamam(kanit): break
+        tanitimi_kapat(c)
         if yol == "etiket1":
             e = next(e for e in kanit["thumbEtiket"] if e.get("n") == 1)
             c.tikla(e["x"], e["y"]); time.sleep(7); kanit = yeni(olc(), yol)
@@ -500,8 +541,12 @@ def ilk_sayfaya_git(c, kanit, olc):
         elif yol == "kutu":
             k = c.jsj(JS_SAYFA_KUTUSU)
             if not k: kanit["kutuYok"] = True; continue
-            c.tikla(k["x"], k["y"]); time.sleep(1)
-            c.tus("a", "KeyA", 65, modifiers=2); c.yaz("1"); c.tus("Enter", "Enter", 13, text="\r")
+            c.tikla(k["x"], k["y"]); time.sleep(1.5)
+            tk = tus_takimi_sec(c.jsj(JS_SAYFA_TUSLARI))
+            if tk:
+                c.tikla(*tk["bir"]); time.sleep(0.6); c.tikla(*tk["tamam"]); yol = "kutu-tuslar"
+            else:
+                c.tus("a", "KeyA", 65, modifiers=2); c.yaz("1"); c.tus("Enter", "Enter", 13, text="\r")
             time.sleep(7); kanit = yeni(olc(), yol)
         elif yol == "geri":
             k = c.jsj(JS_SAYFA_KUTUSU)
@@ -535,14 +580,11 @@ def kitap_kanit(c, kimlik, sira):
     Kitap 1. sayfada acilmaz (olculdu: 12/172 ile aciliyor) — seritten 1'e gidilir."""
     def olc(): return c.jsj(JS_KANIT) or {}
 
-    atlandi = []
-    for _ in range(4):                       # tanitim balonu tiklamalari YUTUYOR, once o
-        a = c.jsj(JS_ATLA)
-        if not a: break
-        atlandi.append(a.get("t")); time.sleep(2)
+    atlandi = tanitimi_kapat(c)               # tanitim balonu tiklamalari YUTUYOR, once o
 
     kanit = {}
     for _ in range(8):                        # serit ZATEN acikken kucuk gorseller ~10 sn'de gelir;
+        atlandi += tanitimi_kapat(c, tur=2)   # balon acilistan sn'ler SONRA gelir (73768) — her turda
         kanit = olc()                         # kapaliysa asagidaki serit mantigi zaten 2x30 sn yokluyor,
         if kanit.get("thumbOK", 0) >= 3: break  # burada 60 sn beklemek her kitapta bos yere 36 sn yiyordu
         time.sleep(3)
@@ -553,6 +595,7 @@ def kitap_kanit(c, kimlik, sira):
     if kanit.get("thumbOK", 0) < 3:
         for deneme in (1, 2):
             y = {}
+            atlandi += tanitimi_kapat(c)
             sp = c.jsj(JS_SERIT)
             if not sp:
                 kanit["seritTani"] = c.js(JS_SERIT_TANI)

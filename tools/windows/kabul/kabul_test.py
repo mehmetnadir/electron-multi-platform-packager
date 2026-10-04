@@ -658,5 +658,52 @@ class NormalArgvTest(unittest.TestCase):
                          ["app.exe", f"--remote-debugging-port={kabul.PORT}", "--remote-allow-origins=*"])
 
 
+class SayfaTusTakimiTest(unittest.TestCase):
+    """73768 probe (03.10): sayfa kutusu ekran tuş takımı açar; klavye girdisi alanı doldurmaz."""
+    TUSLAR = ([{"t": str(n), "x": 860 + 105 * ((n - 1) % 3), "y": 720 + 55 * ((n - 1) // 3), "b": True} for n in range(1, 10)]
+              + [{"t": "", "x": 860, "y": 886, "b": True}, {"t": "0", "x": 965, "y": 886, "b": True},
+                 {"t": "", "x": 1070, "y": 886, "b": True}, {"t": "", "x": 880, "y": 955, "b": True}])
+
+    def test_bir_ve_tamam_secilir(self):
+        self.assertEqual(kabul.tus_takimi_sec(self.TUSLAR), {"bir": (860, 720), "tamam": (1070, 886)})
+
+    def test_tus_takimi_yoksa_none(self):
+        self.assertIsNone(kabul.tus_takimi_sec([{"t": "1", "x": 1, "y": 1}]))
+        self.assertIsNone(kabul.tus_takimi_sec(None))
+        eksik = [x for x in self.TUSLAR if not (x["t"] == "" and x["x"] == 1070)]
+        self.assertIsNone(kabul.tus_takimi_sec(eksik), "✓ yoksa kör tıklama yok")
+
+    def test_ilk_sayfaya_git_kutu_tus_takimiyla_ve_balon_kapatilarak(self):
+        yedek = {k: getattr(kabul, k) for k in ("time",)}
+        tik = []; olcum = [{"sayfa": "12/172", "canvasDolu": 3000, "canvasRenk": 99}]
+        T = self.TUSLAR
+        class Saat:
+            @staticmethod
+            def sleep(_): pass
+        class C:
+            atla = 1
+            def jsj(s, e):
+                if e is kabul.JS_ATLA:
+                    if s.atla: s.atla -= 1; return {"t": "Atla"}
+                    return None
+                if e is kabul.JS_SAYFA_KUTUSU: return {"x": 773, "y": 763, "geri": {"x": 705, "y": 763}}
+                if e is kabul.JS_SAYFA_TUSLARI: return T
+                return None
+            def tikla(s, x, y):
+                tik.append((x, y))
+                if (x, y) == (1070, 886): olcum[0] = {"sayfa": "1/172", "canvasDolu": 3000, "canvasRenk": 99}
+            def tus(s, *a, **k): raise AssertionError("tuş takımı varken klavye kullanılmaz")
+            def yaz(s, m): raise AssertionError("tuş takımı varken klavye kullanılmaz")
+        try:
+            kabul.time = Saat
+            k = kabul.ilk_sayfaya_git(C(), {"sayfa": "12/172", "thumbEtiket": [{"n": 12, "x": 1, "y": 1}]},
+                                      lambda: dict(olcum[0]))
+        finally:
+            for a, v in yedek.items(): setattr(kabul, a, v)
+        self.assertEqual(k["sayfa"], "1/172")
+        self.assertEqual(k["ilkSayfaYolu"], "kutu-tuslar")
+        self.assertEqual(tik, [(773, 763), (860, 720), (1070, 886)])
+
+
 if __name__ == "__main__":
     unittest.main()
