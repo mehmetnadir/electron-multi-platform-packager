@@ -334,13 +334,17 @@ function kaynakUcIstemcisi({
  *     => Promise<Array<{partNumber: number, etag: string}>>,
  *   parcaBoyutu?: number, simdi?: number, log?: Function, tamamlaEki?: object }} o
  *   `tamamlaEki`: gövdeye eklenen alanlar (ör. üreteç özeti `uretec`).
+ *   `gecerliSha256` + `gecerliSurum`: setin mevcut GEÇERLİ kaynak sürümü (claim `tabanUrl`/`tabanSha256`).
+ *   İkisi de biliniyorsa ve kurulan build'in sha256'sı gecerliSha256'ya eşitse: R2'ye yükleme YOK, yeni
+ *   sürüm kaydı YOK (kilit `birak` ile bırakılır); dönüş `{degismedi: true, surum: gecerliSurum}`.
+ *   Biri bilinmiyorsa davranış değişmez (fail-safe: yeni sürüm kurulur).
  * @returns {Promise<{surum: string, sha256: string, boyut: number, kitaplar: object[], r2ObjectKey: string,
  *   ozet: object}>} `ozet` = `ozet()` dönüşü (md5 dahil — arşive yazım yeniden okumasın)
  */
 async function r2KurYayinla({
   job, zipYolu, setListesi = null, oncekiBoyut = null, oncekiEnvanter = null, vsler = {}, istemci, kapi, ozet,
   parcalariYukle, parcaBoyutu = 64 * 1024 * 1024, simdi = Date.now(), log = () => {}, tamamlaEki = {},
-  ekWebzVarliklari = [],
+  ekWebzVarliklari = [], gecerliSha256 = null, gecerliSurum = null,
 }) {
   const surum = job.kaynakSurumu;
   const kimlik = { bookId: job.bookId, platform: job.platform, surum };
@@ -366,6 +370,15 @@ async function r2KurYayinla({
   let basla;
   try {
     oz = await ozet(zipYolu);
+    if (gecerliSha256 && gecerliSurum && oz.sha256 === gecerliSha256) {
+      // İçerik değişmedi (03.10 72380: 2.0.11 ve 2.0.12 aynı sha, 0,27 GB boşuna yükleme).
+      log(`${R2_ISARETI} r2-kur ${job.bookId}: içerik değişmedi (sha256 ${oz.sha256}) — mevcut ${gecerliSurum} kullanılıyor`);
+      await istemci.birak({ ...kimlik, sebep: `icerik-degismedi (sha256 ${oz.sha256}) — mevcut ${gecerliSurum} geçerli` });
+      return {
+        degismedi: true, surum: gecerliSurum, sha256: oz.sha256, boyut: oz.boyut,
+        kitaplar: tamamlaKitaplari(k.kitaplar), r2ObjectKey: null, ozet: oz,
+      };
+    }
     const partCount = Math.max(1, Math.ceil(oz.boyut / parcaBoyutu));
     basla = await istemci.presignMultipart({ ...kimlik, partCount });
     ({ uploadId } = basla);

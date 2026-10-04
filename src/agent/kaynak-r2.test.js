@@ -427,3 +427,45 @@ test('r2KurYayinla 03.10: kapı UYARI boyutGerekce verdiyse tamamla gövdesine g
   await R.r2KurYayinla(b.o);
   assert.equal('boyutGerekce' in b.s.cagrilar[1].govde, false);
 });
+
+// ---------------------------------------------------------------------------
+// r2KurYayinla — içerik değişmediyse yeni sürüm açılmaz (03.10 72380: 2.0.11 = 2.0.12)
+// ---------------------------------------------------------------------------
+
+test('r2KurYayinla aynı sha: yükleme/presign/tamamla YOK, kilit birak ile bırakılır, mevcut sürüm döner + log', async () => {
+  const a = akis();
+  const loglar = [];
+  const r = await R.r2KurYayinla({ ...a.o, gecerliSha256: SHA, gecerliSurum: '2.51.9', log: (s) => loglar.push(s) });
+  assert.equal(r.degismedi, true);
+  assert.equal(r.surum, '2.51.9');
+  assert.equal(r.sha256, SHA);
+  assert.equal(a.sayac.yukle, 0);
+  assert.deepEqual(a.yollar(), ['kaynak/birak']);
+  assert.match(a.s.cagrilar[0].govde.sebep, /icerik-degismedi/);
+  assert.ok(loglar.some((s) => s.includes(`r2-kur 45549: içerik değişmedi (sha256 ${SHA}) — mevcut 2.51.9 kullanılıyor`)), loglar.join('\n'));
+});
+
+test('r2KurYayinla farklı sha: eski davranış (presign → yükle → tamamla, yeni sürüm)', async () => {
+  const a = akis();
+  const r = await R.r2KurYayinla({ ...a.o, gecerliSha256: 'e'.repeat(64), gecerliSurum: '2.51.9' });
+  assert.equal(r.degismedi, undefined);
+  assert.equal(r.surum, '2.51.10');
+  assert.equal(a.sayac.yukle, 1);
+  assert.deepEqual(a.yollar(), ['kaynak/presign-multipart', 'kaynak/tamamla']);
+});
+
+test('r2KurYayinla geçerli sha bilinmiyor (yok / yalnız biri): eski davranış, yeni sürüm kurulur', async () => {
+  for (const ek of [{}, { gecerliSha256: SHA }, { gecerliSurum: '2.51.9' }, { gecerliSha256: null, gecerliSurum: null }]) {
+    const a = akis();
+    const r = await R.r2KurYayinla({ ...a.o, ...ek });
+    assert.equal(r.surum, '2.51.10', JSON.stringify(ek));
+    assert.equal(a.sayac.yukle, 1, JSON.stringify(ek));
+    assert.deepEqual(a.yollar(), ['kaynak/presign-multipart', 'kaynak/tamamla']);
+  }
+});
+
+test('r2KurYayinla aynı sha ama yazma kapısı RED: kapı önce çalışır, eski davranış (kalıcı hata)', async () => {
+  const a = akis({ kapi: { gecti: false, kitaplar: [], nedenler: ['x'] } });
+  await assert.rejects(R.r2KurYayinla({ ...a.o, gecerliSha256: SHA, gecerliSurum: '2.51.9' }), (e) => /yazma kapısı RED/.test(e.message));
+  assert.deepEqual(a.yollar(), ['kaynak/birak']);
+});

@@ -2157,6 +2157,17 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null, ur
   return { oncekiBoyut: arsiv.r2Surum ? arsiv.boyut : null, oncekiEnvanter: oncekiEnvanterOku(zipPath) };
 }
 
+/**
+ * r2-kur: setin mevcut GEÇERLİ kaynak sürümünün kimliği — yalnız claim'in R2 tabanından (tabanUrl yolundaki
+ * sürüm + tabanSha256) bilinir. Arşiv tabanında sha256 yok (md5) → bilinmez → {} (fail-safe, yeni sürüm kurulur).
+ */
+function r2GecerliSurumKimligi(kaynak) {
+  if (!kaynak || !kaynak.taban || kaynak.taban.tur !== 'r2') return {};
+  const yol = kaynakR2.imzaliKaynakUrlCoz(kaynak.taban.url);
+  if (!yol || !kaynak.taban.sha256) return {};
+  return { gecerliSha256: kaynak.taban.sha256, gecerliSurum: yol.surum };
+}
+
 /** (r2-kur ise) R2 kurma kilidini bırak + işin kirasını bırak (failed YAZILMAZ). @returns {Promise<{ertelendi: true, sebep: string}>} */
 async function r2Ertele(auth, job, sebep, { kilitBirak = true } = {}) {
   currentJob = null; // nabız bırakılan kirayı tazelemesin (kaynakYokBekle ile aynı ders)
@@ -2456,7 +2467,7 @@ async function processJob(auth, job) {
     const srcVersion = kaynak.tur === 'arsiv' ? arsiv.srcVersion : `manuel-${srcVersionTuret(kaynak.url)}`;
     // R2 build'inin kimliği sürümüdür (Dalga B): `r2-<sürüm>`; diğer kaynaklarda yukarıdaki.
     const r2Kaynak = kaynak.tur === 'r2-al' || kaynak.tur === 'r2-kur';
-    const paketKaynakKimligi = r2Kaynak ? `r2-${kaynak.surum}` : srcVersion;
+    let paketKaynakKimligi = r2Kaynak ? `r2-${kaynak.surum}` : srcVersion;
     const kaynakAdi = r2Kaynak ? `r2:${kaynak.surum}` : kaynak.tur === 'arsiv'
       ? `arsiv:${arsiv.etiket || arsiv.md5.slice(0, 12)}`
       : path.basename(String(kaynak.url).split('?')[0]) || undefined;
@@ -2625,10 +2636,16 @@ async function processJob(auth, job) {
           tamamlaEki: job.uretecOzeti ? { uretec: job.uretecOzeti } : {},
           ekWebzVarliklari: job.uretecWebzVarliklari || [],
           parcaBoyutu: MULTIPART_PART_SIZE, log,
+          ...r2GecerliSurumKimligi(kaynak),
         });
       } catch (e) {
         if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: false });
         throw e;
+      }
+      if (yayin.degismedi) {
+        // Yeni sürüm açılmadı: paket + /result mevcut geçerli sürümle (sunucu parite beyanı) devam eder.
+        job.kaynakSurumu = yayin.surum;
+        paketKaynakKimligi = `r2-${yayin.surum}`;
       }
       // Arşiv = R2'nin yerel önbelleği: aynı Mac'teki diğer platformlar r2-al'de indirmesin.
       await r2ArsiveYaz(job.bookId, zipPath, { surum: yayin.surum, ...yayin.ozet, uyari: warn });
