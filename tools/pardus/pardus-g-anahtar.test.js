@@ -49,6 +49,7 @@ exit 0
       HOME: d,
       PARDUS_PARALEL: '1',
       PARDUS_MIN_FREE_GB: '0',
+      EMPP_KANONIK_SART: '0', // bu test G kimliğini sınar; kabuk fail-closed ayrı testte
       ...ekEnv,
     },
   });

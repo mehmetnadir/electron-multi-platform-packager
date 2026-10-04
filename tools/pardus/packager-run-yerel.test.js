@@ -9,7 +9,7 @@ test('jobInfo docker yoluyla ayni alanlari tasir', () => {
   assert.deepEqual(j, {
     sessionId: 's1', platforms: ['linux'], appName: 'Bloktest', appVersion: '1.0.0',
     packageOptions: {}, logoId: null, logoPath: '/l.png',
-    setKimligi: null, guncellemeTabani: null, surum: null,
+    setKimligi: null, guncellemeTabani: null, surum: null, kanonikSart: true,
   });
 });
 
