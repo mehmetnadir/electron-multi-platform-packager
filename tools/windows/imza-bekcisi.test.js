@@ -37,7 +37,7 @@ function ortam({ yuva = false, ping = false, sudo = false, diskYuvaKurar = true 
   const bildir = yaz('bildir', `#!/bin/bash\nprintf 'bildir %s\\n' "$*" >> ${JSON.stringify(gunluk)}\n`);
   const cfg = {
     ...W.varsayilanAyarlar(), ...B.bekciAyarlari({}),
-    winHazirKoku: path.join(d, 'windows-hazir'), winImzaYuvaKoku: yuvaKok, winImzaYuvaSunucu: '',
+    winHazirKoku: path.join(d, 'windows-hazir'), winImzaYuvaKoku: yuvaKok, winImzaYuvaSunucu: '', winYuvaSmbSart: false, // sahte YEREL yuva (04.10 df kanıtı testte kapalı)
     winKanitDizini: path.join(d, 'kanit'), bekciDiskBetigi: disk, bekciBildirIkili: bildir,
   };
   const cagri = { ping: 0, sudo: 0, zincir: [], yayin: [], presign: 0 };
