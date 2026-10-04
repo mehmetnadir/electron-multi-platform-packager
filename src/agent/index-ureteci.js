@@ -32,7 +32,13 @@
  *      LİNK KARTI (set-ek 4fbb8c1 ile aynı `type:'link'` + yama bloğu), yoksa atlanır; ikisi de
  *      rapora sayılır ve `kapiListesi`'nde link satırına çevrilir/çıkarılır (kapı `kitap-eksik` demesin).
  *
- * YA HEP YA HİÇ: listedeki bir KİTAP (contentType kitap/boş) alınamazsa build YAZILMAZ (`kitap-eksik`).
+ *   2b. YEDEK İÇERİK (04.10, Nadir: "zip'i her zaman biz kendimiz oluşturuyoruz"): İmpark cevap verdi
+ *       ama zip kullanılamıyorsa (Data boş / başka kitabın zip'i / 404 / bozuk) `yedekKaynaklar` sırayla
+ *       denenir (`icerik-yedek.js`: SMB'deki Web-Z dosyalarından kendi zip'imiz → önbellek → arşiv).
+ *       Kapılar: kaynak kimliği = kitap, `icerikDenetle`, BookContent kitapId = İmpark referansı.
+ *
+ * YA HEP YA HİÇ: listedeki bir KİTAP (contentType kitap/boş) HİÇBİR kaynaktan alınamazsa build YAZILMAZ
+ * (`kitap-eksik`; sebep "hiçbir kaynakta yok — İmpark: …; denenenler: …"). Setten kitap düşürülmez.
  */
 
 const fs = require('fs');
@@ -536,27 +542,121 @@ function adCoz(k, arsiv, gDizin) {
   } catch (_) { return k.ad || `Kitap ${k.n}`; }
 }
 
+/**
+ * İmpark CEVAP VERDİ ama kullanılabilir zip yok (Data boş / başka kitabın zip'i / biçim dışı / indirme
+ * ya da içerik düzeni bozuk) → yedek kaynak denenir. İmpark'a ULAŞILAMADI (ağ, HTTP≠200, JSON değil,
+ * Success≠true) bu sınıfa GİRMEZ: geçici sayılır, eskisi gibi ertelenir (yedekle tahmin üretilmez).
+ */
+class ImparkZipYok extends Error {
+  constructor(mesaj, imparkVs) {
+    super(mesaj);
+    this.yedekUygun = true;
+    this.imparkVs = imparkVs;
+  }
+}
+
+/** İmpark cevabı Success:true JSON mu; öyleyse Vs (sayı ≥ 0, yoksa null). SAF. */
+function imparkCevabi(cevap) {
+  if (!cevap || cevap.hata || cevap.status !== 200) return null;
+  let j;
+  try { j = JSON.parse(cevap.govde); } catch (_) { return null; }
+  if (!j || j.Success !== true) return null;
+  const vs = j.Vs == null || j.Vs === '' ? null : Number(j.Vs);
+  return { vs: Number.isSafeInteger(vs) && vs >= 0 ? vs : null };
+}
+
+/** Kitabın İmpark yolu: teklif → Data (ZKitapZipH/<id>-<Vs>.zip) → içerik önbelleği → düzen denetimi. */
+async function imparkIcerigi({ k, sablon, getir, indir, onbellek, log }) {
+  const cevap = await getir(M.teklifUrl(sablon, k.id, 0), {});
+  const c = imparkCevabi(cevap);
+  const t = M.teklifYorumla({ id: k.id, surum: 0 }, cevap);
+  if (t.durum === M.DURUM.GUNCEL) throw new ImparkZipYok("İmpark'ta içerik yok (Data boş)", c && c.vs);
+  if (t.durum !== M.DURUM.GERIDE) {
+    if (c) throw new ImparkZipYok(`İmpark ölçülemedi: ${t.not}`, c.vs);
+    throw new Error(`İmpark ölçülemedi: ${t.not}`);
+  }
+  let arsiv;
+  let gDizin;
+  try {
+    arsiv = await M.icerikZipiGetir({
+      id: k.id, vs: t.vs, url: t.data, onbellek, indir,
+      log: (s) => log(s.replace('[merdiven] S1', ISARET)),
+    });
+    gDizin = M.zipDizini(arsiv);
+    icerikDenetle(gDizin, k.id);
+  } catch (e) {
+    throw new ImparkZipYok(`İmpark zip'i alınamadı: ${String((e && e.message) || e).slice(0, 160)}`, t.vs);
+  }
+  return { vs: t.vs, url: t.data, arsiv, gDizin, kaynak: 'impark' };
+}
+
+/**
+ * YEDEK KAYNAKLAR (`icerik-yedek.js`, sırayla). Her aday ÜÇ kapıdan geçer, geçemeyen reddedilir ve
+ * sıradaki denenir (yanlış kitabın içeriği ASLA pakete girmez):
+ *   1. kaynak kimliği (içeriği sakladığı dizin/anahtar) = kitap kimliği;
+ *   2. içerik düzeni (`icerikDenetle`: BookContent + kapak/ilk sayfa + güvenli girdi adları);
+ *   3. BookContent `kitapId` = İmpark referansı (kitap <id> olarak sunulan BookContent'in kitapId'si);
+ *      referans ölçülemezse 1+2 yeter ve rapora `kimlik: 'kaynak'` yazılır.
+ * @returns {Promise<{secilen: object|null, denenen: string[]}>}
+ */
+async function yedektenIcerik({ k, yedekler, kimlikReferansi, imparkVs, calisma, log }) {
+  const denenen = [];
+  for (const y of yedekler) {
+    let r;
+    try {
+      r = await y.getir({ id: k.id, ad: k.ad, imparkVs, calisma, log });
+    } catch (e) {
+      denenen.push(`${y.ad}: hata ${String((e && e.message) || e).slice(0, 100)}`);
+      continue;
+    }
+    if (!r || !r.zip) { denenen.push(`${y.ad}: ${(r && r.yok) || 'yok'}`); continue; }
+    try {
+      if (String(r.kaynakId) !== String(k.id)) throw new Error(`kaynak kimliği ${r.kaynakId} ≠ ${k.id}`);
+      if (!Number.isSafeInteger(r.vs) || r.vs < 0) throw new Error(`sürüm geçersiz (${r.vs})`);
+      const gDizin = M.zipDizini(r.zip);
+      icerikDenetle(gDizin, k.id);
+      const zid = M.kitapIdOku(M.zipGirdiOku(r.zip, gDizin.get(ICERIK)).subarray(0, 8192));
+      const ref = kimlikReferansi ? await kimlikReferansi(k.id) : null;
+      if (ref && zid !== ref) throw new Error(`BookContent kitapId ${zid || '-'} ≠ İmpark'ın ${k.id} kitapId'si ${ref} (başka kitap)`);
+      log(`${ISARET} ${k.id}: içerik YEDEK kaynaktan — ${y.ad} (${r.not || r.zip}), sürüm ${r.vs}, `
+        + `kimlik ${ref ? `kitapId ${zid}` : 'kaynak dizini (referans ölçülemedi)'}`);
+      return {
+        secilen: { vs: r.vs, url: r.url || '', arsiv: r.zip, gDizin, kaynak: y.ad, kimlik: ref ? 'kitapId' : 'kaynak' },
+        denenen,
+      };
+    } catch (e) {
+      denenen.push(`${y.ad}: RED ${String((e && e.message) || e).slice(0, 140)}`);
+    }
+  }
+  return { secilen: null, denenen };
+}
+
 /** Her kitabın içerik zip'i. Kitap alınamazsa `eksik`; kitap olmayan varlık `kitapDisi` (link/atla). */
-async function icerikleriTopla({ plan, sablon, getir, indir, onbellek, log, bekleMs }) {
+async function icerikleriTopla({ plan, sablon, getir, indir, onbellek, log, bekleMs, yedekler = [],
+  kimlikReferansi = null, yedekCalisma = null }) {
   const sonuc = [];
   const eksik = [];
   const kitapDisi = [];
   for (const k of plan.kitaplar) {
     try {
-      const soru = M.teklifUrl(sablon, k.id, 0);
-      const t = M.teklifYorumla({ id: k.id, surum: 0 }, await getir(soru, {}));
-      if (t.durum === M.DURUM.GUNCEL) throw new Error("İmpark'ta içerik yok (Data boş)");
-      if (t.durum !== M.DURUM.GERIDE) throw new Error(`İmpark ölçülemedi: ${t.not}`);
-      const arsiv = await M.icerikZipiGetir({
-        id: k.id, vs: t.vs, url: t.data, onbellek, indir,
-        log: (s) => log(s.replace('[merdiven] S1', ISARET)),
-      });
-      const gDizin = M.zipDizini(arsiv);
-      icerikDenetle(gDizin, k.id);
-      sonuc.push({ ...k, ad: adCoz(k, arsiv, gDizin), vs: t.vs, url: t.data, arsiv, gDizin });
+      let ic;
+      try {
+        ic = await imparkIcerigi({ k, sablon, getir, indir, onbellek, log });
+      } catch (e) {
+        // Yedek yalnız KİTAP türünde (oyun/çalışma kâğıdı link kartına gider) ve İmpark cevap verdiyse.
+        if (!(e && e.yedekUygun) || !yedekler.length || !kitapTuruMu(k.contentType)) throw e;
+        const y = await yedektenIcerik({
+          k, yedekler, kimlikReferansi, imparkVs: e.imparkVs, calisma: yedekCalisma, log,
+        });
+        if (!y.secilen) {
+          throw new Error(`hiçbir kaynakta yok — İmpark: ${e.message}; denenenler: ${y.denenen.join(' | ')}`);
+        }
+        ic = y.secilen;
+      }
+      sonuc.push({ ...k, ad: adCoz(k, ic.arsiv, ic.gDizin), ...ic });
     } catch (e) {
       const satir = { id: k.id, ad: k.ad, contentType: k.contentType, anahtar: k.anahtar,
-        sebep: String((e && e.message) || e).slice(0, 300) };
+        sebep: String((e && e.message) || e).slice(0, 700) };
       (kitapTuruMu(k.contentType) ? eksik : kitapDisi).push(satir);
     }
     if (bekleMs) await new Promise((r) => { setTimeout(r, bekleMs); }); // İmpark'a ≥1,5 sn ara
@@ -605,6 +705,7 @@ function sha256Dosya(dosya) {
  *   kabuk?:'kalip'|{zip?:string, dizin?:string}|{tema:string}|null, webzAdresi?:(g:object)=>string|null,
  *   kurum?:string|null, motorDonusumu?:{kurum:string, logo:Buffer, baseEndpointUrl:string}|null,
  *   kapakGetir?:(url:string)=>Promise<Buffer>, onbellek?:string, getir?:Function, indir?:Function, komut?:Function,
+ *   yedekKaynaklar?:Array<{ad:string, getir:Function}>, kimlikReferansi?:(id:string)=>Promise<string|null>,
  *   log?:Function, bekleMs?:number, sahneyiTut?:boolean}} o
  * @returns {Promise<object>} rapor (zip, duzen, aktivasyon, kitaplar, linkKarti, atlanan, kapiListesi…)
  */
@@ -637,12 +738,18 @@ async function uret(o) {
   log(`${ISARET} ${o.setId}: ${plan.kitaplar.length} kitap, düzen ${duzen}, aktivasyon ${aktivasyon}, `
     + `motor ${path.basename(path.dirname(o.kalipZip))}/${kalip.motor} (kurum ${kalip.kurum || '-'})`);
 
+  // Yedek kaynakların kurduğu zip'ler (SMB/arşivden) — build bitince ya da erteleme yolunda silinir.
+  const yedekCalisma = path.join(o.calisma, `uretec-yedek-${process.pid}`);
+  const yedegiSil = () => fsp.rm(yedekCalisma, { recursive: true, force: true }).catch(() => {});
   const { sonuc, eksik, kitapDisi } = await icerikleriTopla({
     plan, sablon: kalip.sablon || VARSAYILAN_SABLON, getir: o.getir || M.varsayilanGetir,
     indir: o.indir || M.varsayilanIndir, onbellek: o.onbellek || M.icerikOnbellekKoku(), log,
     bekleMs: o.bekleMs == null ? 1500 : o.bekleMs,
+    yedekler: Array.isArray(o.yedekKaynaklar) ? o.yedekKaynaklar : [],
+    kimlikReferansi: typeof o.kimlikReferansi === 'function' ? o.kimlikReferansi : null, yedekCalisma,
   });
   if (eksik.length) {
+    await yedegiSil();
     throw new UretecHatasi(`${eksik.length} kitap alınamadı (ilk: ${eksik[0].id} ${eksik[0].sebep})`
       + ' — build YAZILMADI', { kod: KOD.KITAP_EKSIK, eksik });
   }
@@ -679,7 +786,7 @@ async function uret(o) {
       await menuYaz(kok, xml, kalip.menuBicim, `${o.setId}:${sonuc.map((k) => `${k.id}-${k.vs}`).join(',')}`);
       for (const k of sonuc) {
         await icerikAc(k, path.join(kok, 'assets', k.id), komut);
-        kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `assets/${k.id}`, ad: k.ad, grup: k.grup });
+        kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `assets/${k.id}`, ad: k.ad, grup: k.grup, kaynak: k.kaynak });
       }
     } else {
       await fsp.mkdir(kok, { recursive: true });
@@ -696,7 +803,7 @@ async function uret(o) {
         await menuYaz(path.join(kok, d), xml, kalip.menuBicim, `${k.id}:${k.vs}`);
         await icerikAc(k, path.join(kok, d, 'assets', k.id), komut);
         motorlar.push(d);
-        kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `${d}/assets/${k.id}`, ad: k.ad, grup: k.grup });
+        kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `${d}/assets/${k.id}`, ad: k.ad, grup: k.grup, kaynak: k.kaynak });
       }
       // Menü girdileri liste sırasıyla: kitap / liste linki / kitap-dışı varlığın link kartı.
       const girdiler = [];
@@ -769,6 +876,8 @@ async function uret(o) {
       donusum: donusumKaniti,
       kapak: temaAdi ? kapakSay : null,
       kitaplar: kitapRapor,
+      // İçeriği İmpark zip'i yerine yedek kaynaktan kurulan kitaplar (kaynak + kimlik kapısı).
+      yedek: sonuc.filter((k) => k.kaynak !== 'impark').map((k) => ({ id: k.id, kaynak: k.kaynak, vs: k.vs, kimlik: k.kimlik })),
       // n = liste satır sırası (link kartının dizini link<n>; bookN ile ORTAK sayaç — çakışmaz).
       linkKarti: linkKarti.map((g) => ({
         n: Number(String(g.anahtar || '').replace(/\D/g, '')) || null, assetId: g.id, ad: g.ad, url: g.url, sebep: g.sebep,
@@ -780,6 +889,7 @@ async function uret(o) {
     };
   } finally {
     if (!o.sahneyiTut) await fsp.rm(sahne, { recursive: true, force: true }).catch(() => {});
+    await yedegiSil();
   }
 }
 
@@ -801,6 +911,7 @@ function uretecOzeti(r) {
     kalip: path.basename(path.dirname(r.motor.kalip)), motor: r.motor.dizin, kurum: r.motor.kurumYazilan || r.motor.kurum,
     kabuk: r.kabuk ? (r.kabuk === 'kalip' ? 'kalip' : path.basename(String(r.kabuk))) : null,
     kitap: r.kitaplar.length, linkKarti: r.linkKarti.length, atlanan: r.atlanan.length,
+    ...(r.yedek && r.yedek.length ? { yedek: r.yedek.map((y) => `${y.id}:${y.kaynak}`) } : {}),
     ...(r.donusum ? { donusum: { kurum: r.donusum.kurum, uc: r.donusum.uc, motor: r.donusum.motorlar.length } } : {}),
     ...(r.kapak ? { kapak: r.kapak } : {}),
   };

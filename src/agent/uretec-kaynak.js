@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const M = require('./icerik-merdiven');
 const U = require('./index-ureteci');
+const Y = require('./icerik-yedek');
 const setEk = require('./set-uyelik-ek');
 const temaKabuk = require('./webz-tema-kabuk');
 
@@ -36,12 +37,23 @@ const ISARET = '[uretec]';
  * Yayıncı adı (küçük harf, tr) → { kurum, tema, kalipKurum?, uc? }. tema: 'kalip' = kalıbın Web-Z kökü
  * (sf425); başka değer = `webz-tema-kabuk` teması (kök üretilir + motor dönüşümü).
  */
+/**
+ * İÇERİK KÖKLERİ (üye kitap yedeği, `icerik-yedek.js`): `icerikOrigin` = İmpark'ın kitabı sunduğu alan
+ * (kimlik referansı: `Uploads/WebDijitapDosyalar/<id>/data/BookContent.xml`), `uploads` = aynı
+ * `Uploads/`'un SMB yolu (`~/Impark` altında; ölçüm 04.10: YDS Storage7, Flashy Storage3 — Flashy'de
+ * `httpdocs` yok). Flashy origin'inde XML Cloudflare 403 → referans SMB'den okunur.
+ */
 const FLASHY = Object.freeze({
   kurum: '310', tema: 'web-proxy-modern', kalipKurum: '60',
   uc: Object.freeze({ aday: 'https://flashyelt.yayincilik.net', yedek: 'https://akillitahta.ydspublishing.com' }),
+  icerikOrigin: 'https://flashyelt.yayincilik.net',
+  uploads: 'Storage3/vhosts/yayincilik.net/flashyelt.yayincilik.net/Uploads',
 });
 const YAYINCILAR = Object.freeze({
-  'yds publishing': { kurum: '60', tema: 'kalip' },
+  'yds publishing': {
+    kurum: '60', tema: 'kalip', icerikOrigin: 'https://akillitahta.ydspublishing.com',
+    uploads: 'Storage7/vhosts/akillitahta.ydspublishing.com/httpdocs/Uploads',
+  },
   'flashy elt': FLASHY,
   flashyelt: FLASHY,
 });
@@ -242,7 +254,8 @@ function webzAdresiKur(job, workerKoku = WORKER_KOKU) {
  * Üreteç kaynağı: build.zip'i `zipPath`e kurar. Ertelenecek her durum `UretecKaynakHatasi(gecici)`.
  * @param {{job:object, zipPath:string, work:string, arsivKoku:string, log?:Function,
  *   anahtarliMi:(id:string)=>Promise<boolean>, env?:object, uret?:Function, listeCozFn?:Function,
- *   onbellek?:string, getir?:Function, indir?:Function}} o
+ *   onbellek?:string, getir?:Function, indir?:Function, yedekKaynaklar?:Array<object>,
+ *   kimlikReferansi?:Function}} o
  * @returns {Promise<{rapor:object, liste:{ham:string, kaynak:string}}>}
  */
 async function uretecKaynagi(o) {
@@ -278,6 +291,11 @@ async function uretecKaynagi(o) {
   log(`${ISARET} ${job.bookId}: liste ${liste.kaynak}, kalıp ${kalip.set} (kurum ${kalip.kurum})`
     + `${kabuk && kabuk.tema ? `, tema ${kabuk.tema} → kurum ${yay.kurum}, uç ${ucSecimi.uc} (${ucSecimi.secilen}: `
       + `güncelleme ${ucSecimi.olcum.guncelleme}, anahtar ${ucSecimi.olcum.anahtar})` : ''}`);
+  // Üye kitap içeriği İmpark zip'inden alınamazsa: SMB Web-Z dosyaları → önbellek → arşiv (icerik-yedek.js).
+  const onbellek = o.onbellek || M.icerikOnbellekKoku();
+  const uploadsKoku = yay.uploads ? path.join(Y.smbKoku(o.env || process.env), yay.uploads) : null;
+  const yedekKaynaklar = o.yedekKaynaklar || Y.varsayilanYedekler({ uploadsKoku, onbellek, arsivKoku: o.arsivKoku });
+  const kimlikReferansi = o.kimlikReferansi || Y.kimlikReferansiKur({ origin: yay.icerikOrigin || null, uploadsKoku });
   let rapor;
   try {
     rapor = await (o.uret || U.uret)({
@@ -285,7 +303,7 @@ async function uretecKaynagi(o) {
       cikti: o.zipPath, calisma: path.join(o.work, 'uretec'), duzen: U.DUZEN.OTOMATIK,
       aktivasyon: U.AKTIVASYON.OTOMATIK, anahtarliMi: o.anahtarliMi,
       kabuk, motorDonusumu, kapakGetir: o.kapakGetir, webzAdresi: webzAdresiKur(job),
-      onbellek: o.onbellek || M.icerikOnbellekKoku(), getir: o.getir, indir: o.indir, log,
+      onbellek, getir: o.getir, indir: o.indir, yedekKaynaklar, kimlikReferansi, log,
     });
   } catch (e) {
     if (e instanceof U.UretecHatasi) {

@@ -577,3 +577,162 @@ test('motorDonusumuDogrula: tek nokta bile tutmazsa RED (kurum / logo düz / uç
   assert.equal(U.motorDonusumuDogrula(kok, r.donusum.motorlar, DONUSUM).kurum, '310');
   await fsp.rm(r.sahne, { recursive: true, force: true });
 });
+
+// ─── Yedek içerik kaynağı (04.10: İmpark zip'i yok/başka kitabın/Data boş → kendi kaynağımız) ──────────
+
+const LISTE3 = LISTE.split('\n').slice(0, 4).join('\n'); // 501, 502, link, 503
+
+/** `id` kitabı için yedek içerik zip'i; `zid` BookContent kitapId'si, kapak işareti `yedek-<id>`. */
+async function yedekZip(d, id, { zid = id, ad = `${id}-yedek-${Math.random()}.zip` } = {}) {
+  const k = path.join(d, `yedek-ic-${ad}`);
+  await yaz(k, {
+    'data/BookContent.xml': `<Book kitapId="${zid}"><Page/></Book>`, 'thumbs/1.jpg': `yedek-${id}`,
+    'pages/1.png': `ysayfa-${id}`,
+  });
+  const z = path.join(d, ad);
+  await zipla(k, z);
+  return z;
+}
+
+function sahteYedek(ad, sonuc) {
+  const cagri = [];
+  return { ad, cagri, getir: async (c) => { cagri.push(c); return typeof sonuc === 'function' ? sonuc(c) : sonuc; } };
+}
+
+/** 502 için İmpark davranışını değiştiren getir/indir sarmalayıcıları. */
+function imparkBoz(o, { data, vs = 7, status = 200, indirHata = false } = {}) {
+  return {
+    getir: async (url) => {
+      if (!/id=502&/.test(url)) return o.getir(url);
+      if (status !== 200) return { status, govde: 'sunucu hatası' };
+      return { status: 200, govde: JSON.stringify({ Success: true, Data: data, Vs: vs }) };
+    },
+    indir: async (url, hedef) => {
+      if (indirHata && /\/502-/.test(url)) throw new Error(`indirilemedi (indirme kodu 22): ${url}`);
+      return o.indir(url, hedef);
+    },
+  };
+}
+
+function uretTek(o, ek) {
+  return U.uret({
+    setId: '45479', setAdi: 'Influence 11', listeHam: LISTE3, duzen: 'tek-motor', kalipZip: o.kalipZip,
+    cikti: path.join(o.d, 'out', 'build.zip'), calisma: path.join(o.d, 'w'), onbellek: path.join(o.d, 'onb'),
+    getir: o.getir, indir: o.indir, bekleMs: 0, ...ek,
+  });
+}
+
+test('yedek: İmpark zip\'i 404 (14835 sınıfı) → yedek kaynaktan kurulur; sürüm/kapak yedekten, kapıdan GEÇER', async () => {
+  const o = await ortam();
+  const zip = await yedekZip(o.d, '502');
+  const y = sahteYedek('webz-smb', { zip, kaynakId: '502', vs: 7, not: 'SMB WebDijitapDosyalar/502' });
+  const r = await uretTek(o, {
+    ...imparkBoz(o, { data: 'https://x.example/Uploads/ZKitapZipH/502-7.zip', indirHata: true }),
+    yedekKaynaklar: [y], kimlikReferansi: async (id) => id,
+  });
+  assert.equal(y.cagri.length, 1, 'yedek yalnız 502 için');
+  assert.equal(y.cagri[0].id, '502');
+  assert.equal(y.cagri[0].imparkVs, 7);
+  assert.deepEqual(r.yedek, [{ id: '502', kaynak: 'webz-smb', vs: 7, kimlik: 'kitapId' }]);
+  assert.deepEqual(r.kitaplar.map((k) => [k.id, k.kaynak]), [['501', 'impark'], ['502', 'webz-smb'], ['503', 'impark']]);
+  assert.equal(M.zipGirdiOku(r.zip, M.zipDizini(r.zip).get('assets/502/thumbs/1.jpg')).toString(), 'yedek-502');
+  const xml = menuOku(r.zip, 'classlibraries/ImWin32.dll');
+  assert.equal(ig.kapaklar(xml).find((c) => c.ID === '502').version, 7);
+  assert.deepEqual(U.uretecOzeti(r).yedek, ['502:webz-smb']);
+  const kapi = yazmaKapisi({ zipYolu: r.zip, setListesi: LISTE3, tur: 'otomatik' });
+  assert.equal(kapi.gecti, true, kapi.nedenler.join(' | '));
+  assert.equal(fs.existsSync(path.join(o.d, 'w', `uretec-yedek-${process.pid}`)), false, 'yedek çalışma dizini silindi');
+});
+
+test('yedek: Data BAŞKA kitabın zip\'i (11822 "60 ≠ 11822") → o zip ALINMAZ, yedek İmpark Vs ile kurulur', async () => {
+  const o = await ortam();
+  const zip = await yedekZip(o.d, '502');
+  const y = sahteYedek('webz-smb', (c) => ({ zip, kaynakId: '502', vs: c.imparkVs }));
+  const b = imparkBoz(o, { data: 'https://x.example/Uploads/ZKitapZipH/60-25685.zip', vs: 9 });
+  const indirilen = [];
+  const r = await uretTek(o, {
+    getir: b.getir, indir: async (url, h) => { indirilen.push(url); return b.indir(url, h); },
+    yedekKaynaklar: [y], kimlikReferansi: async () => '502',
+  });
+  assert.ok(!indirilen.some((u) => /60-25685/.test(u)), 'başka kitabın zip\'i indirilmez');
+  assert.equal(y.cagri[0].imparkVs, 9);
+  assert.equal(ig.kapaklar(menuOku(r.zip, 'classlibraries/ImWin32.dll')).find((c) => c.ID === '502').version, 9);
+  assert.equal(r.yedek[0].kaynak, 'webz-smb');
+});
+
+test('yedek: HİÇBİR kaynakta yok (60068 sınıfı, Data boş) → ertele; sebep denenenleri sayar, build yok', async () => {
+  const o = await ortam({ dataBos: ['502'] });
+  const a = sahteYedek('webz-smb', { yok: 'WebDijitapDosyalar/502 yok' });
+  const b = sahteYedek('onbellek', { yok: 'önbellekte dizin yok' });
+  const c = sahteYedek('arsiv', { yok: "41 arşiv build'inde yok" });
+  const cikti = path.join(o.d, 'out', 'build.zip');
+  await assert.rejects(uretTek(o, { yedekKaynaklar: [a, b, c], kimlikReferansi: async () => null }), (e) => {
+    assert.equal(e.kod, 'kitap-eksik');
+    const s = e.eksik.find((x) => x.id === '502').sebep;
+    assert.match(s, /^hiçbir kaynakta yok — İmpark: İmpark'ta içerik yok \(Data boş\); denenenler: /);
+    assert.match(s, /webz-smb: WebDijitapDosyalar\/502 yok \| onbellek: önbellekte dizin yok \| arsiv: 41 arşiv build'inde yok$/);
+    assert.match(e.message, /hiçbir kaynakta yok/);
+    return true;
+  });
+  assert.equal(a.cagri[0].imparkVs, 0, 'Data boş cevabının Vs\'i (0) yedeğe gider');
+  assert.equal(fs.existsSync(cikti), false);
+});
+
+test('yedek: YANLIŞ kimlikli içerik REDDEDİLİR (BookContent kitapId ≠ İmpark referansı), sıradaki denenir', async () => {
+  const o = await ortam();
+  const yanlis = sahteYedek('arsiv', { zip: await yedekZip(o.d, '502', { zid: '06003144' }), kaynakId: '502', vs: 3 });
+  const dogru = sahteYedek('onbellek', { zip: await yedekZip(o.d, '502', { zid: '0602126' }), kaynakId: '502', vs: 5 });
+  const bozuk = imparkBoz(o, { data: 'https://x.example/Uploads/ZKitapZipH/502-7.zip', indirHata: true });
+  const r = await uretTek(o, { ...bozuk, yedekKaynaklar: [yanlis, dogru], kimlikReferansi: async () => '0602126' });
+  assert.deepEqual(r.yedek, [{ id: '502', kaynak: 'onbellek', vs: 5, kimlik: 'kitapId' }]);
+  // Yalnız yanlış aday varsa: build YAZILMAZ, sebep "başka kitap".
+  const o2 = await ortam();
+  const yalniz = sahteYedek('arsiv', { zip: await yedekZip(o2.d, '502', { zid: '06003144' }), kaynakId: '502', vs: 3 });
+  await assert.rejects(uretTek(o2, {
+    ...imparkBoz(o2, { data: 'https://x.example/Uploads/ZKitapZipH/502-7.zip', indirHata: true }),
+    yedekKaynaklar: [yalniz], kimlikReferansi: async () => '0602126',
+  }), (e) => e.kod === 'kitap-eksik'
+    && /arsiv: RED BookContent kitapId 06003144 ≠ İmpark'ın 502 kitapId'si 0602126 \(başka kitap\)/.test(e.eksik[0].sebep));
+  assert.equal(fs.existsSync(path.join(o2.d, 'out', 'build.zip')), false);
+});
+
+test('yedek: kaynak kimliği ≠ kitap, geçersiz sürüm ve bozuk düzen RED; referans yoksa kaynak kimliği yeter', async () => {
+  const o = await ortam();
+  const z = await yedekZip(o.d, '502');
+  const bosDizin = path.join(o.d, 'bos-ic');
+  await yaz(bosDizin, { 'pages/.keep': '' });
+  const bosZip = path.join(o.d, 'bos.zip');
+  await zipla(bosDizin, bosZip);
+  const adaylar = [
+    sahteYedek('a', { zip: z, kaynakId: '999', vs: 1 }),
+    sahteYedek('b', { zip: z, kaynakId: '502', vs: -1 }),
+    sahteYedek('c', { zip: bosZip, kaynakId: '502', vs: 1 }),
+    sahteYedek('d', async () => { throw new Error('SMB koptu'); }),
+    sahteYedek('e', { zip: z, kaynakId: '502', vs: 4 }),
+  ];
+  const r = await uretTek(o, {
+    ...imparkBoz(o, { data: 'https://x.example/Uploads/ZKitapZipH/502-7.zip', indirHata: true }),
+    yedekKaynaklar: adaylar, kimlikReferansi: async () => null,
+  });
+  assert.deepEqual(r.yedek, [{ id: '502', kaynak: 'e', vs: 4, kimlik: 'kaynak' }]);
+  assert.ok(adaylar.every((y) => y.cagri.length === 1));
+});
+
+test('yedek: İmpark\'a ULAŞILAMADI (HTTP 500) ya da kitap-dışı varlık → yedek DENENMEZ (geçici / link kartı)', async () => {
+  const o = await ortam();
+  const y = sahteYedek('webz-smb', { zip: await yedekZip(o.d, '502'), kaynakId: '502', vs: 7 });
+  await assert.rejects(uretTek(o, { ...imparkBoz(o, { status: 500 }), yedekKaynaklar: [y], kimlikReferansi: async () => '502' }),
+    (e) => e.kod === 'kitap-eksik' && /İmpark ölçülemedi: HTTP 500/.test(e.eksik[0].sebep));
+  assert.equal(y.cagri.length, 0, 'ağ/sunucu hatasında yedekle tahmin üretilmez');
+  // Games (contentType games, Data boş) → link/atla yolu; yedek ona sorulmaz.
+  const o2 = await ortam();
+  const y2 = sahteYedek('webz-smb', { yok: 'yok' });
+  const r = await U.uret({
+    setId: '1', listeHam: LISTE, duzen: 'tek-motor', kalipZip: o2.kalipZip, cikti: path.join(o2.d, 'b.zip'),
+    calisma: path.join(o2.d, 'w'), onbellek: path.join(o2.d, 'onb'), getir: o2.getir, indir: o2.indir, bekleMs: 0,
+    yedekKaynaklar: [y2], kimlikReferansi: async () => null,
+  });
+  assert.equal(y2.cagri.length, 0);
+  assert.deepEqual(r.atlanan.map((g) => g.assetId), ['3100010']);
+  assert.deepEqual(r.yedek, []);
+});

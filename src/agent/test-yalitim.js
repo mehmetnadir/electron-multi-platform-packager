@@ -39,6 +39,7 @@
  *                                    kalp yok = kasa ERİŞİLEMEZ, testler gerçek makineye iş YAZMAZ)
  *   EMPP_WIN_KASA_KILIT            ← CONFIG.winKasaKilit (…/windows-kasa-kabul.kilit)
  *   EMPP_WIN_HAZIR_KOK             ← CONFIG.winHazirKoku (…/windows-hazir — imza bekleyen paketler)
+ *   EMPP_IMPARK_SMB_KOKU           ← icerik-yedek.js `smbKoku()` (~/Impark — üye kitap SMB yedeği; yok = bağlı değil)
  *
  * `configUygula(CONFIG)`: `macSerbestFlag`, `macDurdurFlag`, `dusukVeriYoksayFlag` alanlarının
  * CONFIG'te env-override'ı YOK (runner.js'te hardcoded `path.join(os.homedir(), ...)`) — bu
@@ -70,6 +71,8 @@ const ENV_ESLEME = {
   EMPP_VM_KOK: 'vm-kapi',
   EMPP_WIN_KASA_KILIT: 'windows-kasa-kabul.kilit',
   EMPP_WIN_HAZIR_KOK: 'windows-hazir',
+  // Üye kitap yedeği (icerik-yedek.js): testler gerçek İmpark SMB bağlamasını (~/Impark) görmesin.
+  EMPP_IMPARK_SMB_KOKU: 'impark-smb-yok',
 };
 
 /**

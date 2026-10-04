@@ -199,5 +199,52 @@ gitti, üreteç hiç koşmadı; yeni build eskisiyle sha256 birebir (kökte Elec
 - Yazma kapısı: build kökünde giriş yoksa RED `giris-yok` (üreteç kapalı olsa bile R2'ye yazılmaz).
 - Öneri (sunucu): claim'e taban build'in `kaynak`'ını eklemek indirmeyi de gereksizleştirir.
 
+## 13. Üye kitap YEDEK İÇERİK (04.10, dal `uye-icerik-yedek-20261004`)
+
+**Nadir 04.10:** "zip'i her zaman biz kendimiz oluşturuyoruz, paket zip'i sorma" — eksik İmpark zip'i karar
+sorusu değil, bizim kurduğumuz girdi; setten kitap düşürmek çözüm değil. Takılan setler: 45479 (14835 zip 404),
+11845 (11822 Data = `60-25685.zip`), 60114 (60068 Data boş).
+
+**Kaynak envanteri (ölçüm 04.10):**
+
+| Kitap | İmpark Data | SMB `WebDijitapDosyalar/<id>` | Web-Z | Diğer |
+|---|---|---|---|---|
+| 14835 | `ZKitapZipH/14835-1.zip` 404 (SMB'de de yok) | yalnız BOŞ `pages/` (27.08) | 404 | `ZKitapOnIzle/14835` 73 PNG önizleme (kitap DEĞİL); arşivde/önbellekte yok; 45479 v51 eski set build'inde de yok |
+| 11822 | `60-25685.zip` = 73452 SHALL WE 6 içeriği (kitapId 06003144) — YANLIŞ KİTAP, H yolunda 404 | TAM (176 sayfa, htmletk u1-u10, audio, video; kitapId 0602126) | 200 (oradan) | `ZKitapZip/11822-7..9/` açılmış dizinler |
+| 60068 | Data boş, Vs 0 | yok (Flashy vhost'ta hiçbir Uploads alt dizininde yok) | 404 | İmpark SQL: ZKitapId/SayfaSayisi NULL (boş kayıt); 60114 eski paketinde de yok |
+
+`WebDijitapDosyalar/<id>/` eksi `pages2X/` = `ZKitapZipH/<id>-<Vs>.zip` BİREBİR (33574: 2023 dosya, ad kümesi + md5).
+HTTP'de dizin listesi yok (403); htmletk iç dosyaları BookContent'ten çıkarılamaz → HTTP taraması YAPILMAZ (eksik etkinlik).
+
+**Akış (`icerikleriTopla`):** İmpark teklifi → Data → içerik önbelleği (eskisi gibi). İmpark CEVAP VERDİ ama zip
+kullanılamıyorsa (`ImparkZipYok`: Data boş / başka kitabın zip'i / biçim dışı / indirme ya da düzen hatası) ve satır
+KİTAP türündeyse `yedekKaynaklar` sırayla:
+
+| Sıra | Kaynak (`icerik-yedek.js`) | Sürüm | Nerede çalışır |
+|---|---|---|---|
+| 1 | `webz-smb`: SMB `<uploads>/WebDijitapDosyalar/<id>/` → kendi zip'imiz (pages2X hariç); SMB = df kaynağı `//` | İmpark'ın bildirdiği Vs | İmpark VPN + disk bağlı makine (Mac) |
+| 2 | `onbellek`: `<icerik-onbellek>/<id>/<id>-<n>.zip` en büyük n | n | her ajan |
+| 3 | `arsiv`: `kaynak-arsivi/*/build.zip` içinde `(bookN/)assets/<id>/` + o menüdeki kapak (kapaksız kopya alınmaz) | o kapak | her ajan |
+
+İmpark'a ULAŞILAMADI (ağ, HTTP≠200, JSON değil, Success≠true) → yedek DENENMEZ (geçici, eskisi gibi ertelenir).
+
+**Kapılar (yedek kendini onaylamaz, üreteç sınar):** (1) kaynak kimliği (dizin/anahtar) = kitap; (2) sürüm tam sayı ≥ 0;
+(3) `icerikDenetle`; (4) BookContent `kitapId` = İmpark referansı (`kimlikReferansiKur`: SMB'deki, yoksa origin
+HTTP'deki `WebDijitapDosyalar/<id>/data/BookContent.xml` kitapId'si = S_TestKitaplar.ZKitapId). Referans ölçülemezse
+1-3 yeter, rapora `kimlik:'kaynak'`. Geçemeyen aday RED, sıradaki denenir.
+
+**Ya hep ya hiç:** hiçbir kaynakta yoksa `kitap-eksik` (erteleme); sebep:
+`hiçbir kaynakta yok — İmpark: <neden>; denenenler: webz-smb: … | onbellek: … | arsiv: …`.
+Rapor: `kitaplar[].kaynak`, `yedek[]`; `uretecOzeti.yedek` (`<id>:<kaynak>`).
+
+**Kuru koşu (04.10, Mac, 1 kitaplık tek-motor set, scratch):** 11822 → `webz-smb`: 782 MB zip, 2050 dosya, kitapId 0602126 = referans, menü sürümü 9 (İmpark Vs), yazma kapısı GEÇTİ; SMB üstünden 1542 sn (VPN ~0,5 MB/s). 14835 ve 60068 →
+ERTELE, sebepte üç kaynak da sayıldı. ProBook'ta SMB yok → 11822 de ertelenir ("SMB bağlı değil"); 11845'in
+r2-kur'u İmpark VPN'li Mac'te koşarsa kurulur.
+
+**Açık (şefe):** 14835 ve 60068'in İmpark'ta içeriği HİÇ yok (60068 boş kayıt; 14835 yalnız önizleme PNG'leri) —
+kendi kaynağımızda da yok. Önizlemeden sayfa-yalnız kitap sentezi teknik olarak mümkün (sayfalar H zip'te ilk 100
+bayt 256-b gizli, `hashed="true"`) ama 25850 kardeş kitabı 81 sayfalık PDF'ten 11 sayfa + test olarak yayınlanmış →
+önizleme ≠ yayınlanan kitap; uygulanmadı.
+
 ---
-Son Güncelleme: 2026-10-03 — taban kuralı (§12); önceki: faz 3 Flashy (§11), ilk sürüm + runner bağlantısı.
+Son Güncelleme: 2026-10-04 — üye kitap yedek içerik (§13); önceki: taban kuralı (§12), faz 3 Flashy (§11).
