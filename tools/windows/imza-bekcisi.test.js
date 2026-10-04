@@ -65,13 +65,13 @@ function ortam({ yuva = false, ping = false, sudo = false, diskYuvaKurar = true 
     },
     ...ek,
   });
-  const ekle = async (bookId, { yasMs = 60000 } = {}) => {
+  const ekle = async (bookId, { yasMs = 60000, kanonikSurum = null } = {}) => {
     const w = tmp('w');
     const govde = Buffer.concat([Buffer.from('MZ'), crypto.randomBytes(3000)]);
     const exe = path.join(w, `runner-${bookId}-T-2.1.1-Setup.exe`);
     fs.writeFileSync(exe, govde);
     const h = await H.hazirKoy({
-      exe, job: { bookId, platform: 'windows', bookTitle: `Kitap ${bookId}`, surum: '2.1.1' }, surum: '2.1.1',
+      exe, job: { bookId, platform: 'windows', bookTitle: `Kitap ${bookId}`, surum: '2.1.1', ...(kanonikSurum ? { kanonikSurum } : {}) }, surum: '2.1.1',
       kanit: { imzasiz: { md5: md5(govde), sha256: 's', boyut: govde.length } }, cfg, kabul: { kapi: 'kasa' },
     });
     await H.manifestGuncelle(h.dizin, { zaman: new Date(simdi - yasMs).toISOString() });
@@ -139,6 +139,15 @@ test('yuva kapalı + VPN AYAKTA → yalnız disk bağlanır (--sessiz), yuva aç
   assert.equal(m.durum, 'yayinlandi');
   assert.equal(m.yayin.yayinlayan, 'imza-bekcisi');
   assert.doesNotMatch(o.oku(), /^bildir/m, 'sorun yok → bildirim yok');
+});
+
+test('hazır kayıttaki kanonik damga /result işine kanonikSurum olarak geçer (motor/kabuk sütunları)', async () => {
+  const o = ortam({ ping: true });
+  const kanonikSurum = { motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.14', kabukDurum: 'guncel' };
+  await o.ekle('103', { kanonikSurum });
+  const z = await B.tur(o.bagimlilik());
+  assert.equal(z.yayinlanan, 1);
+  assert.deepEqual(o.cagri.yayin[0].job.kanonikSurum, kanonikSurum);
 });
 
 test('VPN kapalı ama parolasız sudo VAR → betik VPN + disk için koşar', async () => {

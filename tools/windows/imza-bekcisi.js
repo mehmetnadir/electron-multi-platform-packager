@@ -135,6 +135,9 @@ async function kaydiIsle(giris, d) {
   const { cfg, log } = d;
   const m = giris.manifest;
   const job = { ...(m.job || {}), bookId: m.bookId, platform: 'windows' };
+  // Kanonik damga hazır kayıtta `manifest.kanonik`te durur (m.job'da yok): /result'a motor/kabuk
+  // sütunları gitsin (04.10: 45449 yayınlandı, sütunlar NULL kaldı).
+  if (!job.kanonikSurum && m.kanonik && typeof m.kanonik === 'object') job.kanonikSurum = m.kanonik;
   const kilit = await H.kayitKilidiDene(giris.dizin);
   if (!kilit) return { durum: 'atlandi', sebep: 'kayıt başka süreçte (runner devralıyor)' };
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'imza-bekcisi-'));
