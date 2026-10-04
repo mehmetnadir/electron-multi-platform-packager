@@ -30,3 +30,4 @@ $env:AGENT_OFISTE = '1'   # windows-kasa ofiste sabit (runner Windows'ta route i
 $env:AGENT_PACKAGE_TIMEOUT_MS = '3600000'
 $env:NODE_OPTIONS = '--dns-result-order=ipv4first --no-network-family-autoselection'
 Set-Location $R
+$env:EMPP_IMZA_YUVA_KOKU = '\\172.17.2.23\Storage7\vhosts\akillitahta.ydspublishing.com\httpdocs\Uploads\KitapTekExe'   # 04.10 imza kapısı AÇIK: kasa tek imzacı (şef: AÇ)

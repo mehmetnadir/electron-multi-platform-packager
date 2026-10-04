@@ -169,6 +169,16 @@ test('sırayla, en eskiden: iki kayıt da yayınlanır, eski önce', async () =>
   assert.equal(o.cagri.ping, 0, 'yuva açıkken VPN/disk ölçülmez');
 });
 
+test('--yalniz: yalnız verilen kitap işlenir, diğerleri kuyrukta kalır (elle ilk tur, 04.10)', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('301', { yasMs: 9000 });
+  await o.ekle('302', { yasMs: 5000 });
+  const z = await B.tur(o.bagimlilik({ yalniz: '302' }));
+  assert.equal(z.yayinlanan, 1);
+  assert.deepEqual(o.cagri.yayin.map((y) => y.job.bookId), ['302']);
+  assert.equal((await H.hazirListesi(o.cfg)).length, 1, '301 kuyrukta kaldı');
+});
+
 test('sunucu kirayı tutmuyor (presign 409) → imzalanmaz, kayıt yerinde; eşik aşıldıysa bildirim', async () => {
   const o = ortam({ yuva: true });
   await o.ekle('301', { yasMs: 4 * SAAT });

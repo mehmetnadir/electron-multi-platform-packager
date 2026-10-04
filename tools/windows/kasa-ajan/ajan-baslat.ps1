@@ -14,6 +14,9 @@ while ($true) {
     Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "node src\server\app.js >> `"$L\packager.log`" 2>&1" -WindowStyle Hidden
     for ($i = 0; $i -lt 30 -and -not (PaketleyiciAyakta); $i++) { Start-Sleep 2 }
   }
+  # Ortam HER runner başlangıcında yeniden okunur (04.10): ortam.ps1'e eklenen değişken (ör.
+  # EMPP_IMZA_YUVA_KOKU) yeniden-baslat.istek ile devreye girer; görevi yeniden başlatmak gerekmez.
+  . D:\empp-ajan\ortam.ps1
   "$(Damga) runner başlıyor (paketleyici: $(PaketleyiciAyakta))" | Out-File -Append -Encoding utf8 "$L\baslat.log"
   & cmd.exe /d /c "node src\agent\runner.js >> `"$L\agent.log`" 2>&1"
   "$(Damga) runner çıktı rc=$LASTEXITCODE — 15 sn sonra yeniden" | Out-File -Append -Encoding utf8 "$L\baslat.log"

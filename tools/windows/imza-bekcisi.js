@@ -29,7 +29,8 @@
  * İmzasız paket buradan ASLA yüklenmez: yükleme yalnız `imzaliYayinZinciri`'nin döndürdüğü, Authenticode'u
  * doğrulanmış ve kabulden geçmiş imzalı kopyayla yapılır.
  *
- * Kullanım: node tools/windows/imza-bekcisi.js [--kuru]   (--kuru: yalnız ölç + raporla, dokunma)
+ * Kullanım: node tools/windows/imza-bekcisi.js [--kuru] [--yalniz=<bookId>]
+ *   (--kuru: yalnız ölç + raporla, dokunma; --yalniz: yalnız o kitabın kaydı — elle ilk tur)
  */
 
 const fs = require('fs');
@@ -200,6 +201,9 @@ async function tur(d) {
   }
   try {
     let liste = await H.hazirListesi(cfg);
+    // --yalniz=<bookId>: elle ilk tur (04.10, şef) — yalnız o kayıt işlenir; ilk imzalı paket
+    // kanıtlanmadan kuyruğun geri kalanına dokunulmaz.
+    if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
     ozet.bekleyen = liste.length;
     if (!liste.length) { log('imza-bekçisi: bekleyen paket yok'); return ozet; }
     let yuva = await W.imzaYuvasiErisilirMi(cfg);
@@ -222,6 +226,7 @@ async function tur(d) {
         else { sebep = `imza/yayın hatası: ${String(r.sebep).slice(0, 160)}`; break; }
       }
       liste = await H.hazirListesi(cfg);
+      if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
     }
     const durum = await H.bildirimDurumuOku(cfg);
     const karar = H.bildirimKarari({
@@ -242,6 +247,7 @@ async function ana(argv = process.argv.slice(2)) {
   const log = (...a) => console.log(new Date().toISOString(), ...a);
   const d = {
     cfg, log, kuru: argv.includes('--kuru'), komutKos: W.komutKos, simdi: () => Date.now(),
+    yalniz: (argv.find((a) => a.startsWith('--yalniz=')) || '').slice('--yalniz='.length) || null,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)), imzaliYayinZinciri: W.imzaliYayinZinciri,
     postResultSuccess: runner.postResultSuccess, postResultFailure: runner.postResultFailure, presignUpload: runner.presignUpload,
     aktivasyonBeklenir: runner.aktivasyonBeklenir, auth: null,
