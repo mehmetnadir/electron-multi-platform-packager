@@ -72,3 +72,34 @@ test('pipefail tuzağı: unrar_kur boruda erken kapanan süzgeç (| grep -q, | a
   assert.doesNotMatch(g, /xz -dc[^\n|]*\|(?!\|)/, 'xz çıktısı boruya değil dosyaya');
   assert.match(g, /ln -sfn "\$S\/opt\/unrar\/usr\/bin\/unrar-nonfree" "\$BIN\/unrar"/);
 });
+
+test('kanonik kabuk + motor: --arsivsiz olsa da eşlenir, yedekler hariç, ProBook node\'uyla doğrulanır', () => {
+  const iArsiv = KUR.indexOf('if [ "$ARSIV" = "1" ]');
+  const iKabuk = KUR.indexOf('rsync -a --exclude \'*.onceki-*\' --exclude kanonik.json "$KDIR/"');
+  assert.ok(iKabuk > 0 && iKabuk < iArsiv, 'kabuk eşlemesi arşiv koşulundan ÖNCE (koşulsuz)');
+  assert.match(KUR, /rsync -a --exclude '\*\.onceki-\*' --exclude kanonik\.json "\$MDIR\/" "\$HOST:\.empp-agent\/motor\/"/);
+  // kanonik.json en son (yarım aktarım doğrulanmaz)
+  assert.ok(KUR.indexOf('rsync -a "$KDIR/kanonik.json"') > KUR.indexOf('"$KDIR/" "$HOST'));
+  assert.match(KUR, /kabuk-kanonik\.js on .*\.empp-agent\/kabuk\/kanonik\.json/);
+  assert.match(KUR, /motor-kanonik\.js on .*\.empp-agent\/motor\/kanonik\.json/);
+  assert.match(KUR, /YUKLENEMEDI[^\n]*basarisiz/);
+  assert.match(KUR, /Mac'te kabuk kanoniği yok/);
+});
+
+test('kanonik doğrulama komutu ProBook yoluna göre gerçekten koşar (sahte ssh, geçerli ve bozuk kanonik)', () => {
+  const crypto = require('node:crypto');
+  const os = require('node:os');
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'kur-kanonik-'));
+  const ev = path.join(kok, 'ev'); const kd = path.join(ev, '.empp-agent', 'kabuk', '1.13.3');
+  fs.mkdirSync(kd, { recursive: true });
+  const main = `${'d'.repeat(20)}.main.js`;
+  fs.writeFileSync(path.join(kd, main), 'x');
+  const sha = crypto.createHash('sha256').update('x').digest('hex').slice(0, 12);
+  fs.writeFileSync(path.join(kd, 'manifest.json'), JSON.stringify({ surum: '1.13.3', main, dosyalar: [{ ad: main, sha12: sha }] }));
+  fs.writeFileSync(path.join(ev, '.empp-agent', 'kabuk', 'kanonik.json'), JSON.stringify({ surum: '1.13.3', dizin: '1.13.3' }));
+  const arac = path.join(__dirname, '..', 'pardus', 'kabuk-kanonik.js');
+  const kos = () => spawnSync(process.execPath, [arac, 'on', path.join(ev, '.empp-agent', 'kabuk', 'kanonik.json')], { encoding: 'utf8' });
+  assert.equal(kos().status, 0);
+  fs.writeFileSync(path.join(kd, main), 'BOZUK');
+  assert.equal(kos().status, 3, 'yüklenemezse kur.sh bu rc ile hata verir');
+});

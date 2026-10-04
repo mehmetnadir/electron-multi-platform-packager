@@ -59,6 +59,7 @@ function ortam() {
   const env = {
     ...process.env, PACKAGER_REPO: repo, EMPP_SERIT_KOK: serit, EMPP_NODE_BIN: path.join(kok, 'yok'),
     PARDUS_DOGRULA: dogrula, PARDUS_DISK_TABAN_GB: '1',
+    EMPP_KANONIK_SART: '0', // kabuk fail-closed testleri kendi ortamını kurar (aşağıda)
   };
   delete env.EMPP_LINUX_DEB;
   delete env.EMPP_SET_MENU;
@@ -231,4 +232,54 @@ test('motor: ProBook\'ta kanonik yoksa derleme DURMAZ, iki UYARI satırı; paket
   const pj = paketJson(o);
   assert.equal(pj.motorSurumu.durum, 'bilinmiyor');
   assert.equal(pj.motorSurumu.sha12, sha12('YAYINCI-ESKI'));
+});
+
+// OKUYUCU KABUĞU KANONİĞİ (2026-10-04): ProBook'ta kabuk kanoniği hiç yoktu, paket eski kabukla
+// çıkıyordu. Şerit artık derleme BAŞLAMADAN düşer (EMPP_KANONIK_SART=0 eski davranış).
+const KABUK_BETIK_KOK = path.join(__dirname, '..', '..');
+function kabukKanonikKur(ev) {
+  const crypto = require('node:crypto');
+  const sha = (b) => crypto.createHash('sha256').update(b).digest('hex').slice(0, 12);
+  const kok = path.join(ev, '.empp-agent', 'kabuk'); const kd = path.join(kok, '1.13.3');
+  fs.mkdirSync(kd, { recursive: true });
+  const main = `${'d'.repeat(20)}.main.js`;
+  fs.writeFileSync(path.join(kd, main), 'x');
+  fs.writeFileSync(path.join(kd, 'manifest.json'),
+    JSON.stringify({ surum: '1.13.3', main, dosyalar: [{ ad: main, sha12: sha('x') }] }));
+  fs.writeFileSync(path.join(kok, 'kanonik.json'), JSON.stringify({ surum: '1.13.3', dizin: '1.13.3' }));
+  return path.join(kok, 'kanonik.json');
+}
+
+test('kabuk: kanonik yoksa (şart varsayılan) derleme BAŞLAMADAN düşer, açık mesaj', () => {
+  const o = ortam(); const ev = path.join(o.kok, 'ev'); fs.mkdirSync(ev);
+  const r = kos(o, o.kaynak, { HOME: ev, EMPP_KANONIK_SART: '', EMPP_KABUK_KANONIK: '' });
+  assert.notEqual(r.status, 0);
+  assert.match(log(o), /UYARI kabuk: kanonik yok ya da doğrulanamadı/);
+  assert.match(log(o), /okuyucu kabugu kanoniği yok \(~\/\.empp-agent\/kabuk\) — eski formatla paket uretilmez/);
+  assert.equal(fs.existsSync(path.join(o.cikti, 'raw', 'packager.log')), false, 'paketleyici hiç koşmamalı');
+});
+
+test('kabuk: EMPP_KANONIK_SART=0 → eski davranış (uyarı, derleme sürer)', () => {
+  const o = ortam(); const ev = path.join(o.kok, 'ev'); fs.mkdirSync(ev);
+  const r = kos(o, o.kaynak, { HOME: ev, EMPP_KANONIK_SART: '0', EMPP_KABUK_KANONIK: '' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(log(o), /UYARI kabuk: kanonik yok/);
+});
+
+test('kabuk: kanonik varsa (göreli dizinli kayıt) doğrulanır, yol paketleyiciye EMPP_KABUK_KANONIK ile geçer', () => {
+  const o = ortam(); const ev = path.join(o.kok, 'ev'); fs.mkdirSync(ev);
+  const yol = kabukKanonikKur(ev);
+  const r = kos(o, o.kaynak, { HOME: ev, EMPP_KANONIK_SART: '', EMPP_KABUK_KANONIK: '' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(log(o), new RegExp(`kabuk: kanonik 1\\.13\\.3 \\(${yol.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\)`));
+});
+
+test('kabuk-kanonik.js: son satırı ayrıştırır, kanonik olmayan paket için UYARI', () => {
+  const { sonDenetim } = require(path.join(KABUK_BETIK_KOK, 'tools', 'pardus', 'kabuk-kanonik.js'));
+  assert.match(sonDenetim('📖 Okuyucu kabuğu: guncel, 2 kitap değişti (kanonik 1.13.3)').satirlar[0],
+    /^kabuk: paket guncel, 2 kitap/);
+  assert.equal(sonDenetim('📖 Okuyucu kabuğu: guncel, 0 kitap değişti (kanonik 1.13.3)').satirlar.length, 1);
+  assert.match(sonDenetim('📖 Okuyucu kabuğu: bilinmiyor, 0 kitap değişti (kanonik YOK)').satirlar[1],
+    /UYARI kabuk: paket kabuğu kanonik DEĞİL/);
+  assert.match(sonDenetim('').satirlar[0], /UYARI kabuk/);
 });

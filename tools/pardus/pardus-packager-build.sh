@@ -126,6 +126,23 @@ else
   log "$MOTOR_SATIR"
 fi
 
+# --- okuyucu kabugu kanonigi (2026-10-04): salt-okur /kabuk; yoksa fail-closed (EMPP_KANONIK_SART=0 acar) ---
+KABUK_YOL="${EMPP_KABUK_KANONIK:-$HOME/.empp-agent/kabuk/kanonik.json}"
+KABUK_ARGS=()
+if [ "${EMPP_OKUYUCU_KABUGU:-1}" != "0" ]; then
+  if ! command -v node >/dev/null 2>&1; then
+    KABUK_SATIR="UYARI kabuk: node yok, kanonik denetlenemedi ($KABUK_YOL)"; KABUK_OK=0
+  elif KABUK_SATIR=$(node "$TOOLS/kabuk-kanonik.js" on "$KABUK_YOL" 2>&1); then KABUK_OK=1
+  else KABUK_OK=0; fi
+  log "$KABUK_SATIR"
+  if [ "$KABUK_OK" = "1" ]; then
+    KABUK_DIZIN="$(cd "$(dirname "$KABUK_YOL")" && pwd -P)"
+    KABUK_ARGS=(-v "$KABUK_DIZIN":/kabuk:ro -e "EMPP_KABUK_KANONIK=/kabuk/$(basename "$KABUK_YOL")")
+  elif [ "${EMPP_KANONIK_SART:-}" != "0" ]; then
+    die "okuyucu kabugu kanoniği yok (~/.empp-agent/kabuk) — eski formatla paket uretilmez"
+  fi
+fi
+
 # --- build ---
 JOB="j$(date +%y%m%d-%H%M%S)"
 mkdir -p "$OUT/raw"
@@ -152,6 +169,8 @@ nice -n 10 docker run --rm --platform linux/amd64 --name "pardus-pack-$JOB" \
   -e EMPP_LINUX_DEB="${EMPP_LINUX_DEB:-0}" \
   -e EMPP_MOTOR_SURUMU="${EMPP_MOTOR_SURUMU:-1}" \
   ${MOTOR_ARGS[@]+"${MOTOR_ARGS[@]}"} \
+  ${KABUK_ARGS[@]+"${KABUK_ARGS[@]}"} \
+  -e EMPP_OKUYUCU_KABUGU="${EMPP_OKUYUCU_KABUGU:-1}" -e EMPP_KANONIK_SART="${EMPP_KANONIK_SART:-}" \
   -e EMPP_GUNCELLEME_ACIK_ANAHTAR="${EMPP_GUNCELLEME_ACIK_ANAHTAR:-}" \
   -e EMPP_G_SET_KIMLIGI="${EMPP_G_SET_KIMLIGI:-}" \
   -e EMPP_G_GUNCELLEME_TABANI="${EMPP_G_GUNCELLEME_TABANI:-}" \
@@ -171,6 +190,11 @@ log "impark: $IMPARK ($(du -h "$IMPARK" | cut -f1))"
 if command -v node >/dev/null 2>&1; then
   while IFS= read -r l; do log "$l"; done \
     < <(node "$TOOLS/motor-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
+fi
+
+if command -v node >/dev/null 2>&1; then
+  while IFS= read -r l; do log "$l"; done \
+    < <(node "$TOOLS/kabuk-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
 fi
 
 # --- dogrulama (kanit) ---

@@ -76,6 +76,7 @@ function ortam() {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: ev, PACKAGER_REPO: kok,
     PARDUS_KILIT: path.join(kok, 'kilit.d'), PARDUS_MIN_FREE_GB: '0',
     DOCKER_IZ: path.join(kok, 'docker.iz'), SAHTE_NODE: process.execPath, SAHTE_KONTEYNER: konteyner,
+    EMPP_KANONIK_SART: '0', // kabuk fail-closed testleri aşağıda
   };
   delete env.EMPP_MOTOR_KANONIK;
   delete env.EMPP_MOTOR_SURUMU;
@@ -166,4 +167,44 @@ test('normal kip: kendi kilidini alır ve bırakır', () => {
   const r = kos(o);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.existsSync(o.env.PARDUS_KILIT), false);
+});
+
+// OKUYUCU KABUĞU KANONİĞİ (2026-10-04): docker şeridi kabuk kanoniğini hiç bağlamıyordu →
+// konteynerde ~/.empp-agent/kabuk yoktu. Artık salt-okur /kabuk; yoksa derleme BAŞLAMADAN düşer.
+function kabukKur(ev) {
+  const kok = path.join(ev, '.empp-agent', 'kabuk'); const kd = path.join(kok, '1.13.3');
+  fs.mkdirSync(kd, { recursive: true });
+  const main = `${'d'.repeat(20)}.main.js`;
+  fs.writeFileSync(path.join(kd, main), 'x');
+  fs.writeFileSync(path.join(kd, 'manifest.json'),
+    JSON.stringify({ surum: '1.13.3', main, dosyalar: [{ ad: main, sha12: sha12('x') }] }));
+  // Mac'te yazılmış MUTLAK kayıt konteynerde yok → yerel alt dizine düşme yolu da bağlanır.
+  fs.writeFileSync(path.join(kok, 'kanonik.json'),
+    JSON.stringify({ surum: '1.13.3', dizin: '/Users/baska/.empp-agent/kabuk/1.13.3' }));
+  return kok;
+}
+
+test('kabuk bağlı: ~/.empp-agent/kabuk doğrulanırsa /kabuk salt-okur + EMPP_KABUK_KANONIK', () => {
+  const o = ortam(); const kok = kabukKur(o.ev);
+  const r = kos(o, { EMPP_KANONIK_SART: '' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const c = derlemeCagrisi(o);
+  assert.ok(c.includes(`-v ${fs.realpathSync(kok)}:/kabuk:ro`), c);
+  assert.match(c, /-e EMPP_KABUK_KANONIK=\/kabuk\/kanonik\.json/);
+});
+
+test('kabuk yok: şart varsayılan → derleme BAŞLAMADAN düşer (docker hiç koşmaz)', () => {
+  const o = ortam();
+  const r = kos(o, { EMPP_KANONIK_SART: '' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout + r.stderr, /okuyucu kabugu kanoniği yok \(~\/\.empp-agent\/kabuk\) — eski formatla paket uretilmez/);
+  const iz = fs.existsSync(o.env.DOCKER_IZ) ? fs.readFileSync(o.env.DOCKER_IZ, 'utf8') : '';
+  assert.doesNotMatch(iz, /--name pardus-pack-/);
+});
+
+test('kabuk yok + EMPP_KANONIK_SART=0 → UYARI, derleme sürer, /kabuk bağlanmaz', () => {
+  const o = ortam();
+  const r = kos(o, { EMPP_KANONIK_SART: '0' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(derlemeCagrisi(o), /:\/kabuk:ro/);
 });

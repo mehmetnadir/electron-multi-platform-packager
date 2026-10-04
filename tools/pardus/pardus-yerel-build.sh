@@ -152,6 +152,18 @@ export EMPP_MOTOR_KANONIK="${EMPP_MOTOR_KANONIK:-$HOME/.empp-agent/motor/kanonik
 export EMPP_MOTOR_SURUMU="${EMPP_MOTOR_SURUMU:-1}"   # 0 = motor kapisi kapali (T6), docker ile ayni
 MOTOR_SATIR=$(node "$TOOLS/motor-kanonik.js" on "$EMPP_MOTOR_KANONIK" 2>&1) || true
 log "$MOTOR_SATIR"
+# Okuyucu kabugu kanonigi (2026-10-04): ProBook'ta hic yoktu, log'da tek satir yoktu. Paketleyici
+# (okuyucuKabuguDegistir) EMPP_KABUK_KANONIK'i okur; yoksa paket ESKI kabukla cikardi. Artik
+# fail-closed: kanonik dogrulanamazsa (ve EMPP_KANONIK_SART != 0) derleme baslamadan durur.
+export EMPP_KABUK_KANONIK="${EMPP_KABUK_KANONIK:-$HOME/.empp-agent/kabuk/kanonik.json}"
+export EMPP_OKUYUCU_KABUGU="${EMPP_OKUYUCU_KABUGU:-1}" EMPP_KANONIK_SART="${EMPP_KANONIK_SART:-}"
+if KABUK_SATIR=$(node "$TOOLS/kabuk-kanonik.js" on "$EMPP_KABUK_KANONIK" 2>&1); then
+  log "$KABUK_SATIR"
+else
+  log "$KABUK_SATIR"
+  [ "$EMPP_KANONIK_SART" = "0" ] || [ "$EMPP_OKUYUCU_KABUGU" = "0" ] \
+    || die "okuyucu kabugu kanoniği yok (~/.empp-agent/kabuk) — eski formatla paket uretilmez"
+fi
 log "paketleyici basliyor (job $JOB, DEB=$EMPP_LINUX_DEB) — log: $OUT/raw/packager.log"
 set +e
 ( cd "$WORKAPP" && node "$TOOLS/packager-run-yerel.js" "$REPO" "$SID" "$APP_NAME" "$VER" "$JOB" ) \
@@ -162,6 +174,8 @@ asama paketleyici
 [ $RC -eq 0 ] || die "paketleyici rc=$RC (son satirlar: $(tail -3 "$OUT/raw/packager.log" | tr '\n' ' '))"
 while IFS= read -r l; do log "$l"; done \
   < <(node "$TOOLS/motor-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
+while IFS= read -r l; do log "$l"; done \
+  < <(node "$TOOLS/kabuk-kanonik.js" son "$OUT/raw/packager.log" 2>&1)
 
 LINUX_OUT="$WORKAPP/temp/$JOB/linux"
 IMPARK=$(ls "$LINUX_OUT"/*.impark 2>/dev/null | head -1 || true)

@@ -204,6 +204,25 @@ mac_kur(){
   log "ProBook kipi baslatiliyor"
   "${SSH[@]}" "bash -s -- probook" < "$0"
 
+  # KANONİK KABUK + MOTOR (2026-10-04): --arsivsiz olsa da HER ZAMAN eşlenir. Eskiden kabuk hiç
+  # eşlenmiyordu (ProBook'ta yoktu), motor yalnız arsiv-esle.sh ile geliyordu → --arsivsiz kurulumda
+  # paket sessizce eski formatla çıkardı. Mac otorite; yedekler (1.13.3.onceki-*) taşınmaz. Önce
+  # veri, en son kanonik.json (yarım aktarım doğrulanmaz). Sonunda ProBook node'uyla yükleme
+  # doğrulanır; yüklenmezse kurulum HATA verir (fail-closed).
+  local KDIR="${EMPP_KABUK_DIZINI:-$HOME/.empp-agent/kabuk}" MDIR="${EMPP_MOTOR_DIZINI:-$HOME/.empp-agent/motor}"
+  [ -f "$KDIR/kanonik.json" ] || die "Mac'te kabuk kanoniği yok ($KDIR) — scripts/kabuk-kanonik-doldur.js koştur"
+  [ -f "$MDIR/kanonik.json" ] || die "Mac'te motor kanoniği yok ($MDIR) — scripts/motor-kanonik-doldur.js koştur"
+  "${SSH[@]}" "mkdir -p ~/.empp-agent/kabuk ~/.empp-agent/motor" || die "ProBook kanonik dizini acilamadi"
+  rsync -a --exclude '*.onceki-*' --exclude kanonik.json "$KDIR/" "$HOST:.empp-agent/kabuk/" || die "kabuk kanoniği eslenemedi"
+  rsync -a "$KDIR/kanonik.json" "$HOST:.empp-agent/kabuk/kanonik.json" || die "kabuk kanonik.json eslenemedi"
+  rsync -a --exclude '*.onceki-*' --exclude kanonik.json "$MDIR/" "$HOST:.empp-agent/motor/" || die "motor kanoniği eslenemedi"
+  rsync -a "$MDIR/kanonik.json" "$HOST:.empp-agent/motor/kanonik.json" || die "motor kanonik.json eslenemedi"
+  "${SSH[@]}" "N=\$HOME/$SERIT_ADI/node/bin/node; R=\$HOME/$SERIT_ADI/repo/tools/pardus; \
+    \$N \$R/kabuk-kanonik.js on \$HOME/.empp-agent/kabuk/kanonik.json && \
+    \$N \$R/motor-kanonik.js on \$HOME/.empp-agent/motor/kanonik.json" \
+    || die "ProBook'ta kabuk/motor kanoniği YUKLENEMEDI — eski formatla paket uretilmesin diye kurulum basarisiz"
+  log "kabuk + motor kanoniği eslendi ve ProBook node'uyla dogrulandi"
+
   # Kaynak arşivi (2026-09-26): ProBook, Mac'in onaylı build zip arşivinin BİREBİR kopyasını tutar;
   # yoksa arşivdeki kitabı İmpark exe'sinden (eski arayüz) üretir. Mac ajanı fark görünce aynı betiği
   # kendisi de koşturur. İlk eşleme büyük (~20 GB, LAN) — --arsivsiz ile atlanır.
