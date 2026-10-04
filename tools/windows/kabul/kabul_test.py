@@ -705,5 +705,107 @@ class SayfaTusTakimiTest(unittest.TestCase):
         self.assertEqual(tik, [(773, 763), (860, 720), (1070, 886)])
 
 
+
+class SayfalarKartiTest(unittest.TestCase):
+    """73768 (04.10): tur Sayfalar kartini acik birakir; thumb'lar IO ile tembel uretilir."""
+    def test_plan_kart_yoksa_bos(self):
+        self.assertEqual(kabul.serit_eylem_plani(None, 0), [])
+        self.assertEqual(kabul.serit_eylem_plani({"var": False}, 0), [])
+
+    def test_plan_ilk_tur_acik_kart_once_kapatilir(self):
+        self.assertEqual(kabul.serit_eylem_plani({"var": True, "acik": True, "h": 269, "img": 2}, 0), ["kapat", "ac"])
+        self.assertEqual(kabul.serit_eylem_plani({"var": True, "acik": False}, 0), ["ac"])
+
+    def test_plan_sonraki_turlar_kaydir_tekerlek_ok_ve_basik_kart_boyut(self):
+        dolu = {"var": True, "acik": True, "h": 269, "img": 2}
+        self.assertEqual([kabul.serit_eylem_plani(dolu, t) for t in (1, 2, 3, 4)],
+                         [["kaydir"], ["tekerlek"], ["ok"], ["kaydir"]])
+        basik = {"var": True, "acik": True, "h": 48, "img": 0}
+        self.assertEqual(kabul.serit_eylem_plani(basik, 1), ["boyut", "kaydir"])
+        self.assertEqual(kabul.serit_eylem_plani({"var": True, "acik": False}, 2), ["ac"])
+
+    def _sahte(self, thumb_akisi):
+        """Kart durumu: acik, kapat->kapali, ac->acik; her eylem thumb sayisini akistan ilerletir."""
+        olay = []; durum = {"acik": True, "thumb": 0, "i": 0}
+        akis = list(thumb_akisi)
+        def ilerle():
+            if durum["i"] < len(akis): durum["thumb"] = akis[durum["i"]]; durum["i"] += 1
+        class C:
+            def js(s, e):
+                if e is kabul.JS_KART_KAPAT: olay.append("kapat"); durum["acik"] = False; return "x"
+                if e is kabul.JS_YENIDEN_BOYUT: olay.append("boyut"); return "resize"
+                return None
+            def jsj(s, e):
+                if e is kabul.JS_KART:
+                    return {"var": True, "acik": durum["acik"], "h": 269 if durum["thumb"] else 48,
+                            "img": durum["thumb"], "imgOK": durum["thumb"], "thumbKaynak": durum["thumb"]}
+                if e is kabul.JS_SERIT:
+                    if durum["acik"]: raise AssertionError("acik karta JS_SERIT tiklanmaz (kapatir)")
+                    olay.append("ac"); durum["acik"] = True; ilerle(); return {"yol": "etiket"}
+                if e is kabul.JS_SERIT_KAYDIR: olay.append("kaydir"); ilerle(); return {"once": 0, "sonra": 240, "x": 700, "y": 790}
+                if e is kabul.JS_SERIT_OK: olay.append("ok"); ilerle(); return {"x": 1, "y": 1}
+                if e is kabul.JS_ATLA: return None
+                return None
+            def cmd(s, m, **k): olay.append("tekerlek"); ilerle()
+            def tikla(s, x, y): pass
+        olc = lambda: {"thumbOK": durum["thumb"], "canvasDolu": 5000, "canvasRenk": 300}
+        return C(), olc, olay
+
+    def _kos(self, c, olc):
+        yedek = kabul.time
+        class Saat:
+            @staticmethod
+            def sleep(_): pass
+        try:
+            kabul.time = Saat
+            return kabul.kart_ile_thumb_yukle(c, olc, {"thumbOK": 0})
+        finally:
+            kabul.time = yedek
+
+    def test_kapat_ac_sonra_kaydirma_ile_uc_gercek_thumb(self):
+        c, olc, olay = self._sahte([2, 3])
+        k, kartli = self._kos(c, olc)
+        self.assertTrue(kartli)
+        self.assertEqual(k["thumbOK"], 3)
+        self.assertEqual(olay[:3], ["kapat", "ac", "kaydir"])
+        self.assertEqual(k["kartEylem"][:2], ["kapat", "ac-etiket"])
+        self.assertEqual(k["kart"]["thumbKaynak"], 3)
+
+    def test_esik_gevsemez_iki_thumb_ile_kaldi(self):
+        c, olc, olay = self._sahte([2])
+        k, _ = self._kos(c, olc)
+        self.assertEqual(k["thumbOK"], 2)
+        self.assertIn("tekerlek", olay); self.assertIn("ok", olay)
+        self.assertEqual(kabul.kanit_sonucu(k["thumbOK"], 5000, 300, 172, True)[0], "KALDI")
+
+    def test_kitap_kanit_kartli_temada_kor_serit_anahtari_kosmaz(self):
+        c, olc, olay = self._sahte([2])
+        c.ekran = lambda: b"png"
+        yedek = {k: getattr(kabul, k) for k in ("time", "ilk_sayfaya_git", "gonder")}
+        class Saat:
+            @staticmethod
+            def sleep(_): pass
+        try:
+            kabul.time = Saat
+            kabul.ilk_sayfaya_git = lambda c_, k, o: k
+            kabul.gonder = lambda a, v: True
+            orj = c.jsj
+            c.jsj = lambda e: ({"thumbOK": 0, "canvasDolu": 5000, "canvasRenk": 300, "sayfa": "1/172",
+                                "toplamSayfa": 172} if e is kabul.JS_KANIT else orj(e))
+            k = kabul.kitap_kanit(c, "73768", 1)
+        finally:
+            for a, v in yedek.items(): setattr(kabul, a, v)
+        self.assertEqual(olay.count("ac"), 1, "kart yolu sonrasi eski anahtar karti kapatip acmamali")
+        self.assertIn("kartEylem", k)
+
+    def test_kart_yoksa_dokunulmaz(self):
+        class C:
+            def jsj(s, e): return {"var": False} if e is kabul.JS_KART else None
+            def js(s, e): raise AssertionError("kart yokken eylem yok")
+        k, kartli = kabul.kart_ile_thumb_yukle(C(), lambda: {}, {"thumbOK": 1})
+        self.assertFalse(kartli)
+        self.assertEqual(k, {"thumbOK": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

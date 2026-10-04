@@ -370,6 +370,108 @@ def serit_etiket_mi(metin):
                     re.IGNORECASE)
     return bool(d.match((metin or "").strip()))
 
+# ── SAYFALAR KARTI (73768, 04.10 olcumu) ──────────────────────────────────────
+# Tanitim turu 'previewCard' adiminda Sayfalar kartini ACIK birakir; JS_SERIT'e tiklamak onu
+# KAPATIR (anahtar). Kart icindeki thumb <img>'leri IntersectionObserver ile TEMBEL uretilir:
+# olculen: kart acikken img=0 (gorunur 1536x794), kapat-ac sonrasi gercek thumbs/13.jpg+14.jpg
+# (yalniz 2, esik 3). Gercek kullanici ne yaparsa o: kapat-ac, seridi kaydir (scrollBy,
+# tekerlek, seridin kendi '>' dugmesi), karti tetikle (resize). ESIK GEVSEMEZ: >=3 gercek thumb.
+JS_KART = r"""
+(()=>{const pc=document.querySelector('[data-tour=previewCard]');if(!pc)return JSON.stringify({var:false});
+ const r=pc.getBoundingClientRect();const tf=pc.style.transform||'';
+ const im=[...pc.querySelectorAll('img')];
+ return JSON.stringify({var:true,acik:!/scaleY\(0\)/.test(tf)&&pc.style.opacity!=='0'&&r.height>0,
+   h:Math.round(r.height),img:im.length,imgOK:im.filter(i=>i.naturalWidth>0).length,
+   thumbKaynak:im.filter(i=>i.naturalWidth>0&&/thumb/i.test(i.getAttribute('src')||'')).length});})()"""
+
+JS_KART_KAPAT = r"""
+(()=>{const pc=document.querySelector('[data-tour=previewCard]');if(!pc)return null;
+ const b=[...pc.querySelectorAll('button')].find(x=>(x.textContent||'').trim().toLowerCase()==='x');
+ if(!b)return null;b.click();return 'x';})()"""
+
+JS_SERIT_KAYDIR = r"""
+(()=>{const s=document.querySelector('.im-preview-tabs-scroller');if(!s)return null;
+ const once=s.scrollLeft;s.scrollBy({left:Math.max(240,Math.round(s.clientWidth*0.5))});
+ s.dispatchEvent(new Event('scroll'));const r=s.getBoundingClientRect();
+ return JSON.stringify({once:Math.round(once),sonra:Math.round(s.scrollLeft),
+   x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});})()"""
+
+JS_SERIT_OK = r"""
+(()=>{const pc=document.querySelector('[data-tour=previewCard]');if(!pc)return null;
+ const ok=[...pc.querySelectorAll('[class*=MuiTabScrollButton],[class*=MuiTabs-scrollButtons]')]
+   .filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;});
+ if(!ok.length)return null;const b=ok[ok.length-1];const r=b.getBoundingClientRect();b.click();
+ return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});})()"""
+
+JS_YENIDEN_BOYUT = r"""(()=>{window.dispatchEvent(new Event('resize'));return 'resize';})()"""
+
+def serit_eylem_plani(kart, tur):
+    """SAF KARAR: Sayfalar karti icin bu turda yapilacak gercek-kullanici eylemleri.
+    tur 0: kart aciksa KAPAT-AC (acik karta JS_SERIT tiklamak onu kapatir), kapaliysa AC.
+    Sonraki turlar: kaydir -> tekerlek -> seridin '>' dugmesi, sirayla. Kart acik ama img uretmemis
+    ve basik (h<100) ise once 'boyut' (resize: kartin genislemesini tetikler)."""
+    if not kart or not kart.get("var"):
+        return []
+    if tur == 0:
+        return ["kapat", "ac"] if kart.get("acik") else ["ac"]
+    if not kart.get("acik"):
+        return ["ac"]
+    eylem = []
+    if kart.get("img", 0) == 0 and kart.get("h", 0) < 100:
+        eylem.append("boyut")
+    eylem.append(("kaydir", "tekerlek", "ok")[(tur - 1) % 3])
+    return eylem
+
+def kart_eylemi(c, eylem):
+    """Tek eylemi uygular; ne yapildigini (kanit icin) dondurur."""
+    if eylem == "kapat":
+        return "kapat" if c.js(JS_KART_KAPAT) == "x" else "kapat-yok"
+    if eylem == "ac":
+        sp = c.jsj(JS_SERIT)
+        return f"ac-{sp.get('yol')}" if sp else "ac-yok"
+    if eylem == "boyut":
+        c.js(JS_YENIDEN_BOYUT)
+        return "boyut"
+    if eylem == "kaydir":
+        k = c.jsj(JS_SERIT_KAYDIR)
+        return f"kaydir-{k.get('once')}>{k.get('sonra')}" if k else "kaydir-yok"
+    if eylem == "tekerlek":
+        k = c.jsj(JS_SERIT_KAYDIR)   # konum icin (ayni zamanda bir adim kaydirir)
+        if not k:
+            return "tekerlek-yok"
+        c.cmd("Input.dispatchMouseEvent", type="mouseWheel", x=k["x"], y=k["y"], deltaX=240, deltaY=0)
+        return "tekerlek"
+    if eylem == "ok":
+        return "ok" if c.jsj(JS_SERIT_OK) else "ok-yok"
+    return f"bilinmeyen-{eylem}"
+
+def kart_ile_thumb_yukle(c, olc, kanit, tur_sayisi=7, bekle_adim=3):
+    """Sayfalar karti VARSA gercek kullanici gibi kapat-ac + kaydir; >=3 gercek thumb arar.
+    Kart yoksa kanit aynen doner (eski serit mantigi devreye girer)."""
+    kart = c.jsj(JS_KART) or {}
+    if not kart.get("var"):
+        return kanit, False
+    yapilan = []
+    for tur in range(tur_sayisi):
+        tanitimi_kapat(c, tur=2)
+        for e in serit_eylem_plani(kart, tur):
+            yapilan.append(kart_eylemi(c, e))
+            time.sleep(1.5)
+        for _ in range(bekle_adim):
+            time.sleep(3)
+            y = olc()
+            if y.get("thumbOK", 0) > kanit.get("thumbOK", 0) or not kanit:
+                kanit = y
+            if y.get("thumbOK", 0) >= 3:
+                kanit = y
+                break
+        kart = c.jsj(JS_KART) or kart
+        if kanit.get("thumbOK", 0) >= 3:
+            break
+    kanit["kartEylem"] = yapilan
+    kanit["kart"] = {k: kart.get(k) for k in ("acik", "h", "img", "imgOK", "thumbKaynak")}
+    return kanit, True
+
 JS_SERIT_TANI = r"""
 (()=>{ // Serit acilamadiginda alt bolgedeki ADAYLARI dokumle — bir sonraki kusur
  // neye bakacagimi soylesin, tahmin yurutmeyeyim (DEBUG_ESCALATION).
@@ -589,10 +691,16 @@ def kitap_kanit(c, kimlik, sira):
         if kanit.get("thumbOK", 0) >= 3: break  # burada 60 sn beklemek her kitapta bos yere 36 sn yiyordu
         time.sleep(3)
 
+    # SAYFALAR KARTI (73768, 04.10): kart varsa gercek kullanici gibi kapat-ac + kaydir.
+    kartli = False
+    if kanit.get("thumbOK", 0) < 3:
+        kanit, kartli = kart_ile_thumb_yukle(c, olc, kanit)
+
     # SERIT BIR ANAHTARDIR: kapali sanip tiklamak aciyi kapatir. Tikladiktan sonra
     # kucuk gorseller TEMBEL yuklenir — 6 sn yetmiyordu (olculdu: 73768'in 1. ve 3.
     # kitabinda serit acildi ama olcum erken yapildi, thumbOK 0 kaldi). 30 sn yoklanir.
-    if kanit.get("thumbOK", 0) < 3:
+    # Sayfalar karti olan temada bu kor anahtar KOSMAZ (karti kapatip birakirdi).
+    if kanit.get("thumbOK", 0) < 3 and not kartli:
         for deneme in (1, 2):
             y = {}
             atlandi += tanitimi_kapat(c)
