@@ -71,6 +71,9 @@ const ENV_ESLEME = {
   EMPP_VM_KOK: 'vm-kapi',
   EMPP_WIN_KASA_KILIT: 'windows-kasa-kabul.kilit',
   EMPP_WIN_HAZIR_KOK: 'windows-hazir',
+  // Hazır kayıt bayat kararı (windows-hazir gecerliKanonikOku): testler gerçek ~/.empp-agent kanonik.json'ını görmesin.
+  EMPP_MOTOR_KANONIK: 'motor-kanonik-yok.json',
+  EMPP_KABUK_KANONIK: 'kabuk-kanonik-yok.json',
   // Üye kitap yedeği (icerik-yedek.js): testler gerçek İmpark SMB bağlamasını (~/Impark) görmesin.
   EMPP_IMPARK_SMB_KOKU: 'impark-smb-yok',
 };

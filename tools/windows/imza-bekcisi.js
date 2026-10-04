@@ -118,6 +118,16 @@ async function tokenOku(cfg) {
   return { agentId: t.agentId, token: t.token };
 }
 
+/** Bayat kayıt: `bayat/`'a al + sunucu satırını kapat (best-effort). */
+async function bayatIsle(giris, job, karar, d) {
+  const b = await H.bayatKenaraAl(d.cfg, giris, karar);
+  if (d.postResultFailure) {
+    const ayrinti = karar.kayitli ? `kayıt ${karar.kayitli}, geçerli ${karar.gecerli}` : karar.sebep;
+    await d.postResultFailure(d.auth, job, `[imza-bekliyor] hazır kayıt bayat (${ayrinti})`.slice(0, 1500));
+  }
+  return { durum: 'bayat', sebep: b.sebep, dizin: b.dizin };
+}
+
 /**
  * Tek kaydı imzalat + doğrula + yayınla. @returns {Promise<{durum:string, sebep?:string, dizin?:string}>}
  */
@@ -129,14 +139,25 @@ async function kaydiIsle(giris, d) {
   if (!kilit) return { durum: 'atlandi', sebep: 'kayıt başka süreçte (runner devralıyor)' };
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'imza-bekcisi-'));
   try {
+    let yoklama;
     try {
-      await d.presignUpload(d.auth, job);
+      yoklama = await d.presignUpload(d.auth, job);
     } catch (e) {
       if (kiraBizdeDegilMi(e)) {
         return { durum: 'atlandi', sebep: 'kira sunucuda bu ajanda değil — runner bir sonraki kiralamada devralır' };
       }
       return { durum: 'hata', sebep: `sunucu yoklaması: ${e.message}` };
     }
+    // BAYAT KONTROLÜ (04.10, imzadan ve R2'den ÖNCE): (a) kaynak sürümü — sunucunun geçerli sürümü
+    // `d.gecerliKaynakSurumu` enjeksiyonundan ya da presign yanıtının `gecerliKaynakSurumu` alanından
+    // (book-update `/result/presign`, gecerliBuildOku — /result paritesiyle AYNI değer); (b) kanonik damga
+    // (motor sha12 / kabuk sürümü, ajanın kendi kanonik.json'ları). Bayatsa imza istenmez, kayıt `bayat/`'a
+    // alınır ve sunucu satırı kapatılır (imza-bekliyor tutması sonsuza dek running kalmasın → failed → yeniden kuyruk).
+    const gecerli = d.gecerliKaynakSurumu ? await d.gecerliKaynakSurumu(job, yoklama)
+      : (yoklama && (yoklama.gecerliKaynakSurumu || yoklama.kaynakSurumu)) || null;
+    const karar = H.bayatKarari(m, { gecerliKaynakSurumu: gecerli, gecerliKanonik: await H.gecerliKanonikOku(cfg) });
+    if (karar.bilinmiyor) log(`imza-bekçisi: ${path.basename(giris.dizin)} bayat kıyası yapılamadı: ${karar.bilinmiyor}`);
+    if (karar.bayat) return bayatIsle(giris, job, karar, d);
     const kanit = await kanitOku(cfg, giris);
     kanit.hazirDizini = giris.dizin;
     let zincir;
@@ -157,7 +178,20 @@ async function kaydiIsle(giris, d) {
       await H.manifestGuncelle(giris.dizin, { sonHata: e.message, sonDeneme: new Date().toISOString() });
       return { durum: 'hata', sebep: e.message };
     }
-    const yayin = await d.postResultSuccess(d.auth, job, zincir.imzaliYol);
+    let yayin;
+    try {
+      yayin = await d.postResultSuccess(d.auth, job, zincir.imzaliYol);
+    } catch (e) {
+      // Sunucu kaynak paritesi reddi (yüklemeden/imzadan sonra bile): kayıt yayınlanmış sayılmaz → bayat.
+      if (/kaynak-surumu-eski/.test(String((e && e.message) || ''))) return bayatIsle(giris, job, { sebep: `kaynak-surumu-eski: ${e.message}`.slice(0, 300) }, d);
+      throw e;
+    }
+    if (yayin && yayin.yenidenKuyruk) {
+      // 200 + yenidenKuyruk: sunucu satırı zaten yeniden kuyruğa aldı; kayıt yayınlandı DEĞİL, bayat.
+      const yk = yayin.yenidenKuyruk;
+      const b = await H.bayatKenaraAl(cfg, giris, { sebep: `kaynak-surumu-eski: claim ${yk.claim}, geçerli ${yk.gecerli} (/result yeniden kuyruğa aldı)` });
+      return { durum: 'bayat', sebep: b.sebep, dizin: b.dizin };
+    }
     await W.yayinKaniti(zincir, yayin, cfg, log);
     const s = await H.sonuclandir(cfg, giris, 'yayinlandi', {
       durum: 'yayinlandi', imzali: zincir.kanit.imzali,
@@ -222,7 +256,8 @@ async function tur(d) {
         else if (r.durum === 'red') {
           ozet.reddedilen += 1;
           await bildirimGonder(d, { anahtar: `red:${giris.manifest.bookId}`, mesaj: `Windows paketi ${giris.manifest.bookId} imzalı kabulden KALDI — yayınlanmadı: ${String(r.sebep).slice(0, 160)}` }, await H.bildirimDurumuOku(cfg));
-        } else if (r.durum === 'atlandi') { ozet.atlanan += 1; sebep = sebep || r.sebep; }
+        } else if (r.durum === 'bayat') { ozet.bayat = (ozet.bayat || 0) + 1; }
+        else if (r.durum === 'atlandi') { ozet.atlanan += 1; sebep = sebep || r.sebep; }
         else { sebep = `imza/yayın hatası: ${String(r.sebep).slice(0, 160)}`; break; }
       }
       liste = await H.hazirListesi(cfg);

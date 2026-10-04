@@ -461,12 +461,15 @@ function yuvaProbKomutlari(cfg, platform = process.platform, node = process.exec
 }
 
 /**
- * win32 dizin probu (FAIL-CLOSED, 04.10): "yol var" yetmez — kök LİSTELENEBİLMELİ ve içinde 66902
- * klasörü görünmeli, 66902 de listelenebilmeli. Mac'te Storage7 bağlı değilken yerel diske yazılan
- * "yuva" saatlerce beklendi (yol var diye erişilebilir sayıldı); kasada aynı sınıf açılmasın.
+ * win32 dizin probu (FAIL-CLOSED, 04.10): "yol var" yetmez — kök LİSTELENEBİLMELİ. Mac'te Storage7
+ * bağlı değilken yerel diske yazılan "yuva" saatlerce beklendi (yol var diye erişilebilir sayıldı).
+ * Tarihçe (04.10, ikinci düzeltme): köprünün `exe-remove`'u İmpark'ta 66902 klasörünü KOMPLE siliyor;
+ * ilk sürüm "66902 görünmeli" diye şart koştuğu için her imzalı paketten sonra prob "yuva erişilemiyor"
+ * dedi ve sıradaki paket için fazladan exe-create gerekti. Şimdi: kök listelenebilmeli (zorunlu);
+ * 66902 YOKSA erişilebilir (exe-create klasörü kendisi açar); VARSA yine listelenebilmeli.
  */
 const WIN_YUVA_PROBU = 'const fs=require("fs"),p=require("path");try{const k=process.argv[1],y=process.argv[2];'
-  + 'if(!fs.readdirSync(k).includes(y))process.exit(2);fs.readdirSync(p.join(k,y));process.exit(0)}'
+  + 'if(!fs.readdirSync(k).includes(y))process.exit(0);fs.readdirSync(p.join(k,y));process.exit(0)}'
   + 'catch(e){process.exit(1)}';
 
 /** SAF: win32'de yuva kökü gerçek bir UNC paylaşımı mı (\\\\sunucu\\paylaşım\\…). Yerel yol → false. */

@@ -50,6 +50,7 @@ const {
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
   pardusBetikEnv, claimGSurumu, pardusYedekKabulDurumu,
+  curlNullAygiti,
 } = require('./runner-helpers');
 // Kalıcı kabul kanıtı kökü — başsız (android/mac/windows) kapı AYNI kökü kullanır
 // (tools/kabul/basliksiz-kabul.js); Pardus da aynı adlandırma+kökle yazar (bkz. §DÜZELTME 2).
@@ -816,7 +817,7 @@ async function parcalariYukle(artifactPath, size, partSize, urls, contentType, s
         const url = (guncelUrls.find((u) => u.partNumber === partNumber) || {}).url;
         await run('dd', [`if=${artifactPath}`, `of=${partFile}`, 'bs=1M', `skip=${offsetMB}`, `count=${countMB}`, 'status=none']);
         const res = await run('curl', [
-          '-sS', '-4', '--fail', '-X', 'PUT', '-D', '-', '-o', '/dev/null',
+          '-sS', '-4', '--fail', '-X', 'PUT', '-D', '-', '-o', curlNullAygiti(),
           '--connect-timeout', '30', '--speed-limit', '1024', '--speed-time', '60',
           '-H', `Content-Type: ${contentType || 'application/octet-stream'}`,
           '--upload-file', partFile,
@@ -935,7 +936,10 @@ async function postResultSuccess(auth, job, artifactPath) {
   if (res.status !== 200) {
     throw new Error(`result(completed) rejected: HTTP ${res.status} ${JSON.stringify(res.data)}`);
   }
-  return { r2ObjectKey: presigned.r2ObjectKey, publicUrl: presigned.publicUrl };
+  // Sunucu kaynak paritesi: claim bayatsa tamamlanır AMA yeniden kuyruğa alınır → çağıran (imza bekçisi)
+  // kaydı `yayinlandi` DEĞİL bayat saymalı (04.10).
+  const yk = res.data && res.data.yenidenKuyruk;
+  return { r2ObjectKey: presigned.r2ObjectKey, publicUrl: presigned.publicUrl, ...(yk ? { yenidenKuyruk: yk } : {}) };
 }
 
 async function postResultFailure(auth, job, errorMessage) {
@@ -2408,6 +2412,30 @@ async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
   return { yayinlandi: true };
 }
 
+/**
+ * Hazır kaydın bayat kararı + (bayatsa) `bayat/`'a taşıma. Taşıma kayıt kilidiyle sarılır: bekçi aynı
+ * kaydı işliyorsa dokunulmaz ("bekçi işliyor" yolu). @returns {Promise<{bayat:boolean, sonuc?:object}>}
+ */
+async function hazirBayatKontrol(auth, job, bekleyen, gecerliKaynakSurumu) {
+  const gecerliKanonik = await windowsHazir.gecerliKanonikOku(CONFIG);
+  const k = windowsHazir.bayatKarari(bekleyen.manifest, { gecerliKaynakSurumu, gecerliKanonik });
+  if (k.bilinmiyor) warn(`windows: ${job.bookId} hazır kayıt bayat kıyası yapılamadı: ${k.bilinmiyor}`);
+  if (!k.bayat) return { bayat: false };
+  const kilit = await windowsHazir.kayitKilidiDene(bekleyen.dizin);
+  if (!kilit) {
+    log(`windows: hazır kayıt (${bekleyen.dizin}) şu an imza bekçisinde — bayat taşıması yapılmadı`);
+    await imzaBekliyorBildir(auth, job, bekleyen, 'imza bekçisi bu paketi işliyor');
+    return { bayat: true, sonuc: { ertelendi: true, imzaBekliyor: true, sebep: 'bekçi işliyor' } };
+  }
+  try {
+    const b = await windowsHazir.bayatKenaraAl(CONFIG, bekleyen, k);
+    warn(`windows: ${job.bookId} hazır kayıt BAYAT (${b.sebep}) — imza istenmedi, ${b.dizin}'e alındı; yeniden üretilecek`);
+  } finally {
+    await kilit();
+  }
+  return { bayat: true };
+}
+
 async function processJob(auth, job) {
   const packagerPlatform = mapPlatform(job.platform);
   if (!packagerPlatform) {
@@ -2427,9 +2455,21 @@ async function processJob(auth, job) {
     const winPlan = packagerPlatform === 'windows' ? windowsSerit.onKosul(job) : null;
     // HAZIR KUYRUK KISA DEVRESİ (§2a, 02.10): aynı kitap + sürüm zaten "imza bekliyor"sa YENİDEN
     // ÜRETİLMEZ — yuva açıksa o paket imzalanıp yayınlanır, kapalıysa iş yine imza-bekliyor bildirilir.
+    // BAYAT KONTROLÜ (04.10, 72378/72379): hazır kayıt (a) sunucunun geçerli kaynağından eski kaynaktan ya da
+    // (b) kanoniksiz/eski kanonik motor-kabukla üretilmişse imzaya/R2'ye GİTMEZ; `bayat/`'a alınır
+    // (silinmez) ve iş yeni kaynakla üretilir. Geçerli kaynak sürümü = claim `r2-al` kaynakSurumu. `r2-kur`
+    // claim'inde sürüm ancak kaynak kurulunca bilinir (içerik değişmediyse AYNI kalır, 72380) → karar
+    // `hazirErtelenen` ile kurulumdan SONRAYA bırakılır.
+    let hazirErtelenen = null;
     if (winPlan) {
       const bekleyen = await windowsHazir.hazirBul(CONFIG, job.bookId, winPlan.surum);
-      if (bekleyen) return await hazirIsiDevral(auth, job, winPlan, bekleyen, work);
+      const zaman = windowsHazir.bayatKararZamani(job);
+      if (bekleyen && zaman.ertele) hazirErtelenen = bekleyen;
+      else if (bekleyen) {
+        const b = await hazirBayatKontrol(auth, job, bekleyen, zaman.kaynakSurumu);
+        if (b.sonuc) return b.sonuc;
+        if (!b.bayat) return await hazirIsiDevral(auth, job, winPlan, bekleyen, work);
+      }
     }
 
     // 1-3. KAYNAK — EXE'SİZ SÖZLEŞME (Nadir 01.10, book-update exesiz-kaynak-sozlesmesi.md):
@@ -2660,6 +2700,12 @@ async function processJob(auth, job) {
       }
       // Arşiv = R2'nin yerel önbelleği: aynı Mac'teki diğer platformlar r2-al'de indirmesin.
       await r2ArsiveYaz(job.bookId, zipPath, { surum: yayin.surum, ...yayin.ozet, uyari: warn });
+      // Ertelenen hazır kayıt kararı (O2): kaynak sürümü artık biliniyor (içerik değişmediyse eskisiyle aynı).
+      if (hazirErtelenen) {
+        const b = await hazirBayatKontrol(auth, job, hazirErtelenen, yayin.surum);
+        if (b.sonuc) return b.sonuc;
+        if (!b.bayat) return await hazirIsiDevral(auth, job, winPlan, hazirErtelenen, work);
+      }
     }
     // imKeys kapısı (r2-kur'da yazma kapısında zaten RED olur): paketleyiciye gitmeden önce.
     if (!imk.kapi.gecti) {

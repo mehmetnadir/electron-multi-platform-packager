@@ -220,6 +220,86 @@ test('imza hatası → kayıt yerinde (sonHata), tur DURUR (ikinci kayıt denenm
   assert.match(l[0].manifest.sonHata, /imza zaman aşımı/);
 });
 
+const bayatDizinleri = (o) => (fs.existsSync(path.join(o.cfg.winHazirKoku, 'bayat')) ? fs.readdirSync(path.join(o.cfg.winHazirKoku, 'bayat')) : []);
+
+test('ÜRETİM BAĞLAMASI: sunucu presign yanıtındaki gecerliKaynakSurumu (enjeksiyon YOK) → eski kayıt bayat; imza/R2 yok; sunucu satırı kapatılır', async () => {
+  const o = ortam({ yuva: true });
+  const k = await o.ekle('701');
+  await H.manifestGuncelle(k.dizin, { job: { bookId: '701', kaynakSurumu: '2.0.7' } });
+  const hatalar = [];
+  const z = await B.tur(o.bagimlilik({
+    presignUpload: async () => ({ r2ObjectKey: 'k', gecerliKaynakSurumu: '2.0.11' }),
+    postResultFailure: async (auth, job, sebep) => { hatalar.push({ id: job.bookId, sebep }); },
+  }));
+  assert.equal(z.bayat, 1);
+  assert.equal(o.cagri.zincir.length, 0, 'imza istenmedi');
+  assert.equal(o.cagri.yayin.length, 0, 'R2/result yok');
+  assert.equal((await H.hazirListesi(o.cfg)).length, 0);
+  const bay = bayatDizinleri(o);
+  assert.equal(bay.length, 1);
+  assert.equal(fs.existsSync(path.join(o.cfg.winHazirKoku, 'bayat', bay[0], 'runner-701-T-2.1.1-Setup.exe')), true, 'exe silinmedi');
+  assert.equal(hatalar.length, 1, 'K2: sunucu satırı açık bırakılmaz (failed)');
+  assert.equal(hatalar[0].sebep, '[imza-bekliyor] hazır kayıt bayat (kayıt 2.0.7, geçerli 2.0.11)');
+});
+
+test('bayat DEĞİL: kayıt = geçerli sürüm, ya da yoklama sürüm döndürmüyor → akış aynen, imzalanır, failed çağrılmaz', async () => {
+  const o = ortam({ yuva: true });
+  const k = await o.ekle('702');
+  await H.manifestGuncelle(k.dizin, { job: { bookId: '702', kaynakSurumu: '2.0.11' } });
+  const hatalar = [];
+  const z = await B.tur(o.bagimlilik({
+    presignUpload: async () => ({ r2ObjectKey: 'k', gecerliKaynakSurumu: '2.0.11' }),
+    postResultFailure: async () => { hatalar.push(1); },
+  }));
+  assert.equal(z.yayinlanan, 1);
+  assert.equal(hatalar.length, 0);
+  const o2 = ortam({ yuva: true });
+  await o2.ekle('703');
+  assert.equal((await B.tur(o2.bagimlilik())).yayinlanan, 1, 'sürüm bilinmiyorsa bayat sayılmaz');
+});
+
+test('kanoniksiz/eski kanonik kayıt (damgasız ya da kabuk 1.13.3 ≠ 1.13.14) → bayat, imza yok; güncel kanonikli → imzalanır', async () => {
+  const kanonikli = (kanonik) => async () => {
+    const o = ortam({ yuva: true });
+    o.cfg.winKanonikYukleyici = async () => ({ motorSha12: '03e8af70a0f3', kabukSurum: '1.13.14' });
+    const k = await o.ekle('710');
+    await H.manifestGuncelle(k.dizin, { kanonik });
+    return { o, z: await B.tur(o.bagimlilik()) };
+  };
+  let r = await kanonikli({})();
+  assert.equal(r.z.bayat, 1, 'damgasız eski kayıt: fail-closed');
+  assert.equal(r.o.cagri.zincir.length, 0);
+  r = await kanonikli({ motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.3', kabukDurum: 'guncel' })();
+  assert.equal(r.z.bayat, 1, 'eski kanonik kabuk');
+  assert.equal(r.o.cagri.zincir.length, 0);
+  assert.match(fs.readFileSync(path.join(r.o.cfg.winHazirKoku, 'bayat', bayatDizinleri(r.o)[0], 'manifest.json'), 'utf8'), /kanoniksiz\/eski kanonik: kabuk 1\.13\.3 ≠ kanonik 1\.13\.14/);
+  r = await kanonikli({ motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.14', kabukDurum: 'guncel' })();
+  assert.equal(r.z.yayinlanan, 1, 'güncel kanonikli: akış aynen');
+  assert.equal(r.z.bayat, undefined);
+});
+
+test('/result yeniden kuyruğa aldı (200 + yenidenKuyruk) → kayıt yayinlandi DEĞİL, bayat/; reddi (kaynak-surumu-eski hatası) da aynı', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('720');
+  const z = await B.tur(o.bagimlilik({
+    postResultSuccess: async () => ({ r2ObjectKey: 'k', publicUrl: 'u', yenidenKuyruk: { claim: '2.0.7', gecerli: '2.0.11' } }),
+  }));
+  assert.equal(z.yayinlanan, 0);
+  assert.equal(z.bayat, 1);
+  assert.equal(bayatDizinleri(o).length, 1);
+  assert.equal(fs.existsSync(path.join(o.cfg.winHazirKoku, 'yayinlandi')), false);
+  const o2 = ortam({ yuva: true });
+  await o2.ekle('721');
+  const hatalar = [];
+  const z2 = await B.tur(o2.bagimlilik({
+    postResultSuccess: async () => { throw new Error('result(completed) rejected: HTTP 409 kaynak-surumu-eski'); },
+    postResultFailure: async (a, j, sebep) => { hatalar.push(sebep); },
+  }));
+  assert.equal(z2.bayat, 1);
+  assert.equal(bayatDizinleri(o2).length, 1);
+  assert.equal(hatalar.length, 1);
+});
+
 test('kayıt runner tarafından kilitliyse atlanır (çift imza/yayın yok)', async () => {
   const o = ortam({ yuva: true });
   const k = await o.ekle('601');

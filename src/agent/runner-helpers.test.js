@@ -839,3 +839,10 @@ test('agHatasiOzeti: maxLen parametresi ile kirpma sinirini ozellestirir', () =>
     assert.match(H.noterHatasi('stapler', { code: 65, stdout: '', stderr: '' }).message, /\(çıktı boş, rc=65\)/);
   });
 }
+
+test('curlNullAygiti: win32 NUL, diğerleri /dev/null (04.10 curl exit 23)', () => {
+  const { curlNullAygiti } = require('./runner-helpers');
+  assert.equal(curlNullAygiti('win32'), 'NUL');
+  assert.equal(curlNullAygiti('darwin'), '/dev/null');
+  assert.equal(curlNullAygiti('linux'), '/dev/null');
+});

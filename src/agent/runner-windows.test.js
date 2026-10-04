@@ -253,7 +253,7 @@ async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false
     impark_kaynagi: 'yds-v51.exe' }));
 
   const eskiConfig = {};
-  for (const k of ['apiBase', 'packagerApi', 'kaynakYokDurumDosyasi', ...WIN_ALANLARI]) eskiConfig[k] = CONFIG[k];
+  for (const k of ['apiBase', 'packagerApi', 'kaynakYokDurumDosyasi', 'winKanonikYukleyici', ...WIN_ALANLARI]) eskiConfig[k] = CONFIG[k];
   // Her koşu kendi özet-bildirim durumuyla (aralık önceki koşudan etkilenmesin).
   CONFIG.kaynakYokDurumDosyasi = path.join(tmp('kaynak-yok'), 'durum.json');
   const ENV = {
@@ -639,6 +639,100 @@ test('hazır kayıt varken yuva AÇILDI → yeniden üretmeden imzala + doğrula
   assert.equal(m.durum, 'yayinlandi');
   assert.equal(m.yayin.yayinlayan, 'runner');
   assert.equal(r.kanit.durum, 'yayinlandi');
+});
+
+const GECERLI_KANONIK = { motorSha12: '03e8af70a0f3', kabukSurum: '1.13.14' };
+const kanonikAyar = (hazirKok, ek = {}) => ({ winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok, winKanonikYukleyici: async () => GECERLI_KANONIK, ...ek });
+/** İlk koşu yuva kapalı: hazır kayıt yazılır; sonra manifest'in kanonik damgası istenen hâle getirilir. */
+async function kanonikliHazirKayit(hazirKok, kanonik) {
+  await windowsIsiKostur({ ayar: { winImzaYuvaKoku: YUVA_YOK, winHazirKoku: hazirKok } });
+  const k = await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3');
+  await H.manifestGuncelle(k.dizin, { kanonik });
+  return k;
+}
+const bayatSayisi = (hazirKok) => (fs.existsSync(path.join(hazirKok, 'bayat')) ? fs.readdirSync(path.join(hazirKok, 'bayat')).length : 0);
+
+test('kanoniksiz hazır kayıt (02.10 damgası: motor/kabuk "bilinmiyor") → imza istenmez, bayat/\'ya alınır, yeniden üretilir (72379)', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await kanonikliHazirKayit(hazirKok, { motorSha12: 'ba539fb50c60', motorDurum: 'bilinmiyor', kabukSurum: '1.12.7', kabukDurum: 'bilinmiyor' });
+  const r = await windowsIsiKostur({ ayar: kanonikAyar(hazirKok) });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.doesNotMatch(r.gunluk, /^imza /m, 'bayat kayıt için imza istenmedi');
+  assert.equal(r.api.putlar.length, 0, 'R2\'ye yazılmadı');
+  assert.equal(r.api.sonuclar.length, 0, '/result yok');
+  assert.match(r.loglar, /hazır kayıt BAYAT \(kanoniksiz\/eski kanonik: motor durum "bilinmiyor"/);
+  assert.ok(r.paketleyici.istekler.includes('POST /api/package'), 'yeniden ÜRETİLDİ');
+  assert.equal(bayatSayisi(hazirKok), 1, 'bayat kayıt silinmedi, kenara alındı');
+  const bay = fs.readdirSync(path.join(hazirKok, 'bayat'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(hazirKok, 'bayat', bay[0], 'manifest.json'), 'utf8')).durum, 'bayat');
+});
+
+test('eski kanonikli hazır kayıt (kabuk 1.13.3, geçerli 1.13.14) → bayat', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await kanonikliHazirKayit(hazirKok, { motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.3', kabukDurum: 'guncel' });
+  const r = await windowsIsiKostur({ ayar: kanonikAyar(hazirKok) });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.match(r.loglar, /kabuk 1\.13\.3 ≠ kanonik 1\.13\.14/);
+  assert.doesNotMatch(r.gunluk, /^imza /m);
+  assert.equal(bayatSayisi(hazirKok), 1);
+});
+
+test('damgasız (eski) hazır kayıt + geçerli kanonik biliniyor → fail-closed bayat', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await kanonikliHazirKayit(hazirKok, {});
+  const r = await windowsIsiKostur({ ayar: kanonikAyar(hazirKok) });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.match(r.loglar, /damgası yok \(eski kayıt, fail-closed\)/);
+  assert.equal(bayatSayisi(hazirKok), 1);
+});
+
+test('güncel kanonikli hazır kayıt → akış aynen: yeniden üretim yok, imzalanıp yayınlanır, bayat/ yok', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await kanonikliHazirKayit(hazirKok, { motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.14', kabukDurum: 'guncel' });
+  const r = await windowsIsiKostur({ ayar: { winHazirKoku: hazirKok, winKanonikYukleyici: async () => GECERLI_KANONIK } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.paketleyici.istekler, []);
+  assert.equal(r.api.putlar.length, 1);
+  assert.equal(bayatSayisi(hazirKok), 0);
+});
+
+test('bayat kayıt bekçide kilitliyse runner taşımaz (O1): kayıt yerinde, imza-bekliyor bildirilir', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const k = await kanonikliHazirKayit(hazirKok, { motorDurum: 'bilinmiyor' });
+  const birak = await H.kayitKilidiDene(k.dizin);
+  try {
+    const r = await windowsIsiKostur({ ayar: kanonikAyar(hazirKok) });
+    assert.equal(r.hata, null, r.hata && r.hata.stack);
+    assert.deepEqual(r.paketleyici.istekler, [], 'yeniden üretim yok');
+    assert.equal(bayatSayisi(hazirKok), 0, 'kilitliyken taşınmadı');
+    assert.ok(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'));
+    assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+  } finally { await birak(); }
+});
+
+test('geçerli kanonik hiç okunamıyorsa kanonik ölçütü atlanır (kıyas yok): kayıt devralınır', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await kanonikliHazirKayit(hazirKok, {});
+  const r = await windowsIsiKostur({ ayar: { winHazirKoku: hazirKok, winKanonikYukleyici: async () => ({ motorSha12: null, kabukSurum: null }) } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.paketleyici.istekler, []);
+  assert.equal(bayatSayisi(hazirKok), 0);
+});
+
+test('bayatKararZamani: r2-kur → karar ertelenir (sürüm kurulunca); r2-al → claim sürümü; diğer → kaynak ölçütü yok', () => {
+  assert.deepEqual(H.bayatKararZamani({ kaynakTuru: 'r2-kur', kaynakSurumu: '2.0.12' }), { ertele: true, kaynakSurumu: null });
+  assert.deepEqual(H.bayatKararZamani({ kaynakTuru: 'r2-al', kaynakSurumu: '2.0.11' }), { ertele: false, kaynakSurumu: '2.0.11' });
+  assert.deepEqual(H.bayatKararZamani({}), { ertele: false, kaynakSurumu: null });
+});
+
+test('bayatKarari kaynak ekseni: eski sürüm bayat; r2-kur + içerik değişmedi (yayın sürümü = kayıtlı) bayat DEĞİL (72380); biçim dışı → bilinmiyor', () => {
+  const m = { job: { kaynakSurumu: '2.0.7' } };
+  assert.equal(H.bayatKarari(m, { gecerliKaynakSurumu: '2.0.11' }).bayat, true);
+  assert.equal(H.bayatKarari(m, { gecerliKaynakSurumu: '2.0.7' }).bayat, false);
+  const bil = H.bayatKarari(m, { gecerliKaynakSurumu: 'abc' });
+  assert.equal(bil.bayat, false);
+  assert.match(bil.bilinmiyor, /biçim dışı/);
+  assert.equal(H.bayatKarari(m, {}).bayat, false, 'geçerli sürüm bilinmiyor → bayat sayılmaz');
 });
 
 test('hazır kayıt imza bekçisinde kilitliyse runner devralmaz (çift yayın yok), imza-bekliyor bildirir', async () => {

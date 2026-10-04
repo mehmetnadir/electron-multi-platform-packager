@@ -14,6 +14,7 @@
  *   yayinlandi/<bookId>-<sürüm>-<damga>/   bekçinin yayınladığı (taşınır, silinmez)
  *   reddedildi/<bookId>-<sürüm>-<damga>/   imzalı kopya kabulden KALDI (paket kusuru)
  *   eskiler/<bookId>-<sürüm>-<damga>/      aynı sürüm yeniden üretilince yerinden edilen eski kopya
+ *   bayat/<bookId>-<sürüm>-<damga>/        kaynak sürümü sunucunun geçerli kaynağından eski (04.10; imzaya GİTMEZ)
  *   .bildirim-durum.json          bekçi bildirim kısıtı (aynı sebep 3 saatte en çok bir)
  *
  * manifest.json: bookId, platform, surum, exe (dosya adı), sha256, md5, boyut, kabulKanit, kabulKapi,
@@ -27,7 +28,7 @@ const os = require('os');
 const path = require('path');
 
 const MANIFEST = 'manifest.json';
-const ALT_DIZINLER = ['yayinlandi', 'reddedildi', 'eskiler'];
+const ALT_DIZINLER = ['yayinlandi', 'reddedildi', 'eskiler', 'bayat'];
 const DURUM_DOSYASI = '.bildirim-durum.json';
 /** Sunucuya giden ara durum (current_phase) — book-update tasarımı rapor/OKU'da. */
 const IMZA_BEKLIYOR_FAZI = 'imza-bekliyor';
@@ -146,6 +147,8 @@ async function hazirKoy({ exe, job, surum, kanit, cfg, kabul, r2Hedef, sebep }) 
     kabulKanit: kabul ? (kabul.kanitDizini || null) : null,
     r2Hedef: r2Hedef || { belirleyen: 'sunucu-presign', not: 'r2ObjectKey yayın anında /result/presign yanıtından gelir' },
     job: jobOzeti(job),
+    // Paket damgası (paket.json motorSurumu/kabukSurumu özeti) — bayat kararı için (04.10, 72379).
+    kanonik: require('./kanonik-surum').govdeAlanlari(job.kanonikSurum),
     kanit: kanit ? { kapi: kanit.kapi || null, kokIndex: kanit.kokIndex || null, setKimligi: kanit.setKimligi || null } : null,
     zaman: new Date().toISOString(),
     durum: IMZA_BEKLIYOR_FAZI,
@@ -155,6 +158,90 @@ async function hazirKoy({ exe, job, surum, kanit, cfg, kabul, r2Hedef, sebep }) 
   if (fs.existsSync(hedef)) await kenaraTasi(cfg, hedef, 'eskiler');
   await fsp.rename(gecici, hedef);
   return { dizin: hedef, manifest };
+}
+
+/**
+ * BAYAT HAZIR KAYIT (04.10, 72378 + 72379). İki bağımsız ölçüt; biri tutarsa kayıt bayat:
+ *  1. KAYNAK SÜRÜMÜ: hazır exe 2.0.7 kaynağından üretilmişti, sunucunun geçerli kaynağı 2.0.11 →
+ *     imza + kabul + R2 yüklemesi yapıldı, sonra `/result` `kaynak-surumu-eski` dedi (imza yuvası boşa,
+ *     R2 kanonik anahtarına bayat exe). Kayıtlı sürüm ile geçerli sürüm İKİSİ DE `2.<panel>.<sayaç>`
+ *     biçimindeyse ve farklıysa bayat; biri bilinmiyor/biçim dışıysa bayat SAYILMAZ (`bilinmiyor` döner,
+ *     çağıran loglar; sunucu zaten /result'ta reddeder).
+ *  2. KANONİK DAMGA: 72379 imzalı paketi 02.10'da kanoniksiz üretilmiş hazır kayıttan geldi (motor durum
+ *     "bilinmiyor" sha12 ba539fb50c60 ≠ kanonik 03e8af70a0f3, kabuk "bilinmiyor" 1.12.7). Ajanın kendi
+ *     kanonik.json'larından (motor sha12 + kabuk sürümü) okunan GEÇERLİ kanonik en az biri biliniyorsa:
+ *     kayıtta damga yoksa (eski kayıt) / motorDurum ≠ guncel / motorSha12 ≠ geçerli / kabukDurum ≠ guncel /
+ *     kabukSurum ≠ geçerli → bayat ("kanoniksiz/eski kanonik"). Geçerli kanonik hiç okunamıyorsa kıyas
+ *     yapılamaz → ölçüt atlanır (log çağırandadır).
+ * @returns {{bayat:boolean, sebep?:string, kayitli?:string, gecerli?:string, bilinmiyor?:string}}
+ */
+function bayatKarari(manifest, { gecerliKaynakSurumu, gecerliKanonik } = {}) {
+  const { surumGecerli } = require('./kaynak-r2');
+  const kayitli = manifest && manifest.job && typeof manifest.job.kaynakSurumu === 'string' ? manifest.job.kaynakSurumu.trim() : '';
+  const gecerli = typeof gecerliKaynakSurumu === 'string' ? gecerliKaynakSurumu.trim() : '';
+  let bilinmiyor;
+  if (kayitli && gecerli) {
+    if (!surumGecerli(kayitli) || !surumGecerli(gecerli)) bilinmiyor = `kaynak sürümü biçim dışı (kayıt "${kayitli}", geçerli "${gecerli}")`;
+    else if (kayitli !== gecerli) {
+      return { bayat: true, kayitli, gecerli, sebep: `kaynak-surumu-eski: kayıt ${kayitli}, geçerli ${gecerli}` };
+    }
+  }
+  const gk = gecerliKanonik || {};
+  if (gk.motorSha12 || gk.kabukSurum) {
+    const k = manifest && manifest.kanonik && typeof manifest.kanonik === 'object' ? manifest.kanonik : null;
+    if (!k || !Object.values(k).some(Boolean)) {
+      return { bayat: true, sebep: 'kanoniksiz/eski kanonik: hazır kayıtta motor/kabuk damgası yok (eski kayıt, fail-closed)' };
+    }
+    const fark = [];
+    if (k.motorDurum !== 'guncel') fark.push(`motor durum "${k.motorDurum || '-'}"`);
+    if (gk.motorSha12 && k.motorSha12 !== gk.motorSha12) fark.push(`motor ${k.motorSha12 || '-'} ≠ kanonik ${gk.motorSha12}`);
+    if (k.kabukDurum !== 'guncel') fark.push(`kabuk durum "${k.kabukDurum || '-'}"`);
+    if (gk.kabukSurum && k.kabukSurum !== gk.kabukSurum) fark.push(`kabuk ${k.kabukSurum || '-'} ≠ kanonik ${gk.kabukSurum}`);
+    if (fark.length) return { bayat: true, sebep: `kanoniksiz/eski kanonik: ${fark.join('; ')}` };
+  }
+  return bilinmiyor ? { bayat: false, bilinmiyor } : { bayat: false };
+}
+
+/**
+ * Bayat kararının ZAMANI (O2, 04.10): `r2-al` claim'inde claim'in kaynakSurumu = sunucunun geçerli sürümü →
+ * karar hemen; `r2-kur` claim'inde sürüm ancak kaynak kurulunca bilinir (içerik değişmediyse AYNI kalır,
+ * 72380) → karar ertelenir, kurulumdan sonra `yayin.surum` ile verilir; diğer claim'lerde (arşiv/manuel)
+ * kaynak sürümü ölçütü yok (yalnız kanonik ölçütü).
+ * @returns {{ertele:boolean, kaynakSurumu:string|null}}
+ */
+function bayatKararZamani(job) {
+  const tur = job && job.kaynakTuru;
+  if (tur === 'r2-kur') return { ertele: true, kaynakSurumu: null };
+  return { ertele: false, kaynakSurumu: tur === 'r2-al' && typeof job.kaynakSurumu === 'string' ? job.kaynakSurumu : null };
+}
+
+/** Geçerli kanonik motor sha12 + kabuk sürümü (ajanın kendi kanonik.json'ları). Okunamayan alan null. */
+async function gecerliKanonikOku(cfg) {
+  if (cfg && typeof cfg.winKanonikYukleyici === 'function') return cfg.winKanonikYukleyici();
+  const o = { motorSha12: null, kabukSurum: null };
+  try {
+    const m = require('../packaging/motor-surumu');
+    const k = await m.kanonikOku(process.env.EMPP_MOTOR_KANONIK || m.KANONIK_YOLU_VARSAYILAN);
+    if (k && typeof k.sha12 === 'string') o.motorSha12 = k.sha12;
+  } catch (_) { /* bilinmiyor */ }
+  try {
+    const kb = require('../packaging/okuyucu-kabugu');
+    const k = await kb.kanonikKabukYukle(process.env.EMPP_KABUK_KANONIK || kb.KANONIK_YOLU_VARSAYILAN);
+    if (k && typeof k.surum === 'string') o.kabukSurum = k.surum;
+  } catch (_) { /* bilinmiyor */ }
+  return o;
+}
+
+/** Geriye uyum: yalnız kaynak sürümü ölçütü. */
+function kaynakSurumuBayatMi(manifest, gecerliKaynakSurumu) {
+  return bayatKarari(manifest, { gecerliKaynakSurumu });
+}
+
+/** Bayat kaydı silmeden `bayat/`'a taşır (manifest'e durum/sebep yazılır). İmza istenmez. */
+async function bayatKenaraAl(cfg, giris, karar) {
+  const sebep = typeof karar === 'string' ? karar : (karar && karar.sebep) || 'bayat';
+  const s = await sonuclandir(cfg, giris, 'bayat', { durum: 'bayat', sebep, zamanBayat: new Date().toISOString() });
+  return { ...s, sebep };
 }
 
 /** Bekleyenler, en eskiden yeniye. Alt dizinler, geçici ve manifestsiz dizinler sayılmaz. */
@@ -211,5 +298,5 @@ async function kayitKilidiDene(dizin) {
 module.exports = {
   kayitKilidiDene,
   MANIFEST, IMZA_BEKLIYOR_FAZI, ALT_DIZINLER, hazirAyarlari, hazirAnahtari, jobOzeti, bildirimKarari,
-  manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, sonuclandir, bildirimDurumuOku, bildirimDurumuYaz, damga,
+  manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, sonuclandir, kaynakSurumuBayatMi, bayatKarari, bayatKararZamani, gecerliKanonikOku, bayatKenaraAl, bildirimDurumuOku, bildirimDurumuYaz, damga,
 };

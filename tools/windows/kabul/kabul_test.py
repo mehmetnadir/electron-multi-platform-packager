@@ -798,6 +798,42 @@ class SayfalarKartiTest(unittest.TestCase):
         self.assertEqual(olay.count("ac"), 1, "kart yolu sonrasi eski anahtar karti kapatip acmamali")
         self.assertIn("kartEylem", k)
 
+    def test_tekerlek_yanit_vermezse_adim_atlanir_olcum_ve_esik_ayni_kalir(self):
+        """CDP mouseWheel yanit vermezse (kare yok) kabul dusmez; adim atlanir, esik gevsemez."""
+        c, olc, olay = self._sahte([2])
+        def cmd(m, **k):
+            olay.append("tekerlek-asim")
+            self.assertEqual(k.get("_zaman_asimi"), kabul.CDP_TEKERLEK_SN)
+            raise TimeoutError(m)
+        c.cmd = cmd
+        k, kartli = self._kos(c, olc)
+        self.assertTrue(kartli)
+        self.assertIn("tekerlek-asim", olay)
+        self.assertIn("tekerlek-zamanasimi", k["kartEylem"])
+        self.assertEqual(k["thumbOK"], 2)
+        self.assertEqual(kabul.kanit_sonucu(k["thumbOK"], 5000, 300, 172, True)[0], "KALDI")
+
+    def test_cdp_cmd_kisa_sinirda_websocket_zaman_asimi_TimeoutError_olur_ve_sinir_geri_alinir(self):
+        import websocket
+        class WS:
+            def __init__(s): s.t = []
+            def send(s, x): pass
+            def settimeout(s, v): s.t.append(v)
+            def recv(s): raise websocket.WebSocketTimeoutException("x")
+        c = kabul.CDP.__new__(kabul.CDP); c.ws = WS(); c.i = 0
+        with self.assertRaises(TimeoutError):
+            c.cmd("Input.dispatchMouseEvent", _zaman_asimi=1, type="mouseWheel")
+        self.assertEqual(c.ws.t, [1, 120])
+
+    def test_tekerlek_baglanti_koparsa_yutulmaz_yeniden_firlar(self):
+        import websocket
+        c, olc, olay = self._sahte([2])
+        def cmd(m, **k):
+            raise websocket.WebSocketConnectionClosedException("kapandi")
+        c.cmd = cmd
+        with self.assertRaises(websocket.WebSocketConnectionClosedException):
+            self._kos(c, olc)
+
     def test_kart_yoksa_dokunulmaz(self):
         class C:
             def jsj(s, e): return {"var": False} if e is kabul.JS_KART else None

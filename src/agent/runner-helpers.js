@@ -1128,6 +1128,11 @@ function claimGSurumu(job) {
   return { surum: v, sebep: '' };
 }
 
+/** curl `-o` çöp hedefi: Windows'ta /dev/null yok → curl exit 23 (04.10, 72378 ilk kasa yüklemesi). */
+function curlNullAygiti(platform = process.platform) {
+  return platform === 'win32' ? 'NUL' : '/dev/null';
+}
+
 module.exports = {
   claimGSurumu,
   pardusBetikEnv,
@@ -1174,4 +1179,5 @@ module.exports = {
   guncellemeDosyalariniSirala,
   guncellemeIcerikTipi,
   tarListesiniAyristir,
+  curlNullAygiti,
 };

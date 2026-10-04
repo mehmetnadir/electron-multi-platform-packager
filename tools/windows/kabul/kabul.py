@@ -75,15 +75,26 @@ class CDP:
         self.ws = websocket.create_connection(url, timeout=120, suppress_origin=True,
                                               max_size=100 * 1024 * 1024)
         self.i = 0
-    def cmd(self, m, **p):
+    def cmd(self, m, _zaman_asimi=None, **p):
+        """_zaman_asimi (sn): verilirse bu komut icin kisa sinir (varsayilan 120 sn). Gecikmis yanit
+        sonraki cmd'de id uyusmazligiyla yutulur. Asimda TimeoutError (WebSocketTimeout dahil) firlar."""
         self.i += 1
         self.ws.send(json.dumps({"id": self.i, "method": m, "params": p}))
-        son = time.time() + 120
-        while time.time() < son:
-            r = json.loads(self.ws.recv())
-            if r.get("id") == self.i:
-                if "error" in r: raise RuntimeError(str(r["error"])[:200])
-                return r.get("result", {})
+        sinir = _zaman_asimi or 120
+        son = time.time() + sinir
+        if _zaman_asimi: self.ws.settimeout(_zaman_asimi)
+        try:
+            while time.time() < son:
+                r = json.loads(self.ws.recv())
+                if r.get("id") == self.i:
+                    if "error" in r: raise RuntimeError(str(r["error"])[:200])
+                    return r.get("result", {})
+        except websocket.WebSocketTimeoutException as e:
+            raise TimeoutError(m) from e
+        finally:
+            if _zaman_asimi:
+                try: self.ws.settimeout(120)
+                except Exception: pass
         raise TimeoutError(m)
     def js(self, e):
         r = self.cmd("Runtime.evaluate", expression=e, returnByValue=True, awaitPromise=True)
@@ -405,6 +416,8 @@ JS_SERIT_OK = r"""
 
 JS_YENIDEN_BOYUT = r"""(()=>{window.dispatchEvent(new Event('resize'));return 'resize';})()"""
 
+CDP_TEKERLEK_SN = 15
+
 def serit_eylem_plani(kart, tur):
     """SAF KARAR: Sayfalar karti icin bu turda yapilacak gercek-kullanici eylemleri.
     tur 0: kart aciksa KAPAT-AC (acik karta JS_SERIT tiklamak onu kapatir), kapaliysa AC.
@@ -439,7 +452,16 @@ def kart_eylemi(c, eylem):
         k = c.jsj(JS_SERIT_KAYDIR)   # konum icin (ayni zamanda bir adim kaydirir)
         if not k:
             return "tekerlek-yok"
-        c.cmd("Input.dispatchMouseEvent", type="mouseWheel", x=k["x"], y=k["y"], deltaX=240, deltaY=0)
+        # Pencere kare uretmiyorsa dispatchMouseEvent yanit vermez → 72380'in ilk kabulu WebSocket zaman
+        # asimiyla "olculemedi" dustu. Kisa sinir; asimda adim ATLANIR, olcum (thumb sayimi) surer.
+        try:
+            c.cmd("Input.dispatchMouseEvent", _zaman_asimi=CDP_TEKERLEK_SN, type="mouseWheel",
+                  x=k["x"], y=k["y"], deltaX=240, deltaY=0)
+        except (websocket.WebSocketConnectionClosedException, ConnectionError):
+            raise   # baglanti KOPTU: olcume devam edilemez — sessizce yutulmaz, ust katman "olculemedi" der
+        except (TimeoutError, OSError, websocket.WebSocketException) as e:
+            log("KAYDIRMA-ATLANDI", "tekerlek", type(e).__name__)
+            return "tekerlek-zamanasimi"
         return "tekerlek"
     if eylem == "ok":
         return "ok" if c.jsj(JS_SERIT_OK) else "ok-yok"

@@ -39,17 +39,24 @@ test('yuva probu: sunucu boşsa ping atlanır', () => {
   assert.equal(W.yuvaProbKomutlari({ ...cfg, winImzaYuvaSunucu: '' }, 'win32', 'n').length, 1);
 });
 
-test('Windows yuva probu FAIL-CLOSED: kök + 66902 listelenebilmeli; "yol var" yetmez (04.10)', async () => {
+test('Windows yuva probu FAIL-CLOSED: kök listelenebilmeli; 66902 yoksa da erişilir (04.10 exe-remove klasörü siler)', async () => {
   const fs = require('fs'); const os = require('os'); const path = require('path');
   const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'yuva-prob-'));
   const kos = async (k) => {
     const [, prob] = W.yuvaProbKomutlari({ ...cfg, winImzaYuvaKoku: k }, 'win32', process.execPath);
     return (await W.komutKos(prob, { zamanAsimiMs: 8000 })).kod;
   };
-  assert.notEqual(await kos(kok), 0, 'kök var ama 66902 yok → erişilemez');
+  assert.equal(await kos(kok), 0, 'kök var + 66902 yok → erişilir (exe-create klasörü açar)');
   fs.mkdirSync(path.join(kok, W.YUVA_ID));
   assert.equal(await kos(kok), 0, 'kök + 66902 listelenebilir → erişilir');
-  assert.notEqual(await kos(path.join(kok, 'yok-boyle-dizin')), 0);
+  assert.notEqual(await kos(path.join(kok, 'yok-boyle-dizin')), 0, 'kök yok → erişilemez');
+  const dosya = path.join(kok, 'dosya.txt'); fs.writeFileSync(dosya, 'x');
+  assert.notEqual(await kos(dosya), 0, 'kök listelenemez (dosya) → erişilemez');
+});
+
+test('imzaYuvasiErisilirMi win32 dışı sahte: yerel/yarım UNC kök → erişilemez (fail-closed korunur)', () => {
+  assert.equal(W.yuvaKokuUncMu('C:\\yerel\\yuva'), false);
+  assert.equal(W.yuvaKokuUncMu('\\\\sunucu'), false);
 });
 
 test('yuvaKokuUncMu: yalnız \\\\sunucu\\paylaşım kabul; yerel yol ve yarım UNC red', () => {

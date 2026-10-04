@@ -425,6 +425,6 @@ module.exports = {
   imzaliKaynakUrlCoz, claimKaynakDogrula, kanonikUrlMi,
   kaynakKurIzinli, kaynakKurEkle, kaynakR2Ekle,
   merdivenKaniti, tamamlaKitaplari, tamamlaWebzVarliklari,
-  KaynakR2Hatasi, r2OzetDogrula,
+  KaynakR2Hatasi, r2OzetDogrula, surumGecerli,
   kaynakUcIstemcisi, r2KurYayinla,
 };
