@@ -735,14 +735,24 @@ async function imzaBekleVeTak({ exe, work, cfg, log, esikBitisMs = 0 }) {
  * Yuvadaki imzalıyı `_imzali/`'ye taşı + yuvayı temizle (toplu akış 3'ün son adımı). Yayın yerel,
  * doğrulanmış kopyadan yapıldığı için BURADAKİ hata işi düşürmez; loglanır.
  */
-async function yuvayiArsivle({ exe, cfg, log }) {
+async function yuvayiArsivle({ exe, cfg, log, kos = komutKos, tasi = fsp.rename }) {
   const yuva = path.join(cfg.winImzaYuvaKoku, YUVA_ID, 'windows.exe');
-  const hk = await komutKos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'hizli-kontrol', yuva, exe], { zamanAsimiMs: 10 * 60000 });
+  // Çıkış 2 (dosya yok) / 3 geçici SMB görünmezliği olabilir: 2 sn arayla en çok 3 deneme (04.10 72378).
+  const bekleme = Number.isFinite(cfg.yuvaArsivBeklemeMs) ? cfg.yuvaArsivBeklemeMs : 2000;
+  const kirp = (v) => String(v || '').trim().split('\n').slice(-3).join(' | ').slice(-300);
+  let hk;
+  for (let deneme = 1; deneme <= 3; deneme++) {
+    hk = await kos([cfg.winImzaKabuk, cfg.winImzaBetigi, 'hizli-kontrol', yuva, exe], { zamanAsimiMs: 10 * 60000 });
+    if (hk.kod === 0) break;
+    log(`windows: UYARI yuva hızlı kontrolü çıkış ${hk.kod} (deneme ${deneme}/3) stdout: ${kirp(hk.cikti)} stderr: ${kirp(hk.hata)}`);
+    if ((hk.kod !== 2 && hk.kod !== 3) || deneme === 3) break;
+    if (bekleme > 0) await new Promise((r) => setTimeout(r, bekleme));
+  }
   if (hk.kod === 0) {
     try {
       const hedef = path.join(cfg.winImzaYuvaKoku, '_imzali', path.basename(exe));
       await fsp.mkdir(path.dirname(hedef), { recursive: true });
-      await fsp.rename(yuva, hedef);
+      await tasi(yuva, hedef);
       log('windows: yuvadaki imzalı →', hedef);
     } catch (e) { log('windows: UYARI yuva _imzali/\'ye taşınamadı:', e.message); }
   } else {
