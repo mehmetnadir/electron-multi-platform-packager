@@ -67,6 +67,7 @@ const {
   kaynakKarari, manuelZipBicimi, exeYoluMu, arsivOkunurMu,
 } = require('./kaynak-karari');
 const { artefaktOzeti } = require('./artefakt-kaniti');
+const { govdeAlanlari: kanonikGovdeAlanlari, logdanOzet: kanonikLogdanOzet } = require('./kanonik-surum');
 // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — uç istemcisi + yayın akışı tek modülde.
 const kaynakR2 = require('./kaynak-r2');
 const { yazmaKapisi, zipSayfaEnvanteri } = require('./yazma-kapisi');
@@ -917,6 +918,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       r2ObjectKey: presigned.r2ObjectKey,
       publicUrl: presigned.publicUrl,
       ...(kanit || {}),
+      // KANONİK SÜRÜM (motor sha12/durum + kabuk sürüm/durum): paketleyici paket.json'a damgaladı,
+      // poll sonucuyla job.kanonikSurum'a indi. Yoksa/boşsa alanlar HİÇ gönderilmez (sunucu null yazar).
+      ...kanonikGovdeAlanlari(job.kanonikSurum),
       // İÇERİK SÜRÜMLERİ (Dalga B, B4): paketin içerdiği kitap içerik sürümleri [{id, vs}] — merdiven
       // kanıtından (processJob `job.icerikSurumleri`'ni doldurur; claim alanı DEĞİL). Sunucu Dalga A/B
       // karşılaştırması için. Ölçüm yoksa (merdiven kapalı, manuel/r2-al) alan hiç gönderilmez.
@@ -1677,6 +1681,11 @@ async function buildPardusArtifact(zipPath, appName, appVersion, artifactPath, w
   const packagerLogMetni = await fsp.readFile(packagerLogPath, 'utf8').catch(() => '');
   const kokIndexSatiri = pardusLogundanCikar(packagerLogMetni);
   if (kokIndexSatiri) log(`pardus: ${kokIndexSatiri} [kitap ${kimlik.bookId || '?'}, platform pardus]`);
+  // Kanonik motor/kabuk sürümü: paket.json konteynerde kaldığından packager.log damgalarından okunur
+  // (kanonik-surum.js logdanOzet) → job.kanonikSurum → /result gövdesi. Hedef verilmediyse atlanır.
+  if (kimlik.kanonikHedef && typeof kimlik.kanonikHedef === 'object') {
+    kimlik.kanonikHedef.kanonikSurum = kanonikLogdanOzet(packagerLogMetni);
+  }
 
   await fsp.copyFile(builtPath, artifactPath);
   const mb = ((await fsp.stat(artifactPath)).size / 1e6).toFixed(0);
@@ -2673,6 +2682,7 @@ async function processJob(auth, job) {
         bookId: job.bookId, srcVersion: paketKaynakKimligi,
         // claim G kimliği (claim-surum): konteynerdeki paketleyiciye kadar taşınır
         setKimligi: job.setKimligi, guncellemeTabani: job.guncellemeTabani, surum: job.surum,
+        kanonikHedef: job,
       });
     } else {
       log('uploading build to packager...');
@@ -2691,6 +2701,8 @@ async function processJob(auth, job) {
         gSurum.surum);
       log('packager jobId:', jobId, '- polling...');
       const pollSonuclari = await packagerPoll(jobId, packagerPlatform);
+      // Kanonik motor/kabuk sürümü (paket.json damgası) → /result gövdesine (postResultSuccess).
+      job.kanonikSurum = (pollSonuclari && pollSonuclari.kanonikSurum) || null;
       // Kök index denetimi görünürlük köprüsü (2026-09-26) — bkz. kok-index-log-koprusu.js.
       if (pollSonuclari && pollSonuclari.kokIndexDenetimi) {
         const satir = kokIndexOzetSatiriKur({

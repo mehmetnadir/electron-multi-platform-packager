@@ -43,6 +43,7 @@ const windowsAsarsiz = require('./windows-asarsiz');
 const ikonSaydamlik = require('./ikon-saydamlik');
 const harfKapisi = require('./harf-kapisi');
 const kokIndexDenetimi = require('./kok-index-denetimi');
+const kanonikSurumOzeti = require('../agent/kanonik-surum');
 const nsisKurulum = require('./nsis-kurulum');
 const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
@@ -746,6 +747,9 @@ MimeType=application/x-electron;
             const pj = JSON.parse(await fs.readFile(pjYol, 'utf8'));
             await fs.writeFile(pjYol, `${JSON.stringify({ ...pj, kabukSurumu: kabukDamgasiSonucu }, null, 2)}\n`);
           }
+          // Sunucuya raporlanacak kanonik sürüm özeti (agent/kanonik-surum.js) — poll sonucuyla
+          // runner'a taşınır; okunamazsa hepsi null (asla fırlatmaz).
+          results.kanonikSurum = await kanonikSurumOzeti.paketJsondanOku(workingPath);
           if (manifestSonuc.yazildi) {
             const mf = manifestSonuc.manifest;
             console.log(`🪪 Paket kimliği: ${mf.setId} (${mf.setIdKaynagi}), `
