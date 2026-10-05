@@ -47,7 +47,7 @@ const WEBZ = {
 };
 
 /** Eski sf425 kökü + bookN: book2=333, book3=222 (anahtar ≠ klasör), book4 Games (dizin ad, menü 666). */
-function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false, motorEk = {} } = {}) {
+function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false, motorEk = {}, idler = TEK_IDLER } = {}) {
   const z = new AdmZip();
   const ekle = (ad, veri) => z.addFile(`${sarma}${ad}`, Buffer.from(veri));
   ekle('electron.js', 'require("electron");');
@@ -57,8 +57,8 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
     ekle('app.config.js', 'var AppConfig = { setBook: { enable: true } };');
     ekle('bd0c1a4f650802c98ebf.main.js', '/* motor */');
     for (const [ad, v] of Object.entries(motorEk)) ekle(ad, v);
-    ekle('classlibraries/ImWin32.dll', tekMotorMenu(TEK_IDLER));
-    for (const id of TEK_IDLER) {
+    ekle('classlibraries/ImWin32.dll', tekMotorMenu(idler));
+    for (const id of idler) {
       ekle(`assets/${id}/data/BookContent.xml`, `<Book kitapId="${id}"/>`);
       ekle(`assets/${id}/pages/1.png`, `sayfa-${id}`);
       ekle(`assets/${id}/thumbs/1.jpg`, `kapak-${id}`);
@@ -354,6 +354,27 @@ test('A1 çakışma: motor kökünde kabuk dosyası (scripts/xmlParser.js) varsa
   assert.equal(r.durum, 'atlandi');
   assert.match(r.neden, /^A1 atlandı — kabuk dosyası motor dosyasıyla çakışıyor: scripts\/xmlParser\.js/);
   assert.ok(once.equals(sonra));
+});
+
+test('A1 K1 gerileme: tek kitaplı İmpark paketi (1 kapak, 1 assets/<id>, Web-Z 1 üye) → ATLANDI, zip bayt-aynı', async () => {
+  const ayar = { setTitle: 'Tek', books: { book1: { assetId: '25861', title: 'Tek Kitap', contentType: 'book' } } };
+  const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: true, idler: ['25861'] }), ayar });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /^A1 atlandı — tek kitaplı paket \(\d kapak\) — A1 yalnız ≥2 kapaklı tek motorlu set/);
+  assert.ok(once.equals(sonra));
+});
+
+test('A1 k3: "zaten A1" koşusunda kabuk dosyası motor sayfasının başvurusunu ezecekse → ATLANDI', async () => {
+  const ilk = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK });
+  assert.equal(ilk.r.durum, 'uygulandi', ilk.r.neden);
+  const z = new AdmZip(ilk.sonra);
+  const kapak = z.getEntry('kapak/index.html').getData().toString('utf8')
+    .replace('</head>', '<script src="scripts/xmlParser.js"></script></head>');
+  z.updateFile('kapak/index.html', Buffer.from(kapak));
+  const ikinci = await kostur({ zip: z.toBuffer(), ayar: WEBZ_TEK });
+  assert.equal(ikinci.r.durum, 'atlandi');
+  assert.match(ikinci.r.neden, /kabuk dosyası motor dosyasıyla çakışıyor: scripts\/xmlParser\.js/);
+  assert.ok(ikinci.once.equals(ikinci.sonra));
 });
 
 test('A1: ikili kendi kapısıyla durursa (çıkış 1, stderr yol) → ATLANDI, yarım düzen yok, gölge temizlenir', async () => {

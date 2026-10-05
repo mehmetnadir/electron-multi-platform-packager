@@ -451,6 +451,13 @@ async function kabukTazele(o) {
   } catch (e) {
     return atla(`kimlik çözümü: ${String(e && e.message || e).slice(0, 120)}`);
   }
+  // K1 (inceleme 05.10): tek kitaplı İmpark paketi de kök ImWin32 + motor index taşır; A1 yalnız
+  // ≥2 kapaklı tek motorlu settir (yazma kapısı `kokMenuKapaklari` ve Windows kapısı `tekMotorMu`
+  // ile aynı eşik). Altında A1'e çevirmek tek kartlı kabuk üretir → atla.
+  if (a1) {
+    const idli = (kapi.kitaplar || []).filter((k) => k && k.id != null && /^\d+$/.test(String(k.id)));
+    if (idli.length < 2) return atla(`tek kitaplı paket (${idli.length} kapak) — A1 yalnız ≥2 kapaklı tek motorlu set`);
+  }
   const es = eslemeKur({ liste, kapi, setAdi: String(ayar.setTitle || ''), kip: a1 ? KIP_TEK_MOTOR : null });
   if (!es.girdi) return atla(`eşlenemeyen Web-Z üyesi: ${es.eksik.join('; ')}`, { notlar: es.notlar });
   rapor.notlar = es.notlar;
@@ -553,12 +560,20 @@ async function kabukTazele(o) {
     // 4b'. A1 ilk dönüşüm: kökteki motor index.html → kapak/index.html (A1 başlığıyla). Zaten A1
     //      ise (motor kapak/index.html'de) motor sayfasına dokunulmaz.
     //      Dosya gölgede ikiliden önce kondu (4b); burada yalnız zip'e yazılacaklara eklenir.
-    if (a1 && u.motorKaynagi === 'index.html') {
-      // Çakışma kapısı: ikili yalnız gölge kökü görür, motor kökünü GÖRMEZ. İlk dönüşümde kökte
-      // zaten bulunan bir dosyayı kabuk dosyası ezecekse (index.html hariç — o kapak/'a taşındı)
-      // motor bozulur → atla, iş kopyası aynen kalır.
-      const cakisan = yazilan.filter((y) => y !== 'index.html' && once.has(`${onEk}${y}`));
+    // Çakışma kapısı (her A1 koşusu): ikili yalnız gölge kökü görür, motor kökünü GÖRMEZ.
+    //   · ilk dönüşüm: kökte zaten bulunan dosyayı kabuk dosyası ezecekse (index.html hariç — o
+    //     kapak/'a taşındı);
+    //   · her koşu (k3, "zaten A1" dahil): motor sayfasının (`kapak/index.html`, `<base href="../">`
+    //     ile kök-göreli) yerel başvurusunu kabuk dosyası ezecekse
+    //   motor bozulur → atla, iş kopyası aynen kalır.
+    if (a1) {
+      const ilk = u.motorKaynagi === 'index.html';
+      const motorRef = new Set(K.indexYerelReferanslari(a1Girdi.get(A1.A1_MOTOR_SAYFASI).toString('utf8')));
+      const cakisan = yazilan.filter((y) => y !== 'index.html'
+        && ((ilk && once.has(`${onEk}${y}`)) || motorRef.has(y)));
       if (cakisan.length) return atla(`kabuk dosyası motor dosyasıyla çakışıyor: ${cakisan.slice(0, 3).join(', ')}`);
+    }
+    if (a1 && u.motorKaynagi === 'index.html') {
       yazilan.push(A1.A1_MOTOR_SAYFASI);
       yazilan.sort();
     }
