@@ -329,3 +329,22 @@ test('SENTINEL: packagingService adımı kabuktan SONRA, motordan ÖNCE çağır
   assert.ok(kabuk > 0 && adim > kabuk && adim > sart && adim < motor, 'sıra: kabuk → yama → motor');
   assert.ok(geriYaz > manifest, 'manifest paket.json\'u ezdikten sonra kayıt geri yazılır');
 });
+
+test('AKIŞ: eski kabuk .main EKSİZ giriş → main bulunur (main-yok değil); okuyucusuz bookN kabuksuz', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'menu-kimlik-eksiz-'));
+  try {
+    const b1 = path.join(tmp, 'book1');
+    await fs.outputFile(path.join(b1, `${H('7')}.js`), mainJs());
+    await fs.writeFile(path.join(b1, 'index.html'),
+      `<script src="./${H('8')}.336.js"></script><script defer src="./${H('7')}.js"></script>`);
+    await fs.outputFile(path.join(tmp, 'book6', 'Teachers-Pack.pdf'), '%PDF');
+    const r = await M.paketeUygula(tmp, { paketJsonYaz: false });
+    const k1 = r.kitaplar.find((k) => k.dizin === 'book1');
+    assert.equal(k1.main, `${H('7')}.js`);
+    assert.equal(k1.durum, 'yamandi');
+    assert.deepEqual(r.kitaplar.find((k) => k.dizin === 'book6'),
+      { dizin: 'book6', main: null, durum: 'kabuksuz', sebep: 'index-yok' });
+    assert.equal(r.durum, 'yamandi', 'okuyucusuz kitap toplamı kalip-yok yapmaz');
+    assert.equal(M.toplamDurum([{ durum: 'kabuksuz' }]), 'kalip-yok', 'yalnız okuyucusuz → yeşil değil');
+  } finally { await fs.remove(tmp); }
+});

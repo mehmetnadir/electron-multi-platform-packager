@@ -454,13 +454,30 @@ async function motorKapisi(kokDizin, kanonik) {
 
 /**
  * "SAĞ ALT SÜRÜM ROZETİ" — OCR'sız, dosyadan. Rozet MOTORDAN DEĞİL okuyucu kabuğundan
- * gelir (ölçüm 2026-09-24): `index.html` → `<hash>.main.js` → parça haritası →
+ * gelir (ölçüm 2026-09-24): `index.html` → `<hash>.main.js` (eski kabukta `<hash>.js`) → parça haritası →
  * `e.exports={i8:"X"}` taşıyan parça (webpack'in package.json `version` modülü).
  * @param {string} kitapDizini index.html'in bulunduğu dizin
  * @returns {Promise<{surum:string|null, main:string|null, parca:string|null}>}
  */
 async function rozetSurumuOku(kitapDizini) {
   return rozetSurumuOkuEsz(kitapDizini);
+}
+
+/**
+ * ESKİ KABUK ANA GİRİŞİ (2026-10-05, 45550 book4, kabuk 1.9.12.5): index.html ana dosyayı
+ * `.main` eki OLMADAN çağırır (`./6c71fd02299e4d22e9ea.js`, css `./b80bbf50f85d24a5f179.css`).
+ * Kural: önce `<h20>.main.<uz>`; yoksa index'te TEK bir `<h20>.<uz>` referansı varsa o.
+ * Birden çok eksiz aday = belirsiz → ana giriş YOK (dokunma; değişim rozet doğrulamasında
+ * düşer, geri alınır). Webpack parçası `<h20>.<id>.js` bu desene girmez.
+ * @param {string} html
+ * @param {'src'|'href'} nitelik
+ * @param {'js'|'css'} uz
+ * @returns {string|null} eksiz taban ad
+ */
+function tekEksizAnaAd(html, nitelik, uz) {
+  const re = new RegExp(`${nitelik}\\s*=\\s*["'](?:\\.?\\/)?([0-9a-f]{20}\\.${uz})(?:[?#][^"']*)?["']`, 'g');
+  const adlar = [...new Set([...String(html).matchAll(re)].map((m) => m[1]))];
+  return adlar.length === 1 ? adlar[0] : null;
 }
 
 /**
@@ -475,7 +492,10 @@ function rozetSurumuOkuEsz(kitapDizini) {
   const bos = { surum: null, main: null, parca: null };
   let html;
   try { html = fs.readFileSync(path.join(kitapDizini, 'index.html'), 'utf8'); } catch { return bos; }
-  const m = html.match(/src="\.?\/?([0-9a-f]{20}\.main\.js)"/);
+  // Önce `<h20>.main.js`; eski kabukta (1.9.x) TEK eksiz `<h20>.js` girişi (45550 book4).
+  const mainM = html.match(/src="\.?\/?([0-9a-f]{20}\.main\.js)"/);
+  const eksiz = mainM ? null : tekEksizAnaAd(html, 'src', 'js');
+  const m = mainM || (eksiz ? [null, eksiz] : null);
   if (!m) return bos;
   let main;
   try { main = fs.readFileSync(path.join(kitapDizini, m[1]), 'latin1'); } catch {
@@ -512,6 +532,7 @@ module.exports = {
   damgaSatiriAyristir,
   rozetSurumuOku,
   rozetSurumuOkuEsz,
+  tekEksizAnaAd,
   acikMi,
   motorDosyalariniBul,
   dosyaDamgasiHesapla,

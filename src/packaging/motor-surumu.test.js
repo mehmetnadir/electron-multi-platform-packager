@@ -252,3 +252,29 @@ test('packagingService motor adımından sonra makine-okur damga satırını bas
   const manifest = src.indexOf('paketManifesti.paketeUygula(workingPath');
   assert.ok(motorBlok > 0 && satir > motorBlok && satir < manifest, 'motor adımından sonra, manifestten önce');
 });
+
+test('rozetSurumuOkuEsz: eski kabuk (.main EKSİZ giriş, 45550 book4) rozeti okunur; .main\'li aynen', async () => {
+  const H = (c) => c.repeat(20);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rozet-eksiz-'));
+  try {
+    await fs.writeFile(path.join(dir, `${H('6')}.js`), `x={336:"${H('f')}"}`);
+    await fs.writeFile(path.join(dir, `${H('f')}.336.js`), 'e.exports={i8:"1.9.12.5"}');
+    await fs.writeFile(path.join(dir, 'index.html'),
+      `<script src="43e23fce2b7009474555a77.js"></script><script defer src="./${H('6')}.js"></script>`);
+    assert.deepEqual(M.rozetSurumuOkuEsz(dir), { surum: '1.9.12.5', main: `${H('6')}.js`, parca: `${H('f')}.336.js` });
+    assert.equal((await M.rozetSurumuOku(dir)).surum, '1.9.12.5');
+    // .main'li giriş öncelikli (eski davranış)
+    await fs.writeFile(path.join(dir, `${H('a')}.main.js`), `x={923:"${H('b')}"}`);
+    await fs.writeFile(path.join(dir, `${H('b')}.923.js`), 'e.exports={i8:"1.13.14"}');
+    await fs.writeFile(path.join(dir, 'index.html'),
+      `<script src="./${H('6')}.js"></script><script src="./${H('a')}.main.js"></script>`);
+    assert.equal(M.rozetSurumuOkuEsz(dir).surum, '1.13.14');
+    // yalnız webpack parçası referansı → ana giriş YOK
+    await fs.writeFile(path.join(dir, 'index.html'), `<script src="./${H('f')}.336.js"></script>`);
+    assert.deepEqual(M.rozetSurumuOkuEsz(dir), { surum: null, main: null, parca: null });
+    // iki eksiz aday → belirsiz, okunmaz
+    await fs.writeFile(path.join(dir, 'index.html'),
+      `<script src="./${H('6')}.js"></script><script src="./${H('7')}.js"></script>`);
+    assert.equal(M.rozetSurumuOkuEsz(dir).surum, null);
+  } finally { await fs.remove(dir); }
+});

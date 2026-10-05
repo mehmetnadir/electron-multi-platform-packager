@@ -230,3 +230,119 @@ test('ESKİ MAIN: eski ad kanonikle aynıysa taşınmaz', async () => {
     assert.ok(await fs.pathExists(path.join(b, main)) && await fs.pathExists(path.join(b, mainCss)));
   } finally { await fs.remove(tmp); }
 });
+
+/** 45550 book4 biçimi: eski kabuk (1.9.12.5) index'te `.main` EKSİZ giriş çağırır. */
+async function eksizKitapYaz(b, surum = '1.9.12.5') {
+  await kabukYaz(b, { main: `${H('7')}.js`, parcaHash: H('8'), surum, css: `${H('9')}.css` });
+  await fs.writeFile(path.join(b, 'index.html'),
+    `<head><script src="app.config.js"></script><script src="43e23fce2b7009474555a77.js"></script>`
+    + `<script defer="defer" src="./${H('7')}.js"></script>`
+    + `<link href="./favicon.ico" rel="icon"><link href="./${H('9')}.css" rel="stylesheet"></head>`);
+}
+
+test('ESKİ KABUK (.main eksiz, 45550): rozet okunur → degisti; index kanonik; eski ana js/css yedekte', async () => {
+  const { tmp, kok, kYol, main, mainCss } = await alanKur({ kitapSayisi: 1, kanonikSurum: '1.13.14' });
+  try {
+    const b = path.join(kok, 'book1');
+    await eksizKitapYaz(b);
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.kitaplar[0].onceSurum, '1.9.12.5', 'eksiz girişten rozet okundu');
+    assert.equal(d.kitaplar[0].karar, 'degisti');
+    assert.equal(d.durum, 'guncel');
+    const html = await fs.readFile(path.join(b, 'index.html'), 'utf8');
+    assert.ok(html.includes(`src="./${main}"`), 'index kanonik main.js gösterir');
+    assert.ok(html.includes(`href="./${mainCss}"`), 'index kanonik main.css gösterir');
+    assert.equal(html.includes(H('7')), false, 'eski ana js referansı kalmadı');
+    assert.equal(html.includes(H('9')), false, 'eski css referansı kalmadı');
+    assert.equal((html.match(/rel="stylesheet"/g) || []).length, 1, 'ikinci css bağı eklenmedi');
+    assert.ok(html.includes('43e23fce2b7009474555a77.js') && html.includes('./favicon.ico'), 'şablon korunur');
+    const yedek = path.join(tmp, '.empp-eski', 'paket', 'book1');
+    for (const ad of [`${H('7')}.js`, `${H('9')}.css`]) {
+      assert.equal(await fs.pathExists(path.join(b, ad)), false, `${ad} kökte yok`);
+      assert.ok(await fs.pathExists(path.join(yedek, ad)), `${ad} .empp-eski'de`);
+    }
+    assert.equal(d.kitaplar[0].eskiMainTasinan, 2);
+    assert.equal(await fs.pathExists(path.join(b, `${H('8')}.923.js`)), true, 'webpack parçası yerinde');
+    assert.equal(await fs.readFile(path.join(b, 'app.config.js'), 'utf8'), 'KITABA-OZGU');
+    const kapi = await K.kabukKapisi(kok, await K.kanonikKabukYukle(kYol));
+    assert.equal(kapi.gecti, true);
+  } finally { await fs.remove(tmp); }
+});
+
+test('indexYenidenYaz: .main\'li giriş eski davranış; eksiz tek giriş yazılır; webpack parçası ana sanılmaz', () => {
+  const m = `${H('d')}.main.js`;
+  const c = `${H('f')}.main.css`;
+  // .main'li — eski davranış aynen
+  const eski = `<head><script src="./${H('a')}.main.js"></script><link href="./${H('c')}.main.css" rel="stylesheet"></head>`;
+  assert.equal(K.indexYenidenYaz(eski, m, c),
+    `<head><script src="./${m}"></script><link href="./${c}" rel="stylesheet"></head>`);
+  // eksiz — ?sorgu ve tek tırnak da yazılır
+  assert.equal(K.indexYenidenYaz(`<head><script src='${H('7')}.js?v=2'></script></head>`, m, c),
+    `<head><script src='./${m}'></script><link href="./${c}" rel="stylesheet"></head>`);
+  // webpack parçası `<h20>.<id>.js` ana giriş DEĞİL; motor (23 hane) da değil
+  const parca = `<head><script src="./${H('8')}.336.js"></script><script src="43e23fce2b7009474555a77.js"></script></head>`;
+  assert.equal(K.tekEksizAnaAd(parca, 'src', 'js'), null);
+  assert.deepEqual(K.indexMainReferanslari(parca), { js: [], css: [] });
+  assert.equal(K.indexYenidenYaz(parca, m, null), parca, 'parça referansına dokunulmaz');
+  // parça + eksiz ana → yalnız ana seçilir
+  const karisik = `<script src="./${H('8')}.336.js"></script><script src="./${H('7')}.js"></script>`;
+  assert.deepEqual(K.indexMainReferanslari(karisik).js, [`${H('7')}.js`]);
+  // iki eksiz aday = belirsiz → ana giriş yok, dokunulmaz
+  const iki = `<script src="./${H('7')}.js"></script><script src="./${H('6')}.js"></script>`;
+  assert.equal(K.tekEksizAnaAd(iki, 'src', 'js'), null);
+  assert.equal(K.indexYenidenYaz(iki, m, null), iki);
+  // .main varsa eksiz aday yok sayılır
+  assert.deepEqual(K.indexMainReferanslari(`<script src="./${H('7')}.js"></script><script src="x.main.js"></script>`).js,
+    ['x.main.js']);
+});
+
+test('ESKİ KABUK: iki eksiz aday (belirsiz) → rozet okunmaz, kitap DEĞİŞMEZ, karisik', async () => {
+  const { tmp, kok, kYol } = await alanKur({ kitapSayisi: 1 });
+  try {
+    const b = path.join(kok, 'book1');
+    await eksizKitapYaz(b);
+    await fs.writeFile(path.join(b, 'index.html'),
+      `<head><script src="./${H('7')}.js"></script><script src="./${H('6')}.js"></script></head>`);
+    const once = await fs.readFile(path.join(b, 'index.html'), 'utf8');
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.kitaplar[0].karar, 'bilinmiyor');
+    assert.equal(d.durum, 'karisik');
+    assert.equal(await fs.readFile(path.join(b, 'index.html'), 'utf8'), once);
+  } finally { await fs.remove(tmp); }
+});
+
+test('OKUYUCUSUZ bookN (11811 book6: yalnız PDF) → kabuksuz; durum guncel; kapı geçer; kayıtta görünür', async () => {
+  const { tmp, kok, kYol } = await alanKur({ kitapSayisi: 2 });
+  try {
+    const b6 = path.join(kok, 'book6');
+    await fs.outputFile(path.join(b6, 'SUPER-MONSTERS-4-Teachers-Pack.pdf'), '%PDF');
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.durum, 'guncel');
+    assert.equal(d.degisen, 2);
+    const k6 = d.kitaplar.find((k) => k.dizin === 'book6');
+    assert.equal(k6.karar, 'kabuksuz');
+    assert.deepEqual(await fs.readdir(b6), ['SUPER-MONSTERS-4-Teachers-Pack.pdf'], 'dizine dokunulmadı');
+    const pj = JSON.parse(await fs.readFile(path.join(kok, 'paket.json'), 'utf8'));
+    assert.equal(pj.kabukSurumu.kitaplar.find((k) => k.dizin === 'book6').karar, 'kabuksuz');
+    const kapi = await K.kabukKapisi(kok, await K.kanonikKabukYukle(kYol));
+    assert.equal(kapi.gecti, true);
+    assert.equal(kapi.kitaplar.find((k) => k.dizin === 'book6').karar, 'kabuksuz');
+    // yalnız okuyucusuz kitap varsa kapı GEÇMEZ (boş küme yeşil değil)
+    const tek = await fs.mkdtemp(path.join(os.tmpdir(), 'kabuk-pdf-'));
+    try {
+      await fs.outputFile(path.join(tek, 'book1', 'a.pdf'), '%PDF');
+      assert.equal((await K.kabukKapisi(tek, await K.kanonikKabukYukle(kYol))).gecti, false);
+    } finally { await fs.remove(tek); }
+  } finally { await fs.remove(tmp); }
+});
+
+test('okuyucusuzMu: tek kitap kökü istisnaya girmez', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'kabuk-oku-'));
+  try {
+    assert.equal(await K.okuyucusuzMu(tmp, ''), false);
+    await fs.ensureDir(path.join(tmp, 'book1'));
+    assert.equal(await K.okuyucusuzMu(tmp, 'book1'), true);
+    await fs.writeFile(path.join(tmp, 'book1', 'index.html'), '<head></head>');
+    assert.equal(await K.okuyucusuzMu(tmp, 'book1'), false);
+  } finally { await fs.remove(tmp); }
+});

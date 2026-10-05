@@ -34,7 +34,7 @@
 
 const path = require('path');
 const fs = require('fs-extra');
-const { kitapDizinleri, indexMainReferanslari } = require('./okuyucu-kabugu');
+const { kitapDizinleri, indexMainReferanslari, okuyucusuzMu } = require('./okuyucu-kabugu');
 
 const ISARET = 'EMPP_MENU_ID_ESLE';
 
@@ -138,7 +138,9 @@ function menuKimlikEsleYamasi(mainJsMetni) {
 }
 
 /** Kitap durumlarından paket durumu: biri kalıpsızsa 'kalip-yok', biri yamandıysa 'yamandi'. */
-function toplamDurum(kitaplar) {
+function toplamDurum(tumKitaplar) {
+  // okuyucusuz bookN (yalnız PDF, index.html yok) yamanacak main.js taşımaz — toplamaya girmez
+  const kitaplar = tumKitaplar.filter((k) => k.durum !== 'kabuksuz');
   if (!kitaplar.length || kitaplar.some((k) => k.durum === 'kalip-yok')) return 'kalip-yok';
   return kitaplar.some((k) => k.durum === 'yamandi') ? 'yamandi' : 'zaten';
 }
@@ -170,6 +172,11 @@ async function paketeUygula(kokDizin, opts = {}) {
   for (const rel of await kitapDizinleri(kokDizin)) {
     const dir = path.join(kokDizin, rel);
     const dizin = rel || '.';
+    if (await okuyucusuzMu(kokDizin, rel)) {
+      kitaplar.push({ dizin, main: null, durum: 'kabuksuz', sebep: 'index-yok' });
+      log(`   menü kimlik eşleme ${dizin}: okuyucusuz (index.html yok) — atlandı`);
+      continue;
+    }
     let html = null;
     try { html = await fs.readFile(path.join(dir, 'index.html'), 'utf8'); } catch { html = null; }
     const adlar = html ? indexMainReferanslari(html).js : [];

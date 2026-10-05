@@ -28,7 +28,7 @@ const os = require('os');
 const crypto = require('crypto');
 const fs = require('fs-extra');
 const { dizinCoz } = require('./kanonik-sart');
-const { surumKiyasla, surumParcala, rozetSurumuOku } = require('./motor-surumu');
+const { surumKiyasla, surumParcala, rozetSurumuOku, tekEksizAnaAd } = require('./motor-surumu');
 
 const KANONIK_YOLU_VARSAYILAN = process.env.EMPP_KABUK_KANONIK
   || path.join(os.homedir(), '.empp-agent', 'kabuk', 'kanonik.json');
@@ -86,7 +86,7 @@ async function tamAdlaVarMi(kok, goreli) {
   return true;
 }
 
-/** Kabuk taşıyan kitap dizinleri (kök-göreli; '' = kök). */
+/** Kitap dizinleri (kök-göreli; '' = kök). Okuyucusuz bookN de döner — ayıklayan `okuyucusuzMu`. */
 async function kitapDizinleri(kokDizin) {
   let girisler = [];
   try { girisler = await fs.readdir(kokDizin, { withFileTypes: true }); } catch { return []; }
@@ -95,12 +95,36 @@ async function kitapDizinleri(kokDizin) {
   return kitaplar.length ? kitaplar : [''];
 }
 
-/** index.html'de main.js/main.css referanslarını yeniden yazar. SAF. */
+/**
+ * OKUYUCUSUZ bookN (2026-10-05, 11811 book6): dizinde yalnız bir PDF var, index.html yok.
+ * Kabuk kararına ve kapıya katılmaz ('kabuksuz'), paket.json kaydında görünür kalır.
+ * Tek kitap kökü ('') bu istisnaya girmez — kökte index.html yoksa soy bilinmiyor sayılır.
+ */
+async function okuyucusuzMu(kokDizin, rel) {
+  if (!rel) return false;
+  return !(await fs.pathExists(path.join(kokDizin, rel, 'index.html')));
+}
+
+/** index.html'de main.js/main.css referanslarını yeniden yazar (eski kabukta `.main` eksiz). SAF. */
 function indexYenidenYaz(html, main, mainCss) {
-  let yeni = html.replace(/(src=")\.?\/?[0-9a-f]{20}\.main\.js(")/, `$1./${main}$2`);
+  // tekEksizAnaAd ile AYNI hoşgörü (boşluk, tek tırnak, ?sorgu) — bulunan ad yazılamazsa
+  // index eski girişi gösterirken eski dosya yedeğe taşınırdı (kırık kitap).
+  const eksizYaz = (metin, nitelik, eski, yeniAd) => metin.replace(new RegExp(
+    `(${nitelik}\\s*=\\s*(["']))(?:\\.?\\/)?${eski.replace(/\./g, '\\.')}(?:[?#][^"']*)?\\2`),
+  `$1./${yeniAd}$2`);
+  let yeni = html;
+  if (/src="\.?\/?[0-9a-f]{20}\.main\.js"/.test(yeni)) {
+    yeni = yeni.replace(/(src=")\.?\/?[0-9a-f]{20}\.main\.js(")/, `$1./${main}$2`);
+  } else {
+    const eski = tekEksizAnaAd(yeni, 'src', 'js');
+    if (eski) yeni = eksizYaz(yeni, 'src', eski, main);
+  }
   if (mainCss) {
+    const eskiCss = tekEksizAnaAd(yeni, 'href', 'css');
     if (/href="\.?\/?[0-9a-f]{20}\.main\.css"/.test(yeni)) {
       yeni = yeni.replace(/(href=")\.?\/?[0-9a-f]{20}\.main\.css(")/, `$1./${mainCss}$2`);
+    } else if (eskiCss) {
+      yeni = eksizYaz(yeni, 'href', eskiCss, mainCss);
     } else {
       yeni = yeni.replace('</head>', `<link href="./${mainCss}" rel="stylesheet"></head>`);
     }
@@ -108,13 +132,21 @@ function indexYenidenYaz(html, main, mainCss) {
   return yeni;
 }
 
-/** index.html'in referans verdiği *.main.js / *.main.css taban adları. SAF. */
+/**
+ * index.html'in referans verdiği ana giriş taban adları: `*.main.js` / `*.main.css`; yoksa
+ * eski kabuğun TEK eksiz `<h20>.js` / `<h20>.css` girişi (bkz. `tekEksizAnaAd`). SAF.
+ */
 function indexMainReferanslari(html) {
   const al = (re) => [...String(html).matchAll(re)].map((m) => m[1]);
   const benzersiz = (a) => [...new Set(a)];
+  const yedekli = (adlar, nitelik, uz) => {
+    if (adlar.length) return adlar;
+    const eksiz = tekEksizAnaAd(html, nitelik, uz);
+    return eksiz ? [eksiz] : [];
+  };
   return {
-    js: benzersiz(al(/src\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.js)(?:[?#][^"']*)?["']/g)),
-    css: benzersiz(al(/href\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.css)(?:[?#][^"']*)?["']/g)),
+    js: yedekli(benzersiz(al(/src\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.js)(?:[?#][^"']*)?["']/g)), 'src', 'js'),
+    css: yedekli(benzersiz(al(/href\s*=\s*["'](?:\.?\/)?([^"'?#\/]+\.main\.css)(?:[?#][^"']*)?["']/g)), 'href', 'css'),
   };
 }
 
@@ -142,6 +174,11 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
 
   for (const rel of await kitapDizinleri(kokDizin)) {
     const dir = path.join(kokDizin, rel);
+    if (await okuyucusuzMu(kokDizin, rel)) {
+      kitaplar.push({ dizin: rel, onceSurum: null, karar: 'kabuksuz', sonraSurum: null });
+      log(`   kabuk ${rel}: index.html yok (okuyucusuz) — atlandı`);
+      continue;
+    }
     const once = await rozetSurumuOku(dir);
     const karar = kabukKarari(once.surum, kanonik);
     const kayit = { dizin: rel || '.', onceSurum: once.surum, karar, sonraSurum: once.surum };
@@ -259,6 +296,10 @@ async function kabukKapisi(kokDizin, kanonik) {
   if (!kanonik || !surumParcala(kanonik.surum)) return { gecti: null, kitaplar: [], sebep: 'kanonik bilinmiyor' };
   const kitaplar = [];
   for (const rel of await kitapDizinleri(kokDizin)) {
+    if (await okuyucusuzMu(kokDizin, rel)) {
+      kitaplar.push({ dizin: rel, surum: null, karar: 'kabuksuz', eksikCekirdek: [] });
+      continue;
+    }
     const r = await rozetSurumuOku(path.join(kokDizin, rel));
     const eksikCekirdek = [];
     for (const d of kanonik.cekirdek || []) {
@@ -268,8 +309,9 @@ async function kabukKapisi(kokDizin, kanonik) {
     if ((karar === 'ayni' || karar === 'yeni') && eksikCekirdek.length) karar = 'eksik-cekirdek';
     kitaplar.push({ dizin: rel || '.', surum: r.surum, karar, eksikCekirdek });
   }
-  const kotu = kitaplar.filter((k) => k.karar !== 'ayni' && k.karar !== 'yeni');
-  return { gecti: kitaplar.length > 0 && kotu.length === 0, kitaplar,
+  const okuyuculu = kitaplar.filter((k) => k.karar !== 'kabuksuz');
+  const kotu = okuyuculu.filter((k) => k.karar !== 'ayni' && k.karar !== 'yeni');
+  return { gecti: okuyuculu.length > 0 && kotu.length === 0, kitaplar,
     sebep: kotu.length ? `${kotu.length} kitap kabuğu kanonikten eski/bilinmiyor ya da çekirdek varlığı eksik` : 'tümü ≥ kanonik' };
 }
 
@@ -278,6 +320,8 @@ module.exports = {
   acikMi,
   kanonikKabukYukle,
   kitapDizinleri,
+  okuyucusuzMu,
+  tekEksizAnaAd,
   tamAdlaVarMi,
   indexYenidenYaz,
   indexMainReferanslari,
