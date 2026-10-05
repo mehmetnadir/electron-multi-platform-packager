@@ -172,6 +172,7 @@ function panelBag({ panel = { status: 200, govde: PANEL } } = {}) {
 
 async function isKostur({
   job, arsivKoku = tmp('bos'), dosyalar = {}, anahtarli = [], pb = panelBag(), env = {}, uretec = null,
+  adim = {},
 }) {
   const sunucu = await sahteSunucu({ dosyalar });
   const orjAdim = { ...kaynakAdim };
@@ -180,6 +181,7 @@ async function isKostur({
   kaynakAdim.merdiven = async () => ({ satirlar: [], s1: [] });
   kaynakAdim.setEki = async () => ({ eklenen: [] });
   if (uretec) kaynakAdim.uretec = uretec;
+  Object.assign(kaynakAdim, adim);
   imKeys.varsayilanBagimliliklar = () => ({
     anahtarliMi: async (id) => anahtarli.includes(String(id)),
     kodCek: async () => KODLAR,
@@ -423,4 +425,67 @@ test('setListesiPanelFarki: yerel hazır kaydına girer (jobOzeti), /result göv
     kaynak.indexOf('async function postResultFailure'));
   assert.ok(govde.length > 100);
   assert.doesNotMatch(govde, /setListesiPanelFarki/);
+});
+
+// ─── sf425 kabuk tazeleme (Z2, 05.10): zincirdeki yeri + bayrak ────────────────────────────
+
+/** Sıra casusu: set eki → kabuk → panel. Kabuk casusu iş kopyasına dokunmaz. */
+function siraCasusu(pb) {
+  const sira = [];
+  const cagri = [];
+  return {
+    sira, cagri,
+    adim: {
+      setEki: async () => { sira.push('setEki'); return { eklenen: [] }; },
+      kabukTazele: async (o) => {
+        sira.push(`kabuk(panel=${pb.casus.panel.length})`);
+        cagri.push(o);
+        return { durum: 'atlandi', neden: 'test' };
+      },
+    },
+  };
+}
+
+test('Z2 r2-kur + EMPP_SET_KABUK_TAZELE=1: kabuk set ekinden SONRA, panelden ÖNCE bir kez koşar', async () => {
+  const pb = panelBag();
+  const c = siraCasusu(pb);
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', buildZip()), job: () => ({ ...r2Kur(), kisaKod: 'tlk2k' }), pb,
+    env: { EMPP_SET_KABUK_TAZELE: '1' }, adim: c.adim,
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.deepEqual(c.sira, ['setEki', 'kabuk(panel=0)']);
+  assert.equal(pb.casus.panel.length, 1, 'panel kabuktan sonra koştu');
+  assert.equal(c.cagri[0].job.kisaKod, 'tlk2k');
+  assert.match(c.cagri[0].zip, /build\.zip$|\.zip$/);
+});
+
+test('Z2 bayrak KAPALI (varsayılan): kabuk adımı hiç çağrılmaz', async () => {
+  const pb = panelBag();
+  const c = siraCasusu(pb);
+  const r = await isKostur({ arsivKoku: arsivKur('45480', buildZip()), job: r2Kur, pb, adim: c.adim });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.deepEqual(c.sira, ['setEki']);
+});
+
+test('Z2 arşiv kaynağı (r2-kur değil): bayrak açık olsa da kabuk çağrılmaz', async () => {
+  const pb = panelBag();
+  const c = siraCasusu(pb);
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', buildZip()), pb, env: { EMPP_SET_KABUK_TAZELE: '1' }, adim: c.adim,
+    job: () => ({ bookId: '45480', platform: 'android' }),
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.ok(!c.sira.some((x) => x.startsWith('kabuk')), c.sira.join(','));
+});
+
+test('Z2 kabuk adımı fırlatırsa iş DÜŞMEZ (log + zincir sürer)', async () => {
+  const pb = panelBag();
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', buildZip()), job: r2Kur, pb, env: { EMPP_SET_KABUK_TAZELE: '1' },
+    adim: { kabukTazele: async () => { throw new Error('beklenmedik'); } },
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.match(r.loglar, /\[set-kabuk\] beklenmeyen hata, kabuk tazelenmedi/);
+  assert.ok(r.kayit.parcalar.length > 0, 'R2\'ye yine yazıldı');
 });
