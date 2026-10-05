@@ -41,6 +41,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs-extra');
 const kabuk = require('./set-kabuk');
+const { a1DuzeniMi } = require('./a1-duzen');
 const { kapiAcikMi } = require('./platform-kapisi');
 
 const DOSYA_ADI = 'empp-set.json';
@@ -193,7 +194,9 @@ function haritaUret(g = {}) {
     ? { deger: String(g.taban.taban || ''), kaynak: g.taban.kaynak || 'verildi' }
     : { deger: String(g.taban || ''), kaynak: 'verildi' };
 
-  const kabukListesi = kabukDosyalariTopla(g.kabukDosyalari);
+  // A1 (tek motorlu set): `kapak/` kabuk, `assets/`+`classlibraries/` kitap (`set-kabuk.js`).
+  const a1 = g.duzen === 'a1';
+  const kabukListesi = kabuk.kabukDosyalariSuz(g.kabukDosyalari, { a1 });
   const kitaplar = kitapDizinleriTopla(g.kitapDizinleri);
   // Kabuk tanımının kapsamadığı kök dizinler — SESSİZ değil, YAZILI kör nokta.
   const kapsamDisi = [...new Set((Array.isArray(g.kapsamDisiDallar) ? g.kapsamDisiDallar : [])
@@ -212,7 +215,8 @@ function haritaUret(g = {}) {
     taban: t.deger,
     tabanKaynagi: t.kaynak,
     damga: damgaCoz(g.damga),
-    kabukTanimi: kabuk.IMZA,
+    kabukTanimi: a1 ? kabuk.IMZA_A1 : kabuk.IMZA,
+    ...(a1 ? { duzen: 'a1' } : {}),
     kabukDosyaSayisi: kabukListesi.length,
     kabukDosyalari: kabukListesi,
     kapsamDisiDallar: kapsamDisi,
@@ -247,7 +251,7 @@ function surumCoz(ham) {
  * kitaplar 11.034 dosya; kabuk 459. Tam ağaç taraması paketlemeye dakikalar eklerdi).
  * SEMBOLİK BAĞ İZLENMEZ: bağ, ağaç dışına çıkan bir kabuk girdisi üretebilirdi.
  */
-async function kabukDosyalariBul(paketKoku) {
+async function kabukDosyalariBul(paketKoku, secenek = {}) {
   const liste = [];
   let kokGirisleri;
   try { kokGirisleri = await fs.readdir(paketKoku, { withFileTypes: true }); }
@@ -255,7 +259,7 @@ async function kabukDosyalariBul(paketKoku) {
 
   for (const g of kokGirisleri) {
     if (g.isSymbolicLink() || !g.isFile()) continue;
-    if (kabuk.kabukYoluMu(g.name)) liste.push(g.name);
+    if (kabuk.kabukYoluMu(g.name, secenek)) liste.push(g.name);
   }
 
   async function in_(mutlak, goreli) {
@@ -266,11 +270,12 @@ async function kabukDosyalariBul(paketKoku) {
       if (g.isSymbolicLink()) continue;
       const alt = `${goreli}/${g.name}`;
       if (g.isDirectory()) await in_(path.join(mutlak, g.name), alt);
-      else if (g.isFile() && kabuk.kabukYoluMu(alt)) liste.push(alt);
+      else if (g.isFile() && kabuk.kabukYoluMu(alt, secenek)) liste.push(alt);
     }
   }
 
-  for (const dizin of kabuk.KABUK_DIZINLERI) {
+  const dizinler = [...kabuk.KABUK_DIZINLERI, ...(secenek.a1 ? kabuk.A1_KABUK_DIZINLERI : [])];
+  for (const dizin of dizinler) {
     const giris = kokGirisleri.find((g) => g.name === dizin);
     if (!giris || giris.isSymbolicLink() || !giris.isDirectory()) continue;
     await in_(path.join(paketKoku, dizin), dizin);
@@ -285,13 +290,13 @@ async function kabukDosyalariBul(paketKoku) {
  * NEDEN: beyaz listenin kör noktası budur. Yayıncı yarın `fonts/` eklerse kabuk
  * onu kaçırır; sessizce kaçırmasın diye pakete YAZILIR ve kapı FAIL eder.
  */
-async function kapsamDisiDallariBul(paketKoku) {
+async function kapsamDisiDallariBul(paketKoku, secenek = {}) {
   let girisler;
   try { girisler = await fs.readdir(paketKoku, { withFileTypes: true }); }
   catch { return []; }
   const dizinler = girisler.filter((g) => g.isDirectory() && !g.isSymbolicLink())
     .map((g) => g.name);
-  return kabuk.dallariSinifla(dizinler).bilinmeyen;
+  return kabuk.dallariSinifla(dizinler, secenek).bilinmeyen;
 }
 
 /** Paket kökündeki `^book\d+$` dizinlerini bulur (I/O). İçeriğe BAKILMAZ. */
@@ -313,9 +318,11 @@ async function paketeYaz(paketKoku, secenekler = {}) {
     imzaAcikAnahtari = null, surum = null,
   } = secenekler;
 
-  const kabukListesi = await kabukDosyalariBul(paketKoku);
+  // A1 düzeni (kapak/index.html işaretli + kök menü): kabuk tanımı A1 seçeneğiyle uygulanır.
+  const a1 = a1DuzeniMi(paketKoku);
+  const kabukListesi = await kabukDosyalariBul(paketKoku, { a1 });
   const kitaplar = await kitapDizinleriBul(paketKoku);
-  const kapsamDisi = await kapsamDisiDallariBul(paketKoku);
+  const kapsamDisi = await kapsamDisiDallariBul(paketKoku, { a1 });
   const harita = haritaUret({
     setKimligi,
     taban: tabanCoz(env, guncellemeTabani),
@@ -324,6 +331,7 @@ async function paketeYaz(paketKoku, secenekler = {}) {
     kabukDosyalari: kabukListesi,
     kitapDizinleri: kitaplar,
     kapsamDisiDallar: kapsamDisi,
+    duzen: a1 ? 'a1' : null,
     imzaAcikAnahtari,
     env,
     surum,

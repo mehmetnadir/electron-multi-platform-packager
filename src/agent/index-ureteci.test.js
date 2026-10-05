@@ -179,6 +179,13 @@ test('webzMenuDosyalari: kalıbın eski kitapları TAŞINMAZ; yama+ayar+tanım+b
   assert.equal(out.get('index.html').toString(), '<title>Yeni</title>');
 });
 
+test('webzMenuDosyalari A1 kapısı: kabuk tek motor menüsü (kapak alanı) taşıyorsa bookN menüsüyle YAZILMAZ', () => {
+  const ayar = { books: { 'kapak-501': { assetId: '501', kapak: '501', path: '.', title: 'A' } }, setTitle: 'S' };
+  assert.throws(() => U.webzMenuDosyalari({
+    yama: `window.__setSettings = ${JSON.stringify(ayar)};`, ayar: JSON.stringify(ayar), tanim: null, index: '<title>S</title>',
+  }, { setAdi: 'S', girdiler: [{ dizin: 'book1', id: '501', ad: 'A', grup: '' }] }), (e) => e.kod === 'kalip' && /A1/.test(e.message));
+});
+
 // ─── Uçtan uca (yerel) ──────────────────────────────────────────────────────────────────────
 
 test('uret tek-motor: kök motor + tüm kapaklı kök menü + assets/<id>; yazma kapısından GEÇER', async () => {

@@ -53,7 +53,7 @@
  * anlık görüntüsü ise workingPath İLK DOLDURULDUĞUNDA (kopyadan hemen sonra, HİÇBİR
  * yamadan önce) alınır — `packagingService.js`'te bu modülün `oku()`'su ile.
  *
- * BAĞIMLILIK KURALI: yalnız Node stdlib + `./set-menu` (motor kopyası imzası TEK
+ * BAĞIMLILIK KURALI: yalnız Node stdlib + `./set-menu` + `./a1-duzen` (motor kopyası imzası ve A1 düzeni TEK
  * kaynaktan gelsin — kopya tanım YASAK, bkz. `set-kabuk.js` aynı ilke).
  *
  * BOZARSAN: `kok-index-denetimi.test.js`'teki dört senaryo (sadık kaynak, ezilmiş kaynak,
@@ -63,6 +63,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const { motorKopyasiMi, MENU_ISARETI, webZKabukIndexiMi } = require('./set-menu');
+const A1 = require('./a1-duzen');
 
 /**
  * Paketleyicinin köke bilerek enjekte ettiği `<script src="empp-*.js"></script>` etiketleri.
@@ -190,9 +191,24 @@ function normalle(html) {
  *   (kaynak yok/motor kopyasıydı, K17 menüsü doğru biçimde üretildi) | 'yok' (ne
  *   kaynakta ne pakette kök index var — denetim dışı) | 'ezilmis' (ARIZA).
  */
-function karsilastir(kaynakHtml, guncelHtml) {
+function karsilastir(kaynakHtml, guncelHtml, ek = {}) {
   const kNorm = normalle(kaynakHtml);
   const gNorm = normalle(guncelHtml);
+
+  // A1 (2026-10-05, 11-12 tek motorlu set; a1-duzen.js): kök = Üretim Masası sf425 kabuğu, motor =
+  // kapak/index.html. Motor sayfası ezilmiş/başlıksızsa (base yok, shim önce, motor değil) paket
+  // DÜŞER — kök kabuk doğru olsa bile kitaplar açılmaz. Kapak sayfası doğruysa ve kök Web-Z kabuğuysa
+  // (ya da kaynakla aynıysa) geçerli A1 düzenidir.
+  if (ek && ek.a1KapakHtml !== undefined) {
+    const ihlal = A1.kapakDenetle(ek.a1KapakHtml);
+    if (ihlal.length) {
+      return { sonuc: 'a1-bozuk', detay: `A1 motor sayfası geçersiz: ${ihlal.join('; ')}` };
+    }
+    if (gNorm !== null && webZKabukIndexiMi(guncelHtml) && !motorKopyasiMi(guncelHtml)) {
+      return { sonuc: 'a1-kabuk', detay: `A1 düzeni: kök sf425 kabuğu, motor ${A1.A1_MOTOR_SAYFASI} (başlık doğru)` };
+    }
+    return { sonuc: 'a1-bozuk', detay: `A1 düzeni: ${A1.A1_MOTOR_SAYFASI} var ama kök index sf425 kabuğu değil` };
+  }
 
   if (kNorm === null && gNorm === null) {
     return { sonuc: 'yok', detay: 'ne kaynakta ne pakette kök index.html var — denetim dışı' };
@@ -262,7 +278,7 @@ function acikMi(env) {
   return modOku(env) !== 'kapali';
 }
 
-const GECERLI_SONUCLAR = new Set(['sadik', 'uretilen-menu-beklenir', 'yok']);
+const GECERLI_SONUCLAR = new Set(['sadik', 'uretilen-menu-beklenir', 'yok', 'a1-kabuk']);
 
 /**
  * Paketleme çağrı noktası. Saf `karsilastir`i sarar; moda göre uyarır/düşürür.
@@ -280,7 +296,7 @@ async function denetle(kaynakHtml, guncelHtml, secenekler = {}) {
   const log = secenekler.log || (() => {});
   if (mod === 'kapali') return { mod, uygulandi: false, sonuc: null };
 
-  const sonuc = karsilastir(kaynakHtml, guncelHtml);
+  const sonuc = karsilastir(kaynakHtml, guncelHtml, secenekler.ek || {});
   const gecerli = GECERLI_SONUCLAR.has(sonuc.sonuc);
   const ozet = `🔍 Kök index denetimi (${mod}): ${sonuc.sonuc} — ${sonuc.detay}`;
   log(ozet);
@@ -335,7 +351,15 @@ async function kaynakSnapshotAl(workingPath) {
  */
 async function paketeUygula(workingPath, kaynakHtml, secenekler = {}) {
   const guncelHtml = await kokIndexOku(workingPath);
-  return denetle(kaynakHtml, guncelHtml, secenekler);
+  // A1 adayı: kök menü + kapak/index.html. İşaret aranmaz — işaretsiz (başlığı kaybolmuş) kapak
+  // sayfası da denetime girer ve `a1-bozuk` olur (a1DuzeniMi işaret ister, burada kullanılmaz).
+  const ek = { ...(secenekler.ek || {}) };
+  const kapakYolu = path.join(workingPath, ...A1.A1_MOTOR_SAYFASI.split('/'));
+  try {
+    await fs.access(path.join(workingPath, 'classlibraries', 'ImWin32.dll'));
+    ek.a1KapakHtml = await fs.readFile(kapakYolu, 'utf8');
+  } catch (_) { /* A1 değil: kök menü ya da kapak sayfası yok */ }
+  return denetle(kaynakHtml, guncelHtml, { ...secenekler, ek });
 }
 
 module.exports = {

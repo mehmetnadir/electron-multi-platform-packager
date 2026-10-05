@@ -199,3 +199,27 @@ test('T8 · UÇTAN UCA: açık resources/app ağacı agactanTopla ile ölçülü
   assert.match(kotu.detay, /kitap içeriği EKSİK: 1\/3/);
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test('T-A1 · A1 düzeni (duzen=a1, kapak/index.html kabukta): PASS; A1 seçeneksiz okunsa sızma olurdu; bookN ağacında duzen=a1 FAIL', () => {
+  const a1 = harita({
+    duzen: 'a1', kabukTanimi: K.SET_KABUK.IMZA_A1, kapsamDisiDallar: [], kabukDosyaSayisi: 3,
+    kabukDosyalari: ['abc.main.js', 'index.html', 'kapak/index.html'],
+  });
+  const m = K.maddeSetGuncelleme(girdi({ harita: a1 }));
+  assert.strictEqual(m.durum, K.PASS, m.detay);
+  assert.match(m.detay, /C1\) sızma yok/);
+  assert.match(m.detay, /C3\) tanım aynı/);
+  // Ö1: A1 haritası bookN imzası taşırsa (ya da tersi) C3 FAIL.
+  const yanlisImza = K.maddeSetGuncelleme(girdi({ harita: { ...a1, kabukTanimi: K.SET_KABUK_IMZASI } }));
+  assert.strictEqual(yanlisImza.durum, K.FAIL);
+  assert.match(yanlisImza.detay, /C3\) TANIM SAPMASI/);
+  const seceneksiz = K.maddeSetGuncelleme(girdi({ harita: { ...a1, duzen: undefined } }));
+  assert.strictEqual(seceneksiz.durum, K.FAIL);
+  assert.match(seceneksiz.detay, /C1\) KABUK DIŞI GİRDİ SIZMIŞ.*kapak\/index\.html/);
+  const bookN = K.maddeSetGuncelleme(girdi({
+    harita: { ...a1, kitapDizinleri: ['book1'], kitapSayisi: 1 },
+    tekMotor: kanit({ yol: { idler: [], ek: ['book1/index.html'] }, menuHam: null }),
+  }));
+  assert.strictEqual(bookN.durum, K.FAIL);
+  assert.match(bookN.detay, /duzen=a1 ama paket tek-motor düzeninde değil/);
+});

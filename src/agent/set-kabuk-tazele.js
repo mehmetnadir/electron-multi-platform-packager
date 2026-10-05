@@ -14,8 +14,12 @@
  *
  * NE YAPAR (iş kopyası `build.zip`; arşiv/önbellek zip'ine DOKUNULMAZ):
  *   1. Uygunluk: kökte `bookN/index.html` düzeni VE kök index sf425 kabuğu ya da motor kopyası.
- *      Tek motorlu kök (11-12: bookN yok, kök `classlibraries/ImWin32.dll`) ATLANIR — bookN'e
- *      geçiş her kitapta ayrı aktivasyon kodu sordurur (pilot §3b).
+ *      Tek motorlu kök (11-12: bookN yok, kök `classlibraries/ImWin32.dll`) `a1` KİPİNE girer
+ *      (bookN'e geçiş her kitapta ayrı aktivasyon kodu sorduruyordu, pilot §3b). A1 (05.10,
+ *      ölçüm `arastirma/set-kabuk-0510/a1-deneme-sonuc.md`, arayüz `a1-arayuz.md`): kök motor
+ *      `index.html` → `kapak/index.html` (`../packaging/a1-duzen` başlığıyla), kök `index.html`
+ *      = ikilinin sf425 kabuğu (`--kip tek-motor`, kart `kapak/index.html?kapak=<ID>&defaultPageNo=N`).
+ *      İkili kipi tanımazsa / kapı reddederse A1 ATLANIR, iş kopyası aynen kalır (fail-closed).
  *   2. Web-Z `go/<kisaKod>/web-stream/config/settings.json` + kapaklar (`images/<anahtar>.png`),
  *      tarayıcı UA ile (UA'sız 403).
  *   3. Kimlik eşlemesi: yazma kapısının kendi çözümü (a/a2/b/c — assetId dizini, ImWin32 kapak
@@ -48,8 +52,16 @@ const setEk = require('./set-uyelik-ek');
 const uretecKaynak = require('./uretec-kaynak');
 const { webZKabukIndexiMi } = require('../packaging/set-menu-bicim');
 const { motorKopyasiMi } = require('../packaging/set-menu');
+const A1 = require('../packaging/a1-duzen');
 
 const ISARET = '[set-kabuk]';
+/** İkili sözleşmesi: tek motorlu sette `--kip tek-motor` (a1-arayuz.md). */
+const KIP_TEK_MOTOR = 'tek-motor';
+/** A1 kabuğunun kart bağlantısı imzası (language-set.js `kitapAcmaAdresi`, Swift 199bac1b). */
+const A1_KART_IMZASI = 'kapak/index.html?kapak=';
+/** A1 ikilisinin gölge kökte okuduğu girdiler (Swift 49bf319f): menü + motor sayfası + assets/<id>. */
+const A1_MENU = 'classlibraries/ImWin32.dll';
+const kapakKlasoru = (id) => `kapak-${id}`;
 const WEBZ_KOKU = 'https://webz.ydspublishing.com';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
   + 'Chrome/126.0 Safari/537.36';
@@ -86,7 +98,10 @@ function onEkBul(adlar) {
 /**
  * Build düzeni uygun mu. SAF.
  * @param {{adlar: Set<string>, kokIndexHtml: string|null}} o  adlar önek SIYRILMIŞ
- * @returns {{uygun: boolean, neden: string|null, bookNler: string[], kokTuru: string|null}}
+ * A1 kipinde ek alanlar: `kip: 'a1'`, `motorKaynagi` (`index.html` = ilk dönüşüm,
+ * `kapak/index.html` = zaten A1; motor sayfası yeniden yazılmaz).
+ * @returns {{uygun: boolean, neden: string|null, bookNler: string[], kokTuru: string|null,
+ *   kip?: 'a1', motorKaynagi?: string}}
  */
 function uygunluk({ adlar, kokIndexHtml }) {
   const bookNler = [...new Set([...adlar].map((a) => a.split('/')[0]).filter(bookNMi))]
@@ -94,7 +109,17 @@ function uygunluk({ adlar, kokIndexHtml }) {
     .sort((a, b) => sayi(a) - sayi(b));
   if (!bookNler.length) {
     if (adlar.has('classlibraries/ImWin32.dll')) {
-      return { uygun: false, neden: 'tek-motor: aktivasyon tasarımı bekliyor', bookNler, kokTuru: 'tek-motor' };
+      const html = kokIndexHtml == null ? null : String(kokIndexHtml);
+      if (adlar.has(A1.A1_MOTOR_SAYFASI)) {
+        if (html != null && webZKabukIndexiMi(html) && !motorKopyasiMi(html)) {
+          return { uygun: true, neden: null, bookNler, kokTuru: 'a1', kip: 'a1', motorKaynagi: A1.A1_MOTOR_SAYFASI };
+        }
+        return { uygun: false, neden: `tek-motor: ${A1.A1_MOTOR_SAYFASI} var ama kök index sf425 kabuğu değil`, bookNler, kokTuru: 'tek-motor' };
+      }
+      if (html != null && motorKopyasiMi(html)) {
+        return { uygun: true, neden: null, bookNler, kokTuru: 'tek-motor', kip: 'a1', motorKaynagi: 'index.html' };
+      }
+      return { uygun: false, neden: 'tek-motor: kök index motor sayfası değil (dokunulmaz)', bookNler, kokTuru: 'tek-motor' };
     }
     return { uygun: false, neden: 'bookN düzeni yok', bookNler, kokTuru: null };
   }
@@ -137,15 +162,18 @@ function webzListesi(ayar) {
 /**
  * Web-Z listesi + yazma kapısı kimlik çözümü → Swift aracının eşleme dosyası. SAF.
  * @param {{liste: ReturnType<typeof webzListesi>, kapi: {kitaplar: Array<{n:number,id:string|null}>,
- *   webzVarliklari?: Array<{n:number,id:string}>}, setAdi: string}} o
+ *   webzVarliklari?: Array<{n:number,id:string}>}, setAdi: string, kip?: string}} o
+ *   `kip: 'tek-motor'` (A1): klasör `bookN` değil `kapak-<id>` (menü anahtarı); her kitap `kapak`
+ *   alanını (= kök ImWin32 kapak kimliği) taşır — ikili kart bağlantısını bununla kurar.
  * @returns {{girdi: {setTitle:string, kitaplar: object[]}|null, eksik: string[], notlar: string[]}}
  */
-function eslemeKur({ liste, kapi, setAdi }) {
+function eslemeKur({ liste, kapi, setAdi, kip = null }) {
+  const tekMotor = kip === KIP_TEK_MOTOR;
   // assetId → klasör. Aynı kimlik İKİ klasörde ise hangisinin açılacağı belirsiz (Swift ilkini, sözlük
   // sonuncuyu alırdı) → eşleme kurulmaz, adım atlanır (kart yanlış kitabı açmasın).
   const sahipler = new Map();
   const ekle = (id, n) => {
-    const k = `book${n}`;
+    const k = tekMotor ? kapakKlasoru(id) : `book${n}`;
     if (!sahipler.has(id)) sahipler.set(id, new Set());
     sahipler.get(id).add(k);
   };
@@ -178,8 +206,8 @@ function eslemeKur({ liste, kapi, setAdi }) {
     alinan.add(k);
     if (k !== g.anahtar) notlar.push(`${g.anahtar} → ${k} (assetId ${g.assetId})`);
     kitaplar.push({
-      klasor: k, assetId: g.assetId, title: g.title, contentType: g.contentType,
-      ...(g.group ? { group: g.group } : {}), anahtar: g.anahtar,
+      klasor: k, ...(tekMotor ? { kapak: g.assetId } : {}), assetId: g.assetId, title: g.title,
+      contentType: g.contentType, ...(g.group ? { group: g.group } : {}), anahtar: g.anahtar,
     });
   }
   if (eksik.length) return { girdi: null, eksik, notlar };
@@ -215,14 +243,33 @@ function kabukDosyasiMi(yol, klasorler) {
 /**
  * Yazım sonrası kapı (merkez dizin önce/sonra + kabuk metinleri). SAF.
  * @param {{once: Map, sonra: Map, onEk: string, yazilan: string[], beklenen: {kitaplar: object[]},
- *   metin: {dil: string|null, yama: string|null, ayar: string|null, index: string|null}}} o
+ *   metin: {dil: string|null, yama: string|null, ayar: string|null, index: string|null,
+ *   kapak?: string|null}, kip?: 'a1'|null, motorKaynagi?: string|null}} o
+ *   A1 (`kip: 'a1'`): `kapak/index.html` yalnız paketleyici (bu adım) yazar; A1 başlığı doğru ve
+ *   başlık çıkınca kaynak motor sayfasıyla (`motorKaynagi`, ilk dönüşümde) bayt-aynı olmalı;
+ *   dil betiği kart imzası (`kapak/index.html?kapak=`) taşır; menüde her kitap `kapak` = assetId,
+ *   `path` = `.` (BookContent.xml kökteki `assets/<id>/data/`'da aranır).
  * @returns {string[]} ihlal satırları
  */
-function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin }) {
+function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin, kip = null, motorKaynagi = null }) {
   const ihlal = [];
+  const a1 = kip === 'a1';
   // Yazılan her kök dosyası kabuğun bilinen dosyası olmalı (electron.js, kök assets/** vb. → RED).
   const klasorler = new Set((beklenen.kitaplar || []).map((k) => k.klasor));
-  for (const y of yazilan) if (!kabukDosyasiMi(y, klasorler)) ihlal.push(`beklenmeyen kabuk dosyası: ${y}`);
+  for (const y of yazilan) {
+    if (a1 && y === A1.A1_MOTOR_SAYFASI) continue;
+    if (!kabukDosyasiMi(y, klasorler)) ihlal.push(`beklenmeyen kabuk dosyası: ${y}`);
+  }
+  if (a1) {
+    const kapak = metin.kapak == null ? null : String(metin.kapak);
+    for (const i of A1.kapakDenetle(kapak)) ihlal.push(`A1: ${i}`);
+    if (kapak != null && motorKaynagi != null && A1.baslikCikar(kapak) !== String(motorKaynagi)) {
+      ihlal.push(`A1: ${A1.A1_MOTOR_SAYFASI} başlık dışında kaynak motor sayfasından farklı`);
+    }
+    if (metin.dil && !metin.dil.includes(A1_KART_IMZASI)) {
+      ihlal.push(`A1: ${DIL_BETIGI} kart imzası yok (${A1_KART_IMZASI}) — ikili tek-motor kipini uygulamadı`);
+    }
+  }
   const yazilanKume = new Set(yazilan.map((y) => `${onEk}${y}`));
   for (const [ad, g] of once) {
     if (g.dizin) continue;
@@ -273,6 +320,10 @@ function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin }) {
     if (String(b.assetId) !== String(k.assetId)) ihlal.push(`${k.klasor}: assetId ${b.assetId} ≠ Web-Z ${k.assetId}`);
     if (String(b.contentType || 'book') !== String(k.contentType || 'book')) {
       ihlal.push(`${k.klasor}: contentType ${b.contentType} ≠ Web-Z ${k.contentType}`);
+    }
+    if (a1) {
+      if (String(b.kapak) !== String(k.assetId)) ihlal.push(`A1: ${k.klasor}: kapak ${b.kapak} ≠ assetId ${k.assetId}`);
+      if (b.path !== '.') ihlal.push(`A1: ${k.klasor}: path ${b.path} ≠ .`);
     }
   }
   return ihlal;
@@ -375,16 +426,20 @@ async function kabukTazele(o) {
   const u = uygunluk({ adlar, kokIndexHtml: eskiIndex });
   if (!u.uygun) return bitir(u.neden, { kokTuru: u.kokTuru });
   rapor.kokTuru = u.kokTuru;
+  const a1 = u.kip === 'a1';
+  if (a1) rapor.kip = 'a1';
+  // A1 yolunda her ATLANDI nedeni "A1 atlandı" ile başlar (log'da eski davranışın korunduğu görünsün).
+  const atla = (neden, ek) => bitir(a1 ? `A1 atlandı — ${neden} (eski düzen korundu)` : neden, ek);
 
   // 2. Web-Z ayarı.
   const taban = `${webzKoku}/go/${kod}/web-stream`;
   let ayar;
   try {
     const r = await getir(`${taban}/config/settings.json`);
-    if (r.status !== 200) return bitir(`Web-Z settings.json HTTP ${r.status}`);
+    if (r.status !== 200) return atla(`Web-Z settings.json HTTP ${r.status}`);
     ayar = JSON.parse(r.govde.toString('utf8'));
   } catch (e) {
-    return bitir(`Web-Z settings.json alınamadı: ${String(e && e.message || e).slice(0, 120)}`);
+    return atla(`Web-Z settings.json alınamadı: ${String(e && e.message || e).slice(0, 120)}`);
   }
   const liste = webzListesi(ayar);
   if (!liste.some((g) => !g.link)) return bitir('Web-Z listesinde kitap yok');
@@ -394,10 +449,17 @@ async function kabukTazele(o) {
   try {
     kapi = K.yazmaKapisi({ zipYolu: o.zip, setListesi: uretecKaynak.ayarlardanListe(ayar) || '' });
   } catch (e) {
-    return bitir(`kimlik çözümü: ${String(e && e.message || e).slice(0, 120)}`);
+    return atla(`kimlik çözümü: ${String(e && e.message || e).slice(0, 120)}`);
   }
-  const es = eslemeKur({ liste, kapi, setAdi: String(ayar.setTitle || '') });
-  if (!es.girdi) return bitir(`eşlenemeyen Web-Z üyesi: ${es.eksik.join('; ')}`, { notlar: es.notlar });
+  // K1 (inceleme 05.10): tek kitaplı İmpark paketi de kök ImWin32 + motor index taşır; A1 yalnız
+  // ≥2 kapaklı tek motorlu settir (yazma kapısı `kokMenuKapaklari` ve Windows kapısı `tekMotorMu`
+  // ile aynı eşik). Altında A1'e çevirmek tek kartlı kabuk üretir → atla.
+  if (a1) {
+    const idli = (kapi.kitaplar || []).filter((k) => k && k.id != null && /^\d+$/.test(String(k.id)));
+    if (idli.length < 2) return atla(`tek kitaplı paket (${idli.length} kapak) — A1 yalnız ≥2 kapaklı tek motorlu set`);
+  }
+  const es = eslemeKur({ liste, kapi, setAdi: String(ayar.setTitle || ''), kip: a1 ? KIP_TEK_MOTOR : null });
+  if (!es.girdi) return atla(`eşlenemeyen Web-Z üyesi: ${es.eksik.join('; ')}`, { notlar: es.notlar });
   rapor.notlar = es.notlar;
   for (const n of es.notlar) log(`${ISARET} eşleme: ${n}`);
 
@@ -413,34 +475,107 @@ async function kabukTazele(o) {
       try {
         r = await getir(`${taban}/images/${encodeURIComponent(k.anahtar)}.png?a=${encodeURIComponent(k.assetId)}`);
       } catch (e) {
-        return bitir(`kapak alınamadı (${k.anahtar}): ${String(e && e.message || e).slice(0, 80)}`);
+        return atla(`kapak alınamadı (${k.anahtar}): ${String(e && e.message || e).slice(0, 80)}`);
       }
       if (!r || r.status !== 200 || !kapakGecerli(r.govde)) {
-        return bitir(`kapak geçersiz (${k.anahtar}): HTTP ${r && r.status}, ${r && r.govde ? r.govde.length : 0} bayt`);
+        return atla(`kapak geçersiz (${k.anahtar}): HTTP ${r && r.status}, ${r && r.govde ? r.govde.length : 0} bayt`);
       }
       await fsp.writeFile(path.join(kapakDizini, `kapak-${k.klasor}.png`), r.govde);
     }
     // 4b. Gölge kök: yalnız bookN/index.html taslakları (ikili klasör varlığını bundan ölçer).
+    //     A1 (Swift 49bf319f arayüzü): ikili kökte motor menüsünü (`classlibraries/ImWin32.dll`),
+    //     motor sayfasını (`kapak/index.html` — araç yoksa DURUR, bu yüzden ikiliden ÖNCE konur) ve
+    //     kitap başına `assets/<id>/` (+ başlık için `data/BookContent.xml`) okur. Kök `index.html`
+    //     gölgeye KONMAZ: araç onu `_eski/`'ye taşırdı; `_` önekli kök dizin paket dışıdır
+    //     (`kok-yedek-dizin-disla.js`) ve zip'e de yazılmaz (aşağıdaki süzgeç).
+    await fsp.mkdir(kok, { recursive: true });
     for (const d of u.bookNler) {
       await fsp.mkdir(path.join(kok, d), { recursive: true });
       await fsp.writeFile(path.join(kok, d, 'index.html'), '');
     }
+    /** A1 girdileri: göreli yol → konulan bayt (ikili DEĞİŞTİRMEMELİ; zip'e yazılmaz). */
+    const a1Girdi = new Map();
+    if (a1) {
+      const zipGirdi = (y) => {
+        const g = once.get(`${onEk}${y}`);
+        return g && !g.dizin ? M.zipGirdiOku(o.zip, g) : null;
+      };
+      let motorHtml;
+      if (u.motorKaynagi === 'index.html') {
+        try { motorHtml = Buffer.from(A1.baslikEkle(eskiIndex)); } catch (e) { return atla(String(e.message)); }
+      } else {
+        motorHtml = zipGirdi(A1.A1_MOTOR_SAYFASI);
+      }
+      const menu = zipGirdi(A1_MENU);
+      if (!motorHtml || !menu) return atla(`A1 girdisi okunamadı (${!menu ? A1_MENU : A1.A1_MOTOR_SAYFASI})`);
+      a1Girdi.set(A1.A1_MOTOR_SAYFASI, motorHtml);
+      a1Girdi.set(A1_MENU, menu);
+      for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
+        const id = String(k.kapak || k.assetId);
+        await fsp.mkdir(path.join(kok, 'assets', id), { recursive: true });
+        const bc = zipGirdi(`assets/${id}/data/BookContent.xml`);
+        if (bc) a1Girdi.set(`assets/${id}/data/BookContent.xml`, bc);
+      }
+      for (const [y, v] of a1Girdi) {
+        await fsp.mkdir(path.dirname(path.join(kok, y)), { recursive: true });
+        await fsp.writeFile(path.join(kok, y), v);
+      }
+    }
     const girdiYolu = path.join(sahne, 'girdi.json');
-    const girdi = { ...es.girdi, kitaplar: es.girdi.kitaplar.map(({ anahtar, ...k }) => k) };
+    const girdi = {
+      ...(a1 ? { kip: KIP_TEK_MOTOR, motorSayfasi: A1.A1_MOTOR_SAYFASI } : {}),
+      ...es.girdi, kitaplar: es.girdi.kitaplar.map(({ anahtar, ...k }) => k),
+    };
     await fsp.writeFile(girdiYolu, JSON.stringify(girdi, null, 2));
-    const r = await ikiliKostur(ikili, [kok, girdiYolu, kapakDizini], { zamanAsimiMs: o.aracSuresiMs || ARAC_SURESI_MS });
+    const argumanlar = a1 ? ['--kip', KIP_TEK_MOTOR, kok, girdiYolu, kapakDizini] : [kok, girdiYolu, kapakDizini];
+    const r = await ikiliKostur(ikili, argumanlar, { zamanAsimiMs: o.aracSuresiMs || ARAC_SURESI_MS });
     if (r.code !== 0) {
-      return bitir(`webz-kabuk-uret çıkış ${r.code}: ${String(r.stderr || '').trim().slice(-200)}`);
+      const ham = String(r.stderr || '').trim().slice(-200);
+      // Eski ikili `--kip`i tanımaz (kullanım satırı / çıkış ≠ 0): A1 atlanır, iş kopyası aynen kalır.
+      return atla(a1 ? `webz-kabuk-uret tek-motor kipini tanımıyor ya da başarısız (çıkış ${r.code}): ${ham}`
+        : `webz-kabuk-uret çıkış ${r.code}: ${ham}`);
     }
     const hepsi = await dosyalariTopla(kok);
     // İkili bookN/ altına HİÇBİR şey yazmamalı (taslak index.html boş kalmalı): yazdıysa araç yanlış
     // köke yazıyordur — çıktı güvenilmez, adım atlanır (bookN içeriği zaten zip'e gitmez).
     const bookNYazilan = hepsi.filter((y) => bookNMi(y.split('/')[0])
       && !(y === `${y.split('/')[0]}/index.html` && fs.statSync(path.join(kok, y)).size === 0));
-    if (bookNYazilan.length) return bitir(`ikili bookN altına yazdı: ${bookNYazilan.slice(0, 3).join(', ')}`);
-    const yazilan = hepsi.filter((y) => !bookNMi(y.split('/')[0]) && !y.startsWith('_eski/')).sort();
+    if (bookNYazilan.length) return atla(`ikili bookN altına yazdı: ${bookNYazilan.slice(0, 3).join(', ')}`);
+    // A1: motor sayfasını (kapak/**) ve diğer girdileri YALNIZ bu adım yazar; ikili değiştirdiyse ya da
+    // kapak/ altına yeni dosya koyduysa çıktı güvenilmez.
+    if (a1) {
+      const bozulan = [...a1Girdi].filter(([y, v]) => {
+        try { return !fs.readFileSync(path.join(kok, y)).equals(v); } catch (_) { return true; }
+      }).map(([y]) => y);
+      if (bozulan.length) return atla(`ikili girdi dosyasını değiştirdi: ${bozulan.slice(0, 3).join(', ')}`);
+    }
+    const kapakYazilan = hepsi.filter((y) => y.split('/')[0] === 'kapak' && !a1Girdi.has(y));
+    if (kapakYazilan.length) return atla(`ikili kapak/ altına yazdı: ${kapakYazilan.slice(0, 3).join(', ')}`);
+    // `_` önekli kök dizin (araç `_eski/`'ye arşivler) ve A1 girdileri zip'e YAZILMAZ.
+    const yazilan = hepsi.filter((y) => !bookNMi(y.split('/')[0]) && !/^_/.test(y.split('/')[0])
+      && !a1Girdi.has(y)).sort();
     if (!yazilan.includes('index.html') || !yazilan.includes(DIL_BETIGI)) {
-      return bitir(`ikili kabuk yazmadı (${yazilan.length} dosya)`);
+      return atla(`ikili kabuk yazmadı (${yazilan.length} dosya)`);
+    }
+    // 4b'. A1 ilk dönüşüm: kökteki motor index.html → kapak/index.html (A1 başlığıyla). Zaten A1
+    //      ise (motor kapak/index.html'de) motor sayfasına dokunulmaz.
+    //      Dosya gölgede ikiliden önce kondu (4b); burada yalnız zip'e yazılacaklara eklenir.
+    // Çakışma kapısı (her A1 koşusu): ikili yalnız gölge kökü görür, motor kökünü GÖRMEZ.
+    //   · ilk dönüşüm: kökte zaten bulunan dosyayı kabuk dosyası ezecekse (index.html hariç — o
+    //     kapak/'a taşındı);
+    //   · her koşu (k3, "zaten A1" dahil): motor sayfasının (`kapak/index.html`, `<base href="../">`
+    //     ile kök-göreli) yerel başvurusunu kabuk dosyası ezecekse
+    //   motor bozulur → atla, iş kopyası aynen kalır.
+    if (a1) {
+      const ilk = u.motorKaynagi === 'index.html';
+      const motorRef = new Set(K.indexYerelReferanslari(a1Girdi.get(A1.A1_MOTOR_SAYFASI).toString('utf8')));
+      const cakisan = yazilan.filter((y) => y !== 'index.html'
+        && ((ilk && once.has(`${onEk}${y}`)) || motorRef.has(y)));
+      if (cakisan.length) return atla(`kabuk dosyası motor dosyasıyla çakışıyor: ${cakisan.slice(0, 3).join(', ')}`);
+    }
+    if (a1 && u.motorKaynagi === 'index.html') {
+      yazilan.push(A1.A1_MOTOR_SAYFASI);
+      yazilan.sort();
     }
 
     // 4c. Değişmezlik: üretilen dosyalar zip'tekiyle aynıysa yazılmaz (aynı kabuk her r2-kur'da yeni
@@ -471,19 +606,22 @@ async function kabukTazele(o) {
       girdiler = yazilan.map((y) => `${onEk}${y}`);
     }
     const z = await komut('zip', ['-q', '-D', '-X', '-n', M.SIKISIK_UZANTILAR, path.resolve(aday), ...girdiler], { cwd });
-    if (z.code !== 0) return bitir(`zip yazılamadı (${z.code}): ${String(z.stderr).slice(-200)}`);
+    if (z.code !== 0) return atla(`zip yazılamadı (${z.code}): ${String(z.stderr).slice(-200)}`);
     const sonra = M.zipDizini(aday);
     const ihlal = kapiDenetle({
       once, sonra, onEk, yazilan, beklenen: girdi,
+      kip: a1 ? 'a1' : null,
+      motorKaynagi: a1 && u.motorKaynagi === 'index.html' ? eskiIndex : null,
       metin: {
         dil: metinAl(aday, sonra, `${onEk}${DIL_BETIGI}`),
         yama: metinAl(aday, sonra, `${onEk}${YAMA}`),
         ayar: metinAl(aday, sonra, `${onEk}${AYAR}`),
         index: metinAl(aday, sonra, `${onEk}index.html`),
+        ...(a1 ? { kapak: metinAl(aday, sonra, `${onEk}${A1.A1_MOTOR_SAYFASI}`) } : {}),
       },
     });
     if (ihlal.length) {
-      return bitir(`kapı RED (${ihlal.length}; ilk: ${ihlal[0]}) — iş kopyası DEĞİŞMEDİ`, { ihlal });
+      return atla(`kapı RED (${ihlal.length}; ilk: ${ihlal[0]}) — iş kopyası DEĞİŞMEDİ`, { ihlal });
     }
     await fsp.rename(aday, o.zip);
     rapor.durum = 'uygulandi';
@@ -492,7 +630,7 @@ async function kabukTazele(o) {
       setAdi: girdi.setTitle,
     });
   } catch (e) {
-    return bitir(`beklenmeyen hata: ${String(e && e.message || e).slice(0, 200)} — iş kopyası DEĞİŞMEDİ`);
+    return atla(`beklenmeyen hata: ${String(e && e.message || e).slice(0, 200)} — iş kopyası DEĞİŞMEDİ`);
   } finally {
     await fsp.rm(aday, { force: true }).catch(() => {});
     await fsp.rm(sahne, { recursive: true, force: true }).catch(() => {});
@@ -501,5 +639,5 @@ async function kabukTazele(o) {
 
 module.exports = {
   ISARET, WEBZ_KOKU, IMZA, acik, ikiliYolu, onEkBul, uygunluk, webzListesi, eslemeKur, kapakGecerli,
-  kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele,
+  kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele, KIP_TEK_MOTOR, A1_KART_IMZASI,
 };

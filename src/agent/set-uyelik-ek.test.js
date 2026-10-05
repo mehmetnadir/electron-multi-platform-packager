@@ -481,3 +481,26 @@ test('45550 gerçek build: Worksheet linki menüye girer; Games (book5, Grade-6-
     assert.ok(yeniYama.includes(E.LINK_ISARET));
     assert.equal(out.has('set-menu.json'), false, 'link set-menu.json (kitap tanımı) değiştirmez');
   });
+
+// ─── A1 (tek motorlu set, 05.10) ────────────────────────────────────────────────────────────
+
+test('A1 kapısı: a1MenuMu yalnız dolu kapak alanında true', () => {
+  assert.equal(E.a1MenuMu({ book1: { assetId: '1' } }), false);
+  assert.equal(E.a1MenuMu({ book1: { assetId: '1', kapak: '' } }), false);
+  assert.equal(E.a1MenuMu(null), false);
+  assert.equal(E.a1MenuMu({ 'kapak-1': { assetId: '1', kapak: '1', path: '.' } }), true);
+});
+
+test('A1 kapısı: kökte kapak/index.html varsa üyelik eki UYGULANMAZ, zip BAYT-AYNI, İmpark sorulmaz', async () => {
+  const o = ortam({
+    degistir: (k) => {
+      fs.mkdirSync(path.join(k, 'kapak'));
+      fs.writeFileSync(path.join(k, 'kapak', 'index.html'), '<html></html>');
+    },
+  });
+  const once = dosyaMd5(o.zip);
+  const r = await E.setUyelikEki({ ...o.ortak, liste: CANLI_LISTE });
+  assert.match(r.sonuc, /^A1 tek motorlu set/);
+  assert.equal(dosyaMd5(o.zip), once);
+  assert.equal(o.sorular.length, 0);
+});

@@ -31,6 +31,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const { findSubBookDirs } = require('./sub-book-dirs');
+const { a1DuzeniMi } = require('./a1-duzen');
 
 const APP_CONFIG_NAME = 'app.config.js';
 // K8 (2026-09-09, Tudem kaniti): eskiden burada bookDirs ad deseniyle (`^book\d+$`)
@@ -94,37 +95,36 @@ async function ensureSetBookHomeButton(rootPath) {
   const bookDirs = await findSubBookDirs(rootPath, { maxDepth: 2 }).catch(() => []);
 
   if (bookDirs.length === 0) {
+    // A1 (2026-10-05, tek motorlu set): motor `kapak/index.html`, ayarı KÖK `app.config.js`. Ev
+    // düğmesi `oneBook` kipinde yalnız `setBook.enable` true iken görünür (motor 450.js @42520) ve
+    // kabuğa (kök index.html) döner — false kalırsa kullanıcı kitaptan çıkamaz.
+    if (a1DuzeniMi(rootPath)) return { isSet: true, a1: true, books: [await kitapYamala(rootPath, '.')] };
     return { isSet: false, books: [] };
   }
 
   const results = [];
-  for (const book of bookDirs) {
-    // K9e (2026-09-09, K9b/K9d ile AYNI desen) — NEDEN: bu döngü de try/catch'siz
-    // idi; bir kitabın app.config.js'i EACCES/ENOENT verirse TÜM fonksiyon
-    // (results dahil) çağırana fırlar, kalan alt-kitaplar setBook.enable=true
-    // yamasını hiç ALMAZ. Pratikte K9c (`ensureWritableTree`) bu adımdan ÖNCE
-    // çalıştığı için risk zaten düşük, ama savunma amaçlı (defense-in-depth,
-    // her öğe kendi hatasından sorumlu) burada da izole edildi.
-    try {
-      const cfgPath = path.join(rootPath, book, APP_CONFIG_NAME);
-      if (!(await fs.pathExists(cfgPath))) {
-        results.push({ book, action: 'no-config-file', path: cfgPath });
-        continue;
-      }
-      const original = await fs.readFile(cfgPath, 'utf8');
-      const { action, content: patched } = ensureSetBookEnabledInContent(original);
-      if (action === 'patched') {
-        await fs.writeFile(cfgPath, patched);
-      }
-      // 'already-true' / 'no-setbook-block' / 'no-enable-field' → dosyaya YAZILMAZ
-      // (idempotent — mtime değişmez).
-      results.push({ book, action, path: cfgPath });
-    } catch (bookErr) {
-      results.push({ book, action: 'error', error: bookErr.message, path: path.join(rootPath, book, APP_CONFIG_NAME) });
-    }
-  }
-
+  for (const book of bookDirs) results.push(await kitapYamala(rootPath, book));
   return { isSet: true, books: results };
+}
+
+/**
+ * Tek kitabın (ya da A1 kökünün, book='.') app.config.js'inde setBook.enable=true.
+ * K9e (2026-09-09, K9b/K9d ile AYNI desen) — NEDEN: döngü eskiden try/catch'siz idi; bir kitabın
+ * app.config.js'i EACCES/ENOENT verirse TÜM fonksiyon çağırana fırlar, kalan alt-kitaplar yamayı
+ * hiç ALMAZDI. Her öğe kendi hatasından sorumlu (defense-in-depth).
+ */
+async function kitapYamala(rootPath, book) {
+  const cfgPath = path.join(rootPath, book, APP_CONFIG_NAME);
+  try {
+    if (!(await fs.pathExists(cfgPath))) return { book, action: 'no-config-file', path: cfgPath };
+    const original = await fs.readFile(cfgPath, 'utf8');
+    const { action, content: patched } = ensureSetBookEnabledInContent(original);
+    if (action === 'patched') await fs.writeFile(cfgPath, patched);
+    // 'already-true' / 'no-setbook-block' / 'no-enable-field' → dosyaya YAZILMAZ (idempotent).
+    return { book, action, path: cfgPath };
+  } catch (bookErr) {
+    return { book, action: 'error', error: bookErr.message, path: cfgPath };
+  }
 }
 
 module.exports = {

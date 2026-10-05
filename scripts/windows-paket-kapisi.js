@@ -1447,10 +1447,15 @@ function maddeSetGuncelleme(p = {}) {
   } else if (!Array.isArray(harita.kabukDosyalari)) {
     fail.push('C) kabukDosyalari bir dizi değil — sızma denetimi yapılamaz, envanter bozuk');
   } else {
-    const sizan = kabukSizintilari(harita.kabukDosyalari);
+    // A1 (tek motorlu set, `kapak/index.html` motor sayfası): üretici `duzen: 'a1'` yazar; kabuk
+    // tanımı A1 seçeneğiyle uygulanır (`kapak/` kabuk). Tek-motor kanıtı yoksa iddia geçersiz.
+    const a1 = harita.duzen === 'a1';
+    if (a1 && !tekMotor) fail.push('C) empp-set.json duzen=a1 ama paket tek-motor düzeninde değil');
+    const kabukSecenek = { a1: a1 && tekMotor };
+    const sizan = kabukSizintilari(harita.kabukDosyalari, kabukSecenek);
     if (sizan.length) {
       const ilk = sizan.slice(0, 8).map((y) => {
-        const sebep = SET_KABUK.kabukDisiSebep(y);
+        const sebep = SET_KABUK.kabukDisiSebep(y, kabukSecenek);
         return `${JSON.stringify(y)} → ${sebep}`;
       }).join(' · ') + (sizan.length > 8 ? ' …' : '');
       fail.push(`C1) KABUK DIŞI GİRDİ SIZMIŞ — kabukDosyalari[] içinde ` +
@@ -1484,12 +1489,13 @@ function maddeSetGuncelleme(p = {}) {
     if (typeof harita.kabukTanimi !== 'string' || !harita.kabukTanimi) {
       olculemedi.push('C3) kabukTanimi imzası pakette yok (şema < 2) — üreticinin ' +
         'kabuk tanımı bu kapınınkiyle aynı mı ÖLÇÜLEMEDİ');
-    } else if (harita.kabukTanimi !== SET_KABUK_IMZASI) {
+    } else if (harita.kabukTanimi !== (kabukSecenek.a1 ? SET_KABUK.IMZA_A1 : SET_KABUK_IMZASI)) {
+      const beklenen = kabukSecenek.a1 ? SET_KABUK.IMZA_A1 : SET_KABUK_IMZASI;
       fail.push(`C3) TANIM SAPMASI — paketi üreten paketleyicinin kabuk tanımı ` +
-        `"${harita.kabukTanimi}", kapınınki "${SET_KABUK_IMZASI}". İki taraf aynı ` +
+        `"${harita.kabukTanimi}", kapınınki "${beklenen}". İki taraf aynı ` +
         `kabuğu ölçmüyor; kapının GEÇTİ'si bu paket için geçersizdir`);
     } else {
-      gecen.push(`C3) tanım aynı (${SET_KABUK_IMZASI})`);
+      gecen.push(`C3) tanım aynı (${harita.kabukTanimi})`);
     }
   }
 

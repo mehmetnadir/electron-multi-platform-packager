@@ -47,6 +47,16 @@ const MENU_YOLLARI = Object.freeze([YAMA, AYAR, TANIM]);
 const ILK_SAYFA = Object.freeze(['pages/1.png', 'pages/1.jpg', 'pages/1.jpeg', 'pages/1.webp']);
 const KAPAK = 'thumbs/1.jpg';
 
+/**
+ * A1 (tek motorlu set, 05.10) menüsü mü: herhangi bir kartın `kapak` alanı dolu. Bu kartlar
+ * `kapak/index.html?kapak=<id>` açar (sf425 `kitapAcmaAdresi`); bookN menüsüyle yeniden yazılırsa
+ * `kapak`/`path` düşer ve kart olmayan `<anahtar>/index.html`e gider. SAF.
+ */
+function a1MenuMu(books) {
+  return Boolean(books && typeof books === 'object'
+    && Object.values(books).some((b) => b && typeof b === 'object' && String(b.kapak == null ? '' : b.kapak).trim()));
+}
+
 function ekAcik(env = process.env) {
   return String(env.EMPP_SET_UYELIK_EK || '') === '1';
 }
@@ -582,6 +592,11 @@ async function setUyelikEki(o) {
   const index = metinAl(o.zip, dizin, 'index.html');
   let books = null;
   try { books = menuBooksOku(yama, ayar); } catch (_) { books = null; }
+  // A1 kapısı: tek motorlu sette bookN eki menüyü bookN adresleriyle yeniden yazardı (kartlar
+  // boş klasöre gider) ve köke bookN motor kopyası eklerdi. Uygulanmaz; iş kopyası aynen kalır.
+  if (dizin.has('kapak/index.html') || a1MenuMu(books)) {
+    return bitir('A1 tek motorlu set (kapak/index.html) — üyelik eki uygulanmaz, menü korundu');
+  }
   const exe = exeKitaplari(o.zip, dizin, books);
   if (!exe.set) return bitir('set değil (bookN menüsü yok) — ek yapılmadı');
 
@@ -733,4 +748,5 @@ async function setUyelikEki(o) {
 module.exports = {
   ISARET, ekAcik, setListesiAyristir, setListesiCoz, eslestir, menuXmlUret, yeniBooks, webzYaz,
   kapiDenetle, linkYamasiEkle, LINK_ISARET, exeKitaplari, tohumluRastgele, setUyelikEki, MENU_YOLLARI, menuBooksOku,
+  a1MenuMu,
 };

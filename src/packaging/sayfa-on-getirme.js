@@ -30,6 +30,7 @@
 
 const path = require('path');
 const fs = require('fs-extra');
+const { a1DuzeniMi, A1_MOTOR_SAYFASI } = require('./a1-duzen');
 
 const ISARET = 'EMPP_ON_GETIRME';
 const VARSAYILAN_ARA_MS = 120;
@@ -43,7 +44,9 @@ function acikMi(env = process.env) {
 /**
  * Enjekte edilecek betiği üretir. Saf fonksiyon — dosya sistemine dokunmaz.
  * @param {string[]} sayfalar kitap köküne göreli yollar, GÖRÜNTÜLENME SIRASINDA
- * @param {{araMs?:number, baslangicMs?:number}} [secenekler]
+ * @param {{araMs?:number, baslangicMs?:number, kapakSuz?:boolean}} [secenekler]
+ *   kapakSuz (A1): çalışma anında `?kapak=<ID>` okunur, yalnız `assets/<ID>/` sayfaları ısıtılır
+ *   (tek motor sayfası yedi kitabın hepsini taşır; açık olan tek kitaptır).
  */
 function betikUret(sayfalar, secenekler = {}) {
   const liste = Array.isArray(sayfalar) ? sayfalar.filter((s) => typeof s === 'string' && s) : [];
@@ -56,7 +59,11 @@ function betikUret(sayfalar, secenekler = {}) {
 (function(){
   if (window.__${ISARET}__) return;
   window.__${ISARET}__ = true;
-  var SAYFALAR = ${JSON.stringify(liste)};
+  var SAYFALAR = ${JSON.stringify(liste)};${secenekler.kapakSuz ? `
+  try {
+    var KAPAK = (/[?&]kapak=(\\d{1,12})(?=&|#|$)/.exec(location.search || '') || [])[1];
+    if (KAPAK) { KAPAK = String(Number(KAPAK)); SAYFALAR = SAYFALAR.filter(function(y){ return y.indexOf('assets/' + KAPAK + '/') === 0; }); }
+  } catch(e){}` : ''}
   if (!SAYFALAR.length) return;
   var ARA = ${araMs}, BASLANGIC = ${baslangicMs};
   var okunan = 0, bayt = 0, basladi = 0;
@@ -174,16 +181,22 @@ async function paketeUygula(paketKoku, { log = () => {}, araMs, baslangicMs } = 
     const tam = path.join(paketKoku, ad);
     if ((await fs.stat(tam)).isDirectory()) adaylar.push(tam);
   }
+  // A1 (tek motorlu set, inceleme Ö4): kök index.html sf425 KABUĞUDUR (kitap açmaz); sayfaları
+  // ısıtacak sayfa motorun kendisi, `kapak/index.html` (`<base href="../">` → yollar kök-göreli,
+  // Electron'da `__dirname` köke çekilir). Kök sayfa listesi motor sayfasına, kapak süzgeciyle girer.
+  const a1 = a1DuzeniMi(paketKoku);
   for (const dizin of adaylar) {
-    const html = path.join(dizin, 'index.html');
+    if (a1 && dizin === path.join(paketKoku, A1_MOTOR_SAYFASI.split('/')[0])) continue;
+    const html = a1 && dizin === paketKoku
+      ? path.join(paketKoku, ...A1_MOTOR_SAYFASI.split('/')) : path.join(dizin, 'index.html');
     if (!(await fs.pathExists(html))) continue;
     const sayfalar = await sayfalariTopla(dizin);
     if (!sayfalar.length) continue;
     const mevcut = await fs.readFile(html, 'utf8');
     const { icerik, uygulandi, sebep } = icerigeEnjekteEt(
-      mevcut, betikUret(sayfalar, { araMs, baslangicMs }));
+      mevcut, betikUret(sayfalar, { araMs, baslangicMs, kapakSuz: a1 && dizin === paketKoku }));
     if (uygulandi) await fs.writeFile(html, icerik, 'utf8');
-    const kitap = path.relative(paketKoku, dizin) || '(kök)';
+    const kitap = path.relative(paketKoku, a1 && dizin === paketKoku ? path.dirname(html) : dizin) || '(kök)';
     sonuc.push({ kitap, sayfa: sayfalar.length, sebep });
     log(`   ön-getirme: ${kitap} — ${sayfalar.length} sayfa (${sebep})`);
   }
