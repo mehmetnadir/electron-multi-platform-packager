@@ -319,7 +319,7 @@ class IlkSayfayaGitTest(unittest.TestCase):
 
     def test_plan_etiket_1_gorunuyorsa_dogrudan_ona(self):
         k = self.SahteOkuyucu(sayfa=3, serit_ilk=1).olc()
-        self.assertEqual(kabul.ilk_sayfa_plani(k), ["etiket1"])
+        self.assertEqual(kabul.ilk_sayfa_plani(k), ["etiket1", "kutu", "geri"])
 
     def test_plan_kaydirilmis_seritte_en_soldakine_tiklamaz(self):
         k = self.SahteOkuyucu(sayfa=8).olc()
@@ -376,6 +376,19 @@ class IlkSayfayaGitTest(unittest.TestCase):
         self.assertNotIn("thumbOnceki", k)
         self.assertEqual(kabul.kanit_sonucu(k["thumbOK"], k["canvasDolu"], k["canvasRenk"],
                                             k["toplamSayfa"], kabul.ilk_sayfada_mi(k["sayfa"]))[0], "KALDI")
+
+    def test_etiket1_tutmazsa_kutu_yedegi_1_sayfaya_goturur(self):
+        # 73768 book1 05.10 17:24: etiket 1'e tiklandi ama gosterge 12/172'de kaldi.
+        o = self.SahteOkuyucu(sayfa=12, toplam=172, serit_ilk=1)
+        asil = o.tikla
+        def tikla(x, y):
+            if (x, y) == (300, 720): o.tiklar.append((x, y)); return  # etiket 1 tiklamasi yutuldu
+            asil(x, y)
+        o.tikla = tikla
+        k = kabul.ilk_sayfaya_git(o, o.olc(), o.olc)
+        self.assertEqual(k["sayfa"], "1/172")
+        self.assertIn(k["ilkSayfaYolu"], ("kutu", "kutu-tuslar"))
+        self.assertIn((300, 720), o.tiklar, "once etiket 1 denendi")
 
     def test_geri_tiklama_sayisi(self):
         self.assertEqual(kabul.geri_tiklama_sayisi("8/136"), 7)

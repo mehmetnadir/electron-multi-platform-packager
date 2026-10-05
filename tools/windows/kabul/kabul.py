@@ -627,9 +627,11 @@ def ilk_sayfa_plani(kanit):
       - etiketi '1' olan thumb gorunuyorsa ona tikla ('etiket1');
       - etiketler var ama 1 yoksa en soldakine TIKLAMA — sayfa kutusu ('kutu'), sonra geri
         dugmesi ('geri');
-      - etiket hic okunamadiysa (baska tema) eski yol ('thumbIlk') once denenir, sonra kutu/geri."""
+      - etiket hic okunamadiysa (baska tema) eski yol ('thumbIlk') once denenir, sonra kutu/geri.
+    etiket1 tutmazsa kutu/geri YEDEK kalir (73768 book1, 05.10 17:24: etiket 1'e tiklandi, gosterge
+    12/172'de kaldi, plan bittigi icin KALDI; onceki kosularda ayni kitap kutu ile 1/172'ye gitmisti)."""
     etiket = [e for e in (kanit.get("thumbEtiket") or []) if isinstance(e, dict)]
-    if any(e.get("n") == 1 for e in etiket): return ["etiket1"]
+    if any(e.get("n") == 1 for e in etiket): return ["etiket1", "kutu", "geri"]
     if etiket: return ["kutu", "geri"]
     return (["thumbIlk"] if kanit.get("thumbIlk") else []) + ["kutu", "geri"]
 
