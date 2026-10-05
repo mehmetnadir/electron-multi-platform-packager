@@ -370,3 +370,27 @@ test('Windows ters bölülü yol (path.win32 + sahte fs): süzme ve birleştirme
   assert.ok(w.includes('key="Y"'));
   assert.deepStrictEqual([...dosyalar.keys()].filter((k) => k.startsWith('C:\\w')), ['C:\\w\\classlibraries\\ImWin32.dll']);
 });
+
+const M = require('./fs-shim');
+
+test('Ö2a/Ö2b: masaüstü yazmaKarari — dar yazmadaki yeni anahtar asıla taşınır; tam menüde boş anahtar dolu anahtarı ezmez', () => {
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'fsk-o2-'));
+  const menuYolu = path.join(kok, 'classlibraries', 'ImWin32.dll');
+  fs.mkdirSync(path.dirname(menuYolu), { recursive: true });
+  const TAM = '<?xml version="1.0"?><main activation="true" key="" ID="9"><Group ID="1"><Tab ID="1">'
+    + ['11', '12', '13'].map((id) => `<cover ID="${id}" version="1" xmlSource="assets/${id}/data/BookContent.xml"></cover>`).join('')
+    + '</Tab></Group></main>';
+  fs.writeFileSync(menuYolu, M.imwinYaz(TAM, 127, 17));
+  const k = M.yazmaKarari(fs.readFileSync(menuYolu, 'utf8'), M.imwinYaz(M.menuSuz(TAM, '11').replace('key=""', 'key="YENI"'), 27, 5), '12');
+  assert.equal(k.tur, 'birlesik');
+  assert.match(k.neden, /yalnız anahtar taşındı/);
+  const x = M.imwinCoz(k.metin).xml;
+  assert.ok(x.includes('key="YENI"'));
+  assert.deepEqual(M.kapakIdleri(x), ['11', '12', '13']);
+  assert.equal(x.replace('key="YENI"', 'key=""'), TAM, 'menünün gerisi asıldan bayt-aynı');
+  const dolu = M.imwinYaz(TAM.replace('key=""', 'key="DOLU"'), 127, 17);
+  const b = M.yazmaKarari(dolu, M.imwinYaz(TAM.replace('version="1"', 'version="5"'), 27, 5), '12');
+  assert.equal(b.tur, 'birlesik');
+  assert.ok(M.imwinCoz(b.metin).xml.includes('key="DOLU"'));
+  assert.ok(M.imwinCoz(b.metin).xml.includes('version="5"'), 'menü yazılandan');
+});

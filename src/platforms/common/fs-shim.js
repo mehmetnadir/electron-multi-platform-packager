@@ -158,6 +158,20 @@
     var ids = kapakIdleri(out);
     return ids.length === 1 && ids[0] === kapak ? out : null;
   }
+  /** `<main …>` açılış etiketindeki `key` değeri ('' = boş ya da yok). SAF. */
+  function mainKey(xml) {
+    var m = /<main\b[^>]*>/.exec(String(xml));
+    var k = m && /\skey="([^"]*)"/.exec(m[0]);
+    return k ? k[1] : '';
+  }
+  /** Yalnız `<main …>` etiketindeki `key`i değiştirir (yoksa ekler); gerisi bayt-aynı. SAF. */
+  function keyYaz(xml, key) {
+    return String(xml).replace(/<main\b[^>]*>/, function (etiket) {
+      return /\skey="[^"]*"/.test(etiket)
+        ? etiket.replace(/\skey="[^"]*"/, function () { return ' key="' + key + '"'; })
+        : etiket.replace(/^<main\b/, function (m0) { return m0 + ' key="' + key + '"'; });
+    });
+  }
   function kumeEsit(a, b) {
     a = tekil(a); b = tekil(b);
     if (a.length !== b.length) return false;
@@ -183,13 +197,8 @@
       var etiket = mainYeni[0];
       // Boş anahtar dolu anahtarı EZMEZ: anahtarsız açılmış ikinci pencere bellekteki boş
       // `key`'i geri yazınca ilk pencerede girilen kod silinmesin. Motor main.key'i hiç boşaltmaz.
-      var eskiMain = /<main\b[^>]*>/.exec(asil);
-      var eskiKey = eskiMain && /\skey="([^"]*)"/.exec(eskiMain[0]);
-      var yeniKey = /\skey="([^"]*)"/.exec(etiket);
-      if (eskiKey && eskiKey[1] && (!yeniKey || !yeniKey[1])) {
-        etiket = yeniKey ? etiket.replace(/\skey="[^"]*"/, function () { return ' key="' + eskiKey[1] + '"'; })
-          : etiket.replace(/^<main\b/, function (m0) { return m0 + ' key="' + eskiKey[1] + '"'; });
-      }
+      var eskiKey = mainKey(asil);
+      if (eskiKey && !mainKey(etiket)) etiket = keyYaz(etiket, eskiKey);
       out = out.replace(/<main\b[^>]*>/, function () { return etiket; });
     }
     out = out.replace(ogeRe('cover'), function (c) { return kapakIdleri(c)[0] === kapak ? kapakYeni : c; });
@@ -216,14 +225,25 @@
     var a = asilHam == null ? null : imwinCoz(asilHam);
     if (!a) return { tur: 'reddet', neden: 'asıl menü okunamadı' };
     var yIds = tekil(kapakIdleri(y.xml)), aIds = tekil(kapakIdleri(a.xml));
+    var yKey = mainKey(y.xml), aKey = mainKey(a.xml);
+    // Ö2a (inceleme 05.10): reddedilen yazmada motorun yeni girdiği anahtar kaybolmasın — menünün
+    // gerisi asıldan kalır, YALNIZ `<main key>` asıla taşınır.
+    var red = function (neden) {
+      if (yKey && yKey !== aKey) {
+        return { tur: 'birlesik', metin: imwinYaz(keyYaz(a.xml, yKey), 27, 5), neden: neden + ' — yalnız anahtar taşındı' };
+      }
+      return { tur: 'reddet', neden: neden };
+    };
     if (yIds.length === 1 && yIds[0] === String(kapak)) {
       var b = menuBirlestir(a.xml, y.xml, kapak);
-      return b == null ? { tur: 'reddet', neden: 'birleşim kapak kümesini korumadı' }
+      return b == null ? red('birleşim kapak kümesini korumadı')
         : { tur: 'birlesik', metin: imwinYaz(b, 27, 5) }; // motorun yazıcısı (6395 `E`) biçimi
     }
     for (var i = 0; i < aIds.length; i++) {
-      if (yIds.indexOf(aIds[i]) === -1) return { tur: 'reddet', neden: 'yazılan menü asıldan dar' };
+      if (yIds.indexOf(aIds[i]) === -1) return red('yazılan menü asıldan dar');
     }
+    // Ö2b: tam menü yazmasında da boş anahtar dolu anahtarı EZMEZ (menü yazılandan, anahtar asıldan).
+    if (aKey && !yKey) return { tur: 'birlesik', metin: imwinYaz(keyYaz(y.xml, aKey), y.n, y.r) };
     return { tur: 'aynen' };
   }
 

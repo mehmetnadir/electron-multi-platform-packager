@@ -102,17 +102,44 @@ test('Android ?kapak: okuma tek kapak, yazma asıl menüye birleşir, anahtar ik
   assert.ok(okunan.includes('key="SAHTE-ISARET"'), 'set başına tek anahtar');
 });
 
-test('Android: dar yazma (başka tek kapak / 0 kapak) ATLANIR, uyarı içerik basmaz', () => {
+test('Android: dar yazma (başka tek kapak / 0 kapak) ATLANIR, uyarı içerik basmaz; dar yazmadaki yeni anahtar asıla taşınır (Ö2a)', () => {
   const a = ortam('?kapak=12');
   const eski = console.warn; const l = [];
   console.warn = (...x) => l.push(x.map(String).join(' '));
   try {
-    a.mod.fsMod.writeFileSync('/classlibraries/ImWin32.dll', motorYazar(M.menuSuz(MENU, '11').replace('key=""', 'key="GIZLI"')));
     a.mod.fsMod.writeFileSync('/classlibraries/ImWin32.dll', motorYazar('<main key=""></main>'));
+    assert.equal(a.depo.getItem(VFS), null, 'anahtarsız dar menü VFS\'e yazılmaz');
+    a.mod.fsMod.writeFileSync('/classlibraries/ImWin32.dll', motorYazar(M.menuSuz(MENU, '11').replace('key=""', 'key="GIZLI"')));
   } finally { console.warn = eski; }
-  assert.equal(a.depo.getItem(VFS), null, 'dar menü VFS\'e yazılmaz');
+  const vfs = coz(a.depo.getItem(VFS));
+  assert.deepEqual(M.kapakIdleri(vfs), ['11', '12', '13', '21'], 'menü asıldan (dar menü yazılmadı)');
+  assert.ok(vfs.includes('key="GIZLI"'), 'yalnız <main key> taşındı');
   assert.ok(l.some((u) => u.includes('[empp-android] kapak yazma reddedildi')), l.join('\n'));
   assert.ok(!l.some((u) => u.includes('GIZLI') || u.includes('<main')));
+});
+
+test('Ö2 EŞLİK: anahtar taşıma ve tam menüde boş anahtar kuralı iki shim\'de aynı sonucu verir', () => {
+  const { mod } = yukle({ search: '', depo: sahteDepo(), dosyalar: new Map() });
+  const A = mod._internals;
+  const asilBos = M.imwinYaz(MENU, 127, 17);
+  const asilDolu = M.imwinYaz(MENU.replace('key=""', 'key="DOLU"'), 127, 17);
+  const vektorler = [
+    [asilBos, motorYazar(M.menuSuz(MENU, '11').replace('key=""', 'key="YENI"')), 'birlesik', 'YENI'], // Ö2a dar + anahtar
+    [asilBos, motorYazar('<main key="YENI"></main>'), 'birlesik', 'YENI'], // Ö2a 0 kapak + anahtar
+    [asilDolu, motorYazar(M.menuSuz(MENU, '11').replace('key=""', 'key="DOLU"')), 'reddet', null], // aynı anahtar → değişiklik yok
+    [asilDolu, motorYazar(MENU), 'birlesik', 'DOLU'], // Ö2b tam menü, boş anahtar → asılınki kalır
+    [asilBos, motorYazar(MENU), 'aynen', null],
+  ];
+  for (const [asil, v, tur, key] of vektorler) {
+    const a = A.yazmaKarari(asil, v, '12'); const d = M.yazmaKarari(asil, v, '12');
+    assert.equal(a.tur, tur); assert.equal(d.tur, tur);
+    assert.equal(a.neden, d.neden);
+    if (tur === 'birlesik') {
+      assert.equal(coz(a.metin), coz(d.metin));
+      assert.ok(coz(a.metin).includes(`key="${key}"`));
+      assert.deepEqual(M.kapakIdleri(coz(a.metin)), ['11', '12', '13', '21']);
+    }
+  }
 });
 
 test('Android: anahtarsız ikinci sayfanın yazması dolu anahtarı silmez; kota hatası asılı korur', () => {
