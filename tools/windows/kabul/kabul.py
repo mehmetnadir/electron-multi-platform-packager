@@ -810,11 +810,46 @@ JS_AKT = r"""
    .concat([...document.querySelectorAll('div,a,span,button')].filter(e=>{
      const b=getComputedStyle(e).backgroundImage; return b&&b.indexOf('url(')>=0&&kapakMi(e.getBoundingClientRect());})
      .map(e=>merkez(e.getBoundingClientRect())));
- const sn=[...document.querySelectorAll('[role=alert],.MuiSnackbarContent-message,.notistack-Snackbar')]
+ const sn=[...document.querySelectorAll('[role=alert],[role=status],.MuiSnackbarContent-message,.MuiAlert-message,.notistack-Snackbar,[class*=nackbar]')]
    .map(e=>(e.innerText||'').trim()).filter(Boolean).join(' | ').slice(0,120);
  return JSON.stringify({diyalog:d||(!!inp&&/aktivasyon/i.test(t)),girdi:g,hata:/aktivasyon kodu hatal/i.test(t),
+   girdiDolu:inp?(inp.value||'').length>0:null,
    kitapta:document.querySelectorAll('canvas.lower-canvas').length>0,raf:raf.slice(0,10),snack:sn||null,
    online:(typeof window.isOnline==='boolean')?window.isOnline:null,gorunur:document.visibilityState});})()"""
+
+# Hata latch'i (04.10 45469 imzali kabul b KALDI dersi): snackbar 1,5 sn yasar; 0,15 sn'lik CDP yoklamasi
+# kacirabilir. Kod girilmeden ONCE sayfaya MutationObserver kurulur; ilk gorulen hata metni + zaman
+# window.__emppAktHata'da KALIR (yoklama hizindan bagimsiz). Metin tek-motor (MUI Snackbar) ve
+# okuyucu (45550 MUI Alert) icin: gorunen herhangi bir dugum metni /aktivasyon kodu hatal/i.
+JS_AKT_LATCH_KUR = r"""
+(()=>{ if(window.__emppAktObs) return 'var';
+ const re=/aktivasyon kodu hatal/i;
+ const bak=t=>{ if(window.__emppAktHata) return; const m=((t&&t.textContent)||'');
+   if(re.test(m)) window.__emppAktHata={metin:m.trim().slice(0,80),t:Date.now()}; };
+ window.__emppAktObs=new MutationObserver(ms=>{ for(const m of ms){ bak(m.target);
+   m.addedNodes.forEach(n=>bak(n)); } });
+ window.__emppAktObs.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+ bak(document.body); return 'kuruldu';})()"""
+JS_AKT_LATCH_OKU = "JSON.stringify({hata:window.__emppAktHata||null,kurulu:!!window.__emppAktObs})"
+
+def akt_latch_hata(l):
+    """SAF: latch okumasindan ilk hata metni (str) | None. Gecersiz/eksik giris -> None."""
+    h = (l or {}).get("hata") if isinstance(l, dict) else None
+    if isinstance(h, dict): h = h.get("metin")
+    return h if isinstance(h, str) and h else None
+
+def akt_b_hata_goruldu(olcum, latch):
+    """SAF: b'nin hata kaniti — latch (yoklamadan bagimsiz) YA DA anlik olcumdeki hata/snack metni."""
+    o = olcum or {}
+    if akt_latch_hata(latch): return True
+    return bool(o.get("hata")) or bool(o.get("snack") and re.search(r"aktivasyon kodu hatal", str(o["snack"]), re.I))
+
+def akt_giris_yeniden_mi(olcum, latch, gecen_sn, bekle_sn=3.0):
+    """SAF KARAR: kod girisi hic ulasmadi mi (yeniden denenmeli)? Sart: bekle_sn gecti, hata kaniti yok,
+    girdi BOS (girdiDolu is False; None = olculemedi -> yeniden deneme yok). Dolu girdi = giris
+    ulasti, hata beklenir (yeniden girmek ayni kodu iki kez gondermesin)."""
+    if gecen_sn < bekle_sn or akt_b_hata_goruldu(olcum, latch): return False
+    return (olcum or {}).get("girdiDolu") is False
 
 # Cevrimdisi kara delik: Symantec Endpoint Protection kasada Windows Guvenlik Duvari kurallarini
 # UYGULATMIYOR (olculdu 03.10: curl'e blok kurali kondu, baglanti yine 302 dondu; profil
@@ -1034,7 +1069,7 @@ def akt_karar(adim, olcum, tek_kitap=False):
 def olcum_ozeti(o):
     """SAF: adimin teshis ozeti (rapora) — kod icermez; raf yalniz sayi."""
     o = o or {}
-    r = {k: o.get(k) for k in ("diyalog", "hata", "kitapta", "online", "snack", "gorunur", "hataGoruldu")
+    r = {k: o.get(k) for k in ("diyalog", "hata", "kitapta", "online", "snack", "gorunur", "hataGoruldu", "girdiDolu")
          if o.get(k) is not None}
     r["raf"] = len(o.get("raf") or [])
     return r
@@ -1142,16 +1177,25 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     if not cevrimdisi_mi(dict(ilk, **{k: v for k, v in o.items() if k == "online" and v is not None})):
         r["aktivasyon"]["kodGirilmedi"] = "uygulama cevrimdisi degil (window.isOnline != false)"
         return c, menuUrl, kitaplar
-    # b) gecersiz kod -> red mesaji (snackbar 1,5 sn — hizli yokla, gorunce ekran)
+    # b) gecersiz kod -> red mesaji. Latch (MutationObserver) kod girisinden ONCE kurulur: karar
+    # snackbar'in 1,5 sn omrunden/yoklama hizindan bagimsiz. Giris ulasmadiysa (girdi bos) 1 kez tekrar.
+    c.js(JS_AKT_LATCH_KUR)
     akt_kod_gir(c, o["girdi"], AKT_GECERSIZ_KOD)
-    b = {}; son = time.time() + 10
+    b = {}; latch = None; t0 = time.time(); son = t0 + 10; yeniden = False
     while time.time() < son:
         b = c.jsj(JS_AKT) or {}
-        if b.get("hata"):
+        latch = c.jsj(JS_AKT_LATCH_OKU)
+        if akt_b_hata_goruldu(b, latch):
             b["hataGoruldu"] = True; akt_ekran(c, kimlik, "b", A.setdefault("b", {})); break
         if b.get("snack"): A.setdefault("b", {})["mesaj"] = b["snack"]
+        if not yeniden and akt_giris_yeniden_mi(b, latch, time.time() - t0):
+            yeniden = True; ana_surec_pencere_goster()
+            g2 = (c.jsj(JS_AKT) or {}).get("girdi") or o["girdi"]
+            akt_kod_gir(c, g2, AKT_GECERSIZ_KOD)
         time.sleep(0.15)
     A.setdefault("b", {})["sonuc"] = akt_karar("b", dict(b, diyalog=(c.jsj(JS_AKT) or {}).get("diyalog")))
+    if akt_latch_hata(latch): A["b"]["mesaj"] = akt_latch_hata(latch)
+    if yeniden: A["b"]["girisYenidenDenendi"] = True
     A["b"]["olcum"] = olcum_ozeti(b)
     if "ekran" not in A["b"]: akt_ekran(c, kimlik, "b", A["b"])
     # c) gecerli kod (girdi maskeli; ekran diyalog kapandiktan SONRA alinir)
