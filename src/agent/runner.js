@@ -710,6 +710,8 @@ const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('.
 // yolu tek fonksiyondan (EMPP_ARSIV_MERDIVEN=1, varsayılan kapalı). Ayrıntı: icerik-merdiven.js.
 const { icerikMerdiveni, merdivenAcik } = require('./icerik-merdiven');
 const setEk = require('./set-uyelik-ek');
+// sf425 kabuk tazeleme (Z2, 05.10): r2-kur zincirinde set ekinden sonra, panelden önce.
+const setKabuk = require('./set-kabuk-tazele');
 const devamYukleme = require('./devam-yukleme');
 
 
@@ -972,6 +974,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       // KAYNAK SÜRÜMÜ (Dalga B, B2 madde 6): claim'deki build sürümü gövdenin kökünde — sunucunun
       // bellek içi claim eşliği API yeniden başlayınca kaybolur; beyan varsa sürüm paritesi yine çalışır.
       ...(typeof job.kaynakSurumu === 'string' && job.kaynakSurumu ? { kaynakSurumu: job.kaynakSurumu } : {}),
+      // SF425 KABUK TAZELEME özeti (Z2, 05.10): yalnız adım koştuysa {durum, neden}. Sunucu şeması
+      // (zod, strict değil) bilinmeyen alanı atar; book-update kaydetmek isterse alan hazır.
+      ...kabukTazelemeGovdesi(job.kabukTazeleme),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );
@@ -982,6 +987,12 @@ async function postResultSuccess(auth, job, artifactPath) {
   // kaydı `yayinlandi` DEĞİL bayat saymalı (04.10).
   const yk = res.data && res.data.yenidenKuyruk;
   return { r2ObjectKey: presigned.r2ObjectKey, publicUrl: presigned.publicUrl, ...(yk ? { yenidenKuyruk: yk } : {}) };
+}
+
+/** /result gövdesinin kabuk tazeleme alanı: `{kabukTazeleme: {durum, neden}}` ya da {}. SAF. */
+function kabukTazelemeGovdesi(o) {
+  if (!o || typeof o !== 'object' || typeof o.durum !== 'string') return {};
+  return { kabukTazeleme: { durum: o.durum, neden: o.neden == null ? null : String(o.neden).slice(0, 300) } };
 }
 
 async function postResultFailure(auth, job, errorMessage) {
@@ -2120,6 +2131,8 @@ const kaynakIndirme = {
 const kaynakAdim = {
   merdiven: (...a) => icerikMerdiveni(...a),
   setEki: (...a) => setEk.setUyelikEki(...a),
+  // sf425 kabuk tazeleme (Z2): başsız Swift ikilisi; hiçbir hata fırlatmaz (adım atlanır).
+  kabukTazele: (o) => setKabuk.kabukTazele(o),
   // imKeys: bağımlılıklar exports üzerinden çözülür (test-yalitim sahtesini koyabilsin; üretimde
   // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
   imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
@@ -2741,6 +2754,18 @@ async function processJob(auth, job) {
       }
     };
     await setEkiUygula();
+    // SF425 KABUK TAZELEME (Z2, 05.10, set-kabuk-tazele.js; sözleşme "sf425 kabuk tazeleme"): yalnız
+    // r2-kur, set ekinden SONRA, panelden ÖNCE. Bayrak kapalıysa (`EMPP_SET_KABUK_TAZELE`) hiç
+    // çağrılmaz. Her hata adımı atlatır (iş kopyası aynen), iş DÜŞMEZ; özet `job.kabukTazeleme`.
+    const kabukUygula = async () => {
+      if (kaynak.tur !== 'r2-kur' || !setKabuk.acik()) return;
+      try {
+        job.kabukTazeleme = await kaynakAdim.kabukTazele({ zip: zipPath, calisma: work, job, log, warn });
+      } catch (e) {
+        job.kabukTazeleme = { durum: 'atlandi', neden: `beklenmeyen hata: ${agHatasiOzeti(e)}` };
+        warn(`${setKabuk.ISARET} beklenmeyen hata, kabuk tazelenmedi: ${agHatasiOzeti(e)}`);
+      }
+    };
     // Taban üreteçle yeniden kurulur; merdiven + set eki yeni build'e yeniden uygulanır.
     // Ertelenecek durumda r2Ertele sonucunu döner (çağıran aynen döndürür), yoksa null.
     const tabaniUretecleKur = async (uretecNeden) => {
@@ -2785,6 +2810,8 @@ async function processJob(auth, job) {
         if (d) return d;
       }
     }
+
+    await kabukUygula();
 
     // PANEL MENÜ HİZALAMA (05.10, panel-menu-hizala.js): kök menülü tek-motor sette menü panelin
     // GetPackageBooks listesine (Group/Tab/üye/sıra) hizalanır, eksik üye İmpark'tan eklenir —
@@ -2832,6 +2859,7 @@ async function processJob(auth, job) {
       const d = await tabaniUretecleKur(`taban ATLANDI — set eki sonrası eksik: ${tabanIstisnasi.join(', ')}`
         + ' (panel hizalamadı)');
       if (d) return d;
+      await kabukUygula();
       panelSonuc = await panelUygula();
       if (panelSonuc.ertele) return panelSonuc.ertele;
     }
@@ -3223,6 +3251,6 @@ module.exports = {
   // Kabul kuyruğu (05.10) — üretim kapısı + iş alma adımı.
   kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs,
   // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
-  kaynakAdim, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
+  kaynakAdim, kabukTazelemeGovdesi, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
   _konumAyarla: (ofiste) => { _konum = { t: Date.now(), ofiste: Boolean(ofiste) }; _sonYetenek = ''; },
 };
