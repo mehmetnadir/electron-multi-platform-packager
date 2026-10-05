@@ -88,7 +88,10 @@ function jobOzeti(job) {
   const alan = ['bookId', 'platform', 'bookTitle', 'publisherName', 'surum', 'setKimligi', 'guncellemeTabani',
     'kaynakSurumu', 'kaynakTuru', 'icerikSurumleri', 'icerikUyeleri', 'appVersion',
     // Yalnız yerel kayıt (05.10): bekçinin /result gövdesi bu alanı TAŞIMAZ (postResultSuccess alan seçer).
-    'setListesiPanelFarki'];
+    'setListesiPanelFarki',
+    // sf425 kabuk tazeleme özeti (Z2, 05.10) {durum, neden, ...} — bekçinin /result gövdesi
+    // postResultSuccess'in `kabukTazelemeGovdesi` seçimiyle yalnız {durum, neden} taşır.
+    'kabukTazeleme'];
   const o = {};
   for (const a of alan) if (job && job[a] !== undefined) o[a] = job[a];
   return o;

@@ -489,3 +489,118 @@ test('Z2 kabuk adımı fırlatırsa iş DÜŞMEZ (log + zincir sürer)', async (
   assert.match(r.loglar, /\[set-kabuk\] beklenmeyen hata, kabuk tazelenmedi/);
   assert.ok(r.kayit.parcalar.length > 0, 'R2\'ye yine yazıldı');
 });
+
+// ─── Z2 reviewer (05.10): kabuk → panel GERÇEK iki adım + /result özeti ─────────────────────
+
+const setKabuk = require('./set-kabuk-tazele');
+const kabukSahte = require('./fikstur/set-kabuk-sahte');
+
+/** sf425 kök + bookN set (45550 düzeni): her bookN kendi ImWin32 menüsünü taşır; kökte de menü var. */
+function sf425Build() {
+  const z = new AdmZip();
+  const eskiMenu = { setTitle: 'Eski', books: {
+    book1: { assetId: '111', title: 'Reference Book' }, book2: { assetId: '222', title: 'Workbook' } } };
+  z.addFile('index.html', Buffer.from(kabukSahte.ESKI_INDEX));
+  z.addFile('electron.js', Buffer.from('require("electron");'));
+  z.addFile('app.config.js', Buffer.from('const AppConfig = { updateBookEndPoint: "https://www.sorucoz.tv/'
+    + 'TestlerMobil/GetKitapGuncellemeBilgi?id={bookId}&setMi={isSet}&versiyon={version}" };\n'));
+  z.addFile('classlibraries/ImWin32.dll', Buffer.from(ig.menuKodla(MENU), 'utf8'));
+  z.addFile('scripts/xmlParser.js', Buffer.from('/* eski */'));
+  z.addFile('scripts/language-set.js', Buffer.from('/* eski kabuk */'));
+  z.addFile('scripts/cevrimdisi-yama.js', Buffer.from(`window.__setSettings = ${JSON.stringify(eskiMenu)};\n`));
+  z.addFile('config/settings.json', Buffer.from(JSON.stringify(eskiMenu)));
+  for (const [d, id] of [['book1', '111'], ['book2', '222']]) {
+    const xml = '<?xml version="1.0"?><main activation="false" key="" label="İmpark Eğitim" ID="45480">'
+      + `<Group ID="1" label="G"><Tab ID="1" label="T"><cover guId="" ID="${id}" etkID="${id}" actName="K${id}" `
+      + `URL="https://icerik.ornek.net/Uploads/ZKitapZipH/${id}-7.zip" version="7" `
+      + `xmlSource="assets/${id}/data/BookContent.xml" activation="false" tabID="1"></cover></Tab></Group></main>`;
+    z.addFile(`${d}/index.html`, Buffer.from(`<html>${d}</html>`));
+    z.addFile(`${d}/classlibraries/ImWin32.dll`, Buffer.from(ig.menuKodla(xml), 'utf8'));
+    z.addFile(`${d}/assets/${id}/data/BookContent.xml`, Buffer.from(`<Book kitapId="${id}"/>`));
+    z.addFile(`${d}/assets/${id}/pages/1.png`, Buffer.from(`sayfa-${id}`));
+    z.addFile(`${d}/assets/${id}/thumbs/1.jpg`, Buffer.from(`kapak-${id}`));
+  }
+  return z.toBuffer();
+}
+
+/** Web-Z: sıra 222 (build book2) → 111 (build book1); anahtar ≠ klasör. */
+const WEBZ_45480 = { setTitle: 'Set', books: {
+  book1: { assetId: '222', title: 'Workbook', contentType: 'book' },
+  book2: { assetId: '111', title: 'Reference Book', contentType: 'book' } } };
+
+test('Z2 GERÇEK iki adım: kabuk sf425\'i tazeler, panel bookN sette menüye DOKUNMAZ, R2 yeni kabuğu taşır', async () => {
+  const pb = panelBag();
+  const d = tmp('kabuk-ikili');
+  const ikili = kabukSahte.sahteIkili(d);
+  const w = kabukSahte.sahteGetir({ ayar: WEBZ_45480 });
+  const once = new AdmZip(sf425Build());
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', sf425Build()), pb, env: { EMPP_SET_KABUK_TAZELE: '1' },
+    job: () => ({ ...r2Kur(), kisaKod: 'abc12', setListesi: '222 | Workbook\n111 | Reference Book' }),
+    // Gerçek adım; yalnız dış bağımlılıklar (ikili, Web-Z, platform) sahte.
+    adim: { kabukTazele: (o) => setKabuk.kabukTazele({ ...o, ikili, getir: w.getir, platform: 'darwin' }) },
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.match(r.loglar, /\[set-kabuk\] UYGULANDI \(45480\)/);
+  assert.match(r.loglar, /\[panel-menu\] bookN menülü set — dokunulmadı/);
+  assert.equal(r.casus.panel.length, 0, 'panel ağına çıkılmadı');
+  assert.ok(r.loglar.indexOf('[set-kabuk] UYGULANDI') < r.loglar.indexOf('[panel-menu] bookN'), r.loglar);
+  for (const zip of [new AdmZip(Buffer.concat(r.kayit.parcalar)), yuklenenZip(r.kayit.uploadGovde)]) {
+    assert.match(zip.getEntry('scripts/language-set.js').getData().toString(), /sonrakiSatirDugmesi/);
+    const ayar = JSON.parse(zip.getEntry('config/settings.json').getData().toString());
+    const sira = Object.entries(ayar.books).sort((a, b) => a[1].displayOrder - b[1].displayOrder).map(([k]) => k);
+    assert.deepEqual(sira, ['book2', 'book1'], 'Web-Z sırası, klasörler aynı');
+    // Panel adımı kabuğun yazdığı menüyü ve kök/bookN menülerini değiştirmedi.
+    for (const ad of ['classlibraries/ImWin32.dll', 'book2/classlibraries/ImWin32.dll', 'book1/assets/111/pages/1.png']) {
+      assert.ok(zip.getEntry(ad), ad);
+    }
+    assert.ok(zip.getEntry('book1/assets/111/pages/1.png').getData()
+      .equals(once.getEntry('book1/assets/111/pages/1.png').getData()));
+  }
+});
+
+test('Z2 /result gövdesi: kabukTazeleme {durum, neden} taşınır; adım koşmadıysa alan YOK; jobOzeti saklar', async () => {
+  assert.deepEqual(runner.kabukTazelemeGovdesi({ durum: 'uygulandi', neden: null, kitaplar: ['book1'] }),
+    { kabukTazeleme: { durum: 'uygulandi', neden: null } });
+  assert.deepEqual(runner.kabukTazelemeGovdesi(undefined), {});
+  const H = require('./windows-hazir');
+  const oz = { durum: 'atlandi', neden: 'tek-motor: aktivasyon tasarımı bekliyor' };
+  assert.deepEqual(H.jobOzeti({ bookId: '1', kabukTazeleme: oz }).kabukTazeleme, oz);
+  assert.equal('kabukTazeleme' in H.jobOzeti({ bookId: '1' }), false);
+  // Gerçek postResultSuccess → sahte sunucunun aldığı gövde.
+  const gelen = [];
+  const s = http.createServer((req, res) => {
+    const p = [];
+    req.on('data', (x) => p.push(x));
+    req.on('end', () => {
+      const yol = req.url.split('?')[0];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (yol === '/agents/test/result/presign') {
+        return res.end(JSON.stringify({ uploadUrl: `http://127.0.0.1:${s.address().port}/put`, r2ObjectKey: 'k', publicUrl: 'p' }));
+      }
+      if (yol === '/agents/test/result') gelen.push(JSON.parse(Buffer.concat(p).toString()));
+      return res.end('{}');
+    });
+  });
+  await new Promise((ok) => s.listen(0, '127.0.0.1', ok));
+  const eski = CONFIG.apiBase;
+  const eskiRate = process.env.AGENT_UPLOAD_RATE;
+  CONFIG.apiBase = `http://127.0.0.1:${s.address().port}`;
+  process.env.AGENT_UPLOAD_RATE = '';
+  const orj = { log: console.log, warn: console.warn };
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    const f = path.join(tmp('art'), 'a.apk');
+    fs.writeFileSync(f, 'apk');
+    await runner.postResultSuccess({ agentId: 'test', token: 'x' }, { bookId: '1', platform: 'android', kabukTazeleme: oz }, f);
+    await runner.postResultSuccess({ agentId: 'test', token: 'x' }, { bookId: '1', platform: 'android' }, f);
+  } finally {
+    Object.assign(console, orj);
+    CONFIG.apiBase = eski;
+    if (eskiRate === undefined) delete process.env.AGENT_UPLOAD_RATE; else process.env.AGENT_UPLOAD_RATE = eskiRate;
+    await new Promise((ok) => { if (s.closeAllConnections) s.closeAllConnections(); s.close(ok); });
+  }
+  assert.deepEqual(gelen[0].kabukTazeleme, oz);
+  assert.equal('kabukTazeleme' in gelen[1], false);
+});

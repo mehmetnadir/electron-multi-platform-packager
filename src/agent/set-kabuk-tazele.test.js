@@ -17,11 +17,7 @@ const S = require('./set-kabuk-tazele');
 const M = require('./icerik-merdiven');
 
 const tmp = (ad) => fs.mkdtempSync(path.join(os.tmpdir(), `skt-${ad}-`));
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(2000, 7)]);
-const ESKI_INDEX = '<html><head><title>Akıllı Tahta</title></head><body>\n'
-  + '    <script src="scripts/xmlParser.js"></script>\n'
-  + '    <script src="scripts/cevrimdisi-yama.js"></script>\n'
-  + '    <script src="scripts/language-set.js"></script>\n</body></html>';
+const { PNG, ESKI_INDEX, sahteIkili, sahteGetir } = require('./fikstur/set-kabuk-sahte');
 const MOTOR_INDEX = '<html><body><script src="./a8f43f74c72b65a3dd05.main.js"></script></body></html>';
 const URL_W = 'https://download.ydspublishing.com/worksheets/grade-6-worksheets/';
 
@@ -38,7 +34,7 @@ const WEBZ = {
 };
 
 /** Eski sf425 kökü + bookN: book2=333, book3=222 (anahtar ≠ klasör), book4 Games (dizin ad, menü 666). */
-function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '' } = {}) {
+function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false } = {}) {
   const z = new AdmZip();
   const ekle = (ad, veri) => z.addFile(`${sarma}${ad}`, Buffer.from(veri));
   ekle('electron.js', 'require("electron");');
@@ -67,59 +63,14 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '' } = {}) 
   };
   kitap('book1', '111');
   kitap('book2', '333');
-  kitap('book3', '222');
+  kitap('book3', cift ? '111' : '222');
   kitap('book4', 'Grade-6-Games');
   return z.toBuffer();
 }
 
-/** Sahte `webz-kabuk-uret` (node betiği). Gerçek aracın çıktı biçimini taklit eder. */
-function sahteIkili(dizin) {
-  const yol = path.join(dizin, 'webz-kabuk-uret');
-  fs.writeFileSync(yol, `#!${process.execPath}
-const fs = require('fs'); const path = require('path');
-const [kok, girdiYolu, kapak] = process.argv.slice(2);
-const mod = process.env.SAHTE_MOD || '';
-const g = JSON.parse(fs.readFileSync(girdiYolu, 'utf8'));
-fs.appendFileSync(path.join(path.dirname(girdiYolu), '..', 'cagri.log'), JSON.stringify({ kok, g }) + '\\n');
-if (mod === 'cikis1') { process.stderr.write('tema şartları eksik'); process.exit(1); }
-const yaz = (ad, v) => { fs.mkdirSync(path.dirname(path.join(kok, ad)), { recursive: true }); fs.writeFileSync(path.join(kok, ad), v); };
-const books = {};
-let kitaplar = g.kitaplar;
-if (mod === 'sira') kitaplar = [...kitaplar].reverse();
-kitaplar.forEach((k, i) => {
-  if (k.contentType === 'link') books[k.klasor] = { assetId: '', title: k.title, contentType: 'link', type: 'link', url: k.url, displayOrder: i };
-  else books[k.klasor] = { assetId: mod === 'id' && i === 0 ? '999' : k.assetId, title: k.title, coverUrl: 'images/' + k.klasor + '.jpg',
-    contentType: mod === 'tur' ? 'book' : (k.contentType || 'book'), displayOrder: i };
-  if (k.contentType !== 'link') yaz('images/' + k.klasor + '.png', fs.readFileSync(path.join(kapak, 'kapak-' + k.klasor + '.png')));
-});
-const ayar = { setTitle: g.setTitle, books };
-yaz('config/settings.json', JSON.stringify(ayar, null, 2));
-yaz('scripts/cevrimdisi-yama.js', 'window.__setSettings = ' + JSON.stringify(ayar) + ';\\n/* set-ek:link-tikla */\\n');
-yaz('scripts/language-set.js', mod === 'imzasiz' ? '/* eski */' : '(function sonrakiSatirDugmesi() {})();');
-yaz('scripts/xmlParser.js', '/* yeni */');
-yaz('styles/cevrimdisi.css', '/* css */');
-yaz('index.html', ${JSON.stringify(ESKI_INDEX)}.replace('xmlParser.js', mod === 'ref' ? 'yok.js' : 'xmlParser.js'));
-yaz('set-menu.json', '{}');
-if (mod === 'bookn') yaz('book1/sizinti.js', 'x');
-`);
-  fs.chmodSync(yol, 0o755);
-  return yol;
-}
-
-/** Sahte Web-Z: settings + kapaklar; `kapakYok` verilen anahtar 404. */
-function sahteGetir({ ayar = WEBZ, kapakYok = null, status = 200 } = {}) {
-  const istekler = [];
-  const getir = async (url) => {
-    istekler.push(url);
-    if (url.endsWith('/config/settings.json')) return { status, govde: Buffer.from(JSON.stringify(ayar)) };
-    const m = /\/images\/([^/?]+)\.png/.exec(url);
-    if (m && m[1] !== kapakYok) return { status: 200, govde: PNG };
-    return { status: 404, govde: Buffer.from('not found') };
-  };
-  return { getir, istekler };
-}
-
-async function kostur({ zip = buildZip(), ayar, kapakYok, mod = '', job = {}, platform = 'darwin', status } = {}) {
+async function kostur({
+  zip = buildZip(), ayar = WEBZ, kapakYok, mod = '', job = {}, platform = 'darwin', status, aracSuresiMs,
+} = {}) {
   const d = tmp('is');
   const zipYolu = path.join(d, 'build.zip');
   fs.writeFileSync(zipYolu, zip);
@@ -131,7 +82,7 @@ async function kostur({ zip = buildZip(), ayar, kapakYok, mod = '', job = {}, pl
   process.env.SAHTE_MOD = mod;
   try {
     const r = await S.kabukTazele({
-      zip: zipYolu, calisma: d, ikili, platform, getir: w.getir,
+      zip: zipYolu, calisma: d, ikili, platform, getir: w.getir, aracSuresiMs,
       job: { bookId: '45550', kisaKod: 'tlk2k', ...job },
       log: (s) => loglar.push(s), warn: (s) => loglar.push(s),
     });
@@ -316,3 +267,99 @@ test('zip merkez dizini okunabilir kalır (M.zipDizini)', async () => {
   const { zipYolu } = await kostur();
   assert.ok(M.zipDizini(zipYolu).size > 10);
 });
+
+// ─── reviewer düzeltmeleri (05.10) ─────────────────────────────────────────────────────────
+
+/** Anahtar sırası ile displayOrder ÇELİŞİR: displayOrder kazanır (Swift webZAyari kuralı). */
+const WEBZ_SIRALI = {
+  setTitle: 'S', books: {
+    book1: { assetId: '111', title: 'Reference Book', contentType: 'book', displayOrder: 2 },
+    book2: { assetId: '222', title: 'Workbook', contentType: 'book', displayOrder: 0 },
+    book3: { assetId: '333', title: 'Test Book', contentType: 'book', displayOrder: 3 },
+    book4: { assetId: '666', title: 'Games', contentType: 'games', displayOrder: 1 },
+    link5: { assetId: '', title: 'Worksheet', type: 'link', url: URL_W, displayOrder: 4 },
+  },
+};
+
+test('webzListesi: bütün üyelerde displayOrder varsa ona göre (anahtar sırası değil)', () => {
+  assert.deepEqual(S.webzListesi(WEBZ_SIRALI).map((g) => g.anahtar), ['book2', 'book4', 'book1', 'book3', 'link5']);
+  // Biri eksikse JSON anahtar sırası.
+  const eksik = JSON.parse(JSON.stringify(WEBZ_SIRALI));
+  delete eksik.books.book3.displayOrder;
+  assert.deepEqual(S.webzListesi(eksik).map((g) => g.anahtar), ['book1', 'book2', 'book3', 'book4', 'link5']);
+  // Eşitlikte kararlı (JSON anahtar sırası).
+  const esit = { books: { b2: { assetId: '2', displayOrder: 0 }, b1: { assetId: '1', displayOrder: 0 } } };
+  assert.deepEqual(S.webzListesi(esit).map((g) => g.anahtar), ['b2', 'b1']);
+});
+
+test('uçtan uca: displayOrder sırası menüye ve ikili girdisine taşınır', async () => {
+  const { r, zipYolu } = await kostur({ ayar: WEBZ_SIRALI });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  // book2(222)→build book3, book4(666)→book4, book1(111)→book1, book3(333)→book2.
+  assert.deepEqual(r.kitaplar, ['book3', 'book4', 'book1', 'book2', 'link5']);
+  assert.deepEqual(menu(zipYolu).map(([k]) => k), ['book3', 'book4', 'book1', 'book2', 'link5']);
+});
+
+test('eslemeKur: aynı assetId iki klasörde → çakışma, girdi yok', () => {
+  const e = S.eslemeKur({
+    liste: S.webzListesi(WEBZ), setAdi: 'S',
+    kapi: { kitaplar: [{ n: 1, id: '111' }, { n: 2, id: '333' }, { n: 3, id: '111' }], webzVarliklari: [] },
+  });
+  assert.equal(e.girdi, null);
+  assert.ok(e.eksik.includes('çakışma: assetId 111 birden çok klasörde (book1, book3)'), e.eksik.join('\n'));
+});
+
+test('uçtan uca: aynı assetId iki klasörde → ATLANDI (çakışma), iş kopyası bayt-aynı', async () => {
+  const { r, once, sonra } = await kostur({ zip: buildZip({ cift: true }) });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /çakışma: assetId 111 birden çok klasörde \(book1, book3\)/);
+  assert.ok(once.equals(sonra));
+});
+
+for (const [mod, beklenen] of [['electron', 'electron.js'], ['assets', 'assets/111/data/BookContent.xml']]) {
+  test(`kapı RED (beyaz liste, ${mod}): ikili kabuk dışı kök dosyası yazarsa iş kopyası DEĞİŞMEDİ`, async () => {
+    const { r, once, sonra } = await kostur({ mod });
+    assert.equal(r.durum, 'atlandi');
+    assert.ok(r.ihlal.includes(`beklenmeyen kabuk dosyası: ${beklenen}`), (r.ihlal || [r.neden]).join('\n'));
+    assert.ok(once.equals(sonra));
+  });
+}
+
+test('kabukDosyasiMi: kabuk dosyaları ve klasör kapakları kabul, diğerleri RED', () => {
+  const k = new Set(['book1', 'book3']);
+  for (const y of ['index.html', 'config/settings.json', 'scripts/language-set.js', 'features/voiced.html',
+    'images/book3.png', 'images/book1.jpg', 'set-menu.json']) assert.equal(S.kabukDosyasiMi(y, k), true, y);
+  for (const y of ['electron.js', 'package.json', 'assets/1/a.js', 'images/book9.png', 'classlibraries/ImWin32.dll',
+    'scripts/yeni.js']) assert.equal(S.kabukDosyasiMi(y, k), false, y);
+});
+
+test('zaman aşımı: asılı ikili SIGKILL ile öldürülür, adım ATLANDI, iş kopyası bayt-aynı', async () => {
+  const { r, once, sonra, d } = await kostur({ mod: 'uyu', aracSuresiMs: 2000 });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /çıkış -2: zaman aşımı \(2000 ms\), süreç öldürüldü/);
+  assert.ok(once.equals(sonra));
+  // Yük altında sahte ikili (node) PID yazmadan öldürülmüş olabilir; yazdıysa ölü olmalı.
+  const pidYolu = path.join(d, 'ikili.pid');
+  if (fs.existsSync(pidYolu)) {
+    assert.throws(() => process.kill(Number(fs.readFileSync(pidYolu, 'utf8')), 0), /ESRCH/, 'ikili süreç hâlâ yaşıyor');
+  }
+});
+
+test('ikiliKostur: süre dolunca süreç SIGKILL ile ölür (code -2, PID yok)', async () => {
+  const r = await S.ikiliKostur('/bin/sleep', ['30'], { zamanAsimiMs: 300 });
+  assert.equal(r.code, -2);
+  assert.match(r.stderr, /zaman aşımı \(300 ms\), süreç öldürüldü/);
+  assert.throws(() => process.kill(r.pid, 0), /ESRCH/, 'süreç hâlâ yaşıyor');
+  const ok = await S.ikiliKostur('/bin/echo', ['tamam']);
+  assert.equal(ok.code, 0);
+  assert.equal(ok.stdout.trim(), 'tamam');
+});
+
+test('kapak isteği: Web-Z anahtarı URL kodlanır', async () => {
+  const ayar = JSON.parse(JSON.stringify(WEBZ));
+  ayar.books = { 'kitap 1': ayar.books.book1, ...Object.fromEntries(Object.entries(ayar.books).slice(1)) };
+  const { r, istekler } = await kostur({ ayar });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  assert.ok(istekler.some((u) => u.includes('/images/kitap%201.png?a=111')), istekler.join('\n'));
+});
+

@@ -41,6 +41,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const { spawn } = require('child_process');
 const M = require('./icerik-merdiven');
 const K = require('./yazma-kapisi');
 const setEk = require('./set-uyelik-ek');
@@ -109,14 +110,21 @@ function uygunluk({ adlar, kokIndexHtml }) {
 }
 
 /**
- * Web-Z `settings.json` → SIRALI üye listesi (JSON anahtar sırası = Web-Z sırası). SAF.
+ * Web-Z `settings.json` → SIRALI üye listesi. SAF.
+ * SIRA: bütün üyelerde sayısal `displayOrder` varsa ona göre (kararlı: eşitlikte JSON anahtar sırası) —
+ * Swift `WebZKabukGirdisi.webZAyari` ile aynı kural; tema da yamada `displayOrder`'a göre dizer. Biri
+ * bile eksikse JSON anahtar sırası (Web-Z `generateSettingsJson` sırası).
  * @returns {Array<{anahtar:string, assetId:string, title:string, contentType:string, link:boolean,
  *   url:string, group:string}>}
  */
 function webzListesi(ayar) {
   const books = ayar && ayar.books && typeof ayar.books === 'object' ? ayar.books : {};
   const temiz = (s) => String(s == null ? '' : s).trim();
-  return Object.entries(books).filter(([, b]) => b && typeof b === 'object').map(([anahtar, b]) => {
+  const girdiler = Object.entries(books).filter(([, b]) => b && typeof b === 'object');
+  const sirali = girdiler.length && girdiler.every(([, b]) => typeof b.displayOrder === 'number'
+    && Number.isFinite(b.displayOrder));
+  if (sirali) girdiler.sort((a, b) => a[1].displayOrder - b[1].displayOrder); // Array#sort kararlıdır
+  return girdiler.map(([anahtar, b]) => {
     const link = b.type === 'link' || b.contentType === 'link';
     return {
       anahtar, assetId: link ? '' : temiz(b.assetId), title: temiz(b.title),
@@ -133,12 +141,27 @@ function webzListesi(ayar) {
  * @returns {{girdi: {setTitle:string, kitaplar: object[]}|null, eksik: string[], notlar: string[]}}
  */
 function eslemeKur({ liste, kapi, setAdi }) {
-  const klasor = new Map();
-  for (const k of (kapi && kapi.kitaplar) || []) if (k.id != null) klasor.set(String(k.id), `book${k.n}`);
-  for (const w of (kapi && kapi.webzVarliklari) || []) klasor.set(String(w.id), `book${w.n}`);
-  const kitaplar = [];
+  // assetId → klasör. Aynı kimlik İKİ klasörde ise hangisinin açılacağı belirsiz (Swift ilkini, sözlük
+  // sonuncuyu alırdı) → eşleme kurulmaz, adım atlanır (kart yanlış kitabı açmasın).
+  const sahipler = new Map();
+  const ekle = (id, n) => {
+    const k = `book${n}`;
+    if (!sahipler.has(id)) sahipler.set(id, new Set());
+    sahipler.get(id).add(k);
+  };
+  for (const k of (kapi && kapi.kitaplar) || []) if (k.id != null) ekle(String(k.id), k.n);
+  for (const w of (kapi && kapi.webzVarliklari) || []) ekle(String(w.id), w.n);
   const eksik = [];
   const notlar = [];
+  const listeIdler = new Set(liste.filter((g) => !g.link).map((g) => g.assetId));
+  for (const [id, kume] of sahipler) {
+    if (kume.size > 1 && listeIdler.has(id)) {
+      eksik.push(`çakışma: assetId ${id} birden çok klasörde (${[...kume].sort().join(', ')})`);
+    }
+  }
+  if (eksik.length) return { girdi: null, eksik, notlar };
+  const klasor = new Map([...sahipler].map(([id, kume]) => [id, [...kume][0]]));
+  const kitaplar = [];
   const alinan = new Set();
   for (const g of liste) {
     if (g.link) {
@@ -172,6 +195,24 @@ function kapakGecerli(veri) {
 }
 
 /**
+ * Üretim Masası `WebZTemaUretici.yaz`'ın yazabileceği kök dosyaları (beyaz liste). SAF.
+ * Kaynak: `kopyalanacaklar` + settings/yama/yedek stil/index/set-menu + kapaklar (`images/<klasör>.png|jpg`).
+ */
+const KABUK_SABIT = new Set([
+  'index.html', 'set-menu.json', AYAR, YAMA, 'styles/cevrimdisi.css',
+  'styles/language-set.css', 'styles/language-animations.css',
+  'scripts/language-loader.js', 'scripts/xmlParser.js', 'scripts/language-animations.js',
+  'scripts/book-preloader.js', 'scripts/onboarding.js', DIL_BETIGI,
+  'languages/tr.json', 'languages/en.json', 'images/logo.png', 'images/bg.jpg', 'images/arkaplan.png',
+]);
+function kabukDosyasiMi(yol, klasorler) {
+  if (KABUK_SABIT.has(yol)) return true;
+  if (/^features\/[a-z0-9-]+\.html$/.test(yol)) return true;
+  const m = /^images\/([^/]+)\.(png|jpg)$/.exec(yol);
+  return Boolean(m && klasorler.has(m[1]));
+}
+
+/**
  * Yazım sonrası kapı (merkez dizin önce/sonra + kabuk metinleri). SAF.
  * @param {{once: Map, sonra: Map, onEk: string, yazilan: string[], beklenen: {kitaplar: object[]},
  *   metin: {dil: string|null, yama: string|null, ayar: string|null, index: string|null}}} o
@@ -179,6 +220,9 @@ function kapakGecerli(veri) {
  */
 function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin }) {
   const ihlal = [];
+  // Yazılan her kök dosyası kabuğun bilinen dosyası olmalı (electron.js, kök assets/** vb. → RED).
+  const klasorler = new Set((beklenen.kitaplar || []).map((k) => k.klasor));
+  for (const y of yazilan) if (!kabukDosyasiMi(y, klasorler)) ihlal.push(`beklenmeyen kabuk dosyası: ${y}`);
   const yazilanKume = new Set(yazilan.map((y) => `${onEk}${y}`));
   for (const [ad, g] of once) {
     if (g.dizin) continue;
@@ -256,6 +300,34 @@ async function dosyalariTopla(kok, alt = '') {
     else if (e.isFile()) out.push(goreli);
   }
   return out;
+}
+
+/**
+ * İkiliyi süre sınırıyla koşturur; süre dolunca süreç SIGKILL ile ÖLDÜRÜLÜR (asılı araç ajan
+ * ömrü boyunca kalmasın). Döner {code, pid, stdout, stderr}; zaman aşımında code -2.
+ */
+function ikiliKostur(cmd, args, { zamanAsimiMs = ARAC_SURESI_MS } = {}) {
+  return new Promise((resolve) => {
+    let p;
+    try {
+      p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      resolve({ code: -1, stdout: '', stderr: String(e && e.message) });
+      return;
+    }
+    let out = '';
+    let err = '';
+    let doldu = false;
+    const z = setTimeout(() => { doldu = true; p.kill('SIGKILL'); }, zamanAsimiMs);
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('error', (e) => { clearTimeout(z); resolve({ code: -1, stdout: out, stderr: `${err}${e.message}` }); });
+    p.on('close', (code) => {
+      clearTimeout(z);
+      resolve(doldu ? { code: -2, pid: p.pid, stdout: out, stderr: `zaman aşımı (${zamanAsimiMs} ms), süreç öldürüldü` }
+        : { code, pid: p.pid, stdout: out, stderr: err });
+    });
+  });
 }
 
 /**
@@ -339,7 +411,7 @@ async function kabukTazele(o) {
     for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
       let r;
       try {
-        r = await getir(`${taban}/images/${k.anahtar}.png?a=${encodeURIComponent(k.assetId)}`);
+        r = await getir(`${taban}/images/${encodeURIComponent(k.anahtar)}.png?a=${encodeURIComponent(k.assetId)}`);
       } catch (e) {
         return bitir(`kapak alınamadı (${k.anahtar}): ${String(e && e.message || e).slice(0, 80)}`);
       }
@@ -356,14 +428,7 @@ async function kabukTazele(o) {
     const girdiYolu = path.join(sahne, 'girdi.json');
     const girdi = { ...es.girdi, kitaplar: es.girdi.kitaplar.map(({ anahtar, ...k }) => k) };
     await fsp.writeFile(girdiYolu, JSON.stringify(girdi, null, 2));
-    let zamanlayici;
-    const r = await Promise.race([
-      komut(ikili, [kok, girdiYolu, kapakDizini]),
-      new Promise((res) => {
-        zamanlayici = setTimeout(() => res({ code: -2, stdout: '', stderr: 'zaman aşımı' }), ARAC_SURESI_MS);
-      }),
-    ]);
-    clearTimeout(zamanlayici);
+    const r = await ikiliKostur(ikili, [kok, girdiYolu, kapakDizini], { zamanAsimiMs: o.aracSuresiMs || ARAC_SURESI_MS });
     if (r.code !== 0) {
       return bitir(`webz-kabuk-uret çıkış ${r.code}: ${String(r.stderr || '').trim().slice(-200)}`);
     }
@@ -436,5 +501,5 @@ async function kabukTazele(o) {
 
 module.exports = {
   ISARET, WEBZ_KOKU, IMZA, acik, ikiliYolu, onEkBul, uygunluk, webzListesi, eslemeKur, kapakGecerli,
-  kapiDenetle, kabukTazele,
+  kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele,
 };

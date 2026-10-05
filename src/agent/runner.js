@@ -974,6 +974,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       // KAYNAK SÜRÜMÜ (Dalga B, B2 madde 6): claim'deki build sürümü gövdenin kökünde — sunucunun
       // bellek içi claim eşliği API yeniden başlayınca kaybolur; beyan varsa sürüm paritesi yine çalışır.
       ...(typeof job.kaynakSurumu === 'string' && job.kaynakSurumu ? { kaynakSurumu: job.kaynakSurumu } : {}),
+      // SF425 KABUK TAZELEME özeti (Z2, 05.10): yalnız adım koştuysa {durum, neden}. Sunucu şeması
+      // (zod, strict değil) bilinmeyen alanı atar; book-update kaydetmek isterse alan hazır.
+      ...kabukTazelemeGovdesi(job.kabukTazeleme),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );
@@ -984,6 +987,12 @@ async function postResultSuccess(auth, job, artifactPath) {
   // kaydı `yayinlandi` DEĞİL bayat saymalı (04.10).
   const yk = res.data && res.data.yenidenKuyruk;
   return { r2ObjectKey: presigned.r2ObjectKey, publicUrl: presigned.publicUrl, ...(yk ? { yenidenKuyruk: yk } : {}) };
+}
+
+/** /result gövdesinin kabuk tazeleme alanı: `{kabukTazeleme: {durum, neden}}` ya da {}. SAF. */
+function kabukTazelemeGovdesi(o) {
+  if (!o || typeof o !== 'object' || typeof o.durum !== 'string') return {};
+  return { kabukTazeleme: { durum: o.durum, neden: o.neden == null ? null : String(o.neden).slice(0, 300) } };
 }
 
 async function postResultFailure(auth, job, errorMessage) {
@@ -3242,6 +3251,6 @@ module.exports = {
   // Kabul kuyruğu (05.10) — üretim kapısı + iş alma adımı.
   kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs,
   // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
-  kaynakAdim, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
+  kaynakAdim, kabukTazelemeGovdesi, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
   _konumAyarla: (ofiste) => { _konum = { t: Date.now(), ofiste: Boolean(ofiste) }; _sonYetenek = ''; },
 };
