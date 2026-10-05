@@ -2,11 +2,11 @@
   "tema": "web-proxy-modern",
   "kaynak": "book-update services/cloudflare-worker/src/set-ui-templates.ts",
   "satirlar": [
-    13340,
-    15049
+    13652,
+    15573
   ],
-  "commit": "e7b2da99 2026-09-22",
-  "eslenme": "2026-10-02",
+  "commit": "3a2384e6 2026-10-05",
+  "eslenme": "2026-10-05",
   "dosyalar": {
     "_design/components.css": {
       "boyut": 13144,
@@ -65,12 +65,12 @@
       "sha256": "9bc075cfa1439c842f2f7cbd2f9702d684c71fc9235db0c054b4e20020881c7b"
     },
     "theme.css": {
-      "boyut": 8381,
-      "sha256": "92ba4fb2b193da180fef850492ebfdd2eb2cb093f2af3091d7aca0d5d47d10b8"
+      "boyut": 9380,
+      "sha256": "5cf11fc5d68be9f49cd06f79b2281f985bc943b3ffd7acd543c0e1f485915559"
     },
     "theme.js": {
-      "boyut": 14362,
-      "sha256": "984234fbff2acd87ae9cc8004a9ad8b934bfc26cf06f8d4ccfb1dbf847783fc2"
+      "boyut": 22915,
+      "sha256": "e129161bdf8f2a896fe0d3873a66738e7d358736c82d968a6371fb00c27f9e76"
     }
   }
 }

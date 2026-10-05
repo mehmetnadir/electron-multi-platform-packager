@@ -254,6 +254,16 @@ test('kaynak paritesi: Worker teması (book-update) ile depo kopyası bayt bayt 
     t.skip('book-update set-ui-templates.ts yok');
     return;
   }
+  // Kaynak commit edilmemiş değişiklik taşıyorsa parite kanıt değildir (başka oturumun yarım işi).
+  if (!process.env.EMPP_WEBZ_TEMA_KAYNAK) {
+    const { spawnSync } = require('node:child_process');
+    const r = spawnSync('git', ['-C', path.dirname(esitle.VARSAYILAN_KAYNAK), 'status',
+      '--porcelain', '--', path.basename(esitle.VARSAYILAN_KAYNAK)], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim()) {
+      t.skip('book-update set-ui-templates.ts kirli — EMPP_WEBZ_TEMA_KAYNAK ile temiz kaynak ver');
+      return;
+    }
+  }
   const { dosyalar } = esitle.temaCikar(fs.readFileSync(esitle.VARSAYILAN_KAYNAK, 'utf8'),
     'web-proxy-modern');
   for (const [ad, buf] of dosyalar) {

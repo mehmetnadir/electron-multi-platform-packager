@@ -387,3 +387,195 @@ document.addEventListener('DOMContentLoaded', async () => {
   FlashyUI.initReveal();
   FlashyUI.initLang(I18N);
 });
+
+/* ------------------------------------------------------------------------
+ * Kapak rafı "sonraki satır" düğmesi (2026-10-05, Nadir) — Flashy teması.
+ * KAYNAK: sf425/scripts/language-set.js sonundaki aynı blok; yalnız üç seçici farklı.
+ * Öğretmen tahtada parmakla kaydıramayabilir. Düğme her basışta rafı bir
+ * sonraki kapak SATIRINA kaydırır. Son satırdan sonraki basış başa döner.
+ *  - Satır: .books-row içindeki görünür .book-item'ların aynı üst konumu.
+ *  - Düğme yalnız kapaklar 2+ satırdaysa VE sayfa kaydırılabiliyorsa görünür.
+ *  - Pencere boyutu ya da raf içeriği değişince yeniden hesaplanır.
+ *  - Konum: sağ alt. Sarı indirme düğmesi (#bk-dl) varsa onun ÜSTÜNDE.
+ *  - Çevrimdışı pakette de aynı davranış (indirme düğmesi orada yok).
+ * ---------------------------------------------------------------------- */
+(function sonrakiSatirDugmesi() {
+    if (window.__sonrakiSatirKuruldu) return;
+    window.__sonrakiSatirKuruldu = true;
+
+    var OK_ASAGI = '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">'
+        + '<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var OK_YUKARI = '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">'
+        + '<path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" '
+        + 'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    // Temaya göre değişen iki seçici. Flashy teması (web-proxy-modern/theme.js) aynı
+    // kodun kopyasını kendi seçicileriyle taşır — davranış iki temada aynıdır.
+    var KART_SECICI = '#bookGrid > .flashy-card';
+    var UST_SECICI = '.topbar, header';
+    var RAF_ID = 'bookGrid';
+    var KENAR = 16;          // düğme ile ekran kenarı / indirme düğmesi arası
+    var UST_PAY = 16;        // hedef satırın üstünde bırakılan boşluk
+    var ESIK = 6;            // aynı satır sayılan üst konum farkı (px)
+
+    var dugme = null;
+    var sondaMi = false;
+    var bekleyen = 0;
+
+    function azHareket() {
+        try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; }
+    }
+
+    /** Kaydırılan öğe: belge (html) ya da taşan bir iç kapsayıcı. */
+    function kaydirici() {
+        var adaylar = [document.querySelector('.app-container'), document.getElementById(RAF_ID)];
+        for (var i = 0; i < adaylar.length; i++) {
+            var el = adaylar[i];
+            if (!el) continue;
+            var oy = getComputedStyle(el).overflowY;
+            if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 4) return el;
+        }
+        return document.scrollingElement || document.documentElement;
+    }
+
+    function belgeMi(el) {
+        return el === document.scrollingElement || el === document.documentElement || el === document.body;
+    }
+
+    function konum(el) { return belgeMi(el) ? (window.scrollY || el.scrollTop || 0) : el.scrollTop; }
+    function enFazla(el) {
+        return belgeMi(el)
+            ? Math.max(0, el.scrollHeight - window.innerHeight)
+            : Math.max(0, el.scrollHeight - el.clientHeight);
+    }
+
+    /** Sabit/yapışkan üst çubuk varsa yüksekliği; yoksa 0. */
+    function ustCubukPayi() {
+        var pay = 0;
+        var adaylar = document.querySelectorAll(UST_SECICI);
+        for (var i = 0; i < adaylar.length; i++) {
+            var s = getComputedStyle(adaylar[i]);
+            if (s.position !== 'fixed' && s.position !== 'sticky') continue;
+            var r = adaylar[i].getBoundingClientRect();
+            if (r.top <= 1 && r.bottom > pay && r.height < window.innerHeight / 3) pay = r.bottom;
+        }
+        return pay;
+    }
+
+    /** Satırların kaydırıcı içindeki üst konumları (artan, tekil). */
+    function satirlar(el) {
+        var ogeler = document.querySelectorAll(KART_SECICI);
+        var taban = belgeMi(el) ? 0 : el.getBoundingClientRect().top;
+        var ust = konum(el);
+        var liste = [];
+        for (var i = 0; i < ogeler.length; i++) {
+            var o = ogeler[i];
+            if (o.offsetParent === null) continue;          // gizli kart
+            var y = Math.round(o.getBoundingClientRect().top - taban + ust);
+            var ayni = false;
+            for (var j = 0; j < liste.length; j++) {
+                if (Math.abs(liste[j] - y) <= ESIK) { ayni = true; break; }
+            }
+            if (!ayni) liste.push(y);
+        }
+        liste.sort(function (a, b) { return a - b; });
+        return liste;
+    }
+
+    /**
+     * Sonraki satırın kaydırma hedefi; yoksa null (başa dönülecek).
+     * Kural: üstü görünen İLK satırı bul, hedef ondan SONRAKİ satırın üstüdür
+     * (üst çubuk payı düşülür). Son satıra ya da kaydırma sonuna gelindiyse null.
+     */
+    function sonrakiHedef(el) {
+        var simdi = konum(el);
+        var tavan = enFazla(el);
+        if (simdi >= tavan - 2) return null;
+        var pay = ustCubukPayi() + UST_PAY;
+        var s = satirlar(el);
+        var ilkGorunen = -1;
+        for (var i = 0; i < s.length; i++) {
+            if (s[i] - pay >= simdi - 8) { ilkGorunen = i; break; }
+        }
+        if (ilkGorunen === -1 || ilkGorunen + 1 >= s.length) return null;
+        return Math.min(Math.max(0, s[ilkGorunen + 1] - pay), tavan);
+    }
+
+    function konumla() {
+        if (!dugme) return;
+        var alt = KENAR + 8;
+        // offsetParent position:fixed öğede hep null — görünürlük kutudan ölçülür.
+        var indir = document.getElementById('bk-dl');
+        if (indir) {
+            var r = indir.getBoundingClientRect();
+            if (r.height > 0 && r.width > 0 && getComputedStyle(indir).display !== 'none') {
+                alt = Math.round(window.innerHeight - r.top + KENAR);
+            }
+        }
+        dugme.style.bottom = alt + 'px';
+    }
+
+    function guncelle() {
+        bekleyen = 0;
+        if (!dugme) return;
+        var el = kaydirici();
+        var gorunur = satirlar(el).length >= 2 && enFazla(el) > 4;
+        dugme.hidden = !gorunur;
+        if (!gorunur) return;
+        konumla();
+        var son = sonrakiHedef(el) === null;
+        if (son !== sondaMi || !dugme.firstChild) {
+            sondaMi = son;
+            dugme.innerHTML = son ? OK_YUKARI : OK_ASAGI;
+            dugme.setAttribute('aria-label', son ? 'Başa dön' : 'Sonraki satır');
+            dugme.title = son ? 'Başa dön' : 'Sonraki satır';
+            dugme.classList.toggle('basa-don', son);
+        }
+    }
+
+    function planla() {
+        if (bekleyen) return;
+        bekleyen = (window.requestAnimationFrame || setTimeout)(guncelle);
+    }
+
+    function kaydir() {
+        var el = kaydirici();
+        var hedef = sonrakiHedef(el);
+        var top = hedef === null ? 0 : hedef;
+        var davranis = azHareket() ? 'auto' : 'smooth';
+        if (belgeMi(el)) window.scrollTo({ top: top, behavior: davranis });
+        else el.scrollTo({ top: top, behavior: davranis });
+        if (davranis === 'auto') planla();
+    }
+
+    function kur() {
+        if (dugme || !document.body) return;
+        dugme = document.createElement('button');
+        dugme.type = 'button';
+        dugme.id = 'sonrakiSatirBtn';
+        dugme.className = 'sonraki-satir-btn';
+        dugme.hidden = true;
+        dugme.addEventListener('click', kaydir);   // Enter/Space: <button> yerel davranışı
+        document.body.appendChild(dugme);
+
+        window.addEventListener('scroll', planla, { passive: true });
+        window.addEventListener('resize', planla);
+        document.addEventListener('scroll', planla, { passive: true, capture: true });
+        if (window.ResizeObserver) {
+            var ro = new ResizeObserver(planla);
+            ro.observe(document.documentElement);
+            var raf = document.getElementById(RAF_ID);
+            if (raf) ro.observe(raf);
+        }
+        if (window.MutationObserver) {
+            var raf2 = document.getElementById(RAF_ID);
+            if (raf2) new MutationObserver(planla).observe(raf2, { childList: true, subtree: true });
+            // İndirme düğmesi (#bk-dl) sonradan eklenir; konumu ona göre kayar.
+            new MutationObserver(planla).observe(document.body, { childList: true });
+        }
+        planla();
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', kur);
+    else kur();
+})();

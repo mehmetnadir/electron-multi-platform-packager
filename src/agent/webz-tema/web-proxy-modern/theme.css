@@ -232,3 +232,23 @@
   .pwa-text span { display: none; }
   .set-head { flex-direction: column; align-items: flex-start; }
 }
+
+/* Kapak rafı "sonraki satır" düğmesi (2026-10-05) — sf425 ile aynı davranış,
+   Flashy jetonlarıyla. Dokunmatik hedef 56x56 px; bottom değerini betik
+   indirme düğmesine (#bk-dl) göre ayarlar. */
+.sonraki-satir-btn {
+  position: fixed; right: 16px; bottom: 24px;
+  width: 56px; height: 56px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  border-radius: 999px;
+  background: var(--surface); color: var(--brand);
+  box-shadow: var(--shadow-md);
+  cursor: pointer; z-index: 40; touch-action: manipulation;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.sonraki-satir-btn[hidden] { display: none; }
+.sonraki-satir-btn:active { transform: scale(.94); }
+.sonraki-satir-btn:focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; }
+.sonraki-satir-btn svg { display: block; }
+@media (prefers-reduced-motion: reduce) { .sonraki-satir-btn { transition: none; } }

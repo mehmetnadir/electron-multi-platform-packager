@@ -27,8 +27,9 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const KOK = path.join(__dirname, '..', 'src', 'agent', 'webz-tema');
-const VARSAYILAN_KAYNAK = path.join(process.env.HOME || '', '01dev', 'book-update', 'services',
-  'cloudflare-worker', 'src', 'set-ui-templates.ts');
+// EMPP_WEBZ_TEMA_KAYNAK: ana ağaç commit edilmemiş değişiklik taşırken temiz kaynak (worktree) ver.
+const VARSAYILAN_KAYNAK = process.env.EMPP_WEBZ_TEMA_KAYNAK || path.join(process.env.HOME || '',
+  '01dev', 'book-update', 'services', 'cloudflare-worker', 'src', 'set-ui-templates.ts');
 const TEMA_SATIRI = /^ {2}'([a-z0-9-]+)': \{\s*$/;
 
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
