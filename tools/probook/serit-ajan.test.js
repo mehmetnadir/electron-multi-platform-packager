@@ -47,7 +47,7 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
-  assert.equal(o.caps, 'pardus,kaynak-kur,kaynak-r2');
+  assert.equal(o.caps, 'pardus,kaynak-r2', 'kaynak-kur yalnız Mac (kabuk tazeleme Swift)');
   // Mac paritesi (02.10): G kanalı açık anahtarı + kapsam, set eki, merdiven, CDP kabul
   assert.match(o.setG, /(^|,)linux(,|$)/);
   const { pardusBetikEnv } = require('../../src/agent/runner-helpers');
