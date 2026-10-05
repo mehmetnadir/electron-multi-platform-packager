@@ -1172,5 +1172,36 @@ class MainAkisiOturumTest(unittest.TestCase):
         self.assertTrue(raporlar[0]["oturum"]["baglandi"])
 
 
+class AktBLatchTest(unittest.TestCase):
+    """45469 imzali kabul b KALDI (05.10): snackbar kacirildi / giris ulasmadi. Saf karar + latch."""
+    def test_latch_okuma(self):
+        self.assertEqual(kabul.akt_latch_hata({"hata": {"metin": "Aktivasyon kodu hatalı!", "t": 1}}), "Aktivasyon kodu hatalı!")
+        self.assertIsNone(kabul.akt_latch_hata({"hata": None, "kurulu": True}))
+        self.assertIsNone(kabul.akt_latch_hata(None))
+        self.assertIsNone(kabul.akt_latch_hata("x"))
+
+    def test_hata_kaniti_latch_yoklamadan_bagimsiz(self):
+        l = {"hata": {"metin": "Aktivasyon kodu hatalı!", "t": 1}}
+        self.assertTrue(kabul.akt_b_hata_goruldu({"diyalog": True}, l))   # anlik olcum bos, latch var
+        self.assertTrue(kabul.akt_b_hata_goruldu({"hata": True}, None))
+        self.assertTrue(kabul.akt_b_hata_goruldu({"snack": "Aktivasyon kodu hatalı!"}, None))
+        self.assertFalse(kabul.akt_b_hata_goruldu({"snack": "Kaydedildi"}, None))
+        self.assertFalse(kabul.akt_b_hata_goruldu({}, {"hata": None}))
+
+    def test_giris_yeniden_yalniz_bos_girdide(self):
+        f = kabul.akt_giris_yeniden_mi
+        self.assertTrue(f({"girdiDolu": False}, None, 3.5))      # 45469: girdi bos, hata yok
+        self.assertFalse(f({"girdiDolu": False}, None, 1.0))     # erken
+        self.assertFalse(f({"girdiDolu": True}, None, 5.0))      # giris ulasti, ayni kod 2 kez gitmez
+        self.assertFalse(f({"girdiDolu": None}, None, 5.0))      # olculemedi
+        self.assertFalse(f({"girdiDolu": False}, {"hata": {"metin": "Aktivasyon kodu hatalı!"}}, 5.0))
+
+    def test_js_sabitleri(self):
+        self.assertIn("MutationObserver", kabul.JS_AKT_LATCH_KUR)
+        self.assertIn("__emppAktHata", kabul.JS_AKT_LATCH_OKU)
+        self.assertIn("MuiAlert-message", kabul.JS_AKT)
+        self.assertNotIn("KABULGECERSIZ", kabul.JS_AKT_LATCH_KUR)
+
+
 if __name__ == "__main__":
     unittest.main()
