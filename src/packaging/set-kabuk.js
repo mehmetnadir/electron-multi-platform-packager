@@ -95,6 +95,18 @@ const KABUK_DISI_DIZINLER = Object.freeze(['node_modules', 'temp', '.empp-gecici
 const KITAP_DIZIN_DESENI = /^book\d+$/;
 
 /**
+ * A1 düzeni (tek motorlu 11-12 seti, 2026-10-05; `a1-duzen.js`): bookN YOK, motor kökte, motor
+ * sayfası `kapak/index.html`. YALNIZ `{a1: true}` seçeneğiyle uygulanır (varsayılan bookN tanımı
+ * aynen kalır — kökte `assets/` bookN setinde yine bilinmeyendir):
+ *   · `kapak/` — motor sayfası, kabuktur (kökteki motor dosyaları gibi).
+ *   · `assets/` (kitap içerikleri `assets/<id>`) ve `classlibraries/` (kapak menüsü + aktivasyon
+ *     durumu, `ImWin32.dll`) — KİTAP sınıfı: set kanalı dokunmaz (bookN içi gibi; Windows kapısı
+ *     tek-motor K kanalı).
+ */
+const A1_KABUK_DIZINLERI = Object.freeze(['kapak']);
+const A1_KITAP_DIZINLERI = Object.freeze(['assets', 'classlibraries']);
+
+/**
  * Kabuk sayılmayan kök DOSYALARI: kanalın kendi durum dosyaları.
  * `empp-set.json` envanterin kendisidir (kendini listelemez); `.empp` ile
  * başlayan her kök dosyası güncelleyicinin durumudur (damga, `.indirme` artığı).
@@ -115,6 +127,7 @@ const IMZA = [
   `kitap=${KITAP_DIZIN_DESENI.source}`,
   `yedek=${YEDEK_DIZIN_DESENI.source}`,
   `durum=${ENVANTER_DOSYASI}|${DURUM_DOSYA_ONEKI}*`,
+  `a1=kabuk:${A1_KABUK_DIZINLERI.join(',')};kitap:${A1_KITAP_DIZINLERI.join(',')}`,
 ].join(' ');
 
 /** Yolu POSIX ayraçlı, baştaki `./` ve `/` temizlenmiş hâle getirir. Saf. */
@@ -151,11 +164,12 @@ function dalAdi(ham) {
  * Bir kök dizin adının sınıfı: `'kabuk' | 'kitap' | 'artefakt' | 'yedek' | 'bilinmeyen'`.
  * DOSYA değil DİZİN adı bekler. Saf.
  */
-function dalSinifi(ad) {
+function dalSinifi(ad, secenek = {}) {
   const d = String(ad == null ? '' : ad);
+  const a1 = Boolean(secenek && secenek.a1);
   if (YEDEK_DIZIN_DESENI.test(d)) return 'yedek';
-  if (KABUK_DIZINLERI.includes(d)) return 'kabuk';
-  if (KITAP_DIZIN_DESENI.test(d)) return 'kitap';
+  if (KABUK_DIZINLERI.includes(d) || (a1 && A1_KABUK_DIZINLERI.includes(d))) return 'kabuk';
+  if (KITAP_DIZIN_DESENI.test(d) || (a1 && A1_KITAP_DIZINLERI.includes(d))) return 'kitap';
   if (KABUK_DISI_DIZINLER.includes(d)) return 'artefakt';
   return 'bilinmeyen';
 }
@@ -169,15 +183,15 @@ function dalSinifi(ad) {
  * `main.js`, `set_app.config`, `index.html`, `favicon.ico`… hepsi buradan geçer.
  * Alt yol (2+ parça): yalnız beyaz listedeki dizinlerin altı kabuktur.
  */
-function kabukYoluMu(ham) {
-  return kabukDisiSebep(ham) === null;
+function kabukYoluMu(ham, secenek = {}) {
+  return kabukDisiSebep(ham, secenek) === null;
 }
 
 /**
  * Kabuk DEĞİLSE nedenini döner, kabuksa `null`. Saf.
  * Kapı bu metni kullanıcıya gösterir — "sızdı" demek yetmez, NEDEN sızdığı yazılır.
  */
-function kabukDisiSebep(ham) {
+function kabukDisiSebep(ham, secenek = {}) {
   if (typeof ham !== 'string' || !ham) return 'dize değil ya da boş';
   if (!yolGuvenliMi(ham)) return 'yol güvensiz (boş segment, `.`/`..` kaçışı ya da sürücü öneki)';
   const parcalar = yolNormalle(ham).split('/');
@@ -186,7 +200,7 @@ function kabukDisiSebep(ham) {
     const ad = parcalar[0];
     if (ad === ENVANTER_DOSYASI) return `${ENVANTER_DOSYASI} envanterin kendisidir`;
     if (ad.startsWith(DURUM_DOSYA_ONEKI)) return 'güncelleyicinin durum dosyası';
-    const sinif = dalSinifi(ad);
+    const sinif = dalSinifi(ad, secenek);
     // `yedek` deseni yalnız DİZİN adlarına uygulanır — kökteki `_x.js` dosyası kabuktur.
     if (sinif !== 'bilinmeyen' && sinif !== 'yedek') {
       return `"${ad}" bir DİZİN adıdır (${sinif}) — kabuk girdisi dosya yolu olmalı`;
@@ -195,7 +209,7 @@ function kabukDisiSebep(ham) {
   }
 
   const dal = parcalar[0];
-  const sinif = dalSinifi(dal);
+  const sinif = dalSinifi(dal, secenek);
   if (sinif === 'kabuk') return null;
   if (sinif === 'kitap') return `kitap içeriği (${dal}/) — kitabın kendi kanalına ait`;
   if (sinif === 'artefakt') return `kabuk dışı artefakt dizini (${dal}/)`;
@@ -207,10 +221,10 @@ function kabukDisiSebep(ham) {
  * Kök-göreli dosya yolu listesinden KABUK dosyalarını süzer; tekilleştirir,
  * sıralar, normalleştirir. Saf.
  */
-function kabukDosyalariSuz(dosyaListesi) {
+function kabukDosyalariSuz(dosyaListesi, secenek = {}) {
   const sonuc = new Set();
   for (const ham of Array.isArray(dosyaListesi) ? dosyaListesi : []) {
-    if (kabukYoluMu(ham)) sonuc.add(yolNormalle(ham));
+    if (kabukYoluMu(ham, secenek)) sonuc.add(yolNormalle(ham));
   }
   return [...sonuc].sort();
 }
@@ -220,9 +234,9 @@ function kabukDosyalariSuz(dosyaListesi) {
  * (sıra korunur, tekilleştirme YOK — kapı "kaç girdi sızmış" der).
  * `kabukDosyalariSuz` ile tam ikilidir: sözleşme testi bunu çivi ile çakar.
  */
-function kabukSizintilari(kabukDosyalari) {
+function kabukSizintilari(kabukDosyalari, secenek = {}) {
   const liste = Array.isArray(kabukDosyalari) ? kabukDosyalari : [];
-  return liste.filter((ham) => !kabukYoluMu(ham));
+  return liste.filter((ham) => !kabukYoluMu(ham, secenek));
 }
 
 /**
@@ -230,11 +244,11 @@ function kabukSizintilari(kabukDosyalari) {
  * `bilinmeyen` boş değilse kabuk tanımı o ağacı KAPSAMIYOR demektir —
  * üretici bunu pakete yazar, kapı FAIL eder.
  */
-function dallariSinifla(dizinAdlari) {
+function dallariSinifla(dizinAdlari, secenek = {}) {
   const c = { kabuk: [], kitap: [], artefakt: [], yedek: [], bilinmeyen: [] };
   for (const ad of Array.isArray(dizinAdlari) ? dizinAdlari : []) {
     if (typeof ad !== 'string' || !ad) continue;
-    c[dalSinifi(ad)].push(ad);
+    c[dalSinifi(ad, secenek)].push(ad);
   }
   for (const k of Object.keys(c)) c[k] = [...new Set(c[k])].sort();
   return c;
@@ -243,6 +257,7 @@ function dallariSinifla(dizinAdlari) {
 module.exports = {
   SOZLESME_SURUMU, IMZA,
   KABUK_DIZINLERI, KABUK_DISI_DIZINLER, KITAP_DIZIN_DESENI, YEDEK_DIZIN_DESENI,
+  A1_KABUK_DIZINLERI, A1_KITAP_DIZINLERI,
   ENVANTER_DOSYASI, DURUM_DOSYA_ONEKI,
   yolNormalle, yolGuvenliMi, dalAdi, dalSinifi,
   kabukYoluMu, kabukDisiSebep, kabukDosyalariSuz, kabukSizintilari, dallariSinifla,

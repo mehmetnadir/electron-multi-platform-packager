@@ -117,3 +117,52 @@ test('SENTINEL (iki paketleme yolu): masaüstü ve Android shim enjeksiyonu A1 m
   assert.match(kaynak, /a1Duzen\.kapakaShimEkle\(appPath, 'empp-fs-shim\.js'/);
   assert.match(kaynak, /a1Duzen\.kapakaShimEkle\(wwwPath, 'empp-android-shim\.js'/);
 });
+
+// ─── Set güncelleme kanalı (set-kabuk tanımı) + `_eski/` (koordinatör riski 1 ve 3) ─────────────
+const setKabuk = require('./set-kabuk');
+const setKimligi = require('./set-kimligi');
+const { fsCopyFiltresi, elektronBuilderDesenleri } = require('./kok-yedek-dizin-disla');
+
+test('set-kabuk A1: kapak/ kabuk, assets/+classlibraries/ kitap — YALNIZ {a1:true} ile; varsayılan aynen', () => {
+  assert.equal(setKabuk.dalSinifi('kapak'), 'bilinmeyen');
+  assert.equal(setKabuk.dalSinifi('assets'), 'bilinmeyen');
+  assert.equal(setKabuk.dalSinifi('kapak', { a1: true }), 'kabuk');
+  assert.equal(setKabuk.dalSinifi('assets', { a1: true }), 'kitap');
+  assert.equal(setKabuk.dalSinifi('classlibraries', { a1: true }), 'kitap');
+  assert.equal(setKabuk.dalSinifi('_eski', { a1: true }), 'yedek');
+  assert.equal(setKabuk.kabukYoluMu('kapak/index.html'), false);
+  assert.equal(setKabuk.kabukYoluMu('kapak/index.html', { a1: true }), true);
+  assert.equal(setKabuk.kabukYoluMu('classlibraries/ImWin32.dll', { a1: true }), false);
+  assert.deepEqual(setKabuk.kabukSizintilari(['kapak/index.html', 'assets/1/x.png'], { a1: true }), ['assets/1/x.png']);
+  assert.deepEqual(setKabuk.dallariSinifla(['kapak', 'assets', 'classlibraries', 'scripts', '_eski'], { a1: true }).bilinmeyen, []);
+  assert.match(setKabuk.IMZA, / a1=kabuk:kapak;kitap:assets,classlibraries$/);
+});
+
+test('set-kimligi A1: empp-set.json kapak/index.html kabukta, kapsam dışı dal yok, duzen=a1; bookN ağacında duzen yok', async () => {
+  const d = a1Agac();
+  for (const alt of ['scripts', '_eski']) fs.mkdirSync(path.join(d, alt));
+  fs.writeFileSync(path.join(d, 'scripts/language-set.js'), '//');
+  fs.writeFileSync(path.join(d, '_eski/index-x.html'), 'eski');
+  const h = (await setKimligi.paketeYaz(d, { setKimligi: '45485', damga: 0, env: {} })).harita;
+  assert.equal(h.duzen, 'a1');
+  assert.ok(h.kabukDosyalari.includes('kapak/index.html'), h.kabukDosyalari.join(','));
+  assert.ok(!h.kabukDosyalari.some((y) => /^(assets|classlibraries|_eski)\//.test(y)), h.kabukDosyalari.join(','));
+  assert.deepEqual(h.kapsamDisiDallar, []);
+  assert.deepEqual(setKabuk.kabukSizintilari(h.kabukDosyalari, { a1: true }), [], 'kapı A1 seçeneğiyle sızma görmez');
+  const b = a1Agac();
+  fs.writeFileSync(path.join(b, 'kapak/index.html'), MOTOR); // işaretsiz → A1 değil
+  const hb = (await setKimligi.paketeYaz(b, { setKimligi: '45485', damga: 0, env: {} })).harita;
+  assert.equal(hb.duzen, undefined);
+  assert.deepEqual(hb.kapsamDisiDallar, ['assets', 'classlibraries', 'kapak'], 'A1 değilse gürültülü kör nokta');
+});
+
+test('`_eski/` kök dizini (webz-kabuk-uret arşivi) her paketleme yolunda paket DIŞI', () => {
+  const d = a1Agac();
+  fs.mkdirSync(path.join(d, '_eski'));
+  fs.writeFileSync(path.join(d, '_eski/index-2026.html'), MOTOR);
+  const f = fsCopyFiltresi(d);
+  assert.equal(f(path.join(d, '_eski')), false);
+  assert.equal(f(path.join(d, '_eski/index-2026.html')), false);
+  assert.equal(f(path.join(d, 'kapak/index.html')), true);
+  assert.deepEqual(elektronBuilderDesenleri(), ['!_*', '!_*/**/*']);
+});
