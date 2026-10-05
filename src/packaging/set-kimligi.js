@@ -215,7 +215,7 @@ function haritaUret(g = {}) {
     taban: t.deger,
     tabanKaynagi: t.kaynak,
     damga: damgaCoz(g.damga),
-    kabukTanimi: kabuk.IMZA,
+    kabukTanimi: a1 ? kabuk.IMZA_A1 : kabuk.IMZA,
     ...(a1 ? { duzen: 'a1' } : {}),
     kabukDosyaSayisi: kabukListesi.length,
     kabukDosyalari: kabukListesi,

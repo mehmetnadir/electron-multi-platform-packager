@@ -135,7 +135,10 @@ test('set-kabuk A1: kapak/ kabuk, assets/+classlibraries/ kitap — YALNIZ {a1:t
   assert.equal(setKabuk.kabukYoluMu('classlibraries/ImWin32.dll', { a1: true }), false);
   assert.deepEqual(setKabuk.kabukSizintilari(['kapak/index.html', 'assets/1/x.png'], { a1: true }), ['assets/1/x.png']);
   assert.deepEqual(setKabuk.dallariSinifla(['kapak', 'assets', 'classlibraries', 'scripts', '_eski'], { a1: true }).bilinmeyen, []);
-  assert.match(setKabuk.IMZA, / a1=kabuk:kapak;kitap:assets,classlibraries$/);
+  // Ö1: bookN imzası A1 öncesiyle bayt-aynı; A1 parçası yalnız IMZA_A1'de.
+  assert.equal(setKabuk.IMZA, 'v2 dizin=assets2,core,i18n,config,features,images,languages,scripts,styles '
+    + 'artefakt=node_modules,temp,.empp-gecici kitap=^book\\d+$ yedek=^_ durum=empp-set.json|.empp*');
+  assert.equal(setKabuk.IMZA_A1, `${setKabuk.IMZA} a1=kabuk:kapak;kitap:assets,classlibraries`);
 });
 
 test('set-kimligi A1: empp-set.json kapak/index.html kabukta, kapsam dışı dal yok, duzen=a1; bookN ağacında duzen yok', async () => {
@@ -145,6 +148,7 @@ test('set-kimligi A1: empp-set.json kapak/index.html kabukta, kapsam dışı dal
   fs.writeFileSync(path.join(d, '_eski/index-x.html'), 'eski');
   const h = (await setKimligi.paketeYaz(d, { setKimligi: '45485', damga: 0, env: {} })).harita;
   assert.equal(h.duzen, 'a1');
+  assert.equal(h.kabukTanimi, setKabuk.IMZA_A1);
   assert.ok(h.kabukDosyalari.includes('kapak/index.html'), h.kabukDosyalari.join(','));
   assert.ok(!h.kabukDosyalari.some((y) => /^(assets|classlibraries|_eski)\//.test(y)), h.kabukDosyalari.join(','));
   assert.deepEqual(h.kapsamDisiDallar, []);
@@ -153,6 +157,7 @@ test('set-kimligi A1: empp-set.json kapak/index.html kabukta, kapsam dışı dal
   fs.writeFileSync(path.join(b, 'kapak/index.html'), MOTOR); // işaretsiz → A1 değil
   const hb = (await setKimligi.paketeYaz(b, { setKimligi: '45485', damga: 0, env: {} })).harita;
   assert.equal(hb.duzen, undefined);
+  assert.equal(hb.kabukTanimi, setKabuk.IMZA, 'bookN/A1-dışı harita imzası değişmez');
   assert.deepEqual(hb.kapsamDisiDallar, ['assets', 'classlibraries', 'kapak'], 'A1 değilse gürültülü kör nokta');
 });
 

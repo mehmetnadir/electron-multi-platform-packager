@@ -202,12 +202,17 @@ test('T8 · UÇTAN UCA: açık resources/app ağacı agactanTopla ile ölçülü
 
 test('T-A1 · A1 düzeni (duzen=a1, kapak/index.html kabukta): PASS; A1 seçeneksiz okunsa sızma olurdu; bookN ağacında duzen=a1 FAIL', () => {
   const a1 = harita({
-    duzen: 'a1', kapsamDisiDallar: [], kabukDosyaSayisi: 3,
+    duzen: 'a1', kabukTanimi: K.SET_KABUK.IMZA_A1, kapsamDisiDallar: [], kabukDosyaSayisi: 3,
     kabukDosyalari: ['abc.main.js', 'index.html', 'kapak/index.html'],
   });
   const m = K.maddeSetGuncelleme(girdi({ harita: a1 }));
   assert.strictEqual(m.durum, K.PASS, m.detay);
   assert.match(m.detay, /C1\) sızma yok/);
+  assert.match(m.detay, /C3\) tanım aynı/);
+  // Ö1: A1 haritası bookN imzası taşırsa (ya da tersi) C3 FAIL.
+  const yanlisImza = K.maddeSetGuncelleme(girdi({ harita: { ...a1, kabukTanimi: K.SET_KABUK_IMZASI } }));
+  assert.strictEqual(yanlisImza.durum, K.FAIL);
+  assert.match(yanlisImza.detay, /C3\) TANIM SAPMASI/);
   const seceneksiz = K.maddeSetGuncelleme(girdi({ harita: { ...a1, duzen: undefined } }));
   assert.strictEqual(seceneksiz.durum, K.FAIL);
   assert.match(seceneksiz.detay, /C1\) KABUK DIŞI GİRDİ SIZMIŞ.*kapak\/index\.html/);

@@ -1489,12 +1489,13 @@ function maddeSetGuncelleme(p = {}) {
     if (typeof harita.kabukTanimi !== 'string' || !harita.kabukTanimi) {
       olculemedi.push('C3) kabukTanimi imzası pakette yok (şema < 2) — üreticinin ' +
         'kabuk tanımı bu kapınınkiyle aynı mı ÖLÇÜLEMEDİ');
-    } else if (harita.kabukTanimi !== SET_KABUK_IMZASI) {
+    } else if (harita.kabukTanimi !== (kabukSecenek.a1 ? SET_KABUK.IMZA_A1 : SET_KABUK_IMZASI)) {
+      const beklenen = kabukSecenek.a1 ? SET_KABUK.IMZA_A1 : SET_KABUK_IMZASI;
       fail.push(`C3) TANIM SAPMASI — paketi üreten paketleyicinin kabuk tanımı ` +
-        `"${harita.kabukTanimi}", kapınınki "${SET_KABUK_IMZASI}". İki taraf aynı ` +
+        `"${harita.kabukTanimi}", kapınınki "${beklenen}". İki taraf aynı ` +
         `kabuğu ölçmüyor; kapının GEÇTİ'si bu paket için geçersizdir`);
     } else {
-      gecen.push(`C3) tanım aynı (${SET_KABUK_IMZASI})`);
+      gecen.push(`C3) tanım aynı (${harita.kabukTanimi})`);
     }
   }
 

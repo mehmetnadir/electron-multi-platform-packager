@@ -127,8 +127,14 @@ const IMZA = [
   `kitap=${KITAP_DIZIN_DESENI.source}`,
   `yedek=${YEDEK_DIZIN_DESENI.source}`,
   `durum=${ENVANTER_DOSYASI}|${DURUM_DOSYA_ONEKI}*`,
-  `a1=kabuk:${A1_KABUK_DIZINLERI.join(',')};kitap:${A1_KITAP_DIZINLERI.join(',')}`,
 ].join(' ');
+
+/**
+ * A1 düzeninin imzası: bookN imzası + A1 parçası. YALNIZ `duzen: 'a1'` haritası taşır — bookN
+ * setlerinin `kabukTanimi`'i bayt-aynı kalır (Windows kapısı C3 birebir kıyaslar; eski/yeni
+ * paketleyici karışınca bookN setleri FAIL etmesin — inceleme Ö1, 05.10).
+ */
+const IMZA_A1 = `${IMZA} a1=kabuk:${A1_KABUK_DIZINLERI.join(',')};kitap:${A1_KITAP_DIZINLERI.join(',')}`;
 
 /** Yolu POSIX ayraçlı, baştaki `./` ve `/` temizlenmiş hâle getirir. Saf. */
 function yolNormalle(ham) {
@@ -255,7 +261,7 @@ function dallariSinifla(dizinAdlari, secenek = {}) {
 }
 
 module.exports = {
-  SOZLESME_SURUMU, IMZA,
+  SOZLESME_SURUMU, IMZA, IMZA_A1,
   KABUK_DIZINLERI, KABUK_DISI_DIZINLER, KITAP_DIZIN_DESENI, YEDEK_DIZIN_DESENI,
   A1_KABUK_DIZINLERI, A1_KITAP_DIZINLERI,
   ENVANTER_DOSYASI, DURUM_DOSYA_ONEKI,
