@@ -118,10 +118,17 @@ function izoleOrtam() {
         macSerbestFlag: CONFIG.macSerbestFlag,
         macDurdurFlag: CONFIG.macDurdurFlag,
         dusukVeriYoksayFlag: CONFIG.dusukVeriYoksayFlag,
+        androidSerbestFlag: CONFIG.androidSerbestFlag,
       };
       CONFIG.macSerbestFlag = path.join(dir, 'macos-serbest.istek');
       CONFIG.macDurdurFlag = path.join(dir, 'macos-durdur.istek');
       CONFIG.dusukVeriYoksayFlag = path.join(dir, 'dusuk-veri-yoksay.istek');
+      // Android ev kuralı (05.10): yetenek listesini kıyaslayan testler makinenin konumuna bağlı
+      // kalmasın diye yalıtık bayrak VAR sayılır (android her yerde açık). Kural saf fonksiyonda ölçülür.
+      if ('androidSerbestFlag' in CONFIG) {
+        CONFIG.androidSerbestFlag = path.join(dir, 'android-serbest.istek');
+        fs.writeFileSync(CONFIG.androidSerbestFlag, '');
+      }
       // Dalga B (B4): `kaynak-kur` rolü ofiste kendiliğinden bildirilir — yetenek listesini birebir
       // kıyaslayan testler makinenin konumuna bağlı kalmasın diye testlerde varsayılan KAPALI;
       // gerçek bayrak dosyası okunmaz. Ölçen test (kaynak-r2.test.js) açıkça açar.
@@ -163,6 +170,7 @@ const GERCEK_YOLLAR = {
   macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
   macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
   dusukVeriYoksayFlag: path.join(os.homedir(), '.empp-agent', 'dusuk-veri-yoksay.istek'),
+  androidSerbestFlag: path.join(os.homedir(), '.empp-agent', 'android-serbest.istek'),
 };
 
 function dosyaImzasi(p) {

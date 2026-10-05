@@ -477,6 +477,20 @@ test('etkinYetenekler: evde macos düşer, android/pardus kalır (Nadir kararı 
   assert.deepEqual(etkinYetenekler(['android', 'mac'], { ofiste: false }), ['android']);
 });
 
+test('etkinYetenekler: Mac evde android de düşer; ofiste ya da android-serbest ile kalır (Nadir 05.10)', () => {
+  const k = { androidEvKurali: true };
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ...k, ofiste: false }), []);
+  assert.deepEqual(etkinYetenekler(['android', 'macos', 'kaynak-r2'], { ...k, ofiste: false }), ['kaynak-r2']);
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ...k, ofiste: true }), ['android', 'macos']);
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ...k, ofiste: false, androidSerbest: true }), ['android']);
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ...k, ofiste: false, androidSerbest: true, macSerbest: true }), ['android', 'macos']);
+});
+
+test('etkinYetenekler: androidEvKurali vermeyen ajan (srv21) evde de android tutar', () => {
+  assert.deepEqual(etkinYetenekler(['android'], { ofiste: false }), ['android']);
+  assert.deepEqual(etkinYetenekler(['android', 'pardus'], { ofiste: false, androidEvKurali: false }), ['android', 'pardus']);
+});
+
 test('etkinYetenekler: ofiste tam liste; girdi dizisi değişmez', () => {
   const caps = ['android', 'macos', 'pardus'];
   assert.deepEqual(etkinYetenekler(caps, { ofiste: true }), ['android', 'macos', 'pardus']);

@@ -163,6 +163,8 @@ const CONFIG = {
   ofisGw: process.env.AGENT_OFIS_GW || '192.168.1.254',
   macSerbestFlag: path.join(os.homedir(), '.empp-agent', 'macos-serbest.istek'),
   macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
+  // Android de Mac'te yalnız ofiste (apk yüklemesi ~1,3 GB — Nadir 05.10). Bayrak kalıcıdır.
+  androidSerbestFlag: path.join(os.homedir(), '.empp-agent', 'android-serbest.istek'),
   // `kaynak-kur` yeteneği (Dalga B, B4): build'i kurup R2'ye 1–3 GB yüklemek YALNIZ yüksek bantta —
   // ofis ağı ya da bu bayrak (macOS kuralıyla aynı desen). EMPP_KAYNAK_KUR=0 acil kapatma.
   kaynakKur: process.env.EMPP_KAYNAK_KUR !== '0',
@@ -478,6 +480,8 @@ function guncelYetenekler() {
     ofiste: ofisteMi(),
     macSerbest: pauseRequested(CONFIG.macSerbestFlag),
     macDurdur: pauseRequested(CONFIG.macDurdurFlag),
+    androidEvKurali: CONFIG.caps.some((c) => c === 'macos' || c === 'mac'),
+    androidSerbest: pauseRequested(CONFIG.androidSerbestFlag),
     // Araç zinciri yalnız mac istenen durumlarda ölçülür — pardus/android koşarken
     // boşuna xcrun çağırmayalım.
     macAraci: CONFIG.caps.some((c) => c === 'macos' || c === 'mac') ? macAraciSaglamMi() : undefined,

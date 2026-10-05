@@ -227,7 +227,8 @@ function pauseRequested(flagPath) {
  * Konuma göre etkin yetenekler (2026-09-12, Nadir kararı): macOS (dmg) işi noter için 300-500 MB'ı
  * Apple'a YÜKLER; ev hattında bu yükleme diğer her şeyi (pardus Electron indirmesi dahil) boğar.
  * Kural: mac yalnız ofiste ya da `macos-serbest.istek` bayrağıyla; `macos-durdur.istek` her yerde keser.
- * android/pardus konumdan bağımsız sürer. Sunucu next-job'u heartbeat'teki yeteneklere göre kiralar.
+ * pardus konumdan bağımsız sürer; android Mac'te (androidEvKurali) yalnız ofiste ya da
+ * `android-serbest.istek` ile (05.10). Sunucu next-job'u heartbeat'teki yeteneklere göre kiralar.
  */
 function etkinYetenekler(caps, durum) {
   const d = durum || {};
@@ -254,7 +255,13 @@ function etkinYetenekler(caps, durum) {
   // yuva erişilemese de ilan edilir — paket üretilir, kabulden geçer, imzasız hâliyle hazır kuyruğa
   // girer, yayına ÇIKMAZ; imzayı yuva açılınca bekçi atar. `imzaBekleme` verilmezse eski kural.
   const windowsIzin = d.windowsAcik === true && (d.imzaYuvasi === true || d.imzaBekleme === true);
-  return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows'));
+  // ANDROID EVDE (Nadir 05.10): evdeyken yalnız ofis makineleri (Pardus ProBook, Windows kasa)
+  // üretir. Mac'in apk yüklemesi (paket başına ~1,3 GB) ev hattını dmg gibi boğar. Kural yalnız
+  // `androidEvKurali` veren ajanda (Mac) uygulanır; srv21 gibi ofis dışı sunucu ajanları etkilenmez.
+  // `android-serbest.istek` evde de açar.
+  const androidIzin = d.androidEvKurali !== true || Boolean(d.ofiste) || Boolean(d.androidSerbest);
+  return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows')
+    && (androidIzin || c !== 'android'));
 }
 
 /**
