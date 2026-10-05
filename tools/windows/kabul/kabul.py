@@ -645,8 +645,22 @@ def ilk_sayfa_tamam(kanit):
     return bool(ilk_sayfada_mi(kanit.get("sayfa")) and (kanit.get("canvasDolu") or 0) > 50
                 and (kanit.get("canvasRenk") or 0) > 1)
 
+THUMB_ALANLARI = ("thumbAday", "thumbOK", "thumbBoyut", "kartEylem", "kart", "seritYolu")
+
 def ilk_sayfaya_git(c, kanit, olc):
-    """ilk_sayfa_plani() sirasiyla dener; her adimdan sonra olcer, 1/N + cizili tuvalde durur."""
+    """ilk_sayfa_plani() sirasiyla dener; her adimdan sonra olcer, 1/N + cizili tuvalde durur.
+    THUMB KANITI KORUNUR (73768, 05.10): kutu/geri yolu sayfa tus takimini acar, sayfalar
+    karti kapanir, son olcum thumbOK=0 olur. Seritteki gercek yukleme kaniti (gezinmeden ONCEKI
+    olcum) bu yuzden dusuyordu: son 80 kosuda kutu-tuslar 7/7, geri 4/4 sahte KALDI; etiket1 38/38
+    GECTI. Onceki olcum sonrakinden yuksekse thumb alanlari geri yazilir (thumbOnceki=True);
+    esik (>=3) ve sayfa/tuval olcumu degismez."""
+    onceki = {k: kanit[k] for k in THUMB_ALANLARI if k in kanit}
+    kanit = _ilk_sayfaya_git(c, kanit, olc)
+    if (onceki.get("thumbOK") or 0) > (kanit.get("thumbOK") or 0):
+        kanit.update(onceki); kanit["thumbOnceki"] = True
+    return kanit
+
+def _ilk_sayfaya_git(c, kanit, olc):
     def yeni(y, yol):
         y = y or {}
         y["seritAnahtari"] = kanit.get("seritAnahtari"); y["ilkSayfaYolu"] = yol

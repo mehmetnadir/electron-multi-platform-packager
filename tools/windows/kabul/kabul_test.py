@@ -287,15 +287,16 @@ class IlkSayfayaGitTest(unittest.TestCase):
 
     class SahteOkuyucu:
         """Kaydirilmis serit: gorunen thumb'lar [ilk..ilk+4]; kutu: (900,955), geri: (880,955)."""
-        def __init__(self, sayfa, toplam=136, serit_ilk=None, kutu_calisir=True, etiket=True):
+        def __init__(self, sayfa, toplam=136, serit_ilk=None, kutu_calisir=True, etiket=True, thumb=5):
             self.sayfa, self.toplam, self.kutu_calisir, self.etiket = sayfa, toplam, kutu_calisir, etiket
+            self.thumb = thumb  # tus takimi acilinca kart kapanir: kutu tiklaninca 0'a duser (73768)
             self.serit_ilk = serit_ilk or sayfa
             self.odak = False; self.yazilan = ""; self.tiklar = []
         def thumblar(self):
             return [{"n": self.serit_ilk + i, "x": 300 + 330 * i, "y": 720} for i in range(5)]
         def olc(self):
             t = self.thumblar()
-            k = {"sayfa": f"{self.sayfa}/{self.toplam}", "toplamSayfa": self.toplam, "thumbOK": 5,
+            k = {"sayfa": f"{self.sayfa}/{self.toplam}", "toplamSayfa": self.toplam, "thumbOK": self.thumb,
                  "canvasDolu": 3274, "canvasRenk": 170, "thumbIlk": {"x": t[0]["x"], "y": t[0]["y"]}}
             if self.etiket: k["thumbEtiket"] = t
             return k
@@ -304,7 +305,7 @@ class IlkSayfayaGitTest(unittest.TestCase):
             self.tiklar.append((x, y))
             for t in self.thumblar():
                 if (x, y) == (t["x"], t["y"]): self.sayfa = t["n"]; return
-            if (x, y) == (900, 955): self.odak = True; return
+            if (x, y) == (900, 955): self.odak = True; self.thumb = 0; return
             if (x, y) == (880, 955) and self.sayfa > 1: self.sayfa -= 1
         def tus(self, key, code, vk, modifiers=0, text=None):
             if key == "a" and modifiers == 2: self.yazilan = ""
@@ -355,6 +356,26 @@ class IlkSayfayaGitTest(unittest.TestCase):
         k = kabul.ilk_sayfaya_git(o, bos, o.olc)
         self.assertEqual(k["ilkSayfaYolu"], "etiket1")
         self.assertTrue(kabul.ilk_sayfa_tamam(k))
+
+    def test_kutu_yolu_karti_kapatir_onceki_thumb_kaniti_korunur(self):
+        # 73768 05.10: book1/book3 kutu-tuslar yoluna dustu, son olcum thumbOK=0 -> sahte KALDI.
+        o = self.SahteOkuyucu(sayfa=8)
+        k = kabul.ilk_sayfaya_git(o, o.olc(), o.olc)
+        self.assertEqual(k["sayfa"], "1/136")
+        self.assertEqual(k["ilkSayfaYolu"], "kutu")
+        self.assertEqual(o.olc()["thumbOK"], 0, "sahte okuyucuda kart kapandi")
+        self.assertEqual(k["thumbOK"], 5)
+        self.assertTrue(k.get("thumbOnceki"))
+        self.assertEqual(kabul.kanit_sonucu(k["thumbOK"], k["canvasDolu"], k["canvasRenk"],
+                                            k["toplamSayfa"], kabul.ilk_sayfada_mi(k["sayfa"]))[0], "GECTI")
+
+    def test_onceki_thumb_da_yoksa_kanit_uydurulmaz(self):
+        o = self.SahteOkuyucu(sayfa=8, thumb=0)
+        k = kabul.ilk_sayfaya_git(o, o.olc(), o.olc)
+        self.assertEqual(k["thumbOK"], 0)
+        self.assertNotIn("thumbOnceki", k)
+        self.assertEqual(kabul.kanit_sonucu(k["thumbOK"], k["canvasDolu"], k["canvasRenk"],
+                                            k["toplamSayfa"], kabul.ilk_sayfada_mi(k["sayfa"]))[0], "KALDI")
 
     def test_geri_tiklama_sayisi(self):
         self.assertEqual(kabul.geri_tiklama_sayisi("8/136"), 7)
