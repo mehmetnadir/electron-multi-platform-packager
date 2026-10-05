@@ -208,6 +208,29 @@ for (const [ad, bozuk] of [['renameSync EPERM', 'renameSync'], ['writeFileSync E
   });
 }
 
+test('k2: rename EBUSY/EPERM geçiciyse yeniden denenir → yazıldı; kalıcı EPERM 5 denemede biter', () => {
+  const { base, work } = fixture('12');
+  const saglam = createShim(fs, path, work, base, null, '12');
+  const suz = coz(saglam.readFileSync('classlibraries/ImWin32.dll', 'utf8'));
+  let sayac = 0;
+  const gecici = { ...fs, renameSync: (...a) => {
+    sayac += 1;
+    if (sayac <= 2) { const e = new Error('x'); e.code = sayac === 1 ? 'EBUSY' : 'EPERM'; throw e; }
+    return fs.renameSync(...a);
+  } };
+  createShim(gecici, path, work, base, null, '12').writeFileSync('classlibraries/ImWin32.dll',
+    motorYazar(suz.replace('key=""', 'key="SAHTE-ISARET"')));
+  assert.strictEqual(sayac, 3);
+  assert.ok(coz(fs.readFileSync(workMenuYolu(work), 'utf8')).includes('key="SAHTE-ISARET"'));
+  assert.deepStrictEqual(geciciler(work), []);
+  let kalici = 0;
+  const kaliciFs = { ...fs, renameSync: () => { kalici += 1; const e = new Error('x'); e.code = 'EPERM'; throw e; } };
+  uyarilariTopla(() => createShim(kaliciFs, path, work, base, null, '12').writeFileSync('classlibraries/ImWin32.dll',
+    motorYazar(suz.replace('key=""', 'key="IKINCI"'))));
+  assert.strictEqual(kalici, 5);
+  assert.deepStrictEqual(geciciler(work), []);
+});
+
 const DUP = '<?xml version="1.0"?><main activation="true" key="" ID="9">'
   + `<Group ID="1"><Tab ID="0" label="Tümü">${kapak(11)}${kapak(12)}</Tab><Tab ID="1">${kapak(11)}</Tab></Group>`
   + `<Group ID="2"><Tab ID="2">${kapak(11)}${kapak(13)}</Tab></Group><Tab ID="9">${kapak(11)}</Tab>${kapak(11)}</main>`;

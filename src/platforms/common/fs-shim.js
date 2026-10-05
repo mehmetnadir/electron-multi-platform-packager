@@ -248,6 +248,17 @@
   }
 
   var KILIT_DENEME = 40, KILIT_BEKLE_MS = 5, KILIT_BAYAT_MS = 5000;
+  // k2 (inceleme 05.10): Windows'ta hedefi başka süreç (antivirüs, dizinleyici, ikinci pencere)
+  // kısa süre açık tutarsa rename EPERM/EBUSY/EACCES verir; kısa aralıkla yeniden denenir.
+  var RENAME_DENEME = 5, RENAME_BEKLE_MS = 20;
+  function renameDene(realFs, kaynak, hedef) {
+    for (var i = 1; ; i++) {
+      try { realFs.renameSync(kaynak, hedef); return; } catch (e) {
+        if (i >= RENAME_DENEME || !e || (e.code !== 'EPERM' && e.code !== 'EBUSY' && e.code !== 'EACCES')) throw e;
+        bekleMs(RENAME_BEKLE_MS);
+      }
+    }
+  }
   function bekleMs(ms) { var son = Date.now() + ms; while (Date.now() < son) { /* kısa eşzamanlı bekleme */ } }
 
   /**
@@ -287,7 +298,7 @@
         if (k.tur === 'reddet') { kapakUyar('yazma reddedildi: ' + k.neden); return 'atlandi'; }
         gecici = hedef + '.empp-' + ((typeof process !== 'undefined' && process.pid) || 0) + '-' + Math.random().toString(36).slice(2);
         realFs.writeFileSync(gecici, k.metin, 'utf8');
-        realFs.renameSync(gecici, hedef);
+        renameDene(realFs, gecici, hedef);
         gecici = null;
         return 'yazildi';
       } catch (e) {
