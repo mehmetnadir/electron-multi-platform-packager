@@ -907,6 +907,90 @@ def aktivasyon_kod_oku(yol):
     if len(satirlar) != 1 or any(ch.isspace() for ch in satirlar[0]): return None
     return satirlar[0]
 
+# ── KITAP BAZLI KOD KAYNAGI (05.10) ──────────────────────────────────────────────────────────
+# Aktivasyon kodlari SET bazlidir (paketin imKeys.dll'i). Tek genel dosya yalniz 45449'un kodunu
+# tasiyordu -> 45448/45469/45477/45478/45480 "aktivasyon-c KALDI" (gecerli diye girilen kod o setin
+# degildi). Sira: a) <kod dizini>\<setKimligi>.txt  b) KURULU paketin imKeys.dll'i  c) genel dosya.
+# Rapora yalniz kaynak adi yazilir; KOD DEGERI hicbir log/rapor/dosya adina girmez.
+AKT_KAYNAK_KITAP = "kitap-dosyasi"
+AKT_KAYNAK_PAKET = "paket-imkeys"
+AKT_KAYNAK_GENEL = "genel-dosya"
+IMKEYS_ADI = "imkeys.dll"                      # karsilastirma kucuk harfle (Windows buyuk/kucuk duyarsiz)
+IMKEYS_KOD_DESENI = re.compile(r"^[A-Z0-9-]{3,64}$")   # src/agent/imkeys.js KOD_DESENI ile ayni
+IMKEYS_ATLANAN = {"node_modules", "locales", "swiftshader", "pages", "pages2x", "thumbs"}
+
+def akt_kod_dizini_varsayilan(genel_dosya: str) -> str:
+    """SAF: kitap kod dizininin varsayilani = genel kod dosyasinin dizini + 'aktivasyon-kodlari'.
+    Windows yolu (ters bolu) Mac testinde de dogru bolunsun diye ntpath secilir."""
+    import ntpath
+    yol = ntpath if "\\" in str(genel_dosya) else os.path
+    return yol.join(yol.dirname(str(genel_dosya)), "aktivasyon-kodlari")
+
+def set_kimligi(bookId: object) -> "str | None":
+    """SAF: bookId etiketinden set kimligi ('45448-imzasiz-20261005032127' -> '45448'). Yoksa None."""
+    m = re.match(r"^\s*([1-9]\d*)", str(bookId if bookId is not None else ""))
+    return m.group(1) if m else None
+
+def imkeys_kodlari_coz(veri: "bytes | None") -> "list[str]":
+    """SAF: imKeys.dll baytlari -> kodlar. Bicim src/agent/imkeys.js imKeysBicimle/imKeysCoz'dan:
+    her bayt (256 - b) mod 256, sonuc UTF-8 JSON dizisi, ogeler DUZ buyuk harfli kod. Okunamayan/
+    bozuk/dizi olmayan -> [] (okuyucu da bos sayar). Gecersiz desenli oge atilir."""
+    if not veri: return []
+    try:
+        d = json.loads(bytes((256 - b) & 0xFF for b in veri).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return []
+    if not isinstance(d, list): return []
+    kodlar: "list[str]" = []
+    for e in d:
+        if not isinstance(e, str): continue
+        t = e.strip().upper()
+        if IMKEYS_KOD_DESENI.match(t) and t not in kodlar: kodlar.append(t)
+    return kodlar
+
+def kurulu_imkeys_bul(dizin: str, derinlik: int = 6) -> "list[str]":
+    """Kurulum dizininde imKeys.dll yollari (sirali). imkeys.js yazim yolu = menu koku + xmlSource'un
+    'data/BookContent.xml' yerine 'imKeys.dll': NSIS'te resources\\app\\assets\\<id>\\, bookN setlerde
+    resources\\app\\bookN\\assets\\<id>\\, sarmalayici klasorde bir kat daha derin. Derinlik sinirli
+    gezinti (sayfa/thumb klasorleri atlanir); yol varsayilmaz, bulunur."""
+    bulunan: "list[str]" = []
+    if not dizin or not os.path.isdir(dizin): return bulunan
+    kok_derin = os.path.abspath(dizin).rstrip("\\/").count(os.sep)
+    for kok, alt, dosyalar in os.walk(dizin):
+        if os.path.abspath(kok).count(os.sep) - kok_derin >= derinlik:
+            alt[:] = []
+        else:
+            alt[:] = sorted(a for a in alt if a.lower() not in IMKEYS_ATLANAN)
+        for f in dosyalar:
+            if f.lower() == IMKEYS_ADI: bulunan.append(os.path.join(kok, f))
+    return sorted(bulunan)
+
+def paket_imkeys_kodu(dizin: str) -> "str | None":
+    """Kurulu paketin imKeys.dll'lerinden cozulen ILK gecerli kod. Hangisinin secildigi YAZILMAZ."""
+    for yol in kurulu_imkeys_bul(dizin):
+        try:
+            with open(yol, "rb") as f: kodlar = imkeys_kodlari_coz(f.read())
+        except OSError:
+            continue
+        if kodlar: return kodlar[0]
+    return None
+
+def akt_kod_sec(bookId: object, kod_dizini: "str | None", kurulum_dizini: "str | None",
+                genel_dosya: "str | None") -> "tuple[str | None, str | None]":
+    """Kod kaynagi sirasi: kitap-dosyasi > paket-imkeys > genel-dosya. Donus (kod, kaynak);
+    hicbiri yoksa (None, None). Kod DEGERI cagirana doner, hicbir yere yazilmaz."""
+    sid = set_kimligi(bookId)
+    if sid and kod_dizini:
+        kod = aktivasyon_kod_oku(os.path.join(kod_dizini, sid + ".txt"))
+        if kod: return kod, AKT_KAYNAK_KITAP
+    if kurulum_dizini:
+        kod = paket_imkeys_kodu(kurulum_dizini)
+        if kod: return kod, AKT_KAYNAK_PAKET
+    if genel_dosya:
+        kod = aktivasyon_kod_oku(genel_dosya)
+        if kod: return kod, AKT_KAYNAK_GENEL
+    return None, None
+
 def gd_kural_adi(anahtar):
     """SAF: guvenlik duvari kural adi — yalniz [A-Za-z0-9-] (netsh argumanina enjeksiyon yok)."""
     return "empp-kabul-akt-" + re.sub(r"[^A-Za-z0-9-]", "-", str(anahtar))[:60]
@@ -1004,7 +1088,7 @@ def akt_baglanti_bekle(c, tavan=20):
 
 def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     """a..e adimlari. Donen: (c, menuUrl, kitaplar) — normal kitap kaniti ayni oturumda surer."""
-    A = {}; r["aktivasyon"] = {"adimlar": A, "profil": os.path.basename(profil)}
+    A = {}; r["aktivasyon"] = {**(r.get("aktivasyon") or {}), "adimlar": A, "profil": os.path.basename(profil)}
     c, t, puan = uygulama_ac(ana, dizin, profil)
     if not c: A["a"] = {"sonuc": "KALDI", "sebep": "CDP_ACILMADI"}; return None, None, []
     c.cmd("Page.enable"); time.sleep(10)
@@ -1187,10 +1271,14 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
 
 def aktivasyonlu_kabul(r, bookId, baslik, dizin, ana):
     """Aktivasyon kipi: internetsiz + temiz profil; a..e, sonra ayni oturumda normal kitap kaniti."""
-    kod = aktivasyon_kod_oku(os.environ.get("EMPP_KABUL_AKTIVASYON_KOD_DOSYASI") or AKT_KOD_DOSYASI)
+    genel = os.environ.get("EMPP_KABUL_AKTIVASYON_KOD_DOSYASI") or AKT_KOD_DOSYASI
+    kod_dizini = os.environ.get("KABUL_AKT_KOD_DIZINI") or akt_kod_dizini_varsayilan(genel)
+    kod, kaynak = akt_kod_sec(bookId, kod_dizini, dizin, genel)
     if not kod:
         r["sonuc"] = "OLCULEMEDI"; r["sebep"] = "aktivasyon test kodu dosyasi yok/bos"
         r["kaldirma"] = kaldir(dizin); return bitir(r)
+    r["aktivasyon"] = {"kodKaynagi": kaynak}            # yalniz kaynak adi; DEGER ASLA
+    log("AKTIVASYON", bookId, "kod-kaynagi", kaynak)
     kural = gd_kural_adi(bookId)
     ekle, kaldir_k = gd_kural_komutlari(kural, ana)
     subprocess.run(kaldir_k, capture_output=True)                 # onceki yarim kosudan kalmissa

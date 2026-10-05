@@ -877,5 +877,146 @@ class KokDizinOrtamTest(unittest.TestCase):
         self.assertEqual(m.AKT_KOD_DOSYASI, r"C:\empp-ajan\kabul\aktivasyon-test-kodu.txt")
 
 
+class KitapKodKaynagiTest(unittest.TestCase):
+    """05.10: aktivasyon kodu SET bazli. Sira kitap-dosyasi > paket-imkeys > genel-dosya; rapora
+    yalniz kaynak adi. SAHTE kodlar (gercek kod YOK)."""
+    # Node ile uretildi: require('src/agent/imkeys').imKeysBicimle(['testkod123','ZZZ-999','x y'])
+    # -> base64. imKeysCoz ayni baytlardan ["TESTKOD123","ZZZ-999"] dondurur ('x y' desen disi atilir).
+    IMKEYS_FIKSTUR = "pd6su62stbG8z87N3tTepqam08fHx96j"
+    SAHTE = "TESTKOD123"
+
+    def setUp(self):
+        import base64, tempfile
+        self.d = tempfile.mkdtemp(prefix="kabul-kod-")
+        self.veri = base64.b64decode(self.IMKEYS_FIKSTUR)
+        self.kurulum = os.path.join(self.d, "Programs", "SahteSet")
+        self.kod_dizini = os.path.join(self.d, "aktivasyon-kodlari")
+        self.genel = os.path.join(self.d, "aktivasyon-test-kodu.txt")
+        os.makedirs(os.path.join(self.kurulum, "resources", "app"))
+        os.makedirs(self.kod_dizini)
+
+    def _imkeys(self, *parca, veri=None):
+        yol = os.path.join(self.kurulum, "resources", "app", *parca, "imKeys.dll")
+        os.makedirs(os.path.dirname(yol), exist_ok=True)
+        with open(yol, "wb") as f: f.write(self.veri if veri is None else veri)
+        return yol
+
+    def _yaz(self, yol, metin):
+        with open(yol, "w", encoding="utf-8") as f: f.write(metin)
+
+    def test_imkeys_cozucu_node_kodlayicisiyla_uyumlu(self):
+        self.assertEqual(kabul.imkeys_kodlari_coz(self.veri), ["TESTKOD123", "ZZZ-999"])
+
+    def test_imkeys_cozucu_bozuk_bos_dizi_olmayan(self):
+        self.assertEqual(kabul.imkeys_kodlari_coz(b""), [])
+        self.assertEqual(kabul.imkeys_kodlari_coz(None), [])
+        self.assertEqual(kabul.imkeys_kodlari_coz(b"\x00\x01duz-metin"), [])
+        nesne = bytes((256 - b) & 0xFF for b in b'{"a":"TESTKOD123"}')
+        self.assertEqual(kabul.imkeys_kodlari_coz(nesne), [])
+        bos = bytes((256 - b) & 0xFF for b in b"[]")
+        self.assertEqual(kabul.imkeys_kodlari_coz(bos), [])
+
+    def test_set_kimligi_etiketten(self):
+        self.assertEqual(kabul.set_kimligi("45448-imzasiz-20261005032127"), "45448")
+        self.assertEqual(kabul.set_kimligi("45480"), "45480")
+        self.assertEqual(kabul.set_kimligi(45469), "45469")
+        self.assertIsNone(kabul.set_kimligi("imzasiz-45448"))
+        self.assertIsNone(kabul.set_kimligi(""))
+        self.assertIsNone(kabul.set_kimligi(None))
+
+    def test_kod_dizini_varsayilani_genel_dosyanin_yaninda(self):
+        self.assertEqual(kabul.akt_kod_dizini_varsayilan(r"C:\empp-ajan\kabul\aktivasyon-test-kodu.txt"),
+                         r"C:\empp-ajan\kabul\aktivasyon-kodlari")
+        self.assertEqual(kabul.akt_kod_dizini_varsayilan("/x/y/kod.txt"), "/x/y/aktivasyon-kodlari")
+
+    def test_kurulu_imkeys_tek_motor_ve_bookN_yerlesimi(self):
+        a = self._imkeys("assets", "45448")
+        b = self._imkeys("book2", "assets", "9001")
+        c = self._imkeys("sarmal", "book1", "assets", "9002")
+        # sayfa klasoru atlanir, kok disi yol yok
+        self._imkeys("assets", "45448", "pages")
+        self.assertEqual(kabul.kurulu_imkeys_bul(self.kurulum), sorted([a, b, c]))
+        self.assertEqual(kabul.kurulu_imkeys_bul(os.path.join(self.d, "yok")), [])
+
+    def test_oncelik_kitap_dosyasi_en_once(self):
+        self._yaz(os.path.join(self.kod_dizini, "45448.txt"), "KITAPKOD1\n")
+        self._imkeys("assets", "45448")
+        self._yaz(self.genel, "GENELKOD1")
+        self.assertEqual(kabul.akt_kod_sec("45448-imzasiz-20261005032127", self.kod_dizini, self.kurulum, self.genel),
+                         ("KITAPKOD1", "kitap-dosyasi"))
+
+    def test_baska_setin_kitap_dosyasi_kullanilmaz_paket_imkeys_secilir(self):
+        self._yaz(os.path.join(self.kod_dizini, "45449.txt"), "BASKASET1")
+        self._imkeys("assets", "45448")
+        self._yaz(self.genel, "GENELKOD1")
+        self.assertEqual(kabul.akt_kod_sec("45448-imzasiz-1", self.kod_dizini, self.kurulum, self.genel),
+                         (self.SAHTE, "paket-imkeys"))
+
+    def test_bos_imkeys_atlanir_ilk_dolu_kullanilir(self):
+        self._imkeys("assets", "1000", veri=bytes((256 - b) & 0xFF for b in b"[]"))
+        self._imkeys("assets", "2000")
+        self.assertEqual(kabul.akt_kod_sec("45448", self.kod_dizini, self.kurulum, None), (self.SAHTE, "paket-imkeys"))
+
+    def test_genel_dosya_yalniz_digerleri_yoksa(self):
+        self._yaz(self.genel, "GENELKOD1")
+        self.assertEqual(kabul.akt_kod_sec("45448", self.kod_dizini, self.kurulum, self.genel),
+                         ("GENELKOD1", "genel-dosya"))
+
+    def test_hicbiri_yoksa_none(self):
+        self.assertEqual(kabul.akt_kod_sec("45448", self.kod_dizini, self.kurulum, self.genel), (None, None))
+        self.assertEqual(kabul.akt_kod_sec("etiketsiz", None, None, None), (None, None))
+
+    def test_kod_rapora_loga_stdouta_yazilmaz_yalniz_kaynak(self):
+        import io, contextlib
+        from unittest import mock
+        self._imkeys("assets", "45448")
+        gonderilen, giren = [], {}
+
+        class Sonuc: returncode = 0
+
+        def senaryo(r, kimlik, ana, dizin, kod, profil):
+            giren["kod"] = kod
+            r["aktivasyon"] = {**(r.get("aktivasyon") or {}), "adimlar": {"a": {"sonuc": "GECTI"},
+                               "b": {"sonuc": "GECTI"}, "c": {"sonuc": "KALDI"}}, "profil": "p"}
+            return None, None, []
+
+        ortam = {"EMPP_KABUL_AKTIVASYON_KOD_DOSYASI": self.genel, "KABUL_AKT_KOD_DIZINI": self.kod_dizini}
+        cikti = io.StringIO()
+        with mock.patch.dict(os.environ, ortam), \
+             mock.patch.object(kabul.subprocess, "run", lambda *a, **k: Sonuc()), \
+             mock.patch.object(kabul, "aktivasyon_senaryosu", senaryo), \
+             mock.patch.object(kabul, "oldur", lambda *a, **k: None), \
+             mock.patch.object(kabul, "kaldir", lambda *a, **k: {"durum": "KALDIRILDI"}), \
+             mock.patch.object(kabul, "gonder", lambda ad, veri: gonderilen.append((ad, veri))), \
+             contextlib.redirect_stdout(cikti):
+            r = {"bookId": "45448-imzasiz-20261005032127", "baslik": "x"}
+            kabul.aktivasyonlu_kabul(r, r["bookId"], "x", self.kurulum, r"C:\P\x.exe")
+        self.assertEqual(giren["kod"], self.SAHTE, "paket imKeys kodu senaryoya ulasmali")
+        self.assertEqual(r["aktivasyon"]["kodKaynagi"], "paket-imkeys")
+        self.assertEqual(r["sonuc"], "KALDI")
+        self.assertNotIn(self.SAHTE, cikti.getvalue())
+        self.assertNotIn("ZZZ-999", cikti.getvalue())
+        self.assertIn("paket-imkeys", cikti.getvalue())
+        self.assertTrue(gonderilen)
+        for ad, veri in gonderilen:
+            self.assertNotIn(self.SAHTE, ad)
+            self.assertNotIn(self.SAHTE.encode(), veri if isinstance(veri, bytes) else str(veri).encode())
+
+    def test_hicbir_kaynak_yoksa_olculemedi(self):
+        import io, contextlib
+        from unittest import mock
+        gonderilen = []
+        ortam = {"EMPP_KABUL_AKTIVASYON_KOD_DOSYASI": self.genel, "KABUL_AKT_KOD_DIZINI": self.kod_dizini}
+        with mock.patch.dict(os.environ, ortam), \
+             mock.patch.object(kabul, "kaldir", lambda *a, **k: {}), \
+             mock.patch.object(kabul, "gonder", lambda ad, veri: gonderilen.append(ad)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            r = {"bookId": "45448-x", "baslik": "x"}
+            kabul.aktivasyonlu_kabul(r, r["bookId"], "x", self.kurulum, r"C:\P\x.exe")
+        self.assertEqual(r["sonuc"], "OLCULEMEDI")
+        self.assertEqual(r["sebep"], "aktivasyon test kodu dosyasi yok/bos")
+        self.assertNotIn("aktivasyon", r)
+
+
 if __name__ == "__main__":
     unittest.main()
