@@ -52,7 +52,7 @@ test('setBook: A1 olmayan tek kitap kökü ETKİLENMEZ (isSet false)', async () 
   assert.match(oku(d, 'app.config.js'), /enable: false/);
 });
 
-test('kapakaShimEkle: fs-shim kök betiğinin ardına; idempotent; A1 değilse dokunmaz', async () => {
+test('kapakaShimEkle: fs-shim kök betiğinin ardına; idempotent; A1 bozuksa hata', async () => {
   const d = a1Agac();
   assert.equal((await A1.kapakaShimEkle(d, 'empp-fs-shim.js', sessiz)).durum, 'enjekte');
   const html = oku(d, 'kapak/index.html');
@@ -62,7 +62,8 @@ test('kapakaShimEkle: fs-shim kök betiğinin ardına; idempotent; A1 değilse d
   assert.deepEqual(fs.readdirSync(path.join(d, 'kapak')), ['index.html'], 'geçici dosya kalmaz');
   const d2 = a1Agac();
   fs.rmSync(path.join(d2, 'classlibraries'), { recursive: true });
-  assert.equal((await A1.kapakaShimEkle(d2, 'empp-fs-shim.js', sessiz)).durum, 'a1-degil');
+  // Ö3: işaretli sayfa var ama kök menü yok → A1 değil SAYILMAZ, hata (zorunlu sarmalayıcı düşürür).
+  assert.equal((await A1.kapakaShimEkle(d2, 'empp-fs-shim.js', sessiz)).durum, 'hata');
 });
 
 test('ağ politikası + fs-shim + android shim: üçü de <base> sonrası, kök de alır; kapak denetimi geçer', async () => {
@@ -116,6 +117,9 @@ test('SENTINEL (iki paketleme yolu): masaüstü ve Android shim enjeksiyonu A1 m
   const kaynak = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
   assert.match(kaynak, /a1Duzen\.kapakaShimEkle\(appPath, 'empp-fs-shim\.js'/);
   assert.match(kaynak, /a1Duzen\.kapakaShimEkle\(wwwPath, 'empp-android-shim\.js'/);
+  // Ö3: hata yutan blokların DIŞINDA fail-closed doğrulama, iki yolda da.
+  assert.match(kaynak, /await a1Duzen\.kapakShimZorunlu\(appPath, 'empp-fs-shim\.js'/);
+  assert.match(kaynak, /\} catch \(e\) \{ console\.warn\('⚠️ android shim enjeksiyonu başarısız:', e\.message\); \}\n.*\n.*\n\s*await a1Duzen\.kapakShimZorunlu\(wwwPath, 'empp-android-shim\.js'/);
 });
 
 // ─── Set güncelleme kanalı (set-kabuk tanımı) + `_eski/` (koordinatör riski 1 ve 3) ─────────────
@@ -170,4 +174,41 @@ test('`_eski/` kök dizini (webz-kabuk-uret arşivi) her paketleme yolunda paket
   assert.equal(f(path.join(d, '_eski/index-2026.html')), false);
   assert.equal(f(path.join(d, 'kapak/index.html')), true);
   assert.deepEqual(elektronBuilderDesenleri(), ['!_*', '!_*/**/*']);
+});
+
+test('Ö3 a1Durumu: işaretsiz → degil; işaretli + kök menü yok → bozuk; okuma hatası → bozuk', () => {
+  const d = a1Agac();
+  assert.equal(A1.a1Durumu(d).durum, 'a1');
+  fs.renameSync(path.join(d, 'classlibraries/ImWin32.dll'), path.join(d, 'classlibraries/x'));
+  assert.equal(A1.a1Durumu(d).durum, 'bozuk');
+  assert.equal(A1.a1DuzeniMi(d), false);
+  const e = a1Agac();
+  fs.chmodSync(path.join(e, 'kapak/index.html'), 0o000);
+  try {
+    if (process.getuid && process.getuid() === 0) return; // root her dosyayı okur
+    assert.equal(A1.a1Durumu(e).durum, 'bozuk');
+  } finally { fs.chmodSync(path.join(e, 'kapak/index.html'), 0o644); }
+});
+
+test('Ö3 kapakShimZorunlu: A1 değil → dokunmaz; bozuk / işaret yok / enjeksiyon sonrası geçersiz → paket DÜŞER', async () => {
+  const yok = a1Agac();
+  fs.rmSync(path.join(yok, 'kapak'), { recursive: true });
+  assert.equal((await A1.kapakShimZorunlu(yok, 'empp-fs-shim.js', sessiz)).durum, 'a1-degil');
+  const isaretsiz = a1Agac({ kapak: MOTOR });
+  assert.equal((await A1.kapakShimZorunlu(isaretsiz, 'empp-fs-shim.js', sessiz)).durum, 'a1-degil');
+  const bozuk = a1Agac();
+  fs.rmSync(path.join(bozuk, 'app.config.js'));
+  await assert.rejects(A1.kapakShimZorunlu(bozuk, 'empp-fs-shim.js', sessiz), /enjekte edilemedi \(hata: A1 işaretli ama kökte yok: app\.config\.js\)/);
+  // İşaret var ama A1 kök betiği bozulmuş (shimEkle işareti bulamaz) → düşer.
+  const kirik = a1Agac({ kapak: A1.baslikEkle(MOTOR).replace(A1.A1_KOK_BETIGI, `<script ${A1.A1_ISARET}></script>`) });
+  await assert.rejects(A1.kapakShimZorunlu(kirik, 'empp-fs-shim.js', sessiz), /paket düşürüldü/);
+  // Sağlam: enjekte + doğrulandı; ikinci çağrı zaten-var.
+  const ok = a1Agac();
+  assert.equal((await A1.kapakShimZorunlu(ok, 'empp-fs-shim.js', sessiz)).durum, 'enjekte');
+  assert.equal((await A1.kapakShimZorunlu(ok, 'empp-fs-shim.js', sessiz)).durum, 'zaten-var');
+});
+
+test('k1: A1 kök betiği hatayı sessiz yutmaz (console.warn)', () => {
+  assert.match(A1.A1_KOK_BETIGI, /catch\(e\)\{console\.warn\(/);
+  assert.doesNotMatch(A1.A1_KOK_BETIGI, /catch\(e\)\{\}/);
 });

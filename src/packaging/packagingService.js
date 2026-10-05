@@ -1588,6 +1588,10 @@ if (process.env.ELECTRON_DISABLE_SANDBOX !== 'false') {
       }
     }
     
+    // A1 fail-closed (Ö3): yukarıdaki enjeksiyon hata YUTAN blokların içinde; burada shim'in
+    // kapak/index.html'e girdiği yeniden ölçülür, girmediyse paket DÜŞER (sessiz shim'siz paket yok).
+    await a1Duzen.kapakShimZorunlu(appPath, 'empp-fs-shim.js', console);
+
     // Varsayılan icon dosyalarını kontrol et ve eksikse oluştur
     await this.ensureDefaultIcons(appPath);
     
@@ -4540,6 +4544,9 @@ if (!window.cordova) {
       // A1 (tek motorlu set): motor sayfası kapak/index.html da shim'i <base> sonrası alır.
       await a1Duzen.kapakaShimEkle(wwwPath, 'empp-android-shim.js', console);
     } catch (e) { console.warn('⚠️ android shim enjeksiyonu başarısız:', e.message); }
+    // A1 fail-closed (Ö3): yukarıdaki blok hatayı yutar; A1'de shim'siz motor sayfası paket DÜŞÜRÜR.
+    // Kök index denetimi bu adımdan ÖNCE koştuğu için doğrulama burada yeniden yapılır.
+    await a1Duzen.kapakShimZorunlu(wwwPath, 'empp-android-shim.js', console);
 
     // Android platform ekle. Hata YUTULMAZ (2026-08-04 dersi): `cap add android`
     // sessizce başarısız olunca android/ klasörü hiç oluşmuyor, ardından
