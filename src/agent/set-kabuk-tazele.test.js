@@ -262,10 +262,10 @@ test('A1 UYGULANDI: kök = sf425 kabuğu, motor → kapak/index.html (başlıkl�
   assert.equal(kapak, A1.baslikEkle(MOTOR_INDEX_HEAD));
   assert.deepEqual(A1.kapakDenetle(kapak), []);
   assert.match(zipMetin(z, 'index.html'), /scripts\/language-set\.js/);
-  assert.match(zipMetin(z, 'scripts/language-set.js'), /kapak\/index\.html\?kapak=|'\/index\.html\?kapak='/);
+  assert.match(zipMetin(z, 'scripts/language-set.js'), /kapak\/index\.html\?kapak=/);
   const m = menu(zipYolu);
   assert.deepEqual(m.map(([k]) => k), ['kapak-34333', 'kapak-25861', 'kapak-25862', 'link4']);
-  for (const [, b] of m.slice(0, 3)) { assert.equal(b.kapak, b.assetId); assert.equal(b.path, 'kapak'); }
+  for (const [, b] of m.slice(0, 3)) { assert.equal(b.kapak, b.assetId); assert.equal(b.path, '.'); }
   // Motor dosyaları (kök menü, assets, app.config.js, bundle) bayt-aynı.
   const zOnce = new AdmZip(once);
   for (const g of zOnce.getEntries().filter((e) => e.entryName !== 'index.html')) {
@@ -300,7 +300,7 @@ test('A1 ATLANDI: eski ikili --kip\'i tanımaz → iş kopyası bayt-aynı, log 
 for (const [mod, beklenen] of [
   ['kipi-yoksay', /kart imzası yok/],
   ['a1-imzasiz', /kart imzası yok/],
-  ['a1-yolsuz', /path undefined ≠ kapak/],
+  ['a1-yolsuz', /path undefined ≠ \./],
   ['a1-kapak', /kapak 1 ≠ assetId 34333/],
 ]) {
   test(`A1 kapı RED (${mod}): iş kopyası DEĞİŞMEDİ`, async () => {
@@ -312,10 +312,39 @@ for (const [mod, beklenen] of [
   });
 }
 
-test('A1: ikili kapak/ altına yazarsa → ATLANDI, iş kopyası DEĞİŞMEDİ', async () => {
-  const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod: 'a1-kapak-yaz' });
-  assert.match(r.neden, /ikili kapak\/ altına yazdı: kapak\/index\.html/);
-  assert.ok(once.equals(sonra));
+for (const [mod, beklenen] of [
+  ['a1-kapak-yaz', /ikili girdi dosyasını değiştirdi: kapak\/index\.html/],
+  ['a1-menu-yaz', /ikili girdi dosyasını değiştirdi: classlibraries\/ImWin32\.dll/],
+  ['a1-kapak-ek', /ikili kapak\/ altına yazdı: kapak\/ek\.js/],
+]) {
+  test(`A1 (${mod}): ikili girdiyi değiştirir / kapak/ altına yazarsa → ATLANDI, iş kopyası DEĞİŞMEDİ`, async () => {
+    const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod });
+    assert.equal(r.durum, 'atlandi');
+    assert.match(r.neden, beklenen);
+    assert.ok(once.equals(sonra));
+  });
+}
+
+test('A1 Swift arayüzü: motor sayfası + menü + assets/<id> gölgede ikiliden ÖNCE; kök index gölgede YOK', async () => {
+  // Sahte ikili gerçek araç gibi kapak/index.html, ImWin32.dll ya da assets/<id> yoksa çıkış 1 verir;
+  // kökte index.html varsa _eski/'ye taşır. UYGULANDI = girdiler hazırdı.
+  const { r, zipYolu, d } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod: 'a1-eski-yaz' });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  const adlar = new AdmZip(zipYolu).getEntries().map((e) => e.entryName);
+  assert.ok(!adlar.some((a) => a.startsWith('_eski')), `_eski/ zip'e girmez: ${adlar.filter((a) => a.startsWith('_'))}`);
+  const cagri = JSON.parse(fs.readFileSync(path.join(d, 'cagri.log'), 'utf8').trim());
+  assert.deepEqual(cagri.g.kitaplar.filter((k) => k.kapak).map((k) => k.kapak), ['34333', '25861', '25862']);
+});
+
+test('A1: gölgede motor sayfası yoksa (araç durur) → ATLANDI; sahte ikili sözleşmeyi zorlar', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'a1-sozlesme-'));
+  const ikili = sahteIkili(d);
+  fs.mkdirSync(path.join(d, 'g'));
+  fs.mkdirSync(path.join(d, 'kok'));
+  fs.writeFileSync(path.join(d, 'g', 'girdi.json'), JSON.stringify({ setTitle: 'S', kitaplar: [{ klasor: 'kapak-1', kapak: '1', assetId: '1' }] }));
+  const r = require('node:child_process').spawnSync(ikili, ['--kip', 'tek-motor', path.join(d, 'kok'), path.join(d, 'g', 'girdi.json'), d]);
+  assert.equal(r.status, 1);
+  assert.match(String(r.stderr), /kapak\/index\.html kökte YOK/);
 });
 
 test('A1: motor sayfasında zaten <base> varsa → ATLANDI (sessiz bozma yok)', async () => {
@@ -337,7 +366,7 @@ test('kapiDenetle A1: kapak sayfası kaynak motordan farklıysa RED', () => {
   const ihlal = S.kapiDenetle({
     once: new Map(), sonra: new Map(), onEk: '', yazilan: ['kapak/index.html'], beklenen: { kitaplar: [] },
     kip: 'a1', motorKaynagi: MOTOR_INDEX_HEAD,
-    metin: { kapak: A1.baslikEkle(MOTOR_INDEX_HEAD.replace('<body>', '<body>değişti')), dil: 'kapak=' },
+    metin: { kapak: A1.baslikEkle(MOTOR_INDEX_HEAD.replace('<body>', '<body>değişti')), dil: S.A1_KART_IMZASI },
   });
   assert.ok(ihlal.some((i) => /başlık dışında kaynak motor sayfasından farklı/.test(i)), ihlal.join('\n'));
   assert.ok(!ihlal.some((i) => /beklenmeyen kabuk dosyası: kapak/.test(i)), 'kapak/index.html A1\'de izinli');

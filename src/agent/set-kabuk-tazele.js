@@ -57,8 +57,10 @@ const A1 = require('../packaging/a1-duzen');
 const ISARET = '[set-kabuk]';
 /** İkili sözleşmesi: tek motorlu sette `--kip tek-motor` (a1-arayuz.md). */
 const KIP_TEK_MOTOR = 'tek-motor';
-/** A1 kabuğunun kart bağlantısı imzası (language-set.js'te bulunmalı). */
-const A1_KART_IMZASI = 'kapak=';
+/** A1 kabuğunun kart bağlantısı imzası (language-set.js `kitapAcmaAdresi`, Swift 199bac1b). */
+const A1_KART_IMZASI = 'kapak/index.html?kapak=';
+/** A1 ikilisinin gölge kökte okuduğu girdiler (Swift 49bf319f): menü + motor sayfası + assets/<id>. */
+const A1_MENU = 'classlibraries/ImWin32.dll';
 const kapakKlasoru = (id) => `kapak-${id}`;
 const WEBZ_KOKU = 'https://webz.ydspublishing.com';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -245,7 +247,8 @@ function kabukDosyasiMi(yol, klasorler) {
  *   kapak?: string|null}, kip?: 'a1'|null, motorKaynagi?: string|null}} o
  *   A1 (`kip: 'a1'`): `kapak/index.html` yalnız paketleyici (bu adım) yazar; A1 başlığı doğru ve
  *   başlık çıkınca kaynak motor sayfasıyla (`motorKaynagi`, ilk dönüşümde) bayt-aynı olmalı;
- *   dil betiği kart imzası (`kapak=`) taşır; menüde her kitap `kapak` = assetId, `path` = `kapak`.
+ *   dil betiği kart imzası (`kapak/index.html?kapak=`) taşır; menüde her kitap `kapak` = assetId,
+ *   `path` = `.` (BookContent.xml kökteki `assets/<id>/data/`'da aranır).
  * @returns {string[]} ihlal satırları
  */
 function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin, kip = null, motorKaynagi = null }) {
@@ -320,7 +323,7 @@ function kapiDenetle({ once, sonra, onEk, yazilan, beklenen, metin, kip = null, 
     }
     if (a1) {
       if (String(b.kapak) !== String(k.assetId)) ihlal.push(`A1: ${k.klasor}: kapak ${b.kapak} ≠ assetId ${k.assetId}`);
-      if (b.path !== 'kapak') ihlal.push(`A1: ${k.klasor}: path ${b.path} ≠ kapak`);
+      if (b.path !== '.') ihlal.push(`A1: ${k.klasor}: path ${b.path} ≠ .`);
     }
   }
   return ihlal;
@@ -473,11 +476,43 @@ async function kabukTazele(o) {
       await fsp.writeFile(path.join(kapakDizini, `kapak-${k.klasor}.png`), r.govde);
     }
     // 4b. Gölge kök: yalnız bookN/index.html taslakları (ikili klasör varlığını bundan ölçer).
-    //     A1: gölge kök BOŞ — kitaplar girdideki `kapak` kimlikleriyle verilir (bookN yok).
+    //     A1 (Swift 49bf319f arayüzü): ikili kökte motor menüsünü (`classlibraries/ImWin32.dll`),
+    //     motor sayfasını (`kapak/index.html` — araç yoksa DURUR, bu yüzden ikiliden ÖNCE konur) ve
+    //     kitap başına `assets/<id>/` (+ başlık için `data/BookContent.xml`) okur. Kök `index.html`
+    //     gölgeye KONMAZ: araç onu `_eski/`'ye taşırdı; `_` önekli kök dizin paket dışıdır
+    //     (`kok-yedek-dizin-disla.js`) ve zip'e de yazılmaz (aşağıdaki süzgeç).
     await fsp.mkdir(kok, { recursive: true });
     for (const d of u.bookNler) {
       await fsp.mkdir(path.join(kok, d), { recursive: true });
       await fsp.writeFile(path.join(kok, d, 'index.html'), '');
+    }
+    /** A1 girdileri: göreli yol → konulan bayt (ikili DEĞİŞTİRMEMELİ; zip'e yazılmaz). */
+    const a1Girdi = new Map();
+    if (a1) {
+      const zipGirdi = (y) => {
+        const g = once.get(`${onEk}${y}`);
+        return g && !g.dizin ? M.zipGirdiOku(o.zip, g) : null;
+      };
+      let motorHtml;
+      if (u.motorKaynagi === 'index.html') {
+        try { motorHtml = Buffer.from(A1.baslikEkle(eskiIndex)); } catch (e) { return atla(String(e.message)); }
+      } else {
+        motorHtml = zipGirdi(A1.A1_MOTOR_SAYFASI);
+      }
+      const menu = zipGirdi(A1_MENU);
+      if (!motorHtml || !menu) return atla(`A1 girdisi okunamadı (${!menu ? A1_MENU : A1.A1_MOTOR_SAYFASI})`);
+      a1Girdi.set(A1.A1_MOTOR_SAYFASI, motorHtml);
+      a1Girdi.set(A1_MENU, menu);
+      for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
+        const id = String(k.kapak || k.assetId);
+        await fsp.mkdir(path.join(kok, 'assets', id), { recursive: true });
+        const bc = zipGirdi(`assets/${id}/data/BookContent.xml`);
+        if (bc) a1Girdi.set(`assets/${id}/data/BookContent.xml`, bc);
+      }
+      for (const [y, v] of a1Girdi) {
+        await fsp.mkdir(path.dirname(path.join(kok, y)), { recursive: true });
+        await fsp.writeFile(path.join(kok, y), v);
+      }
     }
     const girdiYolu = path.join(sahne, 'girdi.json');
     const girdi = {
@@ -499,20 +534,26 @@ async function kabukTazele(o) {
     const bookNYazilan = hepsi.filter((y) => bookNMi(y.split('/')[0])
       && !(y === `${y.split('/')[0]}/index.html` && fs.statSync(path.join(kok, y)).size === 0));
     if (bookNYazilan.length) return atla(`ikili bookN altına yazdı: ${bookNYazilan.slice(0, 3).join(', ')}`);
-    // A1: motor sayfasını (kapak/**) YALNIZ bu adım yazar; ikili yazdıysa çıktı güvenilmez.
-    const kapakYazilan = hepsi.filter((y) => y.split('/')[0] === 'kapak');
+    // A1: motor sayfasını (kapak/**) ve diğer girdileri YALNIZ bu adım yazar; ikili değiştirdiyse ya da
+    // kapak/ altına yeni dosya koyduysa çıktı güvenilmez.
+    if (a1) {
+      const bozulan = [...a1Girdi].filter(([y, v]) => {
+        try { return !fs.readFileSync(path.join(kok, y)).equals(v); } catch (_) { return true; }
+      }).map(([y]) => y);
+      if (bozulan.length) return atla(`ikili girdi dosyasını değiştirdi: ${bozulan.slice(0, 3).join(', ')}`);
+    }
+    const kapakYazilan = hepsi.filter((y) => y.split('/')[0] === 'kapak' && !a1Girdi.has(y));
     if (kapakYazilan.length) return atla(`ikili kapak/ altına yazdı: ${kapakYazilan.slice(0, 3).join(', ')}`);
-    const yazilan = hepsi.filter((y) => !bookNMi(y.split('/')[0]) && !y.startsWith('_eski/')).sort();
+    // `_` önekli kök dizin (araç `_eski/`'ye arşivler) ve A1 girdileri zip'e YAZILMAZ.
+    const yazilan = hepsi.filter((y) => !bookNMi(y.split('/')[0]) && !/^_/.test(y.split('/')[0])
+      && !a1Girdi.has(y)).sort();
     if (!yazilan.includes('index.html') || !yazilan.includes(DIL_BETIGI)) {
       return atla(`ikili kabuk yazmadı (${yazilan.length} dosya)`);
     }
     // 4b'. A1 ilk dönüşüm: kökteki motor index.html → kapak/index.html (A1 başlığıyla). Zaten A1
     //      ise (motor kapak/index.html'de) motor sayfasına dokunulmaz.
+    //      Dosya gölgede ikiliden önce kondu (4b); burada yalnız zip'e yazılacaklara eklenir.
     if (a1 && u.motorKaynagi === 'index.html') {
-      let kapakHtml;
-      try { kapakHtml = A1.baslikEkle(eskiIndex); } catch (e) { return atla(String(e.message)); }
-      await fsp.mkdir(path.join(kok, 'kapak'), { recursive: true });
-      await fsp.writeFile(path.join(kok, A1.A1_MOTOR_SAYFASI), kapakHtml);
       yazilan.push(A1.A1_MOTOR_SAYFASI);
       yazilan.sort();
     }
