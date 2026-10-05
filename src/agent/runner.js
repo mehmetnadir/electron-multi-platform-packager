@@ -44,7 +44,7 @@ const {
   artifactExtension,
   joinUrl,
   pickLogoId, asciiAppName,
-  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, agGecidiKomutu, dusukVeriAyristir,
+  packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, isIsteyebilir, pardusKabulErisimUygula, agGecidiAyikla, agGecidiKomutu, dusukVeriAyristir,
   isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
   pardusGerekliDiskGb, uretimKapisi, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
@@ -475,6 +475,7 @@ function kaynakKurDurumu() {
 }
 
 let _sonYetenek = '';
+let _sonYetenekListesi = null; // son hesaplanan liste; siradakiIs iş isteme kapısı okur
 function guncelYetenekler() {
   let caps = etkinYetenekler(CONFIG.caps, {
     ofiste: ofisteMi(),
@@ -535,6 +536,7 @@ function guncelYetenekler() {
       '| tam:', CONFIG.caps.join(','));
     _sonYetenek = imza;
   }
+  _sonYetenekListesi = caps;
   return caps;
 }
 
@@ -600,6 +602,10 @@ async function uretimKapisiDurumu() {
  * @returns {Promise<{kapali:true, sebep:string}|{job:object|null}>}
  */
 async function siradakiIs(auth) {
+  // Platform yeteneği yoksa (evde Mac: yalnız kaynak-r2) iş isteme — sunucu eski CSV'yle kiralıyor.
+  if (!isIsteyebilir(_sonYetenekListesi)) {
+    return { kapali: true, sebep: 'iş alınabilir yetenek yok (' + (_sonYetenekListesi.join(',') || 'boş') + ')' };
+  }
   const kapi = await uretimKapisiDurumu();
   if (!kapi.acik) return { kapali: true, sebep: kapi.sebep };
   return { job: await fetchNextJob(auth) };

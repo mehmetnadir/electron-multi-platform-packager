@@ -470,7 +470,7 @@ test('pauseRequested: bayrak yoksa false; varsa true ve dosya SİLİNMEZ (kalıc
   assert.equal(pauseRequested(flag), false);
 });
 
-const { etkinYetenekler, agGecidiAyikla } = require('./runner-helpers');
+const { etkinYetenekler, agGecidiAyikla, isIsteyebilir } = require('./runner-helpers');
 
 test('etkinYetenekler: evde macos düşer, android/pardus kalır (Nadir kararı 2026-09-12)', () => {
   assert.deepEqual(etkinYetenekler(['android', 'macos', 'pardus'], { ofiste: false }), ['android', 'pardus']);
@@ -859,4 +859,14 @@ test('curlNullAygiti: win32 NUL, diğerleri /dev/null (04.10 curl exit 23)', () 
   assert.equal(curlNullAygiti('win32'), 'NUL');
   assert.equal(curlNullAygiti('darwin'), '/dev/null');
   assert.equal(curlNullAygiti('linux'), '/dev/null');
+});
+
+test('isIsteyebilir: yalnız kaynak-r2 ya da boş liste → iş istenmez; platform/kaynak-kur → istenir; ölçülmedi → engellemez (05.10)', () => {
+  assert.equal(isIsteyebilir(['kaynak-r2']), false);
+  assert.equal(isIsteyebilir([]), false);
+  assert.equal(isIsteyebilir(['android', 'kaynak-r2']), true);
+  assert.equal(isIsteyebilir(['kaynak-r2', 'kaynak-kur']), true);
+  assert.equal(isIsteyebilir(['pardus']), true);
+  assert.equal(isIsteyebilir(null), true);
+  assert.equal(isIsteyebilir(undefined), true);
 });

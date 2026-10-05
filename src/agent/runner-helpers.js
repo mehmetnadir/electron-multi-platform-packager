@@ -265,6 +265,18 @@ function etkinYetenekler(caps, durum) {
 }
 
 /**
+ * İŞ İSTEYEBİLİR Mİ (05.10): yetenek listesinde `kaynak-r2` dışında bir şey (platform ya da
+ * `kaynak-kur` rolü) yoksa ajan next-job ÇAĞIRMAZ. Neden: sunucu heartbeat'te platform listesi
+ * boşsa `build_agents.capabilities`'i güncellemiyor; eski CSV (ör. `android,kaynak-r2`) kalıyor ve
+ * evdeki Mac'e android kiralanıyordu (05.10 21:04, 45479/72411). Sunucu düzeltmesi ayrı iştir.
+ * `null`/`undefined` = henüz ölçülmedi → engellemez (eski davranış).
+ */
+function isIsteyebilir(caps) {
+  if (!Array.isArray(caps)) return true;
+  return caps.some((c) => c !== 'kaynak-r2');
+}
+
+/**
  * PARDUS KABUL ERİŞİM KAPISI (2026-09-27): ProBook'a (kabul betiğinin GERÇEKTEN ssh ile
  * bağlanacağı host) erişilemiyorken Mac `pardus` yeteneğini heartbeat'ten düşürür.
  *
@@ -1166,6 +1178,7 @@ module.exports = {
   PARDUS_G_ENV,
   pauseRequested,
   etkinYetenekler,
+  isIsteyebilir,
   pardusKabulErisimUygula,
   pardusYedekKabulDurumu,
   srcVersionTuret,
