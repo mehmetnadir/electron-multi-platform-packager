@@ -40,6 +40,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const M = require('./icerik-merdiven');
 const K = require('./yazma-kapisi');
 const setEk = require('./set-uyelik-ek');
@@ -262,7 +263,7 @@ async function dosyalariTopla(kok, alt = '') {
  * hâli ya aynen eskisidir.
  * @param {{zip: string, calisma: string, job: object, log?: Function, warn?: Function, env?: object,
  *   getir?: Function, komut?: Function, ikili?: string, platform?: string, webzKoku?: string}} o
- * @returns {Promise<{durum: 'uygulandi'|'atlandi', neden: string|null, kisaKod?: string,
+ * @returns {Promise<{durum: 'uygulandi'|'guncel'|'atlandi', neden: string|null, kisaKod?: string,
  *   kitaplar?: string[], notlar?: string[], dosyaSayisi?: number, sureMs: number}>}
  */
 async function kabukTazele(o) {
@@ -277,9 +278,10 @@ async function kabukTazele(o) {
   const rapor = { durum: 'atlandi', neden: null };
   const bitir = (neden, ek = {}) => {
     Object.assign(rapor, ek, { neden, sureMs: Date.now() - basla });
-    const satir = `${ISARET} ${rapor.durum === 'uygulandi' ? 'UYGULANDI' : 'ATLANDI'}`
+    const etiket = { uygulandi: 'UYGULANDI', guncel: 'GÜNCEL' }[rapor.durum] || 'ATLANDI';
+    const satir = `${ISARET} ${etiket}`
       + `${neden ? ` — ${neden}` : ''}${o.job && o.job.bookId ? ` (${o.job.bookId})` : ''}`;
-    (rapor.durum === 'uygulandi' ? log : warn)(satir);
+    (rapor.durum === 'atlandi' ? warn : log)(satir);
     return rapor;
   };
 
@@ -376,6 +378,20 @@ async function kabukTazele(o) {
       return bitir(`ikili kabuk yazmadı (${yazilan.length} dosya)`);
     }
 
+    // 4c. Değişmezlik: üretilen dosyalar zip'tekiyle aynıysa yazılmaz (aynı kabuk her r2-kur'da yeni
+    // R2 sürümü açtırmasın). `set-menu.json` her üretimde yeni UUID taşır — kıyasa girmez.
+    const degisen = yazilan.filter((y) => {
+      if (y === 'set-menu.json') return false;
+      const g = once.get(`${onEk}${y}`);
+      if (!g) return true;
+      const v = fs.readFileSync(path.join(kok, y));
+      return g.boyut !== v.length || g.crc !== zlib.crc32(v);
+    });
+    if (!degisen.length) {
+      rapor.durum = 'guncel';
+      return bitir('kabuk zaten güncel (değişen dosya yok) — zip değişmedi');
+    }
+
     // 5. Aday klona yaz → kapı → rename.
     await fsp.rm(aday, { force: true });
     await fsp.copyFile(o.zip, aday, fs.constants.COPYFILE_FICLONE);
@@ -406,7 +422,10 @@ async function kabukTazele(o) {
     }
     await fsp.rename(aday, o.zip);
     rapor.durum = 'uygulandi';
-    return bitir(null, { kitaplar: girdi.kitaplar.map((k) => k.klasor), dosyaSayisi: yazilan.length, setAdi: girdi.setTitle });
+    return bitir(null, {
+      kitaplar: girdi.kitaplar.map((k) => k.klasor), dosyaSayisi: yazilan.length, degisenSayisi: degisen.length,
+      setAdi: girdi.setTitle,
+    });
   } catch (e) {
     return bitir(`beklenmeyen hata: ${String(e && e.message || e).slice(0, 200)} — iş kopyası DEĞİŞMEDİ`);
   } finally {

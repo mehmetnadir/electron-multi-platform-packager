@@ -222,6 +222,15 @@ test('UYGULANDI: kabuk yazılır, sıra Web-Z, klasörler aynı, bookN/** merkez
   assert.deepEqual(fs.readdirSync(d).filter((a) => a.startsWith('set-kabuk-') || a.endsWith('.kabuk-aday')), []);
 });
 
+test('ikinci koşu: kabuk zaten güncel → GÜNCEL, zip bayt-aynı (yeni R2 sürümü açtırmaz)', async () => {
+  const ilk = await kostur();
+  assert.equal(ilk.r.durum, 'uygulandi', ilk.r.neden);
+  const ikinci = await kostur({ zip: ilk.sonra });
+  assert.equal(ikinci.r.durum, 'guncel', ikinci.r.neden);
+  assert.ok(ikinci.once.equals(ikinci.sonra), 'zip değişmemeli');
+  assert.ok(ikinci.loglar.some((l) => l.startsWith('[set-kabuk] GÜNCEL')), ikinci.loglar.join('\n'));
+});
+
 test('sarmalayıcı klasörlü zip: kabuk aynı önekle yazılır', async () => {
   const { r, zipYolu } = await kostur({ zip: buildZip({ sarma: 'SET/' }) });
   assert.equal(r.durum, 'uygulandi', r.neden);
