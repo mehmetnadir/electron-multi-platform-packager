@@ -68,7 +68,147 @@
     return { rel: rel, toWork: toWork, toRead: toRead };
   }
 
-  function createShim(realFs, pathMod, WORK, BASE, ORTU) {
+  /**
+   * A1 KAPAK SÜZME (2026-10-05, deneme — arastirma/set-kabuk-0510/a1-deneme-sonuc.md).
+   * 11-12 tek motorlu setlerde sf425 kabuğu motoru `?kapak=<ID>` ile açar. Motor kitap listesini
+   * `classlibraries/ImWin32.dll` menüsünden kurar; menüde TEK kapak varsa `oneBook` yolundan
+   * kapağı doğrudan açar ve `defaultPageNo` çalışır. Shim:
+   *   • OKUMA (fetch + fs.readFile*): menüyü kapağa süzer (yalnız o kapağı taşıyan Group/Tab/cover);
+   *   • YAZMA (fs.writeFile*): motor tek kapaklı menüyü geri yazınca `<main>` niteliklerini
+   *     (aktivasyon anahtarı `key` burada) ve kapak ögesini ASIL menüye birleştirir.
+   * Sonuç: anahtar set başına tek kalır. `?kapak` yoksa davranış BİREBİR eski.
+   * Motor her açılışta menüyü geri yazar (6395 `v` → `E(r)`), birleştirme her açılışta çalışır.
+   */
+  var IMWIN_BICIM = [[127, 17], [27, 5]];
+  var IMWIN_RE = /(^|[\\/])classlibraries[\\/]ImWin32\.dll$/i;
+  function imwinCoz(t) {
+    t = String(t);
+    for (var i = 0; i < IMWIN_BICIM.length; i++) {
+      var n = IMWIN_BICIM[i][0], r = IMWIN_BICIM[i][1];
+      if (t.length > n && t.charAt(n) === '<' && t.charAt(t.length - (n + r)) === '>') {
+        var out = [];
+        for (var p = n; t.length - p > n; p += r) out.push(t.charAt(p));
+        return { xml: out.join(''), n: n, r: r };
+      }
+    }
+    return null;
+  }
+  function imwinYaz(xml, n, r) {
+    function dolgu(k) { var s = ''; for (var i = 0; i < k; i++) s += String.fromCharCode(1 + Math.floor(Math.random() * 125)); return s; }
+    var g = [];
+    for (var i = 0; i < xml.length; i++) g.push(xml.charAt(i) + dolgu(r - 1));
+    return dolgu(n) + g.join('') + dolgu(n);
+  }
+  function ogeRe(ad) { return new RegExp('<' + ad + '\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/' + ad + '>)', 'g'); }
+  function kapakIdleri(s) {
+    var l = [], m, re = ogeRe('cover');
+    while ((m = re.exec(s))) { var k = /^<cover\b[^>]*?\sID="([^"]*)"/.exec(m[0]); if (k) l.push(k[1]); }
+    return l;
+  }
+  function kapakOku(search) { var m = /[?&]kapak=(\d+)/.exec(String(search || '')); return m ? m[1] : null; }
+  /** Menüyü tek kapağa süzer. Kapak menüde yoksa null (süzme yapılmaz, menü olduğu gibi gider). */
+  function menuSuz(xml, kapak) {
+    if (kapakIdleri(xml).indexOf(String(kapak)) === -1) return null;
+    var icerir = function (s) { return kapakIdleri(s).indexOf(String(kapak)) !== -1; };
+    return xml.replace(ogeRe('Group'), function (g) {
+      if (!icerir(g)) return '';
+      return g.replace(ogeRe('Tab'), function (t) {
+        if (!icerir(t)) return '';
+        return t.replace(ogeRe('cover'), function (c) { return kapakIdleri(c)[0] === String(kapak) ? c : ''; });
+      });
+    });
+  }
+  /**
+   * Motorun yazdığı TEK kapaklı menüyü asıl menüye birleştirir: `<main …>` açılış etiketi ve
+   * kapak ögesi yazılandan, gerisi (diğer kapaklar, Group/Tab) asıldan. Yazılan menü tek kapaklı
+   * ve o kapak değilse null (yazma olduğu gibi geçer — örn. sunucudan yeniden kurulan tam menü).
+   */
+  function menuBirlestir(asil, yazilan, kapak) {
+    var ids = kapakIdleri(yazilan);
+    if (ids.length !== 1 || ids[0] !== String(kapak)) return null;
+    var mainYeni = /<main\b[^>]*>/.exec(yazilan);
+    var kapakYeni = yazilan.match(ogeRe('cover'))[0];
+    var out = asil;
+    if (mainYeni) {
+      var etiket = mainYeni[0];
+      // Boş anahtar dolu anahtarı EZMEZ: anahtarsız açılmış ikinci pencere bellekteki boş
+      // `key`'i geri yazınca ilk pencerede girilen kod silinmesin. Motor main.key'i hiç boşaltmaz.
+      var eskiMain = /<main\b[^>]*>/.exec(asil);
+      var eskiKey = eskiMain && /\skey="([^"]*)"/.exec(eskiMain[0]);
+      var yeniKey = /\skey="([^"]*)"/.exec(etiket);
+      if (eskiKey && eskiKey[1] && (!yeniKey || !yeniKey[1])) {
+        etiket = yeniKey ? etiket.replace(/\skey="[^"]*"/, function () { return ' key="' + eskiKey[1] + '"'; })
+          : etiket.replace(/^<main\b/, function (m0) { return m0 + ' key="' + eskiKey[1] + '"'; });
+      }
+      out = out.replace(/<main\b[^>]*>/, function () { return etiket; });
+    }
+    out = out.replace(ogeRe('cover'), function (c) { return kapakIdleri(c)[0] === String(kapak) ? kapakYeni : c; });
+    return out;
+  }
+
+  function kapakKancasi(shim, realFs, pathMod, R, KAPAK) {
+    var P = shim.promises;
+    var imwinMi = function (p) { var r = R.rel(p); return r != null && IMWIN_RE.test(r.replace(/\\/g, '/')); };
+    var kodlamaVar = function (o) { return typeof o === 'string' || !!(o && typeof o === 'object' && o.encoding); };
+    var suzulmus = function (p) {
+      var ham = realFs.readFileSync(R.toRead(p), 'utf8');
+      var c = imwinCoz(ham); if (!c) return null;
+      var s = menuSuz(c.xml, KAPAK); if (s == null) return null;
+      return imwinYaz(s, c.n, c.r);
+    };
+    var birlesik = function (p, veri) {
+      var y = imwinCoz(typeof veri === 'string' ? veri : String(veri)); if (!y) return null;
+      var c = null;
+      try { c = imwinCoz(realFs.readFileSync(R.toRead(p), 'utf8')); } catch (e) { c = null; }
+      if (!c) return null;
+      var b = menuBirlestir(c.xml, y.xml, KAPAK); if (b == null) return null;
+      return imwinYaz(b, 27, 5); // motorun yazıcısıyla (6395 `E`) aynı biçim
+    };
+    // Atomik yazma: iki pencere aynı anda yazarsa yarım dosya oluşmaz (son yazan kazanır).
+    var atomikYaz = function (p, metin) {
+      var hedef = R.toWork(p);
+      var gecici = hedef + '.empp-' + ((typeof process !== 'undefined' && process.pid) || 0) + '-' + Math.random().toString(36).slice(2);
+      realFs.writeFileSync(gecici, metin, 'utf8');
+      realFs.renameSync(gecici, hedef);
+    };
+    var rS = shim.readFileSync, rA = shim.readFile, wS = shim.writeFileSync, wA = shim.writeFile;
+    shim.readFileSync = function (p, o) {
+      if (imwinMi(p)) { try { var s = suzulmus(p); if (s != null) return kodlamaVar(o) ? s : Buffer.from(s, 'utf8'); } catch (e) {} }
+      return rS.apply(this, arguments);
+    };
+    shim.readFile = function (p, o, cb) {
+      if (typeof o === 'function') { cb = o; o = undefined; }
+      if (imwinMi(p) && typeof cb === 'function') {
+        try { var s = suzulmus(p); if (s != null) { var v = kodlamaVar(o) ? s : Buffer.from(s, 'utf8'); setTimeout(function () { cb(null, v); }, 0); return; } } catch (e) {}
+      }
+      return o === undefined ? rA.call(this, p, cb) : rA.call(this, p, o, cb);
+    };
+    shim.writeFileSync = function (p, veri) {
+      if (imwinMi(p)) { try { var b = birlesik(p, veri); if (b != null) { atomikYaz(p, b); return undefined; } } catch (e) {} }
+      return wS.apply(this, arguments);
+    };
+    shim.writeFile = function (p, veri) {
+      var cb = arguments[arguments.length - 1];
+      if (imwinMi(p) && typeof cb === 'function') {
+        try { var b = birlesik(p, veri); if (b != null) { atomikYaz(p, b); setTimeout(function () { cb(null); }, 0); return; } } catch (e) {}
+      }
+      return wA.apply(this, arguments);
+    };
+    if (P) {
+      var prF = P.readFile, pwF = P.writeFile;
+      P.readFile = function (p, o) {
+        if (imwinMi(p)) { try { var s = suzulmus(p); if (s != null) return Promise.resolve(kodlamaVar(o) ? s : Buffer.from(s, 'utf8')); } catch (e) {} }
+        return prF.apply(P, arguments);
+      };
+      P.writeFile = function (p, veri) {
+        if (imwinMi(p)) { try { var b = birlesik(p, veri); if (b != null) { atomikYaz(p, b); return Promise.resolve(); } } catch (e) {} }
+        return pwF.apply(P, arguments);
+      };
+    }
+    return { suzulmus: suzulmus };
+  }
+
+  function createShim(realFs, pathMod, WORK, BASE, ORTU, KAPAK) {
     var R = makeResolver(pathMod, realFs, WORK, BASE, ORTU);
     /** Örtünün getirdiği adı (Dirent isteniyorsa) dizin/dosya bilgisiyle sanal girdiye çevirir. */
     function sanal(ad, L, opts) {
@@ -135,7 +275,8 @@
       });
       shim.promises = sp;
     }
-    shim.__empp = { WORK: WORK, BASE: BASE, ORTU: ORTU || null };
+    shim.__empp = { WORK: WORK, BASE: BASE, ORTU: ORTU || null, KAPAK: KAPAK || null };
+    if (KAPAK) shim.__empp.kapak = kapakKancasi(shim, realFs, pathMod, R, String(KAPAK));
     return shim;
   }
 
@@ -166,11 +307,37 @@
     } catch (e) { return null; }
   }
 
-  function installFetch(win, realFs, pathMod, WORK, BASE) {
+  /** A1: `?kapak` kipinde ImWin32.dll fetch'i süzülmüş menüyle cevaplanır (motor menüyü fetch ile okur). */
+  function kapakFetchYolu(url, pathMod, realFs, WORK, BASE) {
+    if (typeof url !== 'string' || !url) return null;
+    var u = url.split(/[?#]/)[0];
+    if (/^(https?|data|blob|ws|wss):/i.test(u)) return null;
+    var rel = /^file:/i.test(u)
+      ? pathMod.relative(BASE, decodeURIComponent(u.replace(/^file:\/\//i, '')).replace(/^\/([a-zA-Z]:[\\/])/, '$1'))
+      : decodeURIComponent(u).replace(/^\.\//, '').replace(/^\/+/, '');
+    if (!rel || rel.startsWith('..') || !IMWIN_RE.test(rel.replace(/\\/g, '/'))) return null;
+    return rel;
+  }
+
+  function installFetch(win, realFs, pathMod, WORK, BASE, KAPAK) {
     var realFetch = win.fetch;
     if (typeof realFetch !== 'function' || realFetch.__empp) return;
+    var kapakR = KAPAK ? makeResolver(pathMod, realFs, WORK, BASE, null) : null;
     var wrapped = function (input, init) {
       var url = (input && typeof input === 'object' && 'url' in input) ? input.url : input;
+      if (KAPAK) {
+        var kr = kapakFetchYolu(url, pathMod, realFs, WORK, BASE);
+        if (kr) {
+          try {
+            var ham = realFs.readFileSync(kapakR.toRead(kr), 'utf8');
+            var c = imwinCoz(ham), s = c ? menuSuz(c.xml, String(KAPAK)) : null;
+            if (s != null) {
+              return Promise.resolve(new win.Response(imwinYaz(s, c.n, c.r), { status: 200,
+                headers: { 'Content-Type': 'application/octet-stream', 'X-EMPP-Source': 'kapak' } }));
+            }
+          } catch (e) { /* düş: süzmesiz yol */ }
+        }
+      }
       var w = workPathForUrl(url, pathMod, realFs, WORK, BASE);
       if (w) {
         try {
@@ -261,9 +428,11 @@
       var WORK = subBook ? pathMod.join(WORK_ROOT, subBook) : WORK_ROOT;
       var kok = kokBul(pathMod, BASE, subBook);
       var ORTU = ortuOkuyucu(realRequire, realFs, pathMod, proc, kok);
-      var shim = createShim(realFs, pathMod, WORK, BASE, ORTU);
+      // A1 (2026-10-05): sf425 kabuğu tek motoru `?kapak=<ID>` ile açar → menü o kapağa süzülür.
+      var KAPAK = kapakOku(win.location && win.location.search);
+      var shim = createShim(realFs, pathMod, WORK, BASE, ORTU, KAPAK);
       win.require = function (name) { return name === 'fs' ? shim : realRequire.apply(this, arguments); };
-      installFetch(win, realFs, pathMod, WORK, BASE);
+      installFetch(win, realFs, pathMod, WORK, BASE, KAPAK);
       Object.keys(realRequire).forEach(function (k) { try { win.require[k] = realRequire[k]; } catch (e) {} });
       win.__emppFsShim = shim;
       icerikKancasi(win, realRequire, realFs, pathMod, makeResolver(pathMod, realFs, WORK, BASE, ORTU), WORK, kok);
@@ -274,6 +443,7 @@
     }
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl, icerikKancasi, kokBul, ortuOkuyucu };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createShim, makeResolver, install, installFetch, workPathForUrl, icerikKancasi, kokBul, ortuOkuyucu,
+    imwinCoz, imwinYaz, menuSuz, menuBirlestir, kapakOku, kapakIdleri };
   if (isRenderer) install(window);
 })();
