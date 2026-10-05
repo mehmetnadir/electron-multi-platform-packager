@@ -46,7 +46,7 @@ const {
   pickLogoId, asciiAppName,
   packagerResultOf, addFileToZipRoot, restartRequested, pauseRequested, etkinYetenekler, pardusKabulErisimUygula, agGecidiAyikla, agGecidiKomutu, dusukVeriAyristir,
   isTransientNetworkError, yoklamaYenidenDenenir, srcVersionTuret, agHatasiOzeti,
-  pardusGerekliDiskGb, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
+  pardusGerekliDiskGb, uretimKapisi, ertelenebilirKaynakHatasi, DISK_KAPISI_ISARETI,
   noterHatasi,
   probookErisilemezHatasi, PROBOOK_KAPISI_ISARETI, pardusKabulSinifi,
   pardusBetikEnv, claimGSurumu, pardusYedekKabulDurumu,
@@ -565,6 +565,42 @@ async function fetchNextJob(auth) {
   return parseNextJob(res.status, res.data);
 }
 
+/** KABUL KUYRUĞU (05.10) etkin mi: bayrak (EMPP_WIN_KABUL_KUYRUK=1) VE hazır kuyruk açık. */
+function kabulKuyruguAcik() {
+  return CONFIG.winKabulKuyrugu === true && CONFIG.winHazirAcik === true;
+}
+
+/**
+ * Üretim kapısı (05.10): kabul kuyruğu açıkken claim'den ÖNCE. Kabul işçisinde sıra bekleyen kayıt
+ * (işlenmekte olan sayılmaz) derinliğe ulaştıysa ya da üretim diski darsa yeni iş alınmaz; nabız sürer.
+ * Kuyruk kapalıyken her zaman açık (eski davranış). @returns {Promise<{acik:boolean, sebep?:string}>}
+ */
+async function uretimKapisiDurumu() {
+  if (!kabulKuyruguAcik()) return { acik: true };
+  const liste = await windowsHazir.kabulListesi(CONFIG);
+  const bosGb = diskBosGb(os.tmpdir());
+  if (bosGb === null && !uretimKapisiDurumu._bosGbUyarisi) {
+    warn(`üretim kapısı: ${os.tmpdir()} boş alanı ölçülemedi — disk ölçütü atlandı (yalnız kuyruk derinliği)`);
+    uretimKapisiDurumu._bosGbUyarisi = true;
+  }
+  return uretimKapisi({
+    kuyrukSayisi: liste.filter((g) => !g.isleniyor).length,
+    derinlik: CONFIG.winKabulDerinlik,
+    bosGb,
+    minGb: CONFIG.winUretMinBosGb,
+  });
+}
+
+/**
+ * Ana döngünün iş alma adımı: üretim kapısı kapalıysa next-job ÇAĞRILMAZ.
+ * @returns {Promise<{kapali:true, sebep:string}|{job:object|null}>}
+ */
+async function siradakiIs(auth) {
+  const kapi = await uretimKapisiDurumu();
+  if (!kapi.acik) return { kapali: true, sebep: kapi.sebep };
+  return { job: await fetchNextJob(auth) };
+}
+
 /**
  * ERTELEME = KİRAYI AÇIKÇA BIRAK (2026-09-30). Ertelenebilir hatada (disk kapısı, başsız kabul
  * ÖLÇÜLEMEDİ, noter/ProBook geçici sınıfı) 'failed' YAZILMAZ; eskiden kira da bırakılmıyordu →
@@ -949,8 +985,17 @@ async function postResultSuccess(auth, job, artifactPath) {
 }
 
 async function postResultFailure(auth, job, errorMessage) {
+  await postResultFailureYanit(auth, job, errorMessage);
+}
+
+/**
+ * `postResultFailure`'ın sonucu bildiren hâli (05.10, kabul işçisi): sunucu kabul ettiyse (2xx) ok.
+ * FIRLATMAZ. Kabul işçisi kaydı YALNIZ ok:true ise taşır (yoksa satır running + lease NULL kalırdı).
+ * @returns {Promise<{ok:boolean, status:number|null}>}
+ */
+async function postResultFailureYanit(auth, job, errorMessage) {
   try {
-    await axios.post(
+    const res = await axios.post(
       joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/result`),
       {
         bookId: job.bookId,
@@ -960,8 +1005,10 @@ async function postResultFailure(auth, job, errorMessage) {
       },
       { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true },
     );
+    return { ok: res.status >= 200 && res.status < 300, status: res.status };
   } catch (e) {
     errlog('could not report failure for', job.bookId, job.platform, '-', agHatasiOzeti(e));
+    return { ok: false, status: null };
   }
 }
 
@@ -2364,6 +2411,15 @@ async function imzaBekliyorBildir(auth, job, hazirKayit, sebep) {
  * doğrula → imzalı kabul → yayınla → `yayinlandi/`'ye taşı; kapalıysa yeniden üretmeden imza-bekliyor.
  */
 async function hazirIsiDevral(auth, job, winPlan, bekleyen, work) {
+  // KABUL KUYRUĞU (05.10): kayıt kabul işçisinde bekliyor — YENİDEN ÜRETİLMEZ, kabul burada koşmaz;
+  // sunucu tutması yenilenir (eski sunucu satırı kuyruğa bırakmıştı). Bayraktan BAĞIMSIZ: bayrak
+  // kapatılsa da kalan kabul-bekliyor kayıtları işçi boşaltır.
+  if (bekleyen.manifest && bekleyen.manifest.durum === windowsHazir.KABUL_BEKLIYOR) {
+    log(`windows: ${job.bookId} ${winPlan.surum} zaten kabul kuyruğunda (${bekleyen.dizin}) — yeniden ÜRETİLMEDİ`);
+    const r = await imzaBekliyorBildir(auth, job, bekleyen, `${windowsHazir.KABUL_KUYRUGU_ISARETI} imzasız kabul işçide bekliyor (yeniden kiralama)`);
+    if (r.tutuldu) return { ertelendi: true, imzaBekliyor: true, kabulKuyrugu: true, sebep: 'kabul kuyruğunda' };
+    return kabulSatirIciYedek(auth, job, winPlan, bekleyen.dizin, work);
+  }
   const kip = await windowsSerit.imzaKipiSec(CONFIG);
   if (kip.kip !== 'yuva' || !(await windowsSerit.imzaYuvasiErisilirMi(CONFIG))) {
     log(`windows: ${job.bookId} ${winPlan.surum} zaten hazır kuyrukta (${bekleyen.dizin}) — yuva kapalı, yeniden ÜRETİLMEDİ`);
@@ -2388,6 +2444,54 @@ async function hazirIsiDevral(auth, job, winPlan, bekleyen, work) {
   } finally {
     await kayitKilidi();
   }
+}
+
+/**
+ * KABUL KUYRUĞU YEDEĞİ (05.10 inceleme Ö2): sunucu imza-bekliyor tutmasını yapmadıysa (`tutuldu:false` —
+ * eski sunucu satırı kuyruğa bıraktı ya da /release düştü) kuyruk bu iş için devre dışı kalır: imzasız
+ * kabul burada, satır içi koşar. Yoksa eski sunucuda iş → kuyruk → yeniden kiralama → yine kuyruk döngüsü
+ * olur. Kabul işçisiyle AYNI kayıt kilidi ve AYNI GEÇTİ işleyişi (`kabulGectiIsle`); GEÇTİ sonrası kayıt
+ * imza-bekliyor olur ve bugünkü hazır kayıt yolu (`hazirIsiDevral`) devam eder. KALDI → `reddedildi/` +
+ * fırlatır (ana döngü failed yazar, aynı metin); ÖLÇÜLEMEDİ → kayıt yerinde, fırlatır (ertelenebilir).
+ */
+async function kabulSatirIciYedek(auth, job, winPlan, kayitDizini, work) {
+  warn(`windows: ${job.bookId} UYARI — sunucu imza-bekliyor TUTMADI (eski sunucu ya da /release düştü); `
+    + 'kabul kuyruğu bu iş için devre dışı, imzasız kabul SATIR İÇİ koşuyor');
+  currentJob = { bookId: job.bookId, platform: job.platform }; // kira hâlâ bizdeyse nabız tazelesin
+  const kilit = await windowsHazir.kayitKilidiDene(kayitDizini);
+  if (!kilit) {
+    log(`windows: kayıt (${kayitDizini}) şu an kabul işçisinde — satır içi kabul yapılmadı`);
+    currentJob = null;
+    return { ertelendi: true, imzaBekliyor: true, kabulKuyrugu: true, sebep: 'kabul işçisi bu kaydı işliyor' };
+  }
+  try {
+    const m = await windowsHazir.manifestOku(kayitDizini);
+    if (!m || !m.exe) throw new Error(`[windows-serit] kabul kuyruğu kaydı okunamadı: ${kayitDizini}`);
+    const giris = { dizin: kayitDizini, manifest: m, exeYolu: path.join(kayitDizini, m.exe) };
+    if (m.durum === windowsHazir.KABUL_BEKLIYOR) {
+      let k;
+      try {
+        k = await windowsSerit.kabulKos({
+          exe: giris.exeYolu, job, work, cfg: CONFIG, log, aktivasyon: aktivasyonBeklenir(job.bookTitle), etiket: 'imzasiz', sleep,
+        });
+      } catch (e) {
+        const mesaj = String((e && e.message) || e);
+        if (!ertelenebilirKaynakHatasi(e) && /kabul kapısından geçemedi \((KALDI|RED)\)/.test(mesaj)) {
+          await windowsHazir.sonuclandir(CONFIG, giris, 'reddedildi', { durum: 'red', sebep: mesaj, zamanRed: new Date().toISOString(), kabulIsleniyor: null });
+        }
+        throw e;
+      }
+      await windowsHazir.kabulGectiIsle(CONFIG, giris, k, log);
+    }
+  } finally {
+    await kilit();
+  }
+  const guncel = await windowsHazir.hazirBul(CONFIG, job.bookId, winPlan.surum);
+  if (!guncel || guncel.manifest.durum !== windowsHazir.IMZA_BEKLIYOR_FAZI) {
+    currentJob = null;
+    return { ertelendi: true, sebep: 'kabul kuyruğu kaydı satır içi kabulden sonra imza-bekliyor değil' };
+  }
+  return hazirIsiDevral(auth, job, winPlan, guncel, work);
 }
 
 async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
@@ -2865,14 +2969,27 @@ async function processJob(auth, job) {
     //   diğerleri: başsız kabul (bayrak kapalıysa no-op).
     let yayinYolu;
     let winZincir = null;
+    // KABUL KUYRUĞU (05.10): bayrak açık VE hazır kuyruk açıksa imzasız kabul işçiye bırakılır.
+    const kabulKuyrugu = packagerPlatform === 'windows' && kabulKuyruguAcik();
     if (packagerPlatform === 'windows') {
       winZincir = await windowsSerit.yayinOncesiZincir({
         artifactPath, job, plan: winPlan, work, jobId, cfg: CONFIG, log, sleep,
         aktivasyon: aktivasyonBeklenir(job.bookTitle),
         imzaKipi: winKip.kip,
+        kabulKipi: kabulKuyrugu ? 'kuyruk' : 'satir',
         // Yalnız kabulden geçip hazır kuyruğa girerken sorulur (tembel) — RED alan pakette presign yok.
-        r2Hedef: winKip.kip === 'hazir' ? () => r2HedefYoklama(auth, job) : undefined,
+        r2Hedef: winKip.kip === 'hazir' || kabulKuyrugu ? () => r2HedefYoklama(auth, job) : undefined,
       });
+      if (winZincir.kabulKuyrugu) {
+        // KABUL BEKLİYOR: yayın YOK, failed YOK. Sunucu bugünkü imza-bekliyor tutmasıyla satırı tutar
+        // (lease NULL — sıradaki claim'le aynı ajanda iki kiralı satır olmaz); runner sıradaki işe geçer.
+        const bekleSebep = `${windowsHazir.KABUL_KUYRUGU_ISARETI} imzasız kabul işçide bekliyor`;
+        const tutma = await imzaBekliyorBildir(auth, job, winZincir.hazir, bekleSebep);
+        await packagerReleaseJob(jobId);
+        // Ö2: sunucu tutmadıysa kuyruk bu iş için devre dışı — kabul satır içi (eski sunucuda döngü yok).
+        if (!tutma.tutuldu) return await kabulSatirIciYedek(auth, job, winPlan, winZincir.hazir.dizin, work);
+        return { ertelendi: true, imzaBekliyor: true, kabulKuyrugu: true, sebep: bekleSebep };
+      }
       if (winZincir.hazir) {
         // İMZA BEKLİYOR: yayın YOK. Sunucuya ara durum bildirilir (kira bırakılır; book-update
         // `durum:'imza-bekliyor'`u tanıyınca satırı yeniden kiralanmayacak biçimde tutar).
@@ -2966,7 +3083,15 @@ async function main() {
     if (main._dusukLogged) { log('Düşük Veri Modu kalktı — iş almaya devam'); main._dusukLogged = false; }
     let job = null;
     try {
-      job = await fetchNextJob(auth);
+      const sira = await siradakiIs(auth);
+      if (sira.kapali) {
+        // Üretim kapısı (kabul kuyruğu dolu / disk dar): claim yok, nabız (heartbeat) sürer.
+        if (main._kapiSebep !== sira.sebep) { log(`üretim kapısı KAPALI — ${sira.sebep}; yeni iş alınmıyor`); main._kapiSebep = sira.sebep; }
+        await sleep(CONFIG.pollMs);
+        continue;
+      }
+      if (main._kapiSebep) { log('üretim kapısı açıldı — iş almaya devam'); main._kapiSebep = null; }
+      job = sira.job;
       netErrAttempt = 0; // a successful poll resets backoff
     } catch (e) {
       const delay = backoffMs(netErrAttempt++, 1000, 30000);
@@ -3090,11 +3215,13 @@ module.exports = {
   pardusYedekKabul,
   konteynerKabulKapisi,
   _yedekLogSifirla: () => { _yedekAktifSon = false; },
-  yuklemeHizSiniri, packagerStartPackage, postResultSuccess, postResultFailure, presignUpload, releaseJob, releaseJobYanit, imzaBekliyorBildir, hazirIsiDevral,
+  yuklemeHizSiniri, packagerStartPackage, postResultSuccess, postResultFailure, postResultFailureYanit, presignUpload, releaseJob, releaseJobYanit, imzaBekliyorBildir, hazirIsiDevral,
   aktivasyonBeklenir,
   packagerPoll,
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
   fetchNextJob, releaseJob,
+  // Kabul kuyruğu (05.10) — üretim kapısı + iş alma adımı.
+  kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs,
   // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
   kaynakAdim, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
   _konumAyarla: (ofiste) => { _konum = { t: Date.now(), ofiste: Boolean(ofiste) }; _sonYetenek = ''; },

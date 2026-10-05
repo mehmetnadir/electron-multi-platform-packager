@@ -15,11 +15,17 @@
  *   reddedildi/<bookId>-<sürüm>-<damga>/   imzalı kopya kabulden KALDI (paket kusuru)
  *   eskiler/<bookId>-<sürüm>-<damga>/      aynı sürüm yeniden üretilince yerinden edilen eski kopya
  *   bayat/<bookId>-<sürüm>-<damga>/        kaynak sürümü sunucunun geçerli kaynağından eski (04.10; imzaya GİTMEZ)
+ *   olculemedi/<bookId>-<sürüm>-<damga>/   kabul işçisi 3 denemede ölçemedi (05.10; iş kuyruğa döndü, yeniden üretilir)
  *   .bildirim-durum.json          bekçi bildirim kısıtı (aynı sebep 3 saatte en çok bir)
  *
  * manifest.json: bookId, platform, surum, exe (dosya adı), sha256, md5, boyut, kabulKanit, kabulKapi,
  * r2Hedef (sunucu presign'ı belirler; runner'ın bildiği hedef bilgisi), job (claim alanları — bekçi
  * /result gövdesini bunlarla kurar), kanit (statik kapı özeti, kök index), zaman, durum, sebep.
+ *
+ * KABUL KUYRUĞU (05.10, EMPP_WIN_KABUL_KUYRUK=1): runner statik kapıdan sonra kabulü çağırmaz; paket
+ * `durum:'kabul-bekliyor'` ile buraya girer. Tek çıkış yolu kabul işçisidir (`tools/windows/kabul-iscisi.js`):
+ * GEÇTİ → aynı kayıt `imza-bekliyor` olur (bekçiye görünür); KALDI → `reddedildi/`; 3× ÖLÇÜLEMEDİ →
+ * `olculemedi/`. `hazirListesi` (bekçinin listesi) kabul-bekliyor kaydı GÖRMEZ: kabulsüz paket imzaya gitmez.
  */
 
 const fs = require('fs');
@@ -28,10 +34,14 @@ const os = require('os');
 const path = require('path');
 
 const MANIFEST = 'manifest.json';
-const ALT_DIZINLER = ['yayinlandi', 'reddedildi', 'eskiler', 'bayat'];
+const ALT_DIZINLER = ['yayinlandi', 'reddedildi', 'eskiler', 'bayat', 'olculemedi'];
 const DURUM_DOSYASI = '.bildirim-durum.json';
 /** Sunucuya giden ara durum (current_phase) — book-update tasarımı rapor/OKU'da. */
 const IMZA_BEKLIYOR_FAZI = 'imza-bekliyor';
+/** Kabul kuyruğu (05.10): statik kapıdan geçmiş, imzasız kabulü kabul işçisinde bekleyen paket. */
+const KABUL_BEKLIYOR = 'kabul-bekliyor';
+/** Sunucu tutmasının (last_error) kabul kuyruğu öneki: `[imza-bekliyor] [kabul-kuyrugu] …`. */
+const KABUL_KUYRUGU_ISARETI = '[kabul-kuyrugu]';
 
 function hazirAyarlari(env = process.env) {
   return {
@@ -50,6 +60,15 @@ function hazirAyarlari(env = process.env) {
       : Math.max(0, Number(env.EMPP_WIN_IMZA_ESIK_DK === undefined ? 5 : env.EMPP_WIN_IMZA_ESIK_DK) || 0) * 60 * 1000,
     winHazirBildirimEsikMs: 3 * 3600 * 1000,
     winHazirBildirimAralikMs: 3 * 3600 * 1000,
+    // KABUL KUYRUĞU (05.10): EMPP_WIN_KABUL_KUYRUK=1 → runner imzasız kabulü çağırmaz, paketi
+    // kabul-bekliyor kaydıyla bırakıp sıradaki claim'e geçer; kabulü ayrı süreç (kabul işçisi) koşar.
+    // Varsayılan KAPALI. winHazirAcik kapalıyken etkisizdir (hazır kuyruk yoksa kayıt da yok).
+    winKabulKuyrugu: env.EMPP_WIN_KABUL_KUYRUK === '1',
+    // Üretim kapısı: kabul işçisinde SIRA BEKLEYEN (işlenmekte olan sayılmaz) kayıt sayısı bu değere
+    // ulaşınca yeni claim alınmaz. En az 1.
+    winKabulDerinlik: Math.max(1, Math.floor(Number(env.EMPP_WIN_KABUL_DERINLIK || 1)) || 1),
+    // Üretim kapısı: üretim biriminde (os.tmpdir; kasada C:) boş alan bu GB'nin altındaysa claim yok.
+    winUretMinBosGb: Math.max(0, Number(env.EMPP_WIN_URET_MIN_BOS_GB === undefined ? 15 : env.EMPP_WIN_URET_MIN_BOS_GB) || 0),
   };
 }
 
@@ -104,11 +123,14 @@ async function manifestYaz(dizin, manifest) {
   await fsp.rename(gecici, yol);
 }
 
-/** Aynı bookId+sürüm için bekleyen (exe'si yerinde) paket var mı? Yoksa null. */
+/**
+ * Aynı bookId+sürüm için bekleyen (exe'si yerinde) paket var mı? Yoksa null. İki durum da bulunur:
+ * imza-bekliyor ve kabul-bekliyor (05.10) — çağıran `manifest.durum`'a bakar.
+ */
 async function hazirBul(cfg, bookId, surum) {
   const dizin = path.join(cfg.winHazirKoku, hazirAnahtari(bookId, surum));
   const m = await manifestOku(dizin);
-  if (!m || m.durum !== IMZA_BEKLIYOR_FAZI || !m.exe) return null;
+  if (!m || (m.durum !== IMZA_BEKLIYOR_FAZI && m.durum !== KABUL_BEKLIYOR) || !m.exe) return null;
   try {
     const st = await fsp.stat(path.join(dizin, m.exe));
     if (m.boyut != null && st.size !== m.boyut) return null;
@@ -132,7 +154,8 @@ async function kenaraTasi(cfg, dizin, alt) {
  * yazılır, manifest tamamlanınca tek `rename` ile görünür olur (yarım kayıt bekçiye görünmez).
  * @returns {Promise<{dizin:string, manifest:object}>}
  */
-async function hazirKoy({ exe, job, surum, kanit, cfg, kabul, r2Hedef, sebep }) {
+async function hazirKoy({ exe, job, surum, kanit, cfg, kabul, r2Hedef, sebep, durum = IMZA_BEKLIYOR_FAZI }) {
+  if (durum !== IMZA_BEKLIYOR_FAZI && durum !== KABUL_BEKLIYOR) throw new Error(`hazirKoy: bilinmeyen durum "${durum}"`);
   const anahtar = hazirAnahtari(job.bookId, surum);
   const hedef = path.join(cfg.winHazirKoku, anahtar);
   await fsp.mkdir(cfg.winHazirKoku, { recursive: true });
@@ -157,7 +180,7 @@ async function hazirKoy({ exe, job, surum, kanit, cfg, kabul, r2Hedef, sebep }) 
     kanonik: require('./kanonik-surum').govdeAlanlari(job.kanonikSurum),
     kanit: kanit ? { kapi: kanit.kapi || null, kokIndex: kanit.kokIndex || null, setKimligi: kanit.setKimligi || null } : null,
     zaman: new Date().toISOString(),
-    durum: IMZA_BEKLIYOR_FAZI,
+    durum,
     sebep: sebep || null,
   };
   await manifestYaz(gecici, manifest);
@@ -265,6 +288,62 @@ async function hazirListesi(cfg) {
   return liste.sort((a, b) => a.zamanMs - b.zamanMs);
 }
 
+/**
+ * Kabul kuyruğu (05.10): kabul-bekliyor kayıtlar, en eskiden yeniye (işçi bu sırayla işler).
+ * `isleniyor`: işçi kaydı şu an kabulde tutuyor (manifest `kabulIsleniyor.pid` yaşıyor) — üretim kapısı
+ * yalnız SIRA BEKLEYENLERİ sayar; ölü pid'li iz (çöken işçi) bekleyen sayılır. Windows pid'i yeniden
+ * kullanır: makine açılışından ESKİ iz (yeniden başlatma öncesi) pid yaşasa da bayattır.
+ * @param {{acilisMs?:number}} [o] makine açılış anı (testte enjekte edilir)
+ */
+async function kabulListesi(cfg, o = {}) {
+  let girdiler = [];
+  try { girdiler = await fsp.readdir(cfg.winHazirKoku, { withFileTypes: true }); } catch (_) { return []; }
+  const { pidCanliMi, acilisZamaniMs } = require('./windows-serit'); // döngüsel require: çağrı anında
+  const acilisMs = Number.isFinite(o.acilisMs) ? o.acilisMs : acilisZamaniMs();
+  const liste = [];
+  for (const g of girdiler) {
+    if (!g.isDirectory() || g.name.startsWith('.') || ALT_DIZINLER.includes(g.name)) continue;
+    const dizin = path.join(cfg.winHazirKoku, g.name);
+    const m = await manifestOku(dizin);
+    if (!m || m.durum !== KABUL_BEKLIYOR || !m.exe || !fs.existsSync(path.join(dizin, m.exe))) continue;
+    const iz = m.kabulIsleniyor && typeof m.kabulIsleniyor === 'object' ? m.kabulIsleniyor : null;
+    liste.push({
+      dizin, manifest: m, exeYolu: path.join(dizin, m.exe), zamanMs: Date.parse(m.zaman) || 0,
+      isleniyor: Boolean(iz && pidCanliMi(iz.pid) && !(Date.parse(iz.zaman) < acilisMs)),
+    });
+  }
+  return liste.sort((a, b) => a.zamanMs - b.zamanMs);
+}
+
+/**
+ * Kabul GEÇTİ (kabul işçisi ve runner'ın satır içi yedeği AYNI fonksiyonu kullanır): iş kanıtına kabul
+ * sonucu işlenir (bekçi `kanitOku` ile okur), manifest `imza-bekliyor` olur — kayıt bekçiye görünür.
+ * `giris.manifest` diskten taze okunmuş olmalı. @param {{kapi:string, kanitDizini?:string}} k
+ */
+async function kabulGectiIsle(cfg, giris, k, log = () => {}) {
+  const W = require('./windows-serit'); // döngüsel require: çağrı anında
+  const m = giris.manifest;
+  let kanit = null;
+  try { kanit = JSON.parse(await fsp.readFile(W.kanitYolu(cfg, m.bookId, m.surum), 'utf8')); } catch (_) { kanit = null; }
+  if (!kanit) {
+    kanit = {
+      bookId: String(m.bookId), bookTitle: (m.job && m.job.bookTitle) || null, surum: m.surum,
+      imzasiz: { md5: m.md5, sha256: m.sha256, boyut: m.boyut },
+      kapi: m.kanit && m.kanit.kapi, kokIndex: m.kanit && m.kanit.kokIndex,
+    };
+  }
+  try {
+    await W.kanitYaz(cfg, {
+      ...kanit, kabulImzasiz: 'GECTI', kabulImzasizKapi: k.kapi, ...(k.kanitDizini ? { kabulImzasizKanit: k.kanitDizini } : {}),
+      durum: IMZA_BEKLIYOR_FAZI, hazirDizini: giris.dizin,
+    });
+  } catch (e) { log(`kabul: UYARI iş kanıtı yazılamadı: ${e.message}`); }
+  await manifestGuncelle(giris.dizin, {
+    durum: IMZA_BEKLIYOR_FAZI, kabulKapi: k.kapi, kabulKanit: k.kanitDizini || null,
+    kabulZaman: new Date().toISOString(), kabulIsleniyor: null, bekleyenSonuc: null, sonrakiDeneme: null,
+  });
+}
+
 /** Manifest'e alan ekler/günceller (ör. bekçinin sonHata'sı). Kayıt yerinde kalır. */
 async function manifestGuncelle(dizin, ek) {
   const m = await manifestOku(dizin);
@@ -303,6 +382,6 @@ async function kayitKilidiDene(dizin) {
 
 module.exports = {
   kayitKilidiDene,
-  MANIFEST, IMZA_BEKLIYOR_FAZI, ALT_DIZINLER, hazirAyarlari, hazirAnahtari, jobOzeti, bildirimKarari,
+  MANIFEST, IMZA_BEKLIYOR_FAZI, KABUL_BEKLIYOR, KABUL_KUYRUGU_ISARETI, kabulListesi, kabulGectiIsle, ALT_DIZINLER, hazirAyarlari, hazirAnahtari, jobOzeti, bildirimKarari,
   manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, sonuclandir, kaynakSurumuBayatMi, bayatKarari, bayatKararZamani, gecerliKanonikOku, bayatKenaraAl, bildirimDurumuOku, bildirimDurumuYaz, damga,
 };

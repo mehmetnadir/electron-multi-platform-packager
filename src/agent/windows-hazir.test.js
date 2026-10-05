@@ -151,3 +151,57 @@ test('kayitKilidiDene: tutulurken ikinci alamaz, bırakınca alınır', async ()
   assert.ok(b2);
   await b2();
 });
+
+// ---------------------------------------------------------------------------
+// KABUL KUYRUĞU (05.10) — durum parametresi, bekçi listesi kabul-bekliyor GÖRMEZ, kabulListesi sırası.
+// ---------------------------------------------------------------------------
+
+test('hazirAyarlari: kabul kuyruğu varsayılan KAPALI; derinlik 1, min boş 15 GB; env ile değişir', () => {
+  const v = H.hazirAyarlari({});
+  assert.equal(v.winKabulKuyrugu, false);
+  assert.equal(v.winKabulDerinlik, 1);
+  assert.equal(v.winUretMinBosGb, 15);
+  const e = H.hazirAyarlari({ EMPP_WIN_KABUL_KUYRUK: '1', EMPP_WIN_KABUL_DERINLIK: '2', EMPP_WIN_URET_MIN_BOS_GB: '30' });
+  assert.equal(e.winKabulKuyrugu, true);
+  assert.equal(e.winKabulDerinlik, 2);
+  assert.equal(e.winUretMinBosGb, 30);
+  assert.equal(H.hazirAyarlari({ EMPP_WIN_KABUL_DERINLIK: '0' }).winKabulDerinlik, 1, 'derinlik en az 1');
+  assert.equal(H.hazirAyarlari({ EMPP_WIN_KABUL_KUYRUK: 'evet' }).winKabulKuyrugu, false, 'yalnız "1" açar');
+});
+
+test('hazirKoy durum parametresi: kabul-bekliyor yazılır; bilinmeyen durum reddedilir; varsayılan imza-bekliyor', async () => {
+  const o = kur();
+  const h = await H.hazirKoy({ exe: o.exe, job: o.job, surum: '2.51.3', kanit: o.kanit, cfg: o.cfg, durum: H.KABUL_BEKLIYOR });
+  const m = JSON.parse(fs.readFileSync(path.join(h.dizin, 'manifest.json'), 'utf8'));
+  assert.equal(m.durum, 'kabul-bekliyor');
+  assert.equal(m.kabulKapi, null, 'kabul henüz koşmadı');
+  await assert.rejects(H.hazirKoy({ exe: o.exe, job: o.job, surum: '2.51.4', kanit: o.kanit, cfg: o.cfg, durum: 'yayinlandi' }), /bilinmeyen durum/);
+  const v = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '9' }, surum: '2.51.3', kanit: o.kanit, cfg: o.cfg });
+  assert.equal(v.manifest.durum, 'imza-bekliyor');
+});
+
+test('nöbetçi: hazirListesi (imza bekçisinin listesi) kabul-bekliyor kaydı GÖRMEZ; hazirBul iki durumu da bulur', async () => {
+  const o = kur();
+  await H.hazirKoy({ exe: o.exe, job: o.job, surum: '2.51.3', kanit: o.kanit, cfg: o.cfg, durum: H.KABUL_BEKLIYOR });
+  assert.deepEqual(await H.hazirListesi(o.cfg), [], 'kabulsüz paket imzaya gitmez');
+  const b = await H.hazirBul(o.cfg, '74390', '2.51.3');
+  assert.equal(b.manifest.durum, 'kabul-bekliyor');
+  await H.manifestGuncelle(b.dizin, { durum: H.IMZA_BEKLIYOR_FAZI });
+  assert.equal((await H.hazirListesi(o.cfg)).length, 1, 'GEÇTİ sonrası aynı kayıt bekçiye görünür');
+  assert.deepEqual(await H.kabulListesi(o.cfg), []);
+  assert.equal((await H.hazirBul(o.cfg, '74390', '2.51.3')).manifest.durum, 'imza-bekliyor');
+});
+
+test('kabulListesi: yalnız kabul-bekliyor, en eski önce; olculemedi/ ve alt dizinler sayılmaz; isleniyor = canlı pid izi', async () => {
+  const o = kur();
+  const a = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '1' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg, durum: H.KABUL_BEKLIYOR });
+  const b = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '2' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg, durum: H.KABUL_BEKLIYOR });
+  await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '3' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg }); // imza-bekliyor
+  await H.manifestGuncelle(a.dizin, { zaman: '2026-10-05T10:00:00.000Z', kabulIsleniyor: { pid: process.pid, zaman: 'x' } });
+  await H.manifestGuncelle(b.dizin, { zaman: '2026-10-05T08:00:00.000Z', kabulIsleniyor: { pid: 999999999, zaman: 'x' } });
+  fs.mkdirSync(path.join(o.cfg.winHazirKoku, 'olculemedi', 'x'), { recursive: true });
+  const l = await H.kabulListesi(o.cfg);
+  assert.deepEqual(l.map((x) => x.manifest.bookId), ['2', '1']);
+  assert.deepEqual(l.map((x) => x.isleniyor), [false, true], 'ölü pid izi bekleyen sayılır, canlı pid işleniyor');
+  assert.ok(H.ALT_DIZINLER.includes('olculemedi'));
+});

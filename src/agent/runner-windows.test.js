@@ -207,7 +207,7 @@ async function sahtePaketleyici(exeBuf) {
   return { ...sunucu, istekler, durum };
 }
 
-async function sahteApi() {
+async function sahteApi({ releaseKanca = null, releaseYanit = { ok: true } } = {}) {
   const kayit = { istekler: [], putlar: [], sonuclar: [] };
   let taban = '';
   const sunucu = await dinle(async (req, res) => {
@@ -220,7 +220,12 @@ async function sahteApi() {
     }
     if (req.method === 'PUT' && req.url === '/r2/put') { kayit.putlar.push({ md5: md5(govde), boyut: govde.length }); res.writeHead(200); return res.end(); }
     if (req.url === '/agents/test/result') { kayit.sonuclar.push(JSON.parse(govde.toString())); return json(200, { ok: true }); }
-    if (req.url === '/agents/test/release') { (kayit.release = kayit.release || []).push(JSON.parse(govde.toString())); return json(200, { ok: true }); }
+    if (req.url === '/agents/test/release') {
+      (kayit.release = kayit.release || []).push(JSON.parse(govde.toString()));
+      if (releaseKanca) await releaseKanca(kayit); // kabul kuyruğu: release anındaki nabız ölçülür
+      return json(200, releaseYanit);
+    }
+    if (req.url === '/agents/test/heartbeat') { (kayit.nabiz = kayit.nabiz || []).push(JSON.parse(govde.toString())); return json(200, { ok: true }); }
     return json(404, {});
   });
   taban = sunucu.url;
@@ -232,11 +237,11 @@ async function sahteApi() {
 // ---------------------------------------------------------------------------
 const WIN_ALANLARI = Object.keys(W.varsayilanAyarlar());
 
-async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false } = {}) {
+async function windowsIsiKostur({ is = {}, kip = {}, ayar = {}, arsivYok = false, releaseKanca = null, releaseYanit } = {}) {
   const exeBuf = peExe(1_200_000);
   const araclar = sahteAraclar();
   const paketleyici = await sahtePaketleyici(exeBuf);
-  const api = await sahteApi();
+  const api = await sahteApi({ releaseKanca, releaseYanit });
   const yuvaKok = tmp('yuva');
   const kanitDizini = tmp('kanit');
   const arsiv = tmp('arsiv');
@@ -975,4 +980,167 @@ test('HEP_HAZIR: yuva AÇIKKEN bile imza denenmez; paket üretilir, kabul, hazı
   assert.equal(r.api.release[0].durum, 'imza-bekliyor');
   assert.match(r.loglar, /imza kipi HAZIR — EMPP_WIN_IMZA_HEP_HAZIR/);
   assert.ok(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'));
+});
+
+// ---------------------------------------------------------------------------
+// KABUL KUYRUĞU (05.10, EMPP_WIN_KABUL_KUYRUK=1) — runner statik kapıdan sonra kabulü çağırmaz; paket
+// kabul-bekliyor kaydıyla bekler, sunucuda imza-bekliyor tutması yapılır, runner sıradaki claim'e geçer.
+// ---------------------------------------------------------------------------
+const TUTULDU = { status: 'ok', tutuldu: true, durum: 'imza-bekliyor' }; // yeni sunucu (imza-hold)
+const kuyrukAyar = (hazirKok, ek = {}) => ({ winKabulKuyrugu: true, winImzaHepHazir: true, winHazirKoku: hazirKok, ...ek });
+
+test('KABUL KUYRUĞU: kapıdan sonra kabul/imza YOK; /release imza-bekliyor + [kabul-kuyrugu]; /result YOK; release anında heldJobs boş', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({
+    ayar: kuyrukAyar(hazirKok), releaseYanit: TUTULDU,
+    releaseKanca: async () => { await RUNNER.heartbeat({ agentId: 'test', token: 'x' }); },
+  });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.ok(r.paketleyici.istekler.includes('POST /api/package'), 'paket ÜRETİLDİ');
+  assert.match(r.gunluk, /^kapi /m, 'statik kapı koştu');
+  assert.equal(basliksizKabulSayisi(r), 0, 'imzasız kabul runner\'da KOŞMADI');
+  assert.doesNotMatch(r.gunluk, /^imza /m);
+  assert.equal(r.api.sonuclar.length, 0, '/result yok (ne completed ne failed)');
+  assert.equal(r.api.putlar.length, 0);
+  assert.equal(r.api.release.length, 1);
+  assert.equal(r.api.release[0].durum, 'imza-bekliyor', 'sunucunun bugünkü tutması (lease NULL)');
+  assert.match(r.api.release[0].sebep, /^\[imza-bekliyor\] \[kabul-kuyrugu\] /);
+  assert.equal(r.api.release[0].hazir, '74390-2.51.3');
+  assert.equal(r.api.nabiz.length, 1, 'release anında nabız ölçüldü');
+  assert.deepEqual(r.api.nabiz[0].heldJobs, [], 'release anında currentJob düşmüş (NULL lease tazelenmez)');
+  const kayit = await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3');
+  assert.equal(kayit.manifest.durum, 'kabul-bekliyor');
+  assert.equal(kayit.manifest.md5, md5(r.exeBuf));
+  assert.equal(kayit.manifest.r2Hedef.r2ObjectKey, 'softwares/74390/Test - YDS.exe');
+  assert.deepEqual(await H.hazirListesi({ winHazirKoku: hazirKok }), [], 'imza bekçisi kabulsüz kaydı görmez');
+  assert.equal(r.kanit.durum, 'kabul-bekliyor');
+  assert.ok(r.paketleyici.istekler.includes('DELETE /api/delete-job/j1'), 'paketleyici çıktısı bırakıldı');
+});
+
+test('KABUL KUYRUĞU: yuva açık (HEP_HAZIR kapalı) iken de imza denenmez; kayıt kabul-bekliyor', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ ayar: kuyrukAyar(hazirKok, { winImzaHepHazir: false }), releaseYanit: TUTULDU });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.doesNotMatch(r.gunluk, /^imza /m);
+  assert.equal(basliksizKabulSayisi(r), 0);
+  assert.equal(r.api.putlar.length, 0);
+  assert.equal((await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3')).manifest.durum, 'kabul-bekliyor');
+});
+
+test('KABUL KUYRUĞU: aynı kitap/sürüm yeniden kiralanınca paketleyici ÇAĞRILMAZ, tutma yenilenir (bayrak kapalıyken de)', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await windowsIsiKostur({ ayar: kuyrukAyar(hazirKok), releaseYanit: TUTULDU });
+  for (const ayar of [kuyrukAyar(hazirKok), { winHazirKoku: hazirKok, winImzaHepHazir: true }]) {
+    const r = await windowsIsiKostur({ ayar, releaseYanit: TUTULDU });
+    assert.equal(r.hata, null, r.hata && r.hata.stack);
+    assert.deepEqual(r.paketleyici.istekler, [], 'yeniden üretim YOK');
+    assert.equal(basliksizKabulSayisi(r), 0, 'kabul runner\'da koşmaz (işçinin işi)');
+    assert.doesNotMatch(r.gunluk, /^imza /m);
+    r2YazimiSifir(r);
+    assert.equal(r.api.release.length, 1);
+    assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+    assert.match(r.api.release[0].sebep, /^\[imza-bekliyor\] \[kabul-kuyrugu\] /);
+  }
+  assert.equal((await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3')).manifest.durum, 'kabul-bekliyor');
+});
+
+test('KABUL KUYRUĞU: statik kapı RED → kayıt yok, failed (eski davranış)', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ kip: { kapi: 'g-red' }, ayar: kuyrukAyar(hazirKok) });
+  assert.match(r.hata.message, /statik kapı RED/);
+  assert.equal(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'), null);
+  assert.equal((r.api.release || []).length, 0);
+  r2YazimiSifir(r);
+});
+
+test('KABUL KUYRUĞU: bayrak açık ama hazır kuyruk KAPALI (EMPP_WIN_IMZA_BEKLEME=0) → kuyruk etkisiz, satır içi zincir', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ ayar: { winKabulKuyrugu: true, winHazirAcik: false, winHazirKoku: hazirKok } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.api.putlar.length, 1, 'yuva açık: satır içi imza + yayın');
+  assert.equal(basliksizKabulSayisi(r), 2);
+  assert.equal(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'), null);
+});
+
+test('ÜRETİM KAPISI: kabul kuyruğunda sıra bekleyen varken next-job ÇAĞRILMAZ; işlenen kayıt sayılmaz; disk dar → kapalı', async () => {
+  const istekler = [];
+  const sunucu = await dinle((req, res) => { istekler.push(req.url); res.writeHead(204); res.end(); });
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const alanlar = ['apiBase', 'winKabulKuyrugu', 'winHazirAcik', 'winHazirKoku', 'winKabulDerinlik', 'winUretMinBosGb'];
+  const eski = Object.fromEntries(alanlar.map((k) => [k, CONFIG[k]]));
+  const auth = { agentId: 'test', token: 'x' };
+  try {
+    Object.assign(CONFIG, { apiBase: sunucu.url, winKabulKuyrugu: true, winHazirAcik: true, winHazirKoku: hazirKok, winKabulDerinlik: 1, winUretMinBosGb: 0 });
+    assert.deepEqual(await RUNNER.siradakiIs(auth), { job: null }, 'kuyruk boş → next-job sorulur');
+    assert.equal(istekler.length, 1);
+    const w = tmp('w');
+    const exe = path.join(w, 'runner-1-T-2.1.1-Setup.exe');
+    fs.writeFileSync(exe, 'MZ-x');
+    const h = await H.hazirKoy({ exe, job: { bookId: '1', platform: 'windows' }, surum: '2.1.1', kanit: null, cfg: { winHazirKoku: hazirKok }, durum: H.KABUL_BEKLIYOR });
+    const s = await RUNNER.siradakiIs(auth);
+    assert.equal(s.kapali, true);
+    assert.match(s.sebep, /kabul kuyruğu dolu \(1 bekleyen >= derinlik 1\)/);
+    assert.equal(istekler.length, 1, 'kapı kapalıyken next-job ÇAĞRILMADI');
+    await H.manifestGuncelle(h.dizin, { kabulIsleniyor: { pid: process.pid, zaman: new Date().toISOString() } });
+    assert.deepEqual(await RUNNER.siradakiIs(auth), { job: null }, 'işçide işlenen kayıt sayılmaz → üretim kabulle üst üste biner');
+    assert.equal(istekler.length, 2);
+    CONFIG.winUretMinBosGb = 1e9;
+    const d = await RUNNER.siradakiIs(auth);
+    assert.equal(d.kapali, true);
+    assert.match(d.sebep, /üretim diski dar/);
+    assert.equal(istekler.length, 2);
+    CONFIG.winKabulKuyrugu = false;
+    await RUNNER.siradakiIs(auth);
+    assert.equal(istekler.length, 3, 'bayrak kapalı → kapı yok (eski davranış)');
+  } finally {
+    Object.assign(CONFIG, eski);
+    await sunucu.kapat();
+  }
+});
+
+test('kaynak: ana döngü işi siradakiIs ile alır (kapı claim\'den ÖNCE); kabul kuyruğu dalı /result çağırmaz', () => {
+  const ana = SRC.slice(SRC.indexOf('async function main()'), SRC.indexOf('// Graceful shutdown.'));
+  assert.match(ana, /await siradakiIs\(auth\)/);
+  assert.doesNotMatch(ana, /fetchNextJob\(auth\)/, 'kapıyı atlayan doğrudan claim yok');
+  const dal = PROCESS_JOB.slice(PROCESS_JOB.indexOf('if (winZincir.kabulKuyrugu)'), PROCESS_JOB.indexOf('if (winZincir.hazir)'));
+  assert.ok(dal.length > 0);
+  assert.doesNotMatch(dal, /postResult(Success|Failure)/);
+  assert.match(dal, /imzaBekliyorBildir\(auth, job, winZincir\.hazir/);
+});
+
+test('Ö2: sunucu TUTMADI (eski sunucu, tutuldu yok) → yüksek sesli uyarı + imzasız kabul SATIR İÇİ; kayıt imza-bekliyor', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ ayar: kuyrukAyar(hazirKok) }); // sahte API: {ok:true}, tutuldu yok
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.match(r.loglar, /sunucu imza-bekliyor TUTMADI/);
+  assert.equal(basliksizKabulSayisi(r), 1, 'kabul satır içi koştu');
+  assert.doesNotMatch(r.gunluk, /^imza /m, 'HEP_HAZIR: imza yine bekçide');
+  const k = await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3');
+  assert.equal(k.manifest.durum, 'imza-bekliyor', 'kayıt bekçiye geçti');
+  assert.equal(k.manifest.kabulKapi, 'basliksiz');
+  assert.equal(r.api.release.length, 2, 'önce kabul-kuyrugu tutma denemesi, sonra imza-bekliyor bildirimi');
+  assert.match(r.api.release[0].sebep, /\[kabul-kuyrugu\]/);
+  assert.doesNotMatch(r.api.release[1].sebep, /\[kabul-kuyrugu\]/);
+  assert.equal(r.api.putlar.length, 0, 'R2 PUT yok');
+  assert.equal(r.api.sonuclar.length, 0, '/result yok');
+});
+
+test('Ö2: eski sunucu kabul-bekliyor kaydı YENİDEN kiraladı → yeniden üretim yok, kabul satır içi (döngü yok)', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  await windowsIsiKostur({ ayar: kuyrukAyar(hazirKok), releaseYanit: TUTULDU });
+  const r = await windowsIsiKostur({ ayar: kuyrukAyar(hazirKok) });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.deepEqual(r.paketleyici.istekler, [], 'yeniden üretim YOK');
+  assert.equal(basliksizKabulSayisi(r), 1);
+  assert.equal((await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3')).manifest.durum, 'imza-bekliyor');
+});
+
+test('Ö2: sunucu tutmadı + satır içi kabul KALDI → reddedildi/, iş failed (aynı metin)', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await kasaIleKostur('kaldi-kitap', { ayar: kuyrukAyar(hazirKok) });
+  assert.match(r.hata.message, /\(KALDI\)/);
+  assert.equal(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'), null);
+  assert.equal(fs.readdirSync(path.join(hazirKok, 'reddedildi')).length, 1);
+  assert.equal(r.api.putlar.length, 0, 'R2 PUT yok');
+  assert.equal(r.api.sonuclar.length, 0, '/result yok');
 });

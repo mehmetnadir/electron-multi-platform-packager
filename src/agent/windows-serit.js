@@ -565,7 +565,7 @@ const PERL_KILIT = 'open(my $f, ">>", $ARGV[0]) or exit 74; flock($f, LOCK_EX | 
  * win32 kilidi (perl/flock yok): O_EXCL kilit dosyası {pid, zaman}. Sahibi ölmüşse (pid yok) bayat sayılır,
  * kenara taşınır (silme yok) ve bir kez yeniden denenir. Dolu → {kod: 75} (perl ile aynı sözleşme).
  */
-async function dosyaKilidiDene(yol, { pidYasiyor = pidCanliMi } = {}) {
+async function dosyaKilidiDene(yol, { pidYasiyor = pidCanliMi, acilisMs = acilisZamaniMs() } = {}) {
   for (let deneme = 0; deneme < 2; deneme += 1) {
     try {
       const fh = await fsp.open(yol, 'wx');
@@ -577,10 +577,17 @@ async function dosyaKilidiDene(yol, { pidYasiyor = pidCanliMi } = {}) {
     }
     let sahip = null;
     try { sahip = JSON.parse(await fsp.readFile(yol, 'utf8')); } catch (_) { sahip = null; }
-    if (sahip && pidYasiyor(sahip.pid)) return { kod: 75 };
+    // Windows pid'i yeniden kullanır (05.10): makine açılışından ESKİ kilit, pid yaşasa da bayattır.
+    const acilistanOnce = sahip && Date.parse(sahip.zaman) < acilisMs;
+    if (sahip && pidYasiyor(sahip.pid) && !acilistanOnce) return { kod: 75 };
     try { await fsp.rename(yol, `${yol}.bayat-${Date.now()}`); } catch (_) { /* yarış: başkası aldı */ }
   }
   return { kod: 75 };
+}
+
+/** Makine açılış anı (ms). Açılıştan eski pid'li kilit/iz bayattır (Windows pid'i yeniden kullanır). */
+function acilisZamaniMs() {
+  return Date.now() - os.uptime() * 1000;
 }
 
 function pidCanliMi(pid) {
@@ -802,7 +809,7 @@ async function imzaDogrula({ imzasiz, imzali, cfg, log }) {
  * Yayın öncesi zincirin tamamı. Dönen `imzaliYol` şeridin TEK yayın dosyasıdır.
  * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
  */
-async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, log, sleep, aktivasyon, imzaKipi, r2Hedef }) {
+async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, log, sleep, aktivasyon, imzaKipi, r2Hedef, kabulKipi = 'satir' }) {
   const bekle = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const kanit = {
     bookId: String(job.bookId), bookTitle: job.bookTitle || null, surum: plan.surum,
@@ -815,6 +822,22 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
   const kapi = await kapiKos({ exe: artifactPath, work, cfg, log, bookId: job.bookId });
   kanit.kapi = { ozet: kapi.karar.ozet, maddeler: kapi.maddeler };
   kanit.kokIndex = kapi.kokIndex;
+
+  // KABUL KUYRUĞU (05.10, EMPP_WIN_KABUL_KUYRUK=1): imzasız kabul burada KOŞMAZ. Statik kapıdan geçen
+  // paket `kabul-bekliyor` kaydıyla hazır köke girer; kabulü ayrı süreç (tools/windows/kabul-iscisi.js)
+  // sırayla koşar. Kabul ve imza bu çağrıda YOK; yayın YOK. Kapı RED yukarıda fırlatır → kayıt yok.
+  if (kabulKipi === 'kuyruk') {
+    const hedef = typeof r2Hedef === 'function' ? await r2Hedef() : r2Hedef;
+    const sebep = 'imzasız kabul kabul işçisinde bekliyor';
+    const h = await hazir.hazirKoy({
+      exe: artifactPath, job, surum: plan.surum, kanit, cfg, kabul: null, r2Hedef: hedef, sebep, durum: hazir.KABUL_BEKLIYOR,
+    });
+    kanit.durum = hazir.KABUL_BEKLIYOR;
+    kanit.hazirDizini = h.dizin;
+    const yol = await kanitYaz(cfg, kanit);
+    log(`windows: KABUL KUYRUĞU — paket statik kapıdan geçti, imzasız kabul işçide (${h.dizin}); R2'ye YAZILMADI`);
+    return { hazir: h, kanit, kanitYolu: yol, sebep, kabulKuyrugu: true };
+  }
 
   const k1 = await kabulKos({ exe: artifactPath, job, work, cfg, log, aktivasyon, etiket: 'imzasiz', sleep: bekle });
   kanit.kabulImzasiz = 'GECTI';
@@ -911,6 +934,6 @@ module.exports = {
   yuvaKokuUncMu, WIN_YUVA_PROBU,
   yuvaProbKomutlari,
   imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
-  kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, dosyaKilidiDene, tetikCek, imzaEnv, WIN_YUVA_KOKU, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
+  kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, dosyaKilidiDene, pidCanliMi, acilisZamaniMs, tetikCek, imzaEnv, WIN_YUVA_KOKU, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
   yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,
 };

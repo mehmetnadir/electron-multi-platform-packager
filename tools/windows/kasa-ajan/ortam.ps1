@@ -1,5 +1,9 @@
 ﻿# windows-kasa ajan ortamı (ajan-baslat.ps1 ve duman testleri dot-source eder). Sır YOK.
 # EMPP_WIN_IMZA_HEP_HAZIR=1 (kasada elle açılır, buraya EKLENMEZ): satır içi imza denenmez, paket hep hazır kuyruğa; imza bekçisi imzalar.
+# EMPP_WIN_KABUL_KUYRUK=1 (kasada elle açılır, buraya EKLENMEZ; önce kabul-iscisi-gorev-kur.ps1): runner imzasız kabulü
+#   çağırmaz, paket kabul-bekliyor kaydıyla bekler, kabulü "empp-kabul-iscisi" görevi koşar. İlgili:
+#   EMPP_WIN_KABUL_DERINLIK (vars. 1: işçide sıra bekleyen kayıt sayısı bu değere ulaşınca claim yok),
+#   EMPP_WIN_URET_MIN_BOS_GB (vars. 15: C: boş alanı altındaysa claim yok).
 $ErrorActionPreference = 'Continue'
 $K = 'C:\empp-ajan'   # 04.10: D: (HDD) ölüyor, üretim C: (SSD); D: yalnız arşiv
 $R = "$K\paketleyici"

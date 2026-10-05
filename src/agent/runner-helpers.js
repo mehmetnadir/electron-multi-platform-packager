@@ -569,6 +569,25 @@ function yoklamaYenidenDenenir(hata, ardisik, tavan = PAKETLEYICI_YOKLAMA_HATA_T
 /** Ardışık düşen durum isteği tavanı: 6 × (30 sn + 5 sn) ≈ 3,5 dk takılmaya dayanır. */
 const PAKETLEYICI_YOKLAMA_HATA_TAVANI = Number(process.env.AGENT_PACKAGER_POLL_HATA_TAVANI || 6);
 
+/**
+ * WINDOWS ÜRETİM KAPISI (05.10, kabul kuyruğu): claim'den ÖNCE sorulur. SAF — ölçüm çağırandadır.
+ *  - kabul işçisinde SIRA BEKLEYEN kayıt sayısı (işlenmekte olan sayılmaz) >= derinlik → claim yok;
+ *  - üretim biriminde boş alan < minGb → claim yok;
+ *  - boş alan ölçülemediyse (null) yalnız kuyruk ölçütü uygulanır (fail-open; çağıran loglar).
+ * @param {{kuyrukSayisi:number, derinlik:number, bosGb:number|null, minGb:number}} p
+ * @returns {{acik:boolean, sebep?:string}}
+ */
+function uretimKapisi({ kuyrukSayisi, derinlik, bosGb, minGb } = {}) {
+  const d = Math.max(1, Math.floor(Number(derinlik)) || 1);
+  const n = Math.max(0, Number(kuyrukSayisi) || 0);
+  if (n >= d) return { acik: false, sebep: `kabul kuyruğu dolu (${n} bekleyen >= derinlik ${d})` };
+  const min = Number(minGb) || 0;
+  if (min > 0 && typeof bosGb === 'number' && Number.isFinite(bosGb) && bosGb < min) {
+    return { acik: false, sebep: `üretim diski dar (${bosGb} GB boş < ${min} GB)` };
+  }
+  return { acik: true };
+}
+
 // ---------------------------------------------------------------------------
 // Pardus disk kapısı — BOYUT ORANTILI (2026-09-19, ölçümle).
 // ---------------------------------------------------------------------------
@@ -1165,6 +1184,7 @@ module.exports = {
   PAKETLEYICI_YOKLAMA_HATA_TAVANI,
   agHatasiOzeti,
   pardusGerekliDiskGb,
+  uretimKapisi,
   ertelenebilirKaynakHatasi,
   DISK_KAPISI_ISARETI,
   NOTER_KAPISI_ISARETI,
