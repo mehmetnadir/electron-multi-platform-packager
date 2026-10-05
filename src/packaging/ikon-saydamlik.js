@@ -177,4 +177,43 @@ async function logoyuSaydamlastir(sharp, kaynakYolu, secenekler = {}) {
   return { tampon, sonuc, genislik: info.width, yukseklik: info.height };
 }
 
-module.exports = { acikMi, saydamlastir, logoyuSaydamlastir, VARSAYILAN };
+/**
+ * Dört köşe pikselinin alfasını 0 yapar (yerinde). Saf.
+ *
+ * Neden (05.10, 74404 Flashy Grade 6, ölçümle): kaynak logo 327x327, köşeleri
+ * zaten saydam (alfa 0) ama yuvarlak kare gövdesi köşeye çok yakın. 16x16 ve
+ * 32x32'ye küçültmede yeniden örnekleme gövdenin alfasını köşe pikseline
+ * sızdırır: 16x16 köşe alfa 46-49, 32x32 köşe alfa 1. Windows statik kapısı
+ * (madde 2) her karede dört köşe alfa 0 ister. Köşe pikseli ikonun en dış,
+ * görünmez ucudur; sıfırlamak görüntüyü bozmaz, yalnız sızıntıyı keser.
+ */
+function koseleriSaydamla(rgba, genislik, yukseklik) {
+  if (!rgba || genislik < 1 || yukseklik < 1) return rgba;
+  const yer = [
+    0,
+    (genislik - 1) * 4,
+    (yukseklik - 1) * genislik * 4,
+    ((yukseklik - 1) * genislik + genislik - 1) * 4
+  ];
+  for (const k of yer) rgba[k + 3] = 0;
+  return rgba;
+}
+
+/**
+ * Logoyu size x size ICO karesi (PNG tamponu) olarak üretir; köşeler garanti saydam.
+ */
+async function icoKaresi(sharp, kaynak, size) {
+  const { data, info } = await sharp(kaynak)
+    .resize(size, size, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  koseleriSaydamla(data, info.width, info.height);
+  return sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } })
+    .png()
+    .toBuffer();
+}
+
+module.exports = {
+  acikMi, saydamlastir, logoyuSaydamlastir, koseleriSaydamla, icoKaresi, VARSAYILAN
+};

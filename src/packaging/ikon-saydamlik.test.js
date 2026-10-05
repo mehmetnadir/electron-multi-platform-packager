@@ -141,3 +141,38 @@ test('SENTINEL: canli paketleme yolu saydamlastirmayi cagiriyor', () => {
     `windows + linux + macOS ikon yollarinin ucunde de cagri olmali, bulunan: ${cagri}`
   );
 });
+
+// --- Köşe alfa sızıntısı regresyonu (05.10, 74404 Flashy Grade 6) ---
+const sharpKose = require('sharp');
+const { icoKaresi } = require('./ikon-saydamlik');
+const kapi = require('../../scripts/windows-paket-kapisi.js');
+
+async function yuvarlakLogo(boyut, yaricap, opakZemin) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${boyut}" height="${boyut}">` +
+    (opakZemin ? `<rect width="${boyut}" height="${boyut}" fill="#fff"/>` : '') +
+    `<rect x="1" y="1" width="${boyut - 2}" height="${boyut - 2}" rx="${yaricap}" fill="#e63" /></svg>`;
+  return sharpKose(Buffer.from(svg)).png().toBuffer();
+}
+
+for (const [ad, yaricap, opak] of [
+  ['yuvarlak köşeli (Flashy benzeri, köşeye çok yakın gövde)', 40, false],
+  ['kare köşeli gövde, saydam zemin', 1, false],
+  ['tam kare opak zeminli logo', 0, true]
+]) {
+  test(`ICO kareleri 16-256: dört köşe alfa 0 — ${ad}`, async () => {
+    const kaynak = await yuvarlakLogo(327, yaricap, opak);
+    for (const s of [16, 32, 48, 64, 128, 256]) {
+      const b = await icoKaresi(sharpKose, kaynak, s);
+      const r = kapi.kareKoseAlfa(b);
+      assert.strictEqual(r.ok, true);
+      assert.deepStrictEqual(r.alfalar, [0, 0, 0, 0], `${s}x${s}`);
+    }
+  });
+}
+
+test('icoKaresi köşe dışındaki pikseli bozmaz (merkez opak kalır)', async () => {
+  const kaynak = await yuvarlakLogo(327, 40, false);
+  const { data, info } = await sharpKose(await icoKaresi(sharpKose, kaynak, 16))
+    .ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.strictEqual(data[(8 * info.width + 8) * 4 + 3], 255);
+});

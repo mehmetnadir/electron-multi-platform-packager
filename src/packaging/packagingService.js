@@ -2013,14 +2013,8 @@ function closeSplashScreen() {
         const pngBuffers = [];
         
         for (const size of sizes) {
-          const buffer = await sharp(sourceLogo)
-            .resize(size, size, {
-              fit: 'contain',
-              background: { r: 255, g: 255, b: 255, alpha: 0 }
-            })
-            .png()
-            .toBuffer();
-          pngBuffers.push(buffer);
+          // Küçük karelerde köşe alfa sızıntısı: icoKaresi dört köşeyi 0'lar (kapı madde 2).
+          pngBuffers.push(await ikonSaydamlik.icoKaresi(sharp, sourceLogo, size));
         }
         
         // ICO dosyası oluştur
