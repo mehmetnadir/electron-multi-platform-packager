@@ -554,6 +554,11 @@ async function kabukTazele(o) {
     //      ise (motor kapak/index.html'de) motor sayfasına dokunulmaz.
     //      Dosya gölgede ikiliden önce kondu (4b); burada yalnız zip'e yazılacaklara eklenir.
     if (a1 && u.motorKaynagi === 'index.html') {
+      // Çakışma kapısı: ikili yalnız gölge kökü görür, motor kökünü GÖRMEZ. İlk dönüşümde kökte
+      // zaten bulunan bir dosyayı kabuk dosyası ezecekse (index.html hariç — o kapak/'a taşındı)
+      // motor bozulur → atla, iş kopyası aynen kalır.
+      const cakisan = yazilan.filter((y) => y !== 'index.html' && once.has(`${onEk}${y}`));
+      if (cakisan.length) return atla(`kabuk dosyası motor dosyasıyla çakışıyor: ${cakisan.slice(0, 3).join(', ')}`);
       yazilan.push(A1.A1_MOTOR_SAYFASI);
       yazilan.sort();
     }

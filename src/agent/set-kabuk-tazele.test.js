@@ -47,7 +47,7 @@ const WEBZ = {
 };
 
 /** Eski sf425 kökü + bookN: book2=333, book3=222 (anahtar ≠ klasör), book4 Games (dizin ad, menü 666). */
-function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false } = {}) {
+function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false, motorEk = {} } = {}) {
   const z = new AdmZip();
   const ekle = (ad, veri) => z.addFile(`${sarma}${ad}`, Buffer.from(veri));
   ekle('electron.js', 'require("electron");');
@@ -56,6 +56,7 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
     ekle('index.html', typeof tekMotor === 'string' ? tekMotor : MOTOR_INDEX_HEAD);
     ekle('app.config.js', 'var AppConfig = { setBook: { enable: true } };');
     ekle('bd0c1a4f650802c98ebf.main.js', '/* motor */');
+    for (const [ad, v] of Object.entries(motorEk)) ekle(ad, v);
     ekle('classlibraries/ImWin32.dll', tekMotorMenu(TEK_IDLER));
     for (const id of TEK_IDLER) {
       ekle(`assets/${id}/data/BookContent.xml`, `<Book kitapId="${id}"/>`);
@@ -345,6 +346,23 @@ test('A1: gölgede motor sayfası yoksa (araç durur) → ATLANDI; sahte ikili s
   const r = require('node:child_process').spawnSync(ikili, ['--kip', 'tek-motor', path.join(d, 'kok'), path.join(d, 'g', 'girdi.json'), d]);
   assert.equal(r.status, 1);
   assert.match(String(r.stderr), /kapak\/index\.html kökte YOK/);
+});
+
+test('A1 çakışma: motor kökünde kabuk dosyası (scripts/xmlParser.js) varsa → ATLANDI, iş kopyası DEĞİŞMEDİ', async () => {
+  const zip = buildZip({ tekMotor: true, motorEk: { 'scripts/xmlParser.js': '/* motorun */' } });
+  const { r, once, sonra } = await kostur({ zip, ayar: WEBZ_TEK });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /^A1 atlandı — kabuk dosyası motor dosyasıyla çakışıyor: scripts\/xmlParser\.js/);
+  assert.ok(once.equals(sonra));
+});
+
+test('A1: ikili kendi kapısıyla durursa (çıkış 1, stderr yol) → ATLANDI, yarım düzen yok, gölge temizlenir', async () => {
+  const { r, once, sonra, d } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod: 'a1-kapi-dur' });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /çıkış 1\): tema dosyası kökteki motor dosyasıyla çakışıyor: scripts\/x\.js/);
+  assert.ok(once.equals(sonra), 'kapak/index.html taşıması zip\'e girmez');
+  const kalan = fs.readdirSync(d, { recursive: true }).filter((a) => /set-kabuk-|kabuk-aday/.test(String(a)));
+  assert.deepEqual(kalan, [], 'gölge kök ve aday klon silinir');
 });
 
 test('A1: motor sayfasında zaten <base> varsa → ATLANDI (sessiz bozma yok)', async () => {

@@ -276,6 +276,14 @@ function webzMenuDosyalari(t, { setAdi, girdiler }) {
   if (t.yama == null && t.ayar == null) {
     throw new UretecHatasi('kabukta Web-Z menüsü yok (config/settings.json / yama)', { kod: KOD.KALIP });
   }
+  // A1 kapısı (05.10): kabuk tek motorlu setin menüsünü taşıyorsa (`kapak` alanı) bookN menüsüyle
+  // yeniden yazılmaz — `kapak`/`path` düşer, kartlar bookN adresine döner. Fail-closed.
+  let eskiBooks = null;
+  try { eskiBooks = setEk.menuBooksOku(t.yama, t.ayar); } catch (_) { eskiBooks = null; }
+  if (setEk.a1MenuMu(eskiBooks)) {
+    throw new UretecHatasi('kabuk A1 (tek motor) menüsü taşıyor (kapak alanı) — bookN menüsüyle yeniden yazılmaz',
+      { kod: KOD.KALIP });
+  }
   const books = {};
   girdiler.forEach((k, i) => {
     books[k.dizin] = k.link

@@ -51,6 +51,8 @@ if (argv[0] === '--kip') {
   if (kip !== 'tek-motor') { process.stderr.write('bilinmeyen kip: ' + kip); process.exit(2); }
 }
 const tekMotor = kip === 'tek-motor' && mod !== 'kipi-yoksay';
+// Swift 05.10 kapıları: kartsız girdi / kapak≠assetId / tema-motor çakışması → stderr + çıkış 1.
+if (mod === 'a1-kapi-dur') { process.stderr.write('tema dosyası kökteki motor dosyasıyla çakışıyor: scripts/x.js — durduruldu'); process.exit(1); }
 const [kok, girdiYolu, kapak] = argv;
 const g = JSON.parse(fs.readFileSync(girdiYolu, 'utf8'));
 const ust = path.join(path.dirname(girdiYolu), '..');
