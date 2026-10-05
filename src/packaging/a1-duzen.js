@@ -105,7 +105,34 @@ function a1DuzeniMi(kok) {
   } catch (_) { return false; }
 }
 
+/**
+ * Paket ağacı A1 düzenindeyse `kapak/index.html`e shim etiketini (`src` kök-göreli ad) işaretin
+ * ardına yazar (geçici dosya + rename). A1 değilse dokunmaz. I/O. Hata FIRLATMAZ (paketleme sürer),
+ * ama `log.warn` ile bildirir — sessiz yutma yok.
+ * @returns {Promise<{durum: 'a1-degil'|'enjekte'|'zaten-var'|'a1-isareti-yok'|'hata', hata?: string}>}
+ */
+async function kapakaShimEkle(kok, src, log = console) {
+  if (!a1DuzeniMi(kok)) return { durum: 'a1-degil' };
+  const yol = path.join(kok, ...A1_MOTOR_SAYFASI.split('/'));
+  try {
+    const html = fs.readFileSync(yol, 'utf8');
+    if (html.includes(`<script src="${src}"></script>`)) return { durum: 'zaten-var' };
+    const yeni = shimEkle(html, src);
+    if (yeni == null) {
+      log.warn(`⚠️ A1 ${A1_MOTOR_SAYFASI}: işaret yok, ${src} enjekte edilmedi`);
+      return { durum: 'a1-isareti-yok' };
+    }
+    fs.writeFileSync(`${yol}.empp-tmp`, yeni);
+    fs.renameSync(`${yol}.empp-tmp`, yol);
+    log.log(`✅ ${src} A1 ${A1_MOTOR_SAYFASI}'e (<base> sonrası) enjekte edildi`);
+    return { durum: 'enjekte' };
+  } catch (e) {
+    log.warn(`⚠️ A1 ${A1_MOTOR_SAYFASI}: ${src} enjeksiyonu başarısız:`, e && e.message);
+    return { durum: 'hata', hata: String(e && e.message) };
+  }
+}
+
 module.exports = {
   A1_MOTOR_SAYFASI, A1_ISARET, A1_BASE, A1_KOK_BETIGI, A1_BASLIK,
-  baslikEkle, baslikCikar, shimEkle, kapakDenetle, a1DuzeniMi,
+  baslikEkle, baslikCikar, shimEkle, kapakDenetle, a1DuzeniMi, kapakaShimEkle,
 };

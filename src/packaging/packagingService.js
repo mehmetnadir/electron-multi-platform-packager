@@ -25,6 +25,7 @@ const pwaKacis = require('./pwa-kacis');
 const oluMotor = require('./olu-motor-temizligi');
 const anaEkranYolu = require('./ana-ekran-yolu-yamasi');
 const agPolitikasi = require('./ag-politikasi-yamasi');
+const a1Duzen = require('./a1-duzen');
 const sayfaOnGetirme = require('./sayfa-on-getirme');
 const guncellemeOteleme = require('./acilis-guncelleme-oteleme');
 const ilkSayfa = require('./acilis-ilk-sayfa');
@@ -1508,6 +1509,12 @@ flatpak-builder --run build-dir manifest.json ${appName.toLowerCase()}
               console.log('✅ empp-fs-shim.js index.html\'e enjekte edildi');
             }
           }
+          // A1 (2026-10-05, tek motorlu set): motor sayfası kapak/index.html. Shim <base href="../">
+          // + kök betiğinin ARDINA girer (a1-duzen.shimEkle) — <head> başına konursa src kapak/
+          // altına çözülür, shim yüklenmez, anahtar paketteki salt-okunur dosyaya yazılmaya çalışılır.
+          // kapak/ alt kitap DEĞİL (app.config.js yok) → __emppSubBook yazılmaz, WORK tek kalır.
+          // BOZARSAN: `packaging-a1.test.js` kırılır.
+          await a1Duzen.kapakaShimEkle(appPath, 'empp-fs-shim.js', console);
 
           // K9 — NEDEN: SET paketlerinde alt-kitap sayfalarının (findSubBookDirs)
           // Electron renderer'da KENDİ __dirname'i vardır (BASE = sayfanın kendi
@@ -4530,6 +4537,8 @@ if (!window.cordova) {
         await fs.writeFile(idx, html);
         console.log('✅ empp-android-shim.js www/index.html\'e ilk script olarak enjekte edildi');
       }
+      // A1 (tek motorlu set): motor sayfası kapak/index.html da shim'i <base> sonrası alır.
+      await a1Duzen.kapakaShimEkle(wwwPath, 'empp-android-shim.js', console);
     } catch (e) { console.warn('⚠️ android shim enjeksiyonu başarısız:', e.message); }
 
     // Android platform ekle. Hata YUTULMAZ (2026-08-04 dersi): `cap add android`

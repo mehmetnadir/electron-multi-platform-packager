@@ -20,6 +20,7 @@ const fs = require('fs-extra');
 const DOSYA_ADI = 'empp-ag-politikasi.js';
 const KAYNAK = path.join(__dirname, '../platforms/common/ag-politikasi.js');
 const BOOK_RE = /^book\d+$/i;
+const A1 = require('./a1-duzen');
 
 function betikEtiketi(src) {
   return `<script src="${src}"></script>`;
@@ -74,6 +75,26 @@ async function paketeUygula(kokDizin, opts = {}) {
     const r = await dosyayaEnjekteEt(h.index, h.src);
     if (r.durum === 'enjekte') { sonuc.enjekte.push(h.ad); gunluk(`✅ ağ politikası: ${h.ad}`); }
     else { sonuc.atlanan.push({ ad: h.ad, sebep: r.durum }); }
+  }
+  // A1 (2026-10-05): tek motorlu setin motor sayfası `kapak/index.html` — ağ istekleri ORADA olur.
+  // Etiket <base href="../"> + kök betiğinin ARDINA girer (src köke çözülür; <head> başı kapak/'a çözerdi).
+  if (A1.a1DuzeniMi(kokDizin)) {
+    const ad = A1.A1_MOTOR_SAYFASI;
+    const yol = path.join(kokDizin, ...ad.split('/'));
+    const html = await fs.readFile(yol, 'utf8');
+    if (html.includes(DOSYA_ADI)) {
+      sonuc.atlanan.push({ ad, sebep: 'zaten-var' });
+    } else {
+      const yeni = A1.shimEkle(html, DOSYA_ADI);
+      if (yeni == null) {
+        sonuc.atlanan.push({ ad, sebep: 'a1-isareti-yok' });
+      } else {
+        await fs.writeFile(yol + '.empp-tmp', yeni);
+        await fs.rename(yol + '.empp-tmp', yol);
+        sonuc.enjekte.push(ad);
+        gunluk(`✅ ağ politikası: ${ad} (A1)`);
+      }
+    }
   }
   return sonuc;
 }
