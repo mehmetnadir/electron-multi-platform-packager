@@ -17,8 +17,21 @@ const S = require('./set-kabuk-tazele');
 const M = require('./icerik-merdiven');
 
 const tmp = (ad) => fs.mkdtempSync(path.join(os.tmpdir(), `skt-${ad}-`));
-const { PNG, ESKI_INDEX, sahteIkili, sahteGetir } = require('./fikstur/set-kabuk-sahte');
+const { PNG, ESKI_INDEX, sahteIkili, sahteGetir, tekMotorMenu } = require('./fikstur/set-kabuk-sahte');
+const A1 = require('../packaging/a1-duzen');
 const MOTOR_INDEX = '<html><body><script src="./a8f43f74c72b65a3dd05.main.js"></script></body></html>';
+const MOTOR_INDEX_HEAD = '<!doctype html><html><head><meta charset="UTF-8"/><script src="app.config.js"></script>'
+  + '<script defer="defer" src="./bd0c1a4f650802c98ebf.main.js"></script></head><body></body></html>';
+const TEK_IDLER = ['25861', '25862', '34333'];
+/** Tek motorlu set Web-Z ayarı: sıra menüden farklı (Web-Z sırası kazanır), bir link. */
+const WEBZ_TEK = {
+  setTitle: 'Power Grade 11', books: {
+    book1: { assetId: '34333', title: 'Grammar Pack', contentType: 'book', group: 'Books' },
+    book2: { assetId: '25861', title: 'Grammar Book', contentType: 'book', group: 'Books' },
+    book3: { assetId: '25862', title: 'Kitap 2', contentType: 'book', group: 'Books' },
+    link4: { assetId: '', title: 'Worksheet', contentType: 'link', type: 'link', url: 'https://example.com/w/' },
+  },
+};
 const URL_W = 'https://download.ydspublishing.com/worksheets/grade-6-worksheets/';
 
 /** Web-Z ayarı (pilot 45550 biçimi): anahtar sırası = Web-Z sırası; book2/book3 build'de TAKASLI. */
@@ -39,9 +52,17 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
   const ekle = (ad, veri) => z.addFile(`${sarma}${ad}`, Buffer.from(veri));
   ekle('electron.js', 'require("electron");');
   if (tekMotor) {
-    ekle('index.html', MOTOR_INDEX);
-    ekle('classlibraries/ImWin32.dll', 'menü');
-    ekle('assets/111/data/BookContent.xml', '<Book/>');
+    // 11-12 tek motorlu kök: motor index.html + kök menü (3 kapak) + assets/<id> (45485 düzeni).
+    ekle('index.html', typeof tekMotor === 'string' ? tekMotor : MOTOR_INDEX_HEAD);
+    ekle('app.config.js', 'var AppConfig = { setBook: { enable: true } };');
+    ekle('bd0c1a4f650802c98ebf.main.js', '/* motor */');
+    ekle('classlibraries/ImWin32.dll', tekMotorMenu(TEK_IDLER));
+    for (const id of TEK_IDLER) {
+      ekle(`assets/${id}/data/BookContent.xml`, `<Book kitapId="${id}"/>`);
+      ekle(`assets/${id}/pages/1.png`, `sayfa-${id}`);
+      ekle(`assets/${id}/thumbs/1.jpg`, `kapak-${id}`);
+      ekle(`assets/${id}/imKeys.dll`, 'liste');
+    }
     return z.toBuffer();
   }
   ekle('index.html', kokIndex);
@@ -106,14 +127,21 @@ test('acik: varsayılan KAPALI, yalnız "1" açar', () => {
   assert.equal(S.acik({ EMPP_SET_KABUK_TAZELE: '1' }), true);
 });
 
-test('uygunluk: sf425 kök + bookN uygun; motor kopyası kök + bookN uygun; tek motor ATLANIR', () => {
+test('uygunluk: sf425 kök + bookN uygun; motor kopyası kök + bookN uygun; tek motor → A1 kipi', () => {
   const adlar = new Set(['index.html', 'book1/index.html', 'book2/index.html']);
   assert.equal(S.uygunluk({ adlar, kokIndexHtml: ESKI_INDEX }).kokTuru, 'sf425');
   assert.deepEqual(S.uygunluk({ adlar, kokIndexHtml: ESKI_INDEX }).bookNler, ['book1', 'book2']);
   assert.equal(S.uygunluk({ adlar, kokIndexHtml: MOTOR_INDEX }).kokTuru, 'motor-kopyasi');
-  const tek = S.uygunluk({ adlar: new Set(['index.html', 'classlibraries/ImWin32.dll']), kokIndexHtml: MOTOR_INDEX });
-  assert.equal(tek.uygun, false);
-  assert.equal(tek.neden, 'tek-motor: aktivasyon tasarımı bekliyor');
+  assert.equal(S.uygunluk({ adlar, kokIndexHtml: MOTOR_INDEX }).kip, undefined, 'bookN sette A1 yok');
+  const tekAdlar = new Set(['index.html', 'classlibraries/ImWin32.dll']);
+  const tek = S.uygunluk({ adlar: tekAdlar, kokIndexHtml: MOTOR_INDEX });
+  assert.deepEqual([tek.uygun, tek.kip, tek.kokTuru, tek.motorKaynagi], [true, 'a1', 'tek-motor', 'index.html']);
+  // Zaten A1: kök sf425 kabuğu + kapak/index.html → motor sayfası yeniden yazılmaz.
+  const a1Adlar = new Set([...tekAdlar, 'kapak/index.html']);
+  const zaten = S.uygunluk({ adlar: a1Adlar, kokIndexHtml: ESKI_INDEX });
+  assert.deepEqual([zaten.uygun, zaten.kip, zaten.kokTuru, zaten.motorKaynagi], [true, 'a1', 'a1', 'kapak/index.html']);
+  assert.equal(S.uygunluk({ adlar: a1Adlar, kokIndexHtml: MOTOR_INDEX }).uygun, false, 'kapak var ama kök kabuk değil');
+  assert.match(S.uygunluk({ adlar: tekAdlar, kokIndexHtml: '<html>yayıncı</html>' }).neden, /motor sayfası değil/);
   // Flashy tema kabuğu (webz-tema-kabuk) ve yayıncı tasarımlı kök dokunulmaz.
   const flashy = '<meta name="empp-webz-tema" content="x"><script src="scripts/language-set.js"></script>';
   assert.equal(S.uygunluk({ adlar, kokIndexHtml: flashy }).uygun, false);
@@ -197,7 +225,6 @@ test('motor kopyası kök + bookN: kabuk kurulur', async () => {
 });
 
 for (const [ad, ayar] of [
-  ['tek motor (11-12)', { zip: buildZip({ tekMotor: true }) }],
   ['Mac değil', { platform: 'linux' }],
   ['kisaKod yok', { job: { kisaKod: '' } }],
   ['Web-Z 403', { status: 403 }],
@@ -213,10 +240,107 @@ for (const [ad, ayar] of [
   });
 }
 
-test('tek motor: log nedeni "tek-motor: aktivasyon tasarımı bekliyor"', async () => {
-  const { r, istekler } = await kostur({ zip: buildZip({ tekMotor: true }) });
-  assert.equal(r.neden, 'tek-motor: aktivasyon tasarımı bekliyor');
-  assert.equal(istekler.length, 0, 'uygun olmayan sette Web-Z\'ye gidilmez');
+// ─── A1 (11-12 tek motorlu set, 05.10) ─────────────────────────────────────────────────────
+
+const zipMetin = (z, ad) => { const e = z.getEntry(ad); return e ? e.getData().toString('utf8') : null; };
+
+test('eslemeKur tek-motor: klasör kapak-<id>, her kitap kapak = assetId, Web-Z sırası', () => {
+  const kapi = { kitaplar: TEK_IDLER.map((id, i) => ({ n: i + 1, id })) };
+  const e = S.eslemeKur({ liste: S.webzListesi(WEBZ_TEK), kapi, setAdi: 'P', kip: S.KIP_TEK_MOTOR });
+  assert.deepEqual(e.eksik, []);
+  assert.deepEqual(e.girdi.kitaplar.map((k) => k.klasor), ['kapak-34333', 'kapak-25861', 'kapak-25862', 'link4']);
+  assert.deepEqual(e.girdi.kitaplar.slice(0, 3).map((k) => k.kapak), ['34333', '25861', '25862']);
+  assert.equal(e.girdi.kitaplar[3].kapak, undefined, 'link kapak taşımaz');
+});
+
+test('A1 UYGULANDI: kök = sf425 kabuğu, motor → kapak/index.html (başlıklı), motor dosyaları bayt-aynı', async () => {
+  const { r, zipYolu, once, d } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  assert.equal(r.kip, 'a1');
+  const z = new AdmZip(zipYolu);
+  const kapak = zipMetin(z, 'kapak/index.html');
+  assert.equal(kapak, A1.baslikEkle(MOTOR_INDEX_HEAD));
+  assert.deepEqual(A1.kapakDenetle(kapak), []);
+  assert.match(zipMetin(z, 'index.html'), /scripts\/language-set\.js/);
+  assert.match(zipMetin(z, 'scripts/language-set.js'), /kapak\/index\.html\?kapak=|'\/index\.html\?kapak='/);
+  const m = menu(zipYolu);
+  assert.deepEqual(m.map(([k]) => k), ['kapak-34333', 'kapak-25861', 'kapak-25862', 'link4']);
+  for (const [, b] of m.slice(0, 3)) { assert.equal(b.kapak, b.assetId); assert.equal(b.path, 'kapak'); }
+  // Motor dosyaları (kök menü, assets, app.config.js, bundle) bayt-aynı.
+  const zOnce = new AdmZip(once);
+  for (const g of zOnce.getEntries().filter((e) => e.entryName !== 'index.html')) {
+    assert.deepEqual(z.getEntry(g.entryName).getData(), g.getData(), g.entryName);
+  }
+  // İkili --kip tek-motor ile çağrıldı; girdi kip + motorSayfasi + kapak taşır.
+  const cagri = JSON.parse(fs.readFileSync(path.join(d, 'cagri.log'), 'utf8').trim());
+  assert.equal(cagri.kip, 'tek-motor');
+  assert.equal(cagri.g.kip, 'tek-motor');
+  assert.equal(cagri.g.motorSayfasi, 'kapak/index.html');
+  assert.equal(cagri.g.kitaplar[0].kapak, '34333');
+});
+
+test('A1 ikinci koşu: zaten A1 → GÜNCEL, motor sayfası yeniden yazılmaz, zip bayt-aynı', async () => {
+  const ilk = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK });
+  assert.equal(ilk.r.durum, 'uygulandi', ilk.r.neden);
+  const ikinci = await kostur({ zip: ilk.sonra, ayar: WEBZ_TEK });
+  assert.equal(ikinci.r.durum, 'guncel', ikinci.r.neden);
+  assert.equal(ikinci.r.kokTuru, 'a1');
+  assert.ok(ikinci.once.equals(ikinci.sonra));
+});
+
+test('A1 ATLANDI: eski ikili --kip\'i tanımaz → iş kopyası bayt-aynı, log "A1 atlandı … eski düzen korundu"', async () => {
+  const { r, once, sonra, loglar } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod: 'kipsiz' });
+  assert.equal(r.durum, 'atlandi');
+  assert.match(r.neden, /^A1 atlandı — webz-kabuk-uret tek-motor kipini tanımıyor ya da başarısız \(çıkış 2\)/);
+  assert.match(r.neden, /eski düzen korundu/);
+  assert.ok(once.equals(sonra), 'yarım düzen üretilmez');
+  assert.ok(loglar.some((l) => l.startsWith('[set-kabuk] ATLANDI — A1 atlandı')), loglar.join('\n'));
+});
+
+for (const [mod, beklenen] of [
+  ['kipi-yoksay', /kart imzası yok/],
+  ['a1-imzasiz', /kart imzası yok/],
+  ['a1-yolsuz', /path undefined ≠ kapak/],
+  ['a1-kapak', /kapak 1 ≠ assetId 34333/],
+]) {
+  test(`A1 kapı RED (${mod}): iş kopyası DEĞİŞMEDİ`, async () => {
+    const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod });
+    assert.equal(r.durum, 'atlandi');
+    assert.match(r.neden, /^A1 atlandı — kapı RED/);
+    assert.ok(r.ihlal.some((i) => beklenen.test(i)), r.ihlal.join('\n'));
+    assert.ok(once.equals(sonra));
+  });
+}
+
+test('A1: ikili kapak/ altına yazarsa → ATLANDI, iş kopyası DEĞİŞMEDİ', async () => {
+  const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: true }), ayar: WEBZ_TEK, mod: 'a1-kapak-yaz' });
+  assert.match(r.neden, /ikili kapak\/ altına yazdı: kapak\/index\.html/);
+  assert.ok(once.equals(sonra));
+});
+
+test('A1: motor sayfasında zaten <base> varsa → ATLANDI (sessiz bozma yok)', async () => {
+  const motor = MOTOR_INDEX_HEAD.replace('<head>', '<head><base href="/">');
+  const { r, once, sonra } = await kostur({ zip: buildZip({ tekMotor: motor }), ayar: WEBZ_TEK });
+  assert.match(r.neden, /zaten <base> var/);
+  assert.ok(once.equals(sonra));
+});
+
+test('A1: Web-Z üyesi kök menüde yok → eşlenemez, ATLANDI, Web-Z kapakları istenmez', async () => {
+  const ayar = { ...WEBZ_TEK, books: { ...WEBZ_TEK.books, book5: { assetId: '99999', title: 'Yok' } } };
+  const { r, once, sonra, istekler } = await kostur({ zip: buildZip({ tekMotor: true }), ayar });
+  assert.match(r.neden, /^A1 atlandı — eşlenemeyen Web-Z üyesi: book5/);
+  assert.equal(istekler.length, 1);
+  assert.ok(once.equals(sonra));
+});
+
+test('kapiDenetle A1: kapak sayfası kaynak motordan farklıysa RED', () => {
+  const ihlal = S.kapiDenetle({
+    once: new Map(), sonra: new Map(), onEk: '', yazilan: ['kapak/index.html'], beklenen: { kitaplar: [] },
+    kip: 'a1', motorKaynagi: MOTOR_INDEX_HEAD,
+    metin: { kapak: A1.baslikEkle(MOTOR_INDEX_HEAD.replace('<body>', '<body>değişti')), dil: 'kapak=' },
+  });
+  assert.ok(ihlal.some((i) => /başlık dışında kaynak motor sayfasından farklı/.test(i)), ihlal.join('\n'));
+  assert.ok(!ihlal.some((i) => /beklenmeyen kabuk dosyası: kapak/.test(i)), 'kapak/index.html A1\'de izinli');
 });
 
 test('eşlenemeyen Web-Z üyesi (build\'de yok) → ATLANDI', async () => {
