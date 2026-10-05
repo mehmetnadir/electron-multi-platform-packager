@@ -63,7 +63,7 @@ function hazirAnahtari(bookId, surum) {
 /** Runner'ın hazır kuyruğa geçtiği claim alanları (bekçinin /result gövdesi için). Saf. */
 function jobOzeti(job) {
   const alan = ['bookId', 'platform', 'bookTitle', 'publisherName', 'surum', 'setKimligi', 'guncellemeTabani',
-    'kaynakSurumu', 'kaynakTuru', 'icerikSurumleri', 'appVersion'];
+    'kaynakSurumu', 'kaynakTuru', 'icerikSurumleri', 'icerikUyeleri', 'appVersion'];
   const o = {};
   for (const a of alan) if (job && job[a] !== undefined) o[a] = job[a];
   return o;

@@ -259,3 +259,20 @@ test('r2-kur: menüde set aktivasyonu KAPALI → R2 build\'inde main.activation=
   assert.match(r.loglar, /set aktivasyonu: 1 menü, 1 açıldı/);
   assert.ok(!r.loglar.includes('AB3CD'));
 });
+
+test('r2-kur: menü kök başlığı yayınevi adına çevrilir (R2 build + paketleyiciye giden zip); kapak etiketi aynı', async () => {
+  const ig = require('../runtime/icerik-guncelleme');
+  const xml = '<?xml version="1.0"?><main activation="false" key="" label="İmpark Eğitim" ID="45480">'
+    + '<Group ID="1" label="G"><Tab ID="1" label="T"><cover ID="111" label="Kitap Bir" '
+    + 'xmlSource="book1/assets/111/data/BookContent.xml" key="" /></Tab></Group></main>';
+  const z = new AdmZip(setBuildZip());
+  z.addFile('classlibraries/ImWin32.dll', Buffer.from(ig.menuKodla(xml), 'utf8'));
+  const b = bagKur([]); // anahtarsız: imKeys menüye dokunmaz, başlık adımı tek başına çalışır
+  const r = await isKostur({ arsivKoku: arsivKur('45480', z.toBuffer()), job: r2Kur(), bag: b.bag });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  for (const zip of [new AdmZip(Buffer.concat(r.kayit.parcalar)), yuklenenZip(r.kayit.uploadGovde)]) {
+    const m = ig.menuCoz(zip.getEntry('classlibraries/ImWin32.dll').getData());
+    assert.match(m, /<main [^>]*label="YDS Publishing"/);
+    assert.match(m, /<cover ID="111" label="Kitap Bir"/);
+  }
+});

@@ -100,6 +100,15 @@ function izoleOrtam() {
     kodCek: async () => { throw new Error('test-yalitim: keypanel çağrılmamalı'); },
   });
 
+  // Panel menü hizalama (05.10): runner testleri GERÇEK panele (GetPackageBooks) gitmesin. Sahte =
+  // meşru BOŞ liste → adım no-op (menü olduğu gibi). "Ölçülemedi" sahtesi OLMAZ: o geçici hatadır,
+  // iş ertelenirdi. Ölçen testler (panel-menu-hizala*.test.js) kendi bağımlılığını verir.
+  const panelMenuMod = require('./panel-menu-hizala');
+  const eskiPanelMenuBag = panelMenuMod.varsayilanBagimliliklar;
+  panelMenuMod.varsayilanBagimliliklar = () => ({
+    panelGetir: async () => ({ status: 200, govde: '{"Books":null,"statusMessage":"test-yalitim"}' }),
+  });
+
   let configUygulandi = null;
   return {
     dir,
@@ -127,6 +136,7 @@ function izoleOrtam() {
       }
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* zaten yok */ }
       imKeysMod.varsayilanBagimliliklar = eskiImKeysBag;
+      panelMenuMod.varsayilanBagimliliklar = eskiPanelMenuBag;
       configUygulandi = null;
     },
   };

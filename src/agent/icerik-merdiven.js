@@ -811,6 +811,8 @@ module.exports = {
   icerikOnbellekKoku, kanitKoku,
   // set-uyelik-ek.js (2026-09-30) eksik set kitabını AYNI indirme/önbellek yolundan alır.
   icerikZipiGetir, varsayilanIndir, komut, SIKISIK_UZANTILAR,
+  // panel-menu-hizala.js (2026-10-05) eksik panel üyesini AYNI açma + doğrulama yolundan açar.
+  varsayilanIcerikYaz, acmaDogrula, dosyalariTopla,
 };
 
 // CLI (salt okuma S0 kuru koşusu): node src/agent/icerik-merdiven.js s0 <build.zip>

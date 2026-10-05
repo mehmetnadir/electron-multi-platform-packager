@@ -74,6 +74,9 @@ const kaynakR2 = require('./kaynak-r2');
 const { yazmaKapisi, zipSayfaEnvanteri } = require('./yazma-kapisi');
 // Çevrimdışı aktivasyon anahtarları (imKeys.dll) — güvenlik 02.10, bkz. imkeys.js başlığı.
 const imKeys = require('./imkeys');
+const icerikUyeleri = require('./icerik-uyeleri');
+// Kök menülü tek-motor sette paket menüsü ↔ panel GetPackageBooks hizalaması (05.10).
+const panelMenu = require('./panel-menu-hizala');
 
 // ---------------------------------------------------------------------------
 // Config (env). No secrets hardcoded.
@@ -922,6 +925,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       // KANONİK SÜRÜM (motor sha12/durum + kabuk sürüm/durum): paketleyici paket.json'a damgaladı,
       // poll sonucuyla job.kanonikSurum'a indi. Yoksa/boşsa alanlar HİÇ gönderilmez (sunucu null yazar).
       ...kanonikGovdeAlanlari(job.kanonikSurum),
+      // PAKET İÇERİK ÜYELERİ (05.10): paketleyiciye giden son build zip'inin menüsünden [{id, vs, kitap}]
+      // (processJob `job.icerikUyeleri`'ni doldurur). Ölçülemediyse alanlar HİÇ gönderilmez.
+      ...icerikUyeleri.govdeAlanlari({ uyeler: job.icerikUyeleri }),
       // İÇERİK SÜRÜMLERİ (Dalga B, B4): paketin içerdiği kitap içerik sürümleri [{id, vs}] — merdiven
       // kanıtından (processJob `job.icerikSurumleri`'ni doldurur; claim alanı DEĞİL). Sunucu Dalga A/B
       // karşılaştırması için. Ölçüm yoksa (merdiven kapalı, manuel/r2-al) alan hiç gönderilmez.
@@ -2070,6 +2076,9 @@ const kaynakAdim = {
   // imKeys: bağımlılıklar exports üzerinden çözülür (test-yalitim sahtesini koyabilsin; üretimde
   // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
   imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
+  menuBasligi: (o) => imKeys.menuBasligiAdimi(o),
+  // Panel menü hizalama: panel GET'i exports üzerinden (test-yalitim sahtesi internete çıkarmaz).
+  panelMenuHizala: (o) => panelMenu.panelMenuHizala({ ...panelMenu.varsayilanBagimliliklar(), ...o }),
   // Üreteç (r2-kur kaynak adımı): anahtarlı mı sorusu okuyucunun kendi HasZKitapKey'i (imkeys).
   // (imKeys ile AYNI bağımlılık kaynağı: test-yalitim sahtesi burada da geçerli — internete çıkılmaz).
   uretec: (o) => uretecKaynak.uretecKaynagi({ anahtarliMi: imKeys.varsayilanBagimliliklar().anahtarliMi, ...o }),
@@ -2633,6 +2642,17 @@ async function processJob(auth, job) {
     // yeniden uygulanır. Set eki eksiği tamamladıysa taban korunur. Üreteç kapalıysa dokunulmaz.
     if (kaynak.tur === 'r2-kur' && !job.uretecOzeti && uretecKaynak.uretecAcik()) {
       const eksik = uretecKaynak.tabanKitapEksik(zipPath, (setEk.setListesiCoz({ job }) || {}).ham || null);
+      // Panel hizalaması panelde olmayan üyeyi (claim listesinde bayat kalan) menüden çıkarır ama
+      // içeriğini silmez: içeriği kökte duran kimlik "eksik" sayılmaz (üreteç boşuna koşmaz;
+      // ölçüm 05.10 — 45448/45449/45469/45472 claim'i 61633/61635 taşıyor, panel 73010/73147).
+      if (eksik.atla) {
+        const duran = eksik.eksik.filter((id) => panelMenu.kokIcerikVarMi(zipPath, id));
+        if (duran.length && duran.length === eksik.eksik.length) {
+          log(`${panelMenu.ISARET} taban kapsama: ${duran.join(', ')} menüde yok ama içeriği `
+            + 'tabanda duruyor (panel hizalaması çıkarmış) — taban korunur');
+          eksik.atla = false;
+        }
+      }
       if (eksik.atla) {
         try {
           await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job,
@@ -2655,6 +2675,39 @@ async function processJob(auth, job) {
     const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
     job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
 
+    // PANEL MENÜ HİZALAMA (05.10, panel-menu-hizala.js): kök menülü tek-motor sette menü panelin
+    // GetPackageBooks listesine (Group/Tab/üye/sıra) hizalanır, eksik üye İmpark'tan eklenir —
+    // okuyucu çevrimiçi açılışta yeşil/mavi bulut göstermez. imKeys'ten ÖNCE: imKeys son üye
+    // listesini ve covers[0]'ı kendisi bulur (yeni anahtarlı üye imKeys'siz yayınlanmaz).
+    // Manuel build'de ÇALIŞMAZ (sözleşme M1); r2-al ve arşiv/r2-kur'da çalışır (bayat R2 build'in
+    // tek düzeltme yolu). Panel/teklif ölçülemedi ya da indirme ağ hatası → ertelenir (failed yok);
+    // içeriksiz üye / kapı RED → iş görünür hatayla düşer (eksik içerikle paket yok).
+    if (kaynak.tur === 'manuel') {
+      log(`${panelMenu.ISARET} manuel build — panel menü hizalama ATLANDI `
+        + '(olduğu gibi kullanılır, sözleşme M1)');
+    }
+    // Yazma kapısının set listesi: varsayılan claim listesi; panel hizalaması panelinkini koyar.
+    let kapiSetListesi = (setEk.setListesiCoz({ job }) || {}).ham || null;
+    if (kaynak.tur !== 'manuel') {
+      try {
+        const pm = await kaynakAdim.panelMenuHizala({
+          zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
+          claimListesi: kapiSetListesi,
+        });
+        // Panel ölçüldü ve menü panele hizalı (UYGULANDI ya da zaten hizalı) → yazma kapısı panel
+        // listesini görür (claim listesi bayat ya da boş olabilir; Web-Z listesine dokunulmaz).
+        if (pm && pm.hizali && pm.panelSetListesi) {
+          kapiSetListesi = pm.panelSetListesi;
+          job.setListesiPanelFarki = { ...pm.setListesiPanelFarki, listeKaynagi: 'panel' };
+        }
+      } catch (e) {
+        if (e && e.gecici) {
+          return r2Ertele(auth, job, e.message, { kilitBirak: kaynak.tur === 'r2-kur' });
+        }
+        throw e;
+      }
+    }
+
     // ÇEVRİMDIŞI AKTİVASYON (imKeys.dll, güvenlik 02.10 — imkeys.js): okuyucu imKeys.dll'i boş
     // bulup çevrimdışıysa kitabı SABİT 123456 ile kendisi aktive ediyor; İmpark build'lerinde dosya
     // hiç yok. Her kaynakta (r2-kur build'e yazılır → 4 platform aynısını alır; r2-al'de eksikse;
@@ -2673,6 +2726,12 @@ async function processJob(auth, job) {
       throw e;
     }
 
+    // Menü başlığı: set penceresinin başlığı `<main label>`'dan gelir (ham: "İmpark Eğitim") →
+    // yayınevi adı. imKeys'ten sonra, R2 yazımından önce: dört platform + R2 aynı menüyü alır.
+    await kaynakAdim.menuBasligi({
+      zipYolu: zipPath, yayineviAdi: job.publisherName, calisma: work, log,
+    });
+
     // R2'YE YAZ (Dalga B, r2-kur): kurulan build yazma kapısından (B5) geçerse R2'ye yüklenir ve
     // `tamamla` ile sunucu kapısına sunulur. Kapı reddi / 409 → paket ÜRETİLMEZ (kalıcı: failed +
     // bildirim); ağ/5xx/kilit süresi → kira bırakılır (failed yok). Her düşüşte kurma kilidi bırakılır.
@@ -2680,7 +2739,7 @@ async function processJob(auth, job) {
       let yayin;
       try {
         yayin = await kaynakR2.r2KurYayinla({
-          job, zipYolu: zipPath, setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null,
+          job, zipYolu: zipPath, setListesi: kapiSetListesi,
           oncekiBoyut: r2OncekiBoyut, oncekiEnvanter: r2OncekiEnvanter, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
           // Üreteç özeti `tamamla`ya (sunucu bilinmeyen alanı atar; kayıt `kaynak='uretec'` book-update işi).
@@ -2711,6 +2770,12 @@ async function processJob(auth, job) {
     if (!imk.kapi.gecti) {
       throw new Error(`${imKeys.ISARET} ${imKeys.NEDEN_KODU} — paket YAYINLANMAZ: ${imk.kapi.nedenler.join(' | ')}`);
     }
+    // PAKET İÇERİK ÜYELERİ (05.10): merdiven + set eki + imKeys + menü başlığı SONRASI, paketleyiciye
+    // gitmeden önceki SON zip'ten ölçülür (android/mac/windows/pardus aynı zipPath). Hata paketi durdurmaz.
+    const uyeOlcum = icerikUyeleri.zipIcerikUyeleri(zipPath);
+    job.icerikUyeleri = uyeOlcum.uyeler.length ? uyeOlcum.uyeler : null; // runner alanı (claim DEĞİL)
+    if (uyeOlcum.hata) warn(`[uyeler] ölçülemedi: ${uyeOlcum.hata}`);
+    log(`[uyeler] ${uyeOlcum.uyeler.length} kitap, ${uyeOlcum.menuSayisi} menü, ${uyeOlcum.atlanan} atlandı`);
     const appName = asciiAppName(job.bookTitle, `book-${job.bookId}`); // paketleyici iç adı ASCII (45496 dersi)
     // Windows: sözleşme sürümü (madde 1, claim'den). Diğerleri '1.0.0' → paketleyici içerikten
     // türetir (surum-turet.js). Windows dosya adı imza yuvasında (_hazir/_imzali) runner'a ait görünür.

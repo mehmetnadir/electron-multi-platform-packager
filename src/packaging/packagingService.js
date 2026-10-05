@@ -34,6 +34,7 @@ const { insaHataMesaji } = require('./insaHataMesaji');
 const paketManifesti = require('./paket-manifesti');
 const motorSurumu = require('./motor-surumu');
 const okuyucuKabugu = require('./okuyucu-kabugu');
+const menuKimlikEsle = require('./menu-kimlik-esle');
 const setKimligi = require('./set-kimligi');
 const kanonikSart = require('./kanonik-sart');
 const guncelleyiciEnjekte = require('./guncelleyici-enjekte');
@@ -552,18 +553,6 @@ MimeType=application/x-electron;
         }
       }
 
-      // K20 ANA EKRAN YOLU (2026-09-19, saha arızası) — SET'te "ana ekran" butonu
-      // Windows'ta beyaz ekran bırakıyordu. Motor `path.join`'i bir URL üzerinde
-      // çağırıyor; Windows'ta ".\\file:\\C:\\…" gibi GEÇERSİZ adres üretiyor
-      // (Linux/mac'te "file:/…" çıkıyor ve Chromium kabul ettiği için arıza gizli
-      // kalmış). Düzeltme `URL` tabanlı — platformdan bağımsız. Ölü temizlikten
-      // SONRA koşar: atılacak dosyayı yamalamanın anlamı yok.
-      try {
-        await anaEkranYolu.paketiDuzelt(workingPath, { log: (s) => console.log(s) });
-      } catch (k20Error) {
-        console.warn('⚠️ K20 ana ekran yolu yaması başarısız (paketleme devam ediyor):', k20Error.message);
-      }
-
       // K21 AÇILIŞ AĞ POLİTİKASI (2026-09-19, sm4/book1'de ölçüldü) — 3 nokta
       // ekranının ~%91'i ağ beklemesi (1048 ms'in ~950 ms'i). Aynı paket ağ
       // kapalıyken 318 ms'de ve BİREBİR aynı ekranla açılıyor. Enjekte edilen
@@ -626,6 +615,46 @@ MimeType=application/x-electron;
         }
       }
 
+      // OKUYUCU KABUĞU "ESKİYSE DEĞİŞTİR" (Faz 3c, 2026-09-24, Nadir: "Web-Z kabuğu pakete
+      // girsin") — KAPI VARSAYILAN AÇIK (`EMPP_OKUYUCU_KABUGU=0` kapatır). Sağ alttaki sürüm
+      // rozeti kabuktan gelir (bookN `*.main.js` i8). Kanonik: `~/.empp-agent/kabuk/`
+      // (`scripts/kabuk-kanonik-doldur.js`, Web-Z/YDS WebZKitap). Kitap içeriğine dokunmaz;
+      // index.html şablonu korunur, yalnız main referansı yeniden yazılır. Kanonik yoksa
+      // hiçbir şey değişmez. MOTORDAN ÖNCE koşar (sıra: kabuk → motor → manifest).
+      let kabukDamgasiSonucu = null;
+      if (okuyucuKabugu.acikMi()) {
+        try {
+          kabukDamgasiSonucu = await okuyucuKabugu.okuyucuKabuguDegistir(workingPath, undefined, {
+            log: (s) => console.log(s),
+          });
+          console.log(`📖 Okuyucu kabuğu: ${kabukDamgasiSonucu.durum}, ${kabukDamgasiSonucu.degisen} kitap `
+            + `değişti (kanonik ${kabukDamgasiSonucu.kanonikSurum || 'YOK'})`);
+        } catch (kabukError) {
+          console.warn('⚠️ Okuyucu kabuğu değiştirme başarısız (paketleme devam ediyor):', kabukError.message);
+          kabukDamgasiSonucu = { durum: 'hata', hata: kabukError.message };
+        }
+        // FAIL-CLOSED (2026-10-04): üretim işinde kanonik yoksa sessiz eski format YOK.
+        kanonikSart.sartiUygula('kabuk', kabukDamgasiSonucu, jobInfo);
+      }
+
+      // SIRA KURALI (2026-10-05): kabuk 'eski' kararında `*.main.js` + parçalar kanonikle
+      // DEĞİŞTİRİLİR (yamalı eski dosya yedeğe gider, kanonik ham kopyalanır). Kabuk
+      // dosyalarına dokunan yamalar (K20 ana ekran yolu, ilk sayfa, açılış göstergesi)
+      // bu yüzden kabuktan SONRA koşar; önce koşsalardı kanonik kabuklu pakette sessizce
+      // kaybolurlardı. Hepsi idempotent işaretli: kabuk değişmediyse yamalar yerinde kalır,
+      // ikinci geçiş no-op olur. Sıra kilidi: acilis-kabuk-sirasi.test.js.
+      // K20 ANA EKRAN YOLU (2026-09-19, saha arızası) — SET'te "ana ekran" butonu
+      // Windows'ta beyaz ekran bırakıyordu. Motor `path.join`'i bir URL üzerinde
+      // çağırıyor; Windows'ta ".\\file:\\C:\\…" gibi GEÇERSİZ adres üretiyor
+      // (Linux/mac'te "file:/…" çıkıyor ve Chromium kabul ettiği için arıza gizli
+      // kalmış). Düzeltme `URL` tabanlı — platformdan bağımsız. Ölü temizlikten
+      // SONRA koşar: atılacak dosyayı yamalamanın anlamı yok.
+      try {
+        await anaEkranYolu.paketiDuzelt(workingPath, { log: (s) => console.log(s) });
+      } catch (k20Error) {
+        console.warn('⚠️ K20 ana ekran yolu yaması başarısız (paketleme devam ediyor):', k20Error.message);
+      }
+
       // İLK SAYFA GELDİĞİ GİBİ AÇILSIN (2026-09-20, Nadir) — KAPI VARSAYILAN AÇIK
       // (`EMPP_ILK_SAYFA=0` kapatır). Tek-kitap açılış ekranı kitabı ancak güncelleme
       // sorgusunun sonucu gelince açıyor; o sorgunun `.catch`'i ve zaman aşımı yok.
@@ -674,26 +703,18 @@ MimeType=application/x-electron;
         }
       }
 
-      // OKUYUCU KABUĞU "ESKİYSE DEĞİŞTİR" (Faz 3c, 2026-09-24, Nadir: "Web-Z kabuğu pakete
-      // girsin") — KAPI VARSAYILAN AÇIK (`EMPP_OKUYUCU_KABUGU=0` kapatır). Sağ alttaki sürüm
-      // rozeti kabuktan gelir (bookN `*.main.js` i8). Kanonik: `~/.empp-agent/kabuk/`
-      // (`scripts/kabuk-kanonik-doldur.js`, Web-Z/YDS WebZKitap). Kitap içeriğine dokunmaz;
-      // index.html şablonu korunur, yalnız main referansı yeniden yazılır. Kanonik yoksa
-      // hiçbir şey değişmez. MOTORDAN ÖNCE koşar (sıra: kabuk → motor → manifest).
-      let kabukDamgasiSonucu = null;
-      if (okuyucuKabugu.acikMi()) {
-        try {
-          kabukDamgasiSonucu = await okuyucuKabugu.okuyucuKabuguDegistir(workingPath, undefined, {
-            log: (s) => console.log(s),
-          });
-          console.log(`📖 Okuyucu kabuğu: ${kabukDamgasiSonucu.durum}, ${kabukDamgasiSonucu.degisen} kitap `
-            + `değişti (kanonik ${kabukDamgasiSonucu.kanonikSurum || 'YOK'})`);
-        } catch (kabukError) {
-          console.warn('⚠️ Okuyucu kabuğu değiştirme başarısız (paketleme devam ediyor):', kabukError.message);
-          kabukDamgasiSonucu = { durum: 'hata', hata: kabukError.message };
-        }
-        // FAIL-CLOSED (2026-10-04): üretim işinde kanonik yoksa sessiz eski format YOK.
-        kanonikSart.sartiUygula('kabuk', kabukDamgasiSonucu, jobInfo);
+      // MENÜ KİMLİK EŞLEMESİ (2026-10-05, 45449 yeşil bulut) — KAPI VARSAYILAN AÇIK
+      // (`EMPP_MENU_ID_ESLE=0` kapatır). Kabuk çevrimiçi açılışta menüyü panelden kurar ve
+      // indirilmiş kitabın sürümünü yerel menüde Group/Tab/cover kimliğiyle arar; paket
+      // menüsünün Group/Tab kimlikleri (setId, 1..n) panelinkiyle (683, 4294…) tutmaz →
+      // version=1 → sürümü >1 olan her kitap "güncelleme var". Yama `h()`'ye kapak kimliğiyle
+      // ağaç geneli yedek arama ekler. KABUK KANONİĞE ÇEVRİLDİKTEN SONRA koşar (yamalanan
+      // main.js son hâli olsun). Fail-closed DEĞİL: kalıp tutmazsa uyarı + paket.json kaydı.
+      let menuKimlikSonucu = null;
+      if (menuKimlikEsle.acikMi()) {
+        menuKimlikSonucu = await menuKimlikEsle.kabukSonrasiAdim(workingPath, {
+          log: (s) => console.log(s), uyar: (s) => console.warn(s),
+        });
       }
 
       // MOTOR "ESKİYSE DEĞİŞTİR" (Faz 3b, 2026-09-24, Nadir: "bizim derlediğimiz motor
@@ -746,6 +767,10 @@ MimeType=application/x-electron;
             const pjYol = path.join(workingPath, 'paket.json');
             const pj = JSON.parse(await fs.readFile(pjYol, 'utf8'));
             await fs.writeFile(pjYol, `${JSON.stringify({ ...pj, kabukSurumu: kabukDamgasiSonucu }, null, 2)}\n`);
+          }
+          // Manifest paket.json'u baştan yazar — menü kimlik eşleme kaydı da geri konur.
+          if (menuKimlikSonucu) {
+            await menuKimlikEsle.paketJsonaYaz(workingPath, menuKimlikSonucu.durum);
           }
           // Sunucuya raporlanacak kanonik sürüm özeti (agent/kanonik-surum.js) — poll sonucuyla
           // runner'a taşınır; okunamazsa hepsi null (asla fırlatmaz).

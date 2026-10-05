@@ -374,6 +374,19 @@ paket exe bileşimini taşır; merdivenle aynı kural).
 **Kapsam dışı:** Windows passthrough (İmpark exe olduğu gibi — ayrı iş), kurulu taban (G),
 Android G ekleme (A/B kararı), yayıncı tasarımlı (`assets2` düğmeli) ve K17 menü biçimleri.
 
+## Panel menü hizalama (kök menülü tek-motor set) — 2026-10-05
+
+**Kapsam kararı:** `src/agent/panel-menu-hizala.js` MANUEL build'de ÇALIŞMAZ (sözleşme M1; runner log
+satırı yazar); r2-al ve arşiv/r2-kur'da ÇALIŞIR — bayat R2 build'lerin tek düzeltme yolu, bilinçli.
+Sıra: merdiven → set eki → taban kapsama → panel hizalama → imKeys → menü başlığı. Panel tabanı
+paketten (app.config.js `baseEndpointUrl` > menü kapak `URL` alanı; `EMPP_PANEL_PAKET_URL` üstüne
+yazar). Panel ölçülür ve menü panele hizalı biterse (UYGULANDI ya da zaten hizalı) yazma kapısı
+PANEL listesini görür (`listeKaynagi: 'panel'`; claim listesi bayat/boş olabilir, Web-Z listesine
+dokunulmaz); fark (`listeFazla`, `panelYeni`) log + kanıt + `job.setListesiPanelFarki`. Panel boş /
+uç yok (4xx, JSON-dışı) / tutarsız (ortak kimlik yok, eski kapakların >%50'si çıkacak) → menüye
+dokunulmaz, claim listesi aynen. **M1 istisnası:** menü başlığı (`<main label>` = yayınevi adı) manuel
+build'de de yazılır (marka, içerik değil; imKeys emsali).
+
 ## ProBook ölçümleri — G yayınının etki alanı ve izole test yöntemi (araştırma notu 28.09, Silinecekler'de)
 
 **UYARI — G yayını TÜM müşterileri etkiler:** G (kabuk/motor öz-güncellemesi) üretim manifestini ezer;

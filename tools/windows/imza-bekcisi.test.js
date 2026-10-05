@@ -65,13 +65,13 @@ function ortam({ yuva = false, ping = false, sudo = false, diskYuvaKurar = true 
     },
     ...ek,
   });
-  const ekle = async (bookId, { yasMs = 60000, kanonikSurum = null } = {}) => {
+  const ekle = async (bookId, { yasMs = 60000, kanonikSurum = null, icerikUyeleri = null } = {}) => {
     const w = tmp('w');
     const govde = Buffer.concat([Buffer.from('MZ'), crypto.randomBytes(3000)]);
     const exe = path.join(w, `runner-${bookId}-T-2.1.1-Setup.exe`);
     fs.writeFileSync(exe, govde);
     const h = await H.hazirKoy({
-      exe, job: { bookId, platform: 'windows', bookTitle: `Kitap ${bookId}`, surum: '2.1.1', ...(kanonikSurum ? { kanonikSurum } : {}) }, surum: '2.1.1',
+      exe, job: { bookId, platform: 'windows', bookTitle: `Kitap ${bookId}`, surum: '2.1.1', ...(kanonikSurum ? { kanonikSurum } : {}), ...(icerikUyeleri ? { icerikUyeleri } : {}) }, surum: '2.1.1',
       kanit: { imzasiz: { md5: md5(govde), sha256: 's', boyut: govde.length } }, cfg, kabul: { kapi: 'kasa' },
     });
     await H.manifestGuncelle(h.dizin, { zaman: new Date(simdi - yasMs).toISOString() });
@@ -148,6 +148,18 @@ test('hazır kayıttaki kanonik damga /result işine kanonikSurum olarak geçer 
   const z = await B.tur(o.bagimlilik());
   assert.equal(z.yayinlanan, 1);
   assert.deepEqual(o.cagri.yayin[0].job.kanonikSurum, kanonikSurum);
+});
+
+test('hazır kayıttaki icerikUyeleri bekçinin /result işine geçer; yoksa alan yok (05.10)', async () => {
+  const o = ortam({ ping: true });
+  const icerikUyeleri = [{ id: '31456', vs: 10, kitap: 'book1' }, { id: '31457', vs: 0, kitap: 'book2' }];
+  await o.ekle('104', { icerikUyeleri });
+  await o.ekle('105');
+  const z = await B.tur(o.bagimlilik());
+  assert.equal(z.yayinlanan, 2);
+  const iş = (id) => o.cagri.yayin.find((y) => y.job.bookId === id).job;
+  assert.deepEqual(iş('104').icerikUyeleri, icerikUyeleri);
+  assert.equal('icerikUyeleri' in iş('105'), false);
 });
 
 test('VPN kapalı ama parolasız sudo VAR → betik VPN + disk için koşar', async () => {

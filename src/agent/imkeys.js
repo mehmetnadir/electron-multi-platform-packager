@@ -409,6 +409,58 @@ async function imKeysHazirla({ zipYolu, paketId, mod = 'yaz', calisma, anahtarli
   return rapor;
 }
 
+/** XML öznitelik değeri kaçışı (menü `label`'ı çift tırnaklı). */
+function xmlAttrKacis(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Menü KÖKÜNÜN (`<main label>`) başlığını yayınevi adına çevirir — SAF (dosya/ağ yok).
+ * Okuyucu (45449 `…main.js`): kapak sayısı 1 değilse `document.title = main.label` (set), tek
+ * kapakta kapağın adı; Electron `BrowserWindow.title` bunu ezer → setlerde pencere başlığı
+ * İmpark ham menüsündeki "İmpark Eğitim" idi. Yalnız `<main>` etiketinin `label`'ı değişir
+ * (Group/Tab/cover etiketleri ve key/activation/kapaklar aynı kalır); biçim korunur.
+ * @param {Buffer|string} veri ham ImWin32 baytları
+ * @param {string} yayineviAdi boşsa dokunulmaz
+ * @returns {{degisti: boolean, veri: Buffer|string, eski: string|null}}
+ */
+function menuBasligiYaz(veri, yayineviAdi) {
+  const ad = String(yayineviAdi == null ? '' : yayineviAdi).trim();
+  const degismez = { degisti: false, veri, eski: null };
+  if (!ad) return degismez;
+  let xml = null;
+  try { xml = ig.menuCoz(veri); } catch (_) { xml = null; }
+  if (!xml) return degismez;
+  const ana = (xml.match(/<main\b[^>]*>/) || [''])[0];
+  const eski = attr(ana, 'label');
+  if (!ana || eski == null) return degismez;
+  const deger = xmlAttrKacis(ad);
+  if (eski === deger) return { degisti: false, veri, eski };
+  const yeni = xml.replace(ana, () => attrYaz(ana, 'label', deger)); // $ deseni yorumlanmasın
+  // Deterministik dolgu (aynı girdi → aynı ImWin32.dll baytı; set-uyelik-ek ile aynı üreteç).
+  const rnd = require('./set-uyelik-ek').tohumluRastgele(`menu-basligi:${yeni}`);
+  return { degisti: true, veri: Buffer.from(ig.menuKodla(yeni, rnd, ig.menuBicimi(veri) || undefined), 'utf8'), eski };
+}
+
+/**
+ * Build'deki TÜM menülerin (kök / bookN / sarmalayıcı) kök başlığını yayınevi adına çevirir.
+ * imKeys adımından SONRA çağrılır (onun yazdığı menüyü okur). Yayınevi adı yoksa no-op.
+ * @returns {Promise<{degisen: string[]}>}
+ */
+async function menuBasligiAdimi({ zipYolu, yayineviAdi, calisma, log = () => {}, yaz = zipeYaz, okuyucu = null }) {
+  if (!String(yayineviAdi == null ? '' : yayineviAdi).trim()) return { degisen: [] };
+  const z = okuyucu || zipOkuyucu(zipYolu);
+  const dosyalar = [];
+  for (const [ad, g] of z.dizin) {
+    if (!MENU_DESENI.test(ad) || g.dizin || artikMi(ad)) continue;
+    const s = menuBasligiYaz(z.oku(g), yayineviAdi);
+    if (s.degisti) dosyalar.push({ yol: ad, veri: s.veri });
+  }
+  if (dosyalar.length) await yaz(zipYolu, calisma, dosyalar);
+  log(`${ISARET} menü başlığı: ${dosyalar.length} menü yayınevi adına çevrildi`);
+  return { degisen: dosyalar.map((d) => d.yol) };
+}
+
 function redSonucu(mesaj) {
   return { gecti: false, nedenler: [`${NEDEN_KODU}: ${mesaj}`], nedenKodlari: [NEDEN_KODU] };
 }
@@ -488,5 +540,5 @@ module.exports = {
   ISARET, NEDEN_KODU, DOSYA_ADI, HAS_KEY_VARSAYILAN, ImKeysHatasi,
   kodlariNormallestir, imKeysBicimle, imKeysCoz, cevrimdisiKarar, kapaklariBul, zipOkuyucu,
   hasZKitapKeyIstemcisi, kodCekiciOlustur, cevapAyristir, zipeYaz,
-  imKeysHazirla, imKeysKapisi, redSonucu, kapiSar, imKeysAdimi, varsayilanBagimliliklar,
+  imKeysHazirla, menuBasligiYaz, menuBasligiAdimi, imKeysKapisi, redSonucu, kapiSar, imKeysAdimi, varsayilanBagimliliklar,
 };

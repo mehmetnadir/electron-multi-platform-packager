@@ -379,3 +379,73 @@ test('set düzeyi, mod eksikse (r2-al): imKeys hepsi dolu olsa da kapalı bayrak
   assert.match(menuAna(zip, 'classlibraries/ImWin32.dll'), /activation="true"/);
   assert.equal(K.imKeysKapisi({ zipYolu: zip, rapor }).gecti, true);
 });
+
+// --- Menü başlığı (45449: pencere başlığı "İmpark Eğitim" → yayınevi adı) ---
+const BASLIK_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+  + '<main activation="true" key="" label="İmpark Eğitim" bookUpdate="true" ID="45449">'
+  + '<Group ID="45449" label="Impact Grade 12"><Tab ID="1" label="Books">'
+  + '<cover ID="31456" label="İmpark Eğitim" xmlSource="assets/31456/data/BookContent.xml" key="" />'
+  + '</Tab></Group></main>';
+const menuAnaEtiket = (veri) => ig.menuCoz(veri).match(/<main\b[^>]*>/)[0];
+
+test('menuBasligiYaz: yalnız main.label değişir; geri kalan XML aynı, biçim korunur, gidiş-dönüş', () => {
+  const ham = ig.menuKodla(BASLIK_XML, Math.random, { bas: 27, ara: 4, son: 27 });
+  const s = K.menuBasligiYaz(ham, 'YDS Publishing');
+  assert.equal(s.degisti, true);
+  assert.equal(s.eski, 'İmpark Eğitim');
+  const yeni = ig.menuCoz(s.veri);
+  assert.equal(yeni, BASLIK_XML.replace('<main activation="true" key="" label="İmpark Eğitim"',
+    '<main activation="true" key="" label="YDS Publishing"'), 'yalnız main etiketi; cover label\'ı aynı');
+  assert.deepEqual(ig.menuBicimi(s.veri), { bas: 27, ara: 4, son: 27 });
+  assert.match(yeni, /<cover ID="31456" label="İmpark Eğitim"/);
+  assert.equal(K.menuBasligiYaz(s.veri, 'YDS Publishing').degisti, false, 'ikinci kez: değişmez (idempotent)');
+});
+
+test('menuBasligiYaz: Türkçe ad + XML kaçışı; boş ad / label\'sız / çözülemez dosyaya DOKUNMAZ', () => {
+  const ham = ig.menuKodla(BASLIK_XML);
+  const s = K.menuBasligiYaz(ham, 'Çağrı "Öğretim" & Yayınları');
+  assert.equal(ig.menuCoz(s.veri).match(/label="([^"]*)"/)[1], 'Çağrı &quot;Öğretim&quot; &amp; Yayınları');
+  for (const bos of ['', '  ', null, undefined]) {
+    const r = K.menuBasligiYaz(ham, bos);
+    assert.equal(r.degisti, false);
+    assert.equal(r.veri, ham, 'aynı bayt nesnesi');
+  }
+  const etiketsiz = ig.menuKodla('<?xml version="1.0"?><main activation="true" ID="1"><Group ID="1"/></main>');
+  assert.equal(K.menuBasligiYaz(etiketsiz, 'YDS').degisti, false);
+  const cop = Buffer.from('menü değil, rastgele baytlar');
+  assert.equal(K.menuBasligiYaz(cop, 'YDS').degisti, false);
+});
+
+test('menuBasligiAdimi: kök + bookN menüleri çevrilir, diğer dosyalar bayt bayt aynı; ad yoksa zip aynı', async () => {
+  const zip = zipKur({
+    'classlibraries/ImWin32.dll': ig.menuKodla(BASLIK_XML),
+    'book2/classlibraries/ImWin32.dll': ig.menuKodla(BASLIK_XML.replace('45449', '45450')),
+    'index.html': '<html/>',
+  });
+  const once = { idx: zipOku(zip, 'index.html') };
+  const bos = await K.menuBasligiAdimi({ zipYolu: zip, yayineviAdi: '', calisma: tmp('w') });
+  assert.deepEqual(bos.degisen, []);
+  const r = await K.menuBasligiAdimi({ zipYolu: zip, yayineviAdi: 'YDS Publishing', calisma: tmp('w') });
+  assert.deepEqual(r.degisen.sort(), ['book2/classlibraries/ImWin32.dll', 'classlibraries/ImWin32.dll']);
+  for (const ad of r.degisen) {
+    assert.match(menuAnaEtiket(zipOku(zip, ad)), /label="YDS Publishing"/);
+    assert.match(menuAnaEtiket(zipOku(zip, ad)), /activation="true" key=""/);
+  }
+  assert.deepEqual(zipOku(zip, 'index.html'), once.idx);
+  assert.deepEqual((await K.menuBasligiAdimi({ zipYolu: zip, yayineviAdi: 'YDS Publishing', calisma: tmp('w') })).degisen, []);
+});
+
+test('menuBasligiYaz deterministik: aynı girdi → aynı ImWin32.dll baytı (Math.random yok)', () => {
+  const ham = Buffer.from(ig.menuKodla('<main label="İmpark Eğitim" ID="9"><Group/></main>'), 'utf8');
+  const a = K.menuBasligiYaz(ham, 'YDS Publishing');
+  const b = K.menuBasligiYaz(ham, 'YDS Publishing');
+  assert.equal(a.degisti, true);
+  assert.equal(Buffer.compare(a.veri, b.veri), 0);
+  assert.match(ig.menuCoz(a.veri), /<main label="YDS Publishing" ID="9">/);
+});
+
+test('menuBasligiYaz: yayınevi adındaki $ deseni yorumlanmaz ($& / $1 aynen yazılır)', () => {
+  const ham = Buffer.from(ig.menuKodla('<main label="İmpark" ID="9"><Group/></main>'), 'utf8');
+  const s = K.menuBasligiYaz(ham, 'A$&B $1 Yayın');
+  assert.match(ig.menuCoz(s.veri), /<main label="A\$&amp;B \$1 Yayın" ID="9">/);
+});
