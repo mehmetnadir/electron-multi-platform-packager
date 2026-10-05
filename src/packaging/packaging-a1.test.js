@@ -212,3 +212,65 @@ test('k1: A1 kök betiği hatayı sessiz yutmaz (console.warn)', () => {
   assert.match(A1.A1_KOK_BETIGI, /catch\(e\)\{console\.warn\(/);
   assert.doesNotMatch(A1.A1_KOK_BETIGI, /catch\(e\)\{\}/);
 });
+
+// ─── Ö4: ölü motor temizliği + sayfa ön-getirme A1'de motor sayfasından ─────────────────────────
+const oluMotor = require('./olu-motor-temizligi');
+const onGetirme = require('./sayfa-on-getirme');
+
+function a1MotorAgaci() {
+  const H = (c) => c.repeat(20);
+  const ana = `${H('a')}.main.js`; const parca = `${H('b')}.12.js`; const olu = `${H('c')}.main.js`;
+  const motor = MOTOR.replace('./bd0c1a4f650802c98ebf.main.js', ana).replace('<script src="app.config.js"></script>',
+    '<script src="app.config.js"></script><script src="polyfill.js"></script>');
+  // Kabuk kök-düzeyi bir js'e (polyfill.js) başvursun: yalnız kabuktan tohumlanırsa motor ölü sayılırdı.
+  const d = a1Agac({ kapak: A1.baslikEkle(motor), kok: KABUK.replace('</body>', '<script src="polyfill.js"></script></body>') });
+  fs.writeFileSync(path.join(d, ana), `/* ana */ import("./${parca}")`);
+  fs.writeFileSync(path.join(d, parca), '/* parça */');
+  fs.writeFileSync(path.join(d, olu), '/* eski main */');
+  fs.writeFileSync(path.join(d, 'polyfill.js'), '/* polyfill */');
+  return { d, ana, parca, olu };
+}
+
+test('Ö4 ölü motor temizliği A1: motorun hash\'li dosyaları SİLİNMEZ, gerçekten ölü olan silinir', async () => {
+  const { d, ana, parca, olu } = a1MotorAgaci();
+  const r = await oluMotor.paketiTemizle(d);
+  assert.ok(fs.existsSync(path.join(d, ana)), 'motor ana bundle kaldı');
+  assert.ok(fs.existsSync(path.join(d, parca)), 'motor parçası kaldı');
+  assert.ok(!fs.existsSync(path.join(d, olu)), 'ölü main silindi');
+  assert.equal(r.toplamDosya, 1);
+  // Kanıt: yalnız kök index (kabuk) tohumu motoru öldürürdü — eski davranışın tehlikesi.
+  const yalnizKabuk = oluMotor.kapanisHesapla([ana, parca, olu, 'polyfill.js', 'index.html'],
+    fs.readFileSync(path.join(d, 'index.html'), 'utf8'), (f) => fs.readFileSync(path.join(d, f), 'utf8'));
+  assert.ok(yalnizKabuk.olu.includes(ana), 'kabuk tek tohumken ana bundle ölü sayılıyordu');
+});
+
+test('Ö4 ölü motor temizliği A1: motor sayfası okunamıyorsa kökte temizlik YAPILMAZ', async () => {
+  const { d, olu } = a1MotorAgaci();
+  const r = await oluMotor.dizeniTemizle(d, { ekSayfalar: ['kapak/yok.html'] });
+  assert.match(r.atlandi, /^ek-sayfa-okunamadi/);
+  assert.ok(fs.existsSync(path.join(d, olu)));
+});
+
+test('Ö4 ön-getirme A1: betik kapak/index.html\'e (kapak süzgeciyle) girer, kök kabuğa GİRMEZ', async () => {
+  const d = a1Agac();
+  for (const id of ['25861', '34333']) {
+    fs.mkdirSync(path.join(d, `assets/${id}/pages`), { recursive: true });
+    for (const n of [1, 2]) fs.writeFileSync(path.join(d, `assets/${id}/pages/${n}.png`), 'p');
+  }
+  const r = await onGetirme.paketeUygula(d);
+  assert.deepEqual(r.map((x) => [x.kitap, x.sayfa, x.sebep]), [['kapak', 4, 'enjekte-edildi']]);
+  const kapak = oku(d, 'kapak/index.html');
+  assert.ok(kapak.includes(onGetirme.ISARET));
+  assert.ok(kapak.includes("SAYFALAR.filter(function(y){ return y.indexOf('assets/' + KAPAK + '/') === 0; })"));
+  assert.ok(!oku(d, 'index.html').includes(onGetirme.ISARET), 'kabuk ısıtma yapmaz');
+  assert.deepEqual(A1.kapakDenetle(kapak), [], 'A1 başlığı bozulmadı');
+  // Süzgeç çalışma anında: ?kapak=34333 → yalnız o kitabın sayfaları.
+  const betik = /<script>\/\*EMPP_ON_GETIRME\*\/([\s\S]*?)<\/script>/.exec(kapak)[1];
+  const okunan = [];
+  const sahteWin = { require: () => ({ readFile: (y, cb) => { okunan.push(y); cb(null, 'x'); }, join: (...a) => a.join('/') }) };
+  new Function('window', 'location', 'document', 'setTimeout', '__dirname', betik)(
+    sahteWin, { search: '?kapak=034333&defaultPageNo=3' }, { visibilityState: 'visible', readyState: 'complete', addEventListener() {} },
+    (f) => f(), '/kok');
+  assert.ok(okunan.length > 0, 'ısıtma başladı');
+  assert.ok(okunan.every((y) => y.includes('assets/34333/')), okunan.join(','));
+});

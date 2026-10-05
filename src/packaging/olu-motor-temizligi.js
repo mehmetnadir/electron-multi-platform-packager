@@ -23,6 +23,7 @@
 
 const path = require('path');
 const fs = require('fs-extra');
+const { a1DuzeniMi, A1_MOTOR_SAYFASI } = require('./a1-duzen');
 
 const HASH_RE = /[0-9a-f]{20}/g;
 const ADAY_RE = /^[0-9a-f]{20}\./;
@@ -94,11 +95,23 @@ function kapanisHesapla(dizinListesi, htmlIcerik, icerikOku) {
   return { ulasilan, olu: olu.sort(), sebep: 'hesaplandi' };
 }
 
-/** Bir kitap dizinini temizler. */
-async function dizeniTemizle(dizin) {
+/**
+ * Bir kitap dizinini temizler.
+ * @param {string} dizin
+ * @param {{ekSayfalar?: string[]}} [o] tohum taşıyan EK sayfalar (dizine göreli). A1 (tek motorlu set,
+ *   05.10): kök index.html sf425 kabuğudur, motor sayfası `kapak/index.html` (`<base href="../">` ile
+ *   başvuruları kök-göreli). Tohumlar İKİ sayfadan birleşir; yalnız kabuktan tohumlanırsa motorun
+ *   hash'li dosyaları "ulaşılamaz" sayılabilirdi (inceleme Ö4).
+ */
+async function dizeniTemizle(dizin, o = {}) {
   const indexYolu = path.join(dizin, 'index.html');
   if (!await fs.pathExists(indexYolu)) return { atlandi: 'index-yok', silinen: 0, bayt: 0 };
-  const html = await fs.readFile(indexYolu, 'utf8');
+  let html = await fs.readFile(indexYolu, 'utf8');
+  for (const ek of o.ekSayfalar || []) {
+    const yol = path.join(dizin, ...ek.split('/'));
+    // Ek sayfa beklenip okunamıyorsa temizlik YAPILMAZ (eksik tohum = yanlış silme riski).
+    try { html += '\n' + await fs.readFile(yol, 'utf8'); } catch (e) { return { atlandi: `ek-sayfa-okunamadi:${ek}`, silinen: 0, bayt: 0 }; }
+  }
 
   const girdiler = await fs.readdir(dizin, { withFileTypes: true });
   const dosyalar = girdiler.filter((d) => d.isFile()).map((d) => d.name);
@@ -129,8 +142,9 @@ async function paketiTemizle(kokDizin, opts = {}) {
     if (/^book\d+$/i.test(ad) && (await fs.stat(p)).isDirectory()) adaylar.push(p);
   }
   let toplamDosya = 0; let toplamBayt = 0; const ayrinti = [];
+  const a1 = a1DuzeniMi(kokDizin);
   for (const d of adaylar) {
-    const r = await dizeniTemizle(d);
+    const r = await dizeniTemizle(d, d === kokDizin && a1 ? { ekSayfalar: [A1_MOTOR_SAYFASI] } : {});
     ayrinti.push({ dizin: path.relative(kokDizin, d) || '.', ...r });
     toplamDosya += r.silinen; toplamBayt += r.bayt;
   }
