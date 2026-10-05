@@ -2637,43 +2637,50 @@ async function processJob(auth, job) {
       }
     };
     await setEkiUygula();
+    // Taban üreteçle yeniden kurulur; merdiven + set eki yeni build'e yeniden uygulanır.
+    // Ertelenecek durumda r2Ertele sonucunu döner (çağıran aynen döndürür), yoksa null.
+    const tabaniUretecleKur = async (uretecNeden) => {
+      try {
+        await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job, uretecNeden });
+      } catch (e) {
+        if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: true });
+        throw e;
+      }
+      r2OncekiBoyut = null;
+      r2OncekiEnvanter = null;
+      if (kaynak.merdiven && merdivenAcik()) {
+        merdivenSonuc = await kaynakAdim.merdiven({
+          zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
+        });
+      }
+      await setEkiUygula();
+      return null;
+    };
     // TABAN KAPSAMA (03.10, 45482 Shall We 8 Set): set eki SONRASI liste kimliklerinden build'de hâlâ
     // olmayan varsa (set eki ekleyemedi) taban atlanır, üreteç koşar; merdiven + set eki yeni build'e
     // yeniden uygulanır. Set eki eksiği tamamladıysa taban korunur. Üreteç kapalıysa dokunulmaz.
+    let tabanIstisnasi = null; // panel hizalamasının çıkardığı sanılan kimlikler (aşağıda doğrulanır)
     if (kaynak.tur === 'r2-kur' && !job.uretecOzeti && uretecKaynak.uretecAcik()) {
       const eksik = uretecKaynak.tabanKitapEksik(zipPath, (setEk.setListesiCoz({ job }) || {}).ham || null);
       // Panel hizalaması panelde olmayan üyeyi (claim listesinde bayat kalan) menüden çıkarır ama
       // içeriğini silmez: içeriği kökte duran kimlik "eksik" sayılmaz (üreteç boşuna koşmaz;
       // ölçüm 05.10 — 45448/45449/45469/45472 claim'i 61633/61635 taşıyor, panel 73010/73147).
+      // İSTİSNA ŞARTLI: panel adımı bu koşuda menüyü panele hizalı DÖNDÜRMEZSE üreteç yoluna düşülür.
       if (eksik.atla) {
         const duran = eksik.eksik.filter((id) => panelMenu.kokIcerikVarMi(zipPath, id));
         if (duran.length && duran.length === eksik.eksik.length) {
           log(`${panelMenu.ISARET} taban kapsama: ${duran.join(', ')} menüde yok ama içeriği `
-            + 'tabanda duruyor (panel hizalaması çıkarmış) — taban korunur');
+            + 'tabanda duruyor (panel hizalaması çıkarmış) — taban korunur, panel sonrası doğrulanır');
           eksik.atla = false;
+          tabanIstisnasi = duran;
         }
       }
       if (eksik.atla) {
-        try {
-          await r2KurTabanHazirla({ bookId: job.bookId, kaynak, zipPath, work, job,
-            uretecNeden: `taban ATLANDI — set eki sonrası eksik: ${eksik.eksik.join(', ')} (${eksik.sebep})` });
-        } catch (e) {
-          if (e && e.gecici) return r2Ertele(auth, job, e.message, { kilitBirak: true });
-          throw e;
-        }
-        r2OncekiBoyut = null;
-        r2OncekiEnvanter = null;
-        if (kaynak.merdiven && merdivenAcik()) {
-          merdivenSonuc = await kaynakAdim.merdiven({
-            zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
-          });
-        }
-        await setEkiUygula();
+        const d = await tabaniUretecleKur(
+          `taban ATLANDI — set eki sonrası eksik: ${eksik.eksik.join(', ')} (${eksik.sebep})`);
+        if (d) return d;
       }
     }
-    // İçerik sürümü kanıtı (merdiven + set eki): tamamla `kitaplar[].vs` ve `/result` icerikSurumleri.
-    const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
-    job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
 
     // PANEL MENÜ HİZALAMA (05.10, panel-menu-hizala.js): kök menülü tek-motor sette menü panelin
     // GetPackageBooks listesine (Group/Tab/üye/sıra) hizalanır, eksik üye İmpark'tan eklenir —
@@ -2687,8 +2694,11 @@ async function processJob(auth, job) {
         + '(olduğu gibi kullanılır, sözleşme M1)');
     }
     // Yazma kapısının set listesi: varsayılan claim listesi; panel hizalaması panelinkini koyar.
-    let kapiSetListesi = (setEk.setListesiCoz({ job }) || {}).ham || null;
-    if (kaynak.tur !== 'manuel') {
+    let kapiSetListesi = null;
+    const panelUygula = async () => {
+      kapiSetListesi = (setEk.setListesiCoz({ job }) || {}).ham || null;
+      delete job.setListesiPanelFarki;
+      if (kaynak.tur === 'manuel') return { pm: null };
       try {
         const pm = await kaynakAdim.panelMenuHizala({
           zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
@@ -2700,13 +2710,30 @@ async function processJob(auth, job) {
           kapiSetListesi = pm.panelSetListesi;
           job.setListesiPanelFarki = { ...pm.setListesiPanelFarki, listeKaynagi: 'panel' };
         }
+        return { pm };
       } catch (e) {
         if (e && e.gecici) {
-          return r2Ertele(auth, job, e.message, { kilitBirak: kaynak.tur === 'r2-kur' });
+          return { ertele: await r2Ertele(auth, job, e.message, { kilitBirak: kaynak.tur === 'r2-kur' }) };
         }
         throw e;
       }
+    };
+    let panelSonuc = await panelUygula();
+    if (panelSonuc.ertele) return panelSonuc.ertele;
+    // Taban kapsama istisnası yalnız panel ölçülüp menü panele HİZALI döndüyse geçerlidir; yoksa
+    // (panel boş / uç yok / tutarsız) kimlik gerçekten eksiktir → üreteç yolu, panel adımı yeniden.
+    if (tabanIstisnasi && !(panelSonuc.pm && panelSonuc.pm.hizali)) {
+      log(`${panelMenu.ISARET} taban kapsama istisnası GERİ ALINDI: panel hizalı dönmedi — `
+        + `${tabanIstisnasi.join(', ')} gerçekten eksik, üreteç yoluna düşülüyor`);
+      const d = await tabaniUretecleKur(`taban ATLANDI — set eki sonrası eksik: ${tabanIstisnasi.join(', ')}`
+        + ' (panel hizalamadı)');
+      if (d) return d;
+      panelSonuc = await panelUygula();
+      if (panelSonuc.ertele) return panelSonuc.ertele;
     }
+    // İçerik sürümü kanıtı (merdiven + set eki): tamamla `kitaplar[].vs` ve `/result` icerikSurumleri.
+    const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
+    job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
 
     // ÇEVRİMDIŞI AKTİVASYON (imKeys.dll, güvenlik 02.10 — imkeys.js): okuyucu imKeys.dll'i boş
     // bulup çevrimdışıysa kitabı SABİT 123456 ile kendisi aktive ediyor; İmpark build'lerinde dosya

@@ -516,7 +516,7 @@ test('runner sırası: merdiven → set eki → taban kapsama → panel hizalama
   ].map(yer);
   assert.ok(sira.every((v, i) => v > 0 && (i === 0 || v > sira[i - 1])), sira.join(' '));
   assert.match(s2, /panelMenuHizala: \(o\) => panelMenu\.panelMenuHizala\(/);
-  assert.match(s2, /if \(kaynak\.tur !== 'manuel'\) \{\n\s+try \{\n\s+const pm = await kaynakAdim\.panelMenuHizala/);
+  assert.match(s2, /if \(kaynak\.tur === 'manuel'\) return \{ pm: null \};\n\s+try \{\n\s+const pm = await kaynakAdim\.panelMenuHizala/);
   assert.match(s2, /setListesi: kapiSetListesi,/);
 });
 
@@ -636,4 +636,33 @@ test('kokIcerikVarMi: panel hizalamasının çıkardığı üyenin içeriği kö
   await P.panelMenuHizala({ ...o.ortak });
   assert.equal(P.kokIcerikVarMi(o.zip, '61633'), true);
   assert.equal(P.kokIcerikVarMi(o.zip, '12345'), false);
+});
+
+test('ekleme tavanı: yeni üye sayısı max(3, eski × 0,5)\'i aşarsa TUTARSIZ — dokunulmaz', async () => {
+  const j = JSON.parse(PANEL_GOVDE);
+  const ek = Array.from({ length: 14 }, (_, i) => ({ ...j.Books[0], Id: 80000 + i, FixName: String(80000 + i) }));
+  const o = ortam();
+  const md = md5(fs.readFileSync(o.zip));
+  const uyari = [];
+  const r = await P.panelMenuHizala({
+    ...o.ortak, warn: (x) => uyari.push(x),
+    panelGetir: async () => ({ status: 200, govde: JSON.stringify({ ...j, Books: j.Books.concat(ek) }) }),
+  });
+  assert.equal(P.eklemeTavani(30), 15);
+  assert.equal(P.eklemeTavani(1), 3);
+  assert.match(r.sonuc, /16 yeni üye eklenecekti \(tavan 15; eski 30 kapak\)/);
+  assert.equal(r.durum, 'TUTARSIZ');
+  assert.equal(r.hizali, undefined, 'panel listesi kapıya gitmez');
+  assert.equal(o.sayac.teklif.length, 0);
+  assert.equal(md5(fs.readFileSync(o.zip)), md);
+});
+
+test('ekleme tavanı: claim listesine göre panel çok yeni üye taşıyorsa UYARI (hizalama yine uygulanır)', async () => {
+  const o = ortam();
+  const uyari = [];
+  const claim = JSON.parse(PANEL_GOVDE).Books.slice(0, 10).map((b) => `${b.Id} | ${b.Adi}`).join('\n');
+  const r = await P.panelMenuHizala({ ...o.ortak, claimListesi: claim, warn: (x) => uyari.push(x) });
+  assert.match(r.sonuc, /^UYGULANDI/);
+  assert.ok(uyari.some((x) => /UYARI: panel claim listesine göre 20 yeni üye taşıyor \(tavan 15\)/.test(x)),
+    uyari.join('|'));
 });

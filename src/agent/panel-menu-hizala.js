@@ -80,6 +80,12 @@ const DURUM = Object.freeze({
 const PANEL_GOVDE_TAVAN = 5 * 1024 * 1024;
 /** Tutarlılık: eski kapakların en çok bu oranı menüden çıkarılabilir (fazlası = yanlış set). */
 const CIKARMA_TAVAN_ORANI = 0.5;
+/** Ekleme tavanı: yeni üye sayısı en çok max(EKLEME_TABAN, eski kapak × EKLEME_TAVAN_ORANI). */
+const EKLEME_TABAN = 3;
+const EKLEME_TAVAN_ORANI = 0.5;
+
+/** Bir koşuda menüye eklenebilecek en çok yeni üye sayısı. SAF. */
+const eklemeTavani = (eskiSayi) => Math.max(EKLEME_TABAN, Math.floor(eskiSayi * EKLEME_TAVAN_ORANI));
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
@@ -696,7 +702,8 @@ async function panelMenuHizala(o) {
     log(`${ISARET} ${sonuc}${rapor.kanit ? ` (kanıt ${rapor.kanit})` : ''}`);
     return rapor;
   };
-  const dokunma = async (neden) => {
+  const dokunma = async (neden, { durum = null } = {}) => {
+    if (durum) rapor.durum = durum;
     warn(`${ISARET} ${neden} — menü olduğu gibi (dokunulmadı)`);
     return bitir(`dokunulmadı: ${neden}`, { kanit: true });
   };
@@ -758,6 +765,8 @@ async function panelMenuHizala(o) {
   }
   if (panel.durum === DURUM.BOZUK) return dokunma(`panel satırı bozuk: ${panel.neden}`);
   const { books } = panel;
+  rapor.panel = books.length;
+  try { menuParcala(xml); } catch (e) { return dokunma(`menü yapısı beklenmedik: ${e.message}`); }
   // TUTARLILIK: panel listesi bu setin listesi mi? Ortak kimlik yoksa ya da eski kapakların yarıdan
   // fazlası çıkacaksa yanlış set / yanlış alan şüphesi → dokunulmaz (panel listesi kapıya gitmez).
   {
@@ -767,16 +776,31 @@ async function panelMenuHizala(o) {
     const ortak = eskiIdler.filter((id) => panelKume.has(id));
     if (eskiIdler.length && !ortak.length) {
       return dokunma(`tutarlılık: panel ile menünün ortak kimliği yok (menü ${eskiIdler.length}, `
-        + `panel ${books.length})`);
+        + `panel ${books.length})`, { durum: 'TUTARSIZ' });
     }
     const cikacak = eskiIdler.length - ortak.length;
     if (eskiIdler.length && cikacak / eskiIdler.length > CIKARMA_TAVAN_ORANI) {
       return dokunma(`tutarlılık: eski ${eskiIdler.length} kapaktan ${cikacak} tanesi çıkacaktı (> %`
-        + `${CIKARMA_TAVAN_ORANI * 100})`);
+        + `${CIKARMA_TAVAN_ORANI * 100})`, { durum: 'TUTARSIZ' });
+    }
+    // EKLEME TAVANI: tek koşuda çok sayıda yeni üye = yanlış set / panel hatası şüphesi.
+    const eklenecek = [...panelKume].filter((id) => !eskiIdler.includes(id));
+    const tavan = eklemeTavani(eskiIdler.length);
+    if (eklenecek.length > tavan) {
+      return dokunma(`tutarlılık: ${eklenecek.length} yeni üye eklenecekti (tavan ${tavan}; eski `
+        + `${eskiIdler.length} kapak)`, { durum: 'TUTARSIZ' });
     }
   }
   const fark = setListesiFarki(o.claimListesi, books);
   rapor.setListesiPanelFarki = fark;
+  if (fark.claimVar) {
+    let eskiSayi = 0;
+    try { eskiSayi = new Set(kapakSirasi(xml).map((c) => c.id)).size; } catch (_) { eskiSayi = 0; }
+    if (fark.panelYeni.length > eklemeTavani(eskiSayi)) {
+      warn(`${ISARET} UYARI: panel claim listesine göre ${fark.panelYeni.length} yeni üye taşıyor `
+        + `(tavan ${eklemeTavani(eskiSayi)}) — claim listesi çok bayat olabilir`);
+    }
+  }
   const hizaliIsaretle = () => {
     rapor.hizali = true;
     rapor.listeKaynagi = 'panel';
@@ -785,8 +809,6 @@ async function panelMenuHizala(o) {
       + (fark.claimVar ? `fazla [${fark.listeFazla.join(',') || '-'}], panel yeni `
         + `[${fark.panelYeni.join(',') || '-'}]` : 'listesi YOK'));
   };
-  rapor.panel = books.length;
-  try { menuParcala(xml); } catch (e) { return dokunma(`menü yapısı beklenmedik: ${e.message}`); }
 
   // İmKeys: eski ilk kapak doluysa ve sıra değişince ilk kapak değişirse yeni ilk kapağa kopya.
   const eskiKapaklar = kapakSirasi(xml);
@@ -981,5 +1003,5 @@ module.exports = {
   kapakSirasi, hSimule, okuyucuSurumu, eksikUyeler, menuHizala, imKeysYolu, yazmaIzinli,
   kokKorumaIhlalleri, hizalamaKapisi, resimAdi, panelMenuHizala, varsayilanBagimliliklar,
   varsayilanPanelGetir, varsayilanResimIndir, panelSetListesi, setListesiFarki, kokIcerikVarMi,
-  tabanHostu, CIKARMA_TAVAN_ORANI,
+  tabanHostu, CIKARMA_TAVAN_ORANI, eklemeTavani,
 };

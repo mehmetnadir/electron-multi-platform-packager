@@ -170,13 +170,16 @@ function panelBag({ panel = { status: 200, govde: PANEL } } = {}) {
   };
 }
 
-async function isKostur({ job, arsivKoku = tmp('bos'), dosyalar = {}, anahtarli = [], pb = panelBag() }) {
+async function isKostur({
+  job, arsivKoku = tmp('bos'), dosyalar = {}, anahtarli = [], pb = panelBag(), env = {}, uretec = null,
+}) {
   const sunucu = await sahteSunucu({ dosyalar });
   const orjAdim = { ...kaynakAdim };
   const orjBag = imKeys.varsayilanBagimliliklar;
   const orjPanel = panelMenu.varsayilanBagimliliklar;
   kaynakAdim.merdiven = async () => ({ satirlar: [], s1: [] });
   kaynakAdim.setEki = async () => ({ eklenen: [] });
+  if (uretec) kaynakAdim.uretec = uretec;
   imKeys.varsayilanBagimliliklar = () => ({
     anahtarliMi: async (id) => anahtarli.includes(String(id)),
     kodCek: async () => KODLAR,
@@ -189,6 +192,7 @@ async function isKostur({ job, arsivKoku = tmp('bos'), dosyalar = {}, anahtarli 
     EMPP_KAYNAK_YOK_DURUM: path.join(tmp('durum'), 'kaynak-yok-bildirim.json'),
     // Üreteç kapalı: taban kapsama (liste üyesi build'de yok → üreteç) bu testin konusu değil.
     EMPP_INDEX_URETECI: '0',
+    ...env,
   };
   const eskiEnv = {};
   for (const k of Object.keys(ENV)) { eskiEnv[k] = process.env[k]; process.env[k] = ENV[k]; }
@@ -353,4 +357,70 @@ test('manuel build: panel menü hizalama ÇALIŞMAZ (sözleşme M1) — panele s
   assert.match(r.loglar, /\[panel-menu\] manuel build — panel menü hizalama ATLANDI/);
   const xml = ig.menuCoz(yuklenenZip(r.kayit.uploadGovde).getEntry('classlibraries/ImWin32.dll').getData());
   assert.match(xml, /<Group ID="45480" label="Eski">/, 'menü olduğu gibi');
+});
+
+/** Sahte üreteç: verilen kimliklerle kök menülü build kurar (kapı listesi = claim listesi). */
+function sahteUretec(idler, casus) {
+  return async (a) => {
+    casus.uretec += 1;
+    fs.writeFileSync(a.zipPath, kokBuild({ idler }));
+    return {
+      rapor: {
+        kapiListesi: idler.map((id) => `${id} | Kitap ${id}`).join('\n'), duzen: 'kok', aktivasyon: false,
+        motor: { kalip: '/k/kalip/motor', dizin: 'm', kurum: '60' }, kabuk: null,
+        kitaplar: idler, linkKarti: [], atlanan: [],
+      },
+      liste: { kaynak: 'test' },
+    };
+  };
+}
+
+/** Önceki hizalı R2 build'i: menüde yalnız 111, 999'un içeriği kökte duruyor (panel çıkarmış). */
+function hizaliTaban() {
+  const z = new AdmZip(kokBuild({ idler: ['111'] }));
+  z.addFile('assets/999/data/BookContent.xml', Buffer.from('<Book kitapId="999"/>'));
+  z.addFile('assets/999/pages/1.png', Buffer.from('sayfa-999'));
+  z.addFile('assets/999/thumbs/1.jpg', Buffer.from('kapak-999'));
+  return z.toBuffer();
+}
+
+test('taban kapsama istisnası: panel hizalı dönmezse (404) GERİ ALINIR → üreteç yolu, kapı claim listesiyle geçer', async () => {
+  const casus = { uretec: 0 };
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', hizaliTaban()), env: { EMPP_INDEX_URETECI: '1' },
+    uretec: sahteUretec(['111', '999'], casus), pb: panelBag({ panel: { status: 404, govde: 'yok' } }),
+    job: () => ({ ...r2Kur(), setListesi: '111 | Kitap Bir\n999 | Eski' }),
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.equal(casus.uretec, 1, 'üreteç bir kez koştu');
+  assert.match(r.loglar, /taban kapsama: 999 menüde yok ama içeriği tabanda duruyor/);
+  assert.match(r.loglar, /taban kapsama istisnası GERİ ALINDI: panel hizalı dönmedi — 999 gerçekten eksik/);
+  const xml = ig.menuCoz(new AdmZip(Buffer.concat(r.kayit.parcalar))
+    .getEntry('classlibraries/ImWin32.dll').getData());
+  assert.match(xml, /ID="999"/, 'R2 build üreteçle kuruldu, 999 menüde');
+});
+
+test('taban kapsama istisnası: panel hizalı dönerse KORUNUR — üreteç koşmaz', async () => {
+  const casus = { uretec: 0 };
+  const r = await isKostur({
+    arsivKoku: arsivKur('45480', hizaliTaban()), env: { EMPP_INDEX_URETECI: '1' },
+    uretec: sahteUretec(['111', '999'], casus),
+    job: () => ({ ...r2Kur(), setListesi: '111 | Kitap Bir\n999 | Eski' }),
+  });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.equal(casus.uretec, 0);
+  assert.doesNotMatch(r.loglar, /GERİ ALINDI/);
+  assert.match(r.loglar, /kapı set listesi PANELDEN \(2 üye\); claim fazla \[999\], panel yeni \[222\]/);
+});
+
+test('setListesiPanelFarki: yerel hazır kaydına girer (jobOzeti), /result gövdesine girmez', () => {
+  const H = require('./windows-hazir');
+  const fark = { claimVar: true, listeFazla: ['61633'], panelYeni: ['73010'], listeKaynagi: 'panel' };
+  assert.deepEqual(H.jobOzeti({ bookId: '1', setListesiPanelFarki: fark }).setListesiPanelFarki, fark);
+  assert.equal('setListesiPanelFarki' in H.jobOzeti({ bookId: '1' }), false);
+  const kaynak = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');
+  const govde = kaynak.slice(kaynak.indexOf('async function postResultSuccess'),
+    kaynak.indexOf('async function postResultFailure'));
+  assert.ok(govde.length > 100);
+  assert.doesNotMatch(govde, /setListesiPanelFarki/);
 });
