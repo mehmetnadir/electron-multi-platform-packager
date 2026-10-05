@@ -190,6 +190,27 @@ test('sırayla, en eskiden: iki kayıt da yayınlanır, eski önce', async () =>
   assert.equal(o.cagri.ping, 0, 'yuva açıkken VPN/disk ölçülmez');
 });
 
+test('tur içinde gelen ÖNCELİKLİ kayıt (imza-oncelik.txt) sıradaki eskilerin önüne geçer (05.10 SM3)', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('401', { yasMs: 9000 });
+  await o.ekle('402', { yasMs: 8000 });
+  await o.ekle('403', { yasMs: 7000 });
+  let eklendi = false;
+  const d = o.bagimlilik();
+  const asil = d.imzaliYayinZinciri;
+  d.imzaliYayinZinciri = async (p) => {
+    if (!eklendi) {
+      eklendi = true; // ilk kayıt imzalanırken öncelikli set üretilir ve listeye yazılır
+      await o.ekle('73768', { yasMs: 0 });
+      fs.writeFileSync(H.oncelikDosyasi(o.cfg), '73768\n');
+    }
+    return asil(p);
+  };
+  const z = await B.tur(d);
+  assert.equal(z.yayinlanan, 4);
+  assert.deepEqual(o.cagri.yayin.map((y) => y.job.bookId), ['401', '73768', '402', '403']);
+});
+
 test('--yalniz: yalnız verilen kitap işlenir, diğerleri kuyrukta kalır (elle ilk tur, 04.10)', async () => {
   const o = ortam({ yuva: true });
   await o.ekle('301', { yasMs: 9000 });

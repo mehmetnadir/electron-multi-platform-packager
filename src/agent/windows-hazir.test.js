@@ -110,6 +110,20 @@ test('hazirListesi: en eskiden yeniye; alt dizinler, gizli/geçici ve manifestsi
   assert.deepEqual(l.map((x) => x.manifest.bookId), ['2', '1']);
 });
 
+test('hazirListesi: imza-oncelik.txt listesindeki kayıt (dosya sırasıyla) en eskilerin ÖNÜNE geçer', async () => {
+  const o = kur();
+  const a = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '1' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg });
+  const b = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '2' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg });
+  const c = await H.hazirKoy({ exe: o.exe, job: { ...o.job, bookId: '73768' }, surum: '2.1.1', kanit: o.kanit, cfg: o.cfg });
+  await H.manifestGuncelle(a.dizin, { zaman: '2026-10-02T08:00:00.000Z' });
+  await H.manifestGuncelle(b.dizin, { zaman: '2026-10-02T09:00:00.000Z' });
+  await H.manifestGuncelle(c.dizin, { zaman: '2026-10-02T12:00:00.000Z' });
+  assert.deepEqual((await H.hazirListesi(o.cfg)).map((x) => x.manifest.bookId), ['1', '2', '73768'], 'dosyasız: en eski önce');
+  fs.writeFileSync(H.oncelikDosyasi(o.cfg), '# Super Monsters 3\n73768\n\n2 # sonra\nabc\n');
+  assert.deepEqual(await H.oncelikOku(o.cfg), ['73768', '2']);
+  assert.deepEqual((await H.hazirListesi(o.cfg)).map((x) => x.manifest.bookId), ['73768', '2', '1']);
+});
+
 test('sonuclandir: manifest güncellenir, kayıt yayinlandi/ ya da reddedildi/ altına TAŞINIR', async () => {
   const o = kur();
   await H.hazirKoy({ exe: o.exe, job: o.job, surum: '2.51.3', kanit: o.kanit, cfg: o.cfg });

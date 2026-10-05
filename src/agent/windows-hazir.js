@@ -273,7 +273,22 @@ async function bayatKenaraAl(cfg, giris, karar) {
   return { ...s, sebep };
 }
 
-/** Bekleyenler, en eskiden yeniye. Alt dizinler, geçici ve manifestsiz dizinler sayılmaz. */
+/**
+ * Öncelik listesi (05.10, Nadir: "Super Monsters 3'ün exe'sine öncelik"): `<hazır kökünün üstü>/
+ * imza-oncelik.txt`, satır başına bir bookId (# yorum). Listedeki kayıtlar dosya sırasıyla öne
+ * alınır; gerisi en eskiden yeniye. Dosya yoksa ya da okunamazsa boş liste (davranış değişmez).
+ */
+function oncelikDosyasi(cfg) {
+  return path.join(path.dirname(cfg.winHazirKoku), 'imza-oncelik.txt');
+}
+
+async function oncelikOku(cfg) {
+  let metin = '';
+  try { metin = await fsp.readFile(oncelikDosyasi(cfg), 'utf8'); } catch (_) { return []; }
+  return metin.split(/\r?\n/).map((l) => l.replace(/#.*/, '').trim()).filter((l) => /^\d+$/.test(l));
+}
+
+/** Bekleyenler: önce öncelik listesi (dosya sırası), sonra en eskiden yeniye. Alt dizinler, geçici ve manifestsiz dizinler sayılmaz. */
 async function hazirListesi(cfg) {
   let girdiler = [];
   try { girdiler = await fsp.readdir(cfg.winHazirKoku, { withFileTypes: true }); } catch (_) { return []; }
@@ -285,7 +300,9 @@ async function hazirListesi(cfg) {
     if (!m || m.durum !== IMZA_BEKLIYOR_FAZI || !m.exe || !fs.existsSync(path.join(dizin, m.exe))) continue;
     liste.push({ dizin, manifest: m, exeYolu: path.join(dizin, m.exe), zamanMs: Date.parse(m.zaman) || 0 });
   }
-  return liste.sort((a, b) => a.zamanMs - b.zamanMs);
+  const oncelik = await oncelikOku(cfg);
+  const sira = (g) => { const i = oncelik.indexOf(String(g.manifest.bookId)); return i < 0 ? Infinity : i; };
+  return liste.sort((a, b) => (sira(a) - sira(b)) || (a.zamanMs - b.zamanMs));
 }
 
 /**
@@ -383,5 +400,5 @@ async function kayitKilidiDene(dizin) {
 module.exports = {
   kayitKilidiDene,
   MANIFEST, IMZA_BEKLIYOR_FAZI, KABUL_BEKLIYOR, KABUL_KUYRUGU_ISARETI, kabulListesi, kabulGectiIsle, ALT_DIZINLER, hazirAyarlari, hazirAnahtari, jobOzeti, bildirimKarari,
-  manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, sonuclandir, kaynakSurumuBayatMi, bayatKarari, bayatKararZamani, gecerliKanonikOku, bayatKenaraAl, bildirimDurumuOku, bildirimDurumuYaz, damga,
+  manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, oncelikOku, oncelikDosyasi, sonuclandir, kaynakSurumuBayatMi, bayatKarari, bayatKararZamani, gecerliKanonikOku, bayatKenaraAl, bildirimDurumuOku, bildirimDurumuYaz, damga,
 };

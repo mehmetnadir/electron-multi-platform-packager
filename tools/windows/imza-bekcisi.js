@@ -255,7 +255,14 @@ async function tur(d) {
     }
     ozet.yuva = yuva;
     if (yuva && !d.kuru) {
-      for (const giris of liste) {
+      // Liste her kayıttan sonra YENİDEN okunur (05.10): tur saatler sürer; bu arada gelen öncelikli
+      // kayıt (imza-oncelik.txt) ya da yeni kayıt sıradaki ilk aday olur. Bu turda işlenmiş dizin
+      // (atlandı/bayat vb.) aynı turda tekrar alınmaz.
+      const islenen = new Set();
+      for (;;) {
+        const giris = liste.find((g) => !islenen.has(g.dizin));
+        if (!giris) break;
+        islenen.add(giris.dizin);
         const r = await kaydiIsle(giris, d);
         log(`imza-bekçisi: ${path.basename(giris.dizin)} → ${r.durum}${r.sebep ? ` (${String(r.sebep).slice(0, 200)})` : ''}`);
         if (r.durum === 'yayinlandi') ozet.yayinlanan += 1;
@@ -265,6 +272,8 @@ async function tur(d) {
         } else if (r.durum === 'bayat') { ozet.bayat = (ozet.bayat || 0) + 1; }
         else if (r.durum === 'atlandi') { ozet.atlanan += 1; sebep = sebep || r.sebep; }
         else { sebep = `imza/yayın hatası: ${String(r.sebep).slice(0, 160)}`; break; }
+        liste = await H.hazirListesi(cfg);
+        if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
       }
       liste = await H.hazirListesi(cfg);
       if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
