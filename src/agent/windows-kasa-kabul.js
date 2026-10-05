@@ -205,6 +205,9 @@ function raporKarari(rapor) {
     if (kitaplar.length && gecen === kitaplar.length) return { durum: 'GECTI', sebep: ozet };
     return { durum: 'KALDI', sebep: `rapor GECTI diyor ama ${ozet}` };
   }
+  if (rapor.sonuc === 'OLCULEMEDI') { // kabul.py ölçemedi (ör. masaüstü oturumu kopuk) — paket kusuru DEĞİL
+    return { durum: 'OLCULEMEDI', sebep: rapor.sebep || 'kabul.py ölçemedi' };
+  }
   if (rapor.sonuc !== 'KALDI') return { durum: 'OLCULEMEDI', sebep: `bilinmeyen rapor sonucu "${rapor.sonuc}"` };
   if (ALTYAPI_SEBEPLERI.has(rapor.sebep)) {
     const d = rapor.indirme || {};

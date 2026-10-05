@@ -1018,5 +1018,125 @@ class KitapKodKaynagiTest(unittest.TestCase):
         self.assertNotIn("aktivasyon", r)
 
 
+EN = """ USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
+>administrator         console             1  Active      none   10/4/2026 8:00 PM
+"""
+DISC = """ USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
+ administrator                             2  Disc        1:10   10/4/2026 8:00 PM
+"""
+TR = """ KULLANICI ADI         OTURUM ADI         KIMLIK  DURUM   BOŞTA  OTURUM AÇMA
+ Administrator                             3  Bağlantı kesildi  .  4.10.2026 20:00
+"""
+TRAKT = """ KULLANICI ADI         OTURUM ADI         KIMLIK  DURUM   BOŞTA  OTURUM AÇMA
+>Administrator         console             1  Etkin       .  4.10.2026 20:00
+"""
+RDP = """ USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
+>administrator         rdp-tcp#12          4  Active      .   10/4/2026 8:00 PM
+"""
+
+
+class OturumCozTest(unittest.TestCase):
+    def test_aktif_konsol(self):
+        self.assertEqual(kabul.oturum_durumu_coz(EN, "Administrator"),
+                         {"id": 1, "oturum": "console", "durum": "aktif", "konsol": True})
+
+    def test_kopuk_bos_oturum_adi(self):
+        self.assertEqual(kabul.oturum_durumu_coz(DISC, "administrator"),
+                         {"id": 2, "oturum": None, "durum": "kopuk", "konsol": False})
+
+    def test_turkce_kopuk_ve_etkin(self):
+        self.assertEqual(kabul.oturum_durumu_coz(TR, "Administrator")["durum"], "kopuk")
+        self.assertEqual(kabul.oturum_durumu_coz(TR, "Administrator")["id"], 3)
+        d = kabul.oturum_durumu_coz(TRAKT, "Administrator")
+        self.assertEqual((d["durum"], d["konsol"]), ("aktif", True))
+
+    def test_rdp_aktif_konsol_degil(self):
+        d = kabul.oturum_durumu_coz(RDP, "Administrator")
+        self.assertEqual((d["id"], d["oturum"], d["durum"], d["konsol"]), (4, "rdp-tcp#12", "aktif", False))
+
+    def test_kullanici_yok_ve_bos_metin(self):
+        self.assertIsNone(kabul.oturum_durumu_coz(EN, "baskasi"))
+        self.assertIsNone(kabul.oturum_durumu_coz("", "x"))
+
+
+class KonsolKomutuTest(unittest.TestCase):
+    def test_komut_icerigi(self):
+        k = kabul.konsol_gorev_komutu(2)
+        self.assertEqual(k[:2], ["powershell", "-NoProfile"])
+        for parca in ("empp-konsola-bagla", "tscon.exe", "2 /dest:console", "SYSTEM",
+                      "ServiceAccount", "Highest", "-Force", "Start-ScheduledTask"):
+            self.assertIn(parca, k[-1])
+
+    def test_enjeksiyon_reddi(self):
+        for kotu in ("2; calc", "1 & x", None, 1.5, True, -1):
+            with self.assertRaises(ValueError):
+                kabul.konsol_gorev_komutu(kotu)
+
+
+def _olc(*durumlar):
+    it = iter(durumlar)
+    return lambda: next(it)
+
+KOPUK = {"id": 2, "oturum": None, "durum": "kopuk", "konsol": False}
+AKTIF = {"id": 2, "oturum": "console", "durum": "aktif", "konsol": True}
+
+
+class OturumBekcisiTest(unittest.TestCase):
+    def test_zaten_konsolda_baglanmaz(self):
+        r = {"bookId": "1"}; cagri = []
+        self.assertTrue(kabul.oturum_bekcisi(r, olc=_olc(AKTIF), bagla=cagri.append))
+        self.assertEqual(cagri, []); self.assertFalse(r["oturum"]["baglandi"])
+
+    def test_kopuk_baglanir_kabul_surer(self):
+        r = {"bookId": "1"}; cagri = []
+        ok = kabul.oturum_bekcisi(r, olc=_olc(KOPUK, AKTIF), bagla=lambda i: cagri.append(i) or True)
+        self.assertTrue(ok); self.assertEqual(cagri, [2])
+        self.assertTrue(r["oturum"]["baglandi"]); self.assertNotIn("sonuc", r)
+
+    def test_rdp_aktif_de_konsola_baglanir(self):
+        rdp = {"id": 4, "oturum": "rdp-tcp#12", "durum": "aktif", "konsol": False}
+        cagri = []
+        kabul.oturum_bekcisi({}, olc=_olc(rdp, AKTIF), bagla=lambda i: cagri.append(i) or True)
+        self.assertEqual(cagri, [4])
+
+    def test_kopuk_baglanamaz_olculemedi(self):
+        r = {"bookId": "1"}
+        self.assertFalse(kabul.oturum_bekcisi(r, olc=_olc(KOPUK, KOPUK), bagla=lambda i: False))
+        self.assertEqual(r["sonuc"], "OLCULEMEDI")
+        self.assertEqual(r["sebep"], "masaustu oturumu aktif degil (kopuk)")
+
+    def test_oturum_bulunamazsa_engellemez(self):
+        self.assertTrue(kabul.oturum_bekcisi({}, olc=_olc(None), bagla=lambda i: False))
+
+    def test_windows_disinda_atlanir(self):
+        if os.name != "nt":
+            self.assertTrue(kabul.oturum_bekcisi({}))
+
+
+class MainAkisiOturumTest(unittest.TestCase):
+    def _kos(self, olc, bagla):
+        raporlar, indirildi = [], []
+        eski = (kabul.oturum_bekcisi, kabul.indir, kabul.bitir, sys.argv)
+        gercek = kabul.oturum_bekcisi
+        try:
+            kabul.oturum_bekcisi = lambda r: gercek(r, olc=olc, bagla=bagla)
+            kabul.indir = lambda *a: indirildi.append(1) or {"durum": "HATA"}
+            kabul.bitir = raporlar.append
+            sys.argv = ["kabul.py", "11", "http://x", "Kitap"]
+            kabul.main()
+        finally:
+            kabul.oturum_bekcisi, kabul.indir, kabul.bitir, sys.argv = eski
+        return raporlar, indirildi
+
+    def test_kopuk_baglanamaz_olculemedi_indirmeden_biter(self):
+        raporlar, indirildi = self._kos(_olc(KOPUK, KOPUK), lambda i: False)
+        self.assertEqual(raporlar[0]["sonuc"], "OLCULEMEDI"); self.assertEqual(indirildi, [])
+
+    def test_kopuk_baglanir_kabul_surer(self):
+        raporlar, indirildi = self._kos(_olc(KOPUK, AKTIF), lambda i: True)
+        self.assertEqual(indirildi, [1])           # kabul akisi indirmeye gecti
+        self.assertTrue(raporlar[0]["oturum"]["baglandi"])
+
+
 if __name__ == "__main__":
     unittest.main()

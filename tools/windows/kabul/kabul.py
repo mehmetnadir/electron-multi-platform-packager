@@ -1191,10 +1191,85 @@ def normal_argv(ana, bookId, env, simdi=None):
         argv.append("--user-data-dir=" + os.path.join(KOK, f"kabul-profil-{guvenli}-{damga}"))
     return argv
 
+# --- OTURUM BEKCISI (kabulden once) -------------------------------------------------------
+# Kopuk (Disc) RDP oturumunda Chromium/Electron cizmez: Page.captureScreenshot hata verir, tuval
+# bos kalir -> paket saglam oldugu halde "ACILMADI" diye YANLIS RED (04.10: 13 YDS exe'si).
+# RDP'de AKTIF oturum (rdp-tcp#N) da yetmez: RDP penceresi kucultulunce/baglanti duraklayinca
+# cizim durur. Bu yuzden oturum her durumda fiziksel konsola (tscon /dest:console) baglanir.
+# RDP baglantisi dusar — kabul edilebilir: kasa sunucu gibi calisir, kimse RDP'de beklenmez.
+def oturum_durumu_coz(query_user_metni, kullanici):
+    """`query user` ciktisindan kullanicinin oturumunu cozer. SAF.
+    Sutunlar: USERNAME SESSIONNAME ID STATE IDLE TIME LOGON TIME. SESSIONNAME kopukta bos olur;
+    aktif satir '>' ile baslayabilir; basliklar/durum Turkce olabilir -> ID sayisal sutundan,
+    durum ID'den sonrasindan okunur. Donus: {id, oturum, durum: aktif|kopuk|bilinmiyor, konsol}."""
+    hedef = (kullanici or "").strip().casefold()
+    for satir in (query_user_metni or "").splitlines():
+        t = satir.lstrip(" >").split()
+        if len(t) < 3 or t[0].casefold() != hedef: continue
+        if t[1].isdigit(): oturum, i = None, 1
+        elif len(t) > 3 and t[2].isdigit(): oturum, i = t[1], 2
+        else: continue                                  # baslik satiri vb.
+        sid = int(t[i]); metin = " ".join(t[i + 1:]).casefold()
+        if metin.startswith(("disc", "down", "bağlantı", "baglanti")): durum = "kopuk"
+        elif metin.startswith(("active", "etkin", "aktif")): durum = "aktif"
+        else: durum = "bilinmiyor"
+        return {"id": sid, "oturum": oturum, "durum": durum,
+                "konsol": (oturum or "").casefold() == "console"}
+    return None
+
+def konsol_gorev_komutu(oturum_id):
+    """SYSTEM yetkili 'empp-konsola-bagla' gorevini kurup baslatan komut dizisi. SAF.
+    oturum_id yalniz int (bool haric) — enjeksiyon reddedilir."""
+    if not isinstance(oturum_id, int) or isinstance(oturum_id, bool) or oturum_id < 0:
+        raise ValueError("oturum_id sayi olmali")
+    ps = ("$a=New-ScheduledTaskAction -Execute 'C:\\Windows\\System32\\tscon.exe' "
+          "-Argument '%d /dest:console'; "
+          "$p=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; "
+          "Register-ScheduledTask -TaskName 'empp-konsola-bagla' -Action $a -Principal $p -Force | Out-Null; "
+          "Start-ScheduledTask -TaskName 'empp-konsola-bagla'" % oturum_id)
+    return ["powershell", "-NoProfile", "-Command", ps]
+
+def oturum_olc(kullanici=None, calistir=None):
+    calistir = calistir or (lambda a: subprocess.run(a, capture_output=True, text=True).stdout)
+    kullanici = kullanici or os.environ.get("USERNAME", "")
+    try: return oturum_durumu_coz(calistir(["query", "user"]), kullanici)
+    except Exception: return None
+
+def konsola_bagla(oturum_id, calistir=None, bekle=6):
+    """Gorevi kurar+baslatir, bekler; yeniden olcumu cagiran yapar."""
+    calistir = calistir or (lambda a: subprocess.run(a, capture_output=True, text=True))
+    try: calistir(konsol_gorev_komutu(oturum_id))
+    except Exception: return False
+    time.sleep(bekle)
+    return True
+
+def oturum_bekcisi(r, kullanici=None, olc=None, bagla=None):
+    """True: kabul surebilir. False: masaustu aktif degil -> r OLCULEMEDI olarak doldurulur.
+    Windows disinda (olc enjekte edilmedikce) atlanir."""
+    if olc is None and os.name != "nt": return True
+    olc = olc or (lambda: oturum_olc(kullanici)); bagla = bagla or konsola_bagla
+    once = olc()
+    if once is None:                                    # oturum bulunamadi: olcum yapilamaz, engelleme
+        r["oturum"] = {"once": None, "sonra": None, "baglandi": False}; return True
+    ok = once["durum"] == "aktif" and once["konsol"]
+    sonra, baglandi = once, False
+    if not ok:
+        baglandi = bool(bagla(once["id"]))
+        sonra = olc() or once
+        ok = sonra["durum"] == "aktif" and sonra["konsol"]
+    r["oturum"] = {"once": once, "sonra": sonra, "baglandi": baglandi}
+    log("OTURUM", r.get("bookId"), json.dumps(r["oturum"]))
+    if ok: return True
+    r["sonuc"] = "OLCULEMEDI"
+    r["sebep"] = "masaustu oturumu aktif degil (%s)" % sonra["durum"]
+    return False
+
 def main():
     bookId, url, baslik = sys.argv[1], sys.argv[2], sys.argv[3]
     r = {"bookId": bookId, "baslik": baslik, "basladi": time.strftime("%Y-%m-%dT%H:%M:%S")}
     exe = os.path.join(KOK, bookId + ".exe")
+
+    if not oturum_bekcisi(r): return bitir(r)
 
     r["indirme"] = indir(url, exe)
     log("INDIRME", bookId, json.dumps(r["indirme"]))

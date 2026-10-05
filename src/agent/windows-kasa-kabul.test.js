@@ -104,6 +104,8 @@ test('raporKarari: GECTI yalnız her kitap GECTI ise; indirme/aktarım ÖLÇÜLE
   assert.equal(k.durum, 'KALDI');
   assert.match(k.sebep, /1\/2 kitap GECTI — book1:thumb=0 tuval=0 sayfa=12\/40/);
   assert.equal(K.raporKarari(null).durum, 'OLCULEMEDI');
+  const o = K.raporKarari({ sonuc: 'OLCULEMEDI', sebep: 'masaustu oturumu aktif degil (kopuk)' });
+  assert.deepEqual(o, { durum: 'OLCULEMEDI', sebep: 'masaustu oturumu aktif degil (kopuk)' });
   assert.equal(K.raporKarari({ sonuc: '???' }).durum, 'OLCULEMEDI');
 });
 
