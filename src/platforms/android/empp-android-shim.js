@@ -292,10 +292,19 @@
       if (v === null) v = syncGet(relUrl(p), !encoding);
       if (v === null) throw enoent(p);
       // K9: arka planda guncellenen kitabin surumu menuye islenir.
-      if (typeof v === 'string' && /ImWin32\.dll$/i.test(String(p))) v = menuDllYamasi(v);
+      if (typeof v === 'string' && /ImWin32\.dll$/i.test(String(p))) v = kapakSuzMetin(menuDllYamasi(v));
+      // A1: kodlamasız okuma (bayt) da süzülür.
+      else if (KAPAK && imwinYoluMu(p) && v && typeof v === 'object' && typeof TextEncoder !== 'undefined') {
+        var sz = kapakSuzMetin(menuDllYamasi(metneCevir(v)));
+        v = new TextEncoder().encode(sz);
+      }
       return v;
     },
-    writeFileSync: function (p, data) { try { storage.setItem(key(p), toText(data)); } catch (e) { console.warn('[empp-android] writeFileSync', e && e.message); } },
+    writeFileSync: function (p, data) {
+      // A1: kapak kipinde ImWin32 yazması birleştirilir ya da (dar/çözülemez) ATLANIR — aynen yazılmaz.
+      if (KAPAK && imwinYoluMu(p) && kapakYaz(p, data) !== 'aynen') return;
+      try { storage.setItem(key(p), toText(data)); } catch (e) { console.warn('[empp-android] writeFileSync', e && e.message); }
+    },
     appendFileSync: function (p, data) { var cur = storage ? storage.getItem(key(p)) : null; fsMod.writeFileSync(p, (cur || '') + toText(data)); },
     writeFile: function (p, data, opts, cb) { if (typeof opts === 'function') cb = opts; fsMod.writeFileSync(p, data); if (cb) cb(null); },
     readFile: function (p, opts, cb) { if (typeof opts === 'function') { cb = opts; opts = null; } try { cb(null, fsMod.readFileSync(p, opts)); } catch (e) { cb(e); } },
@@ -684,6 +693,135 @@
     for (var i = 0; i < xml.length; i++) g.push(xml.charAt(i) + dolgu(r - 1));
     return dolgu(n) + g.join('') + dolgu(n);
   }
+  // ─── A1 KAPAK SÜZME (2026-10-05) — masaüstü fs-shim.js ile AYNI kurallar (kopya; bu dosya APK'ya
+  // tek başına girer, require edemez). Eşlik testi: `empp-android-shim-kapak.test.js` aynı vektörleri
+  // iki uygulamaya da koşturur — biri değişirse test düşer.
+  // sf425 kabuğu motoru `kapak/index.html?kapak=<ID>` ile açar: ImWin32 okuması TEK kapağa süzülür
+  // (motor `oneBook` → kapak doğrudan açılır), motorun geri yazması asıl menüye birleştirilir
+  // (anahtar set başına tek). Yazılan menü asıldan DARSA / çözülemiyorsa / asıl okunamıyorsa yazma
+  // ATLANIR (asıl yerinde kalır). Boş `key` dolu `key`'i ezmez. VFS ad alanı: bütün kapaklar
+  // `/kapak` sayfa dizinini paylaşır → tek anahtar deposu.
+  function ogeRe(ad) { return new RegExp('<' + ad + '\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/' + ad + '>)', 'g'); }
+  function kapakIdleri(s) {
+    var l = [], m, re = ogeRe('cover');
+    while ((m = re.exec(s))) { var k = /^<cover\b[^>]*?\sID="([^"]*)"/.exec(m[0]); if (k) l.push(k[1]); }
+    return l;
+  }
+  function tekil(l) { var o = []; for (var i = 0; i < l.length; i++) if (o.indexOf(l[i]) === -1) o.push(l[i]); return o; }
+  function kapakOku(search) {
+    var m = /[?&]kapak=(\d{1,12})(?=&|#|$)/.exec(String(search || ''));
+    if (!m) return null;
+    var id = m[1].replace(/^0+/, '');
+    return id ? id : null;
+  }
+  function kapakUyar(ne, e) {
+    try { console.warn('[empp-android] kapak ' + ne, (e && (e.code || e.name)) || e || ''); } catch (_) {}
+  }
+  var TUT = '\u0001';
+  function menuSuz(xml, kapak) {
+    kapak = String(kapak);
+    var tutuldu = false;
+    var out = String(xml).replace(ogeRe('Group'), function (g) {
+      if (tutuldu || kapakIdleri(g).indexOf(kapak) === -1) return '';
+      var tabTut = false;
+      var g2 = g.replace(ogeRe('Tab'), function (t) {
+        if (tabTut || kapakIdleri(t).indexOf(kapak) === -1) return '';
+        tabTut = true;
+        var cTut = false;
+        return t.replace(ogeRe('cover'), function (c) {
+          if (cTut || kapakIdleri(c)[0] !== kapak) return '';
+          cTut = true;
+          return c.replace(/^<cover/, '<cover' + TUT);
+        });
+      });
+      if (!tabTut) return '';
+      tutuldu = true;
+      return g2;
+    });
+    if (!tutuldu) return null;
+    out = out.replace(ogeRe('Tab'), function (t) { return t.indexOf(TUT) === -1 ? '' : t; });
+    out = out.replace(ogeRe('cover'), function (c) { return c.indexOf(TUT) === -1 ? '' : c; });
+    out = out.split(TUT).join('');
+    var ids = kapakIdleri(out);
+    return ids.length === 1 && ids[0] === kapak ? out : null;
+  }
+  function kumeEsit(a, b) {
+    a = tekil(a); b = tekil(b);
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) === -1) return false;
+    return true;
+  }
+  function menuBirlestir(asil, yazilan, kapak) {
+    kapak = String(kapak);
+    var ids = tekil(kapakIdleri(yazilan));
+    if (ids.length !== 1 || ids[0] !== kapak) return null;
+    var asilIdler = kapakIdleri(asil);
+    if (asilIdler.indexOf(kapak) === -1) return null;
+    var mainYeni = /<main\b[^>]*>/.exec(yazilan);
+    var kapakYeni = yazilan.match(ogeRe('cover'))[0];
+    var out = asil;
+    if (mainYeni) {
+      var etiket = mainYeni[0];
+      var eskiMain = /<main\b[^>]*>/.exec(asil);
+      var eskiKey = eskiMain && /\skey="([^"]*)"/.exec(eskiMain[0]);
+      var yeniKey = /\skey="([^"]*)"/.exec(etiket);
+      if (eskiKey && eskiKey[1] && (!yeniKey || !yeniKey[1])) {
+        etiket = yeniKey ? etiket.replace(/\skey="[^"]*"/, function () { return ' key="' + eskiKey[1] + '"'; })
+          : etiket.replace(/^<main\b/, function (m0) { return m0 + ' key="' + eskiKey[1] + '"'; });
+      }
+      out = out.replace(/<main\b[^>]*>/, function () { return etiket; });
+    }
+    out = out.replace(ogeRe('cover'), function (c) { return kapakIdleri(c)[0] === kapak ? kapakYeni : c; });
+    return kumeEsit(kapakIdleri(out), asilIdler) ? out : null;
+  }
+  function metneCevir(veri) {
+    if (typeof veri === 'string') return veri;
+    if (veri && typeof veri === 'object' && typeof veri.byteLength === 'number' && typeof TextDecoder !== 'undefined') {
+      return new TextDecoder().decode(veri instanceof Uint8Array ? veri : new Uint8Array(veri.buffer || veri, veri.byteOffset || 0, veri.byteLength));
+    }
+    return String(veri);
+  }
+  function yazmaKarari(asilHam, veri, kapak) {
+    var y = imwinCoz(metneCevir(veri));
+    if (!y) return { tur: 'reddet', neden: 'yazılan menü çözülemedi' };
+    var a = asilHam == null ? null : imwinCoz(asilHam);
+    if (!a) return { tur: 'reddet', neden: 'asıl menü okunamadı' };
+    var yIds = tekil(kapakIdleri(y.xml)), aIds = tekil(kapakIdleri(a.xml));
+    if (yIds.length === 1 && yIds[0] === String(kapak)) {
+      var b = menuBirlestir(a.xml, y.xml, kapak);
+      return b == null ? { tur: 'reddet', neden: 'birleşim kapak kümesini korumadı' }
+        : { tur: 'birlesik', metin: imwinYaz(b, 27, 5) };
+    }
+    for (var i = 0; i < aIds.length; i++) {
+      if (yIds.indexOf(aIds[i]) === -1) return { tur: 'reddet', neden: 'yazılan menü asıldan dar' };
+    }
+    return { tur: 'aynen' };
+  }
+  var KAPAK = isBrowser ? kapakOku(win.location && win.location.search) : null;
+  function imwinYoluMu(p) { return /ImWin32\.dll$/i.test(String(p).split(/[?#]/)[0]); }
+  /** Kapak kipinde menü metnini süzer; süzülemezse metin aynen. */
+  function kapakSuzMetin(t) {
+    if (!KAPAK || typeof t !== 'string') return t;
+    var c = imwinCoz(t); if (!c) return t;
+    var s = menuSuz(c.xml, KAPAK);
+    return s == null ? t : imwinYaz(s, c.n, c.r);
+  }
+  /** Menünün HAM (süzülmemiş) metni: önce VFS, yoksa paket. */
+  function menuHamOku(p) {
+    var v = storage ? fromStored(storage.getItem(key(p)), 'utf8') : null;
+    if (v == null) v = syncGet(relUrl(p), false);
+    return typeof v === 'string' ? v : null;
+  }
+  /** @returns {'yazildi'|'aynen'|'atlandi'} */
+  function kapakYaz(p, data) {
+    var asilHam = null;
+    try { asilHam = menuHamOku(p); } catch (e) { kapakUyar('asıl okunamadı', e); }
+    var k = yazmaKarari(asilHam, data, KAPAK);
+    if (k.tur === 'aynen') return 'aynen';
+    if (k.tur === 'reddet') { kapakUyar('yazma reddedildi: ' + k.neden); return 'atlandi'; }
+    try { storage.setItem(key(p), k.metin); return 'yazildi'; } catch (e) { kapakUyar('yazılamadı', e); return 'atlandi'; }
+  }
+
   function nitelik(etiket, ad) {
     var m = new RegExp('(?:^|\\s)' + ad + '="([^"]*)"').exec(etiket);
     return m ? m[1] : null;
@@ -747,7 +885,8 @@
     var zipGetir = deps.zipGetir || function (u) {
       return varsayilanFetch()(u).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
     };
-    var menuMetni = deps.menuMetni || function () { return fsMod.readFileSync(dllYolu(), 'utf8'); };
+    // A1: tarama BÜTÜN kitapları görmeli — süzülmemiş (ham) menü okunur.
+    var menuMetni = deps.menuMetni || function () { return KAPAK ? menuDllYamasi(menuHamOku(dllYolu()) || '') : fsMod.readFileSync(dllYolu(), 'utf8'); };
     var uc = deps.uc || guncellemeUcu();
     var rapor = { tarandi: 0, guncellendi: [], hata: [], sebep: null };
     return ag().then(function (d) {
@@ -867,14 +1006,15 @@
           // K9: motor menuyu `fetch(bookModule.dll)` ile okur (kV) — arka planda guncellenen
           // kitabin surumu BURADA da menuye islenmeli; yalniz readFileSync'e koymak yetmedi
           // (telefonda olculdu: menu dogruyken 4 kart yine yesil bulut gosterdi).
-          if (/ImWin32\.dll$/i.test(rel) && Object.keys(surumlerOku()).length) {
+          // A1: kapak kipinde menü fetch'i her zaman bu yoldan geçer ve tek kapağa süzülür.
+          if (/ImWin32\.dll$/i.test(rel) && (KAPAK || Object.keys(surumlerOku()).length)) {
             var s9 = this, a9 = arguments;
             var ham = vfsHas(rel)
               ? Promise.resolve(fromStored(storage.getItem(key(rel)), 'utf8'))
               : real.apply(s9, a9).then(function (r) { return r && r.ok ? r.text() : null; });
             return ham.then(function (t) {
               if (typeof t !== 'string') return real.apply(s9, a9);
-              return new win.Response(menuDllYamasi(t), { status: 200, headers: { 'X-EMPP-Source': 'k9-menu' } });
+              return new win.Response(kapakSuzMetin(menuDllYamasi(t)), { status: 200, headers: { 'X-EMPP-Source': KAPAK ? 'kapak' : 'k9-menu' } });
             });
           }
           if (vfsHas(rel)) {
@@ -1029,7 +1169,9 @@
     imwinCoz: imwinCoz, imwinYaz: imwinYaz, menuKitaplari: menuKitaplari, menuSurumYamasi: menuSurumYamasi,
     menuDllYamasi: menuDllYamasi, otoGuncelle: otoGuncelle, uygunBaglanti: uygunBaglanti, surumYaz: surumYaz, motorZipIndirmesi: motorZipIndirmesi,
     gYukle: gYukle, installG: installG, gEklentisiVar: gEklentisiVar, G_GECIKME: G_GECIKME, G_ISTEMCI: G_ISTEMCI,
-    cevrimiciYoklamaMi: cevrimiciYoklamaMi, cevrimiciYokla: cevrimiciYokla, CEVRIMICI_YOKLAMA: CEVRIMICI_YOKLAMA } };
+    cevrimiciYoklamaMi: cevrimiciYoklamaMi, cevrimiciYokla: cevrimiciYokla, CEVRIMICI_YOKLAMA: CEVRIMICI_YOKLAMA,
+    menuSuz: menuSuz, menuBirlestir: menuBirlestir, yazmaKarari: yazmaKarari, kapakOku: kapakOku, kapakIdleri: kapakIdleri,
+    KAPAK: KAPAK, installFetch: installFetch } };
   }
   if (isBrowser) install();
 })(typeof window !== 'undefined' ? window : undefined);

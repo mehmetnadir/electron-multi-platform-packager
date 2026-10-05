@@ -157,7 +157,8 @@ test('tek kitabın hatası taramayı durdurmaz', async () => {
 test('kaynak-sentinel: fs.readFileSync ImWin32.dll okumasını menuDllYamasi\'dan geçirir', () => {
   const src = require('node:fs').readFileSync(require.resolve('./empp-android-shim.js'), 'utf8');
   const rfs = src.slice(src.indexOf('readFileSync: function (p, enc)'), src.indexOf('writeFileSync: function'));
-  assert.match(rfs, /ImWin32\\\.dll\$\/i\.test\(String\(p\)\)\) v = menuDllYamasi\(v\)/);
+  // A1 (05.10): sürüm yaması kapak süzmesinden ÖNCE uygulanır (kapakSuzMetin(menuDllYamasi(v))).
+  assert.match(rfs, /ImWin32\\\.dll\$\/i\.test\(String\(p\)\)\) v = (kapakSuzMetin\()?menuDllYamasi\(v\)/);
 });
 
 test('GERİLEME: motorun fetch(ImWin32.dll) okuması da sürüm yamasından geçer (telefonda 4 kart yeşil kalmıştı)', async () => {
