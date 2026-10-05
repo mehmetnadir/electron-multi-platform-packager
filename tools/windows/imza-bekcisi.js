@@ -52,6 +52,9 @@ function bekciAyarlari(env = process.env) {
     bekciOpenvpn: env.EMPP_OPENVPN_IKILI || '/usr/local/sbin/openvpn',
     // Bekçi imza kilidini uzun beklemez: runner imzadaysa bu tur atlanır, 30 dk sonra yeniden.
     bekciImzaKilitBeklemeMs: Number(env.EMPP_IMZA_BEKCI_KILIT_MS || 2 * 60 * 1000),
+    // İmzalı kabul runner'ın imzasız kabuluyla kasa makine kilidinde yarışır; 30 dk (varsayılan) aşılırsa
+    // kabul ÖLÇÜLEMEDİ olur ve aynı exe sonraki turda yeniden imzalanır. Bekçi kilidi uzun bekler.
+    bekciKasaKilitBeklemeMs: Math.max(0, Number(env.EMPP_BEKCI_KILIT_BEKLEME_DK || 120) || 120) * 60 * 1000,
     bekciBildirIkili: env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir'),
   };
 }
@@ -166,7 +169,7 @@ async function kaydiIsle(giris, d) {
     let zincir;
     try {
       zincir = await d.imzaliYayinZinciri({
-        imzasiz: giris.exeYolu, job, work, cfg: { ...cfg, winImzaKilitBeklemeMs: cfg.bekciImzaKilitBeklemeMs },
+        imzasiz: giris.exeYolu, job, work, cfg: { ...cfg, winImzaKilitBeklemeMs: cfg.bekciImzaKilitBeklemeMs, winKasaKilitBeklemeMs: cfg.bekciKasaKilitBeklemeMs },
         log, sleep: d.sleep, aktivasyon: d.aktivasyonBeklenir(job.bookTitle), kanit,
       });
     } catch (e) {

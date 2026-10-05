@@ -37,6 +37,10 @@ function hazirAyarlari(env = process.env) {
   return {
     // EMPP_WIN_IMZA_BEKLEME=0 → eski davranış: yuva yoksa windows ilan edilmez/üretilmez.
     winHazirAcik: env.EMPP_WIN_IMZA_BEKLEME !== '0',
+    // EMPP_WIN_IMZA_HEP_HAZIR=1 → satır içi imza HİÇ denenmez (yuva probu dahil); paket üretilir,
+    // kabulden geçer, hazır kuyruğa girer, imza bekçisi imzalar. Varsayılan kapalı. winHazirAcik
+    // kapalıyken etkisizdir (hazır kuyruk yoksa eski davranış). Ölçüm 05.10: exe başına ~20 dk boş bekleme.
+    winImzaHepHazir: env.EMPP_WIN_IMZA_HEP_HAZIR === '1',
     winHazirKoku: env.EMPP_WIN_HAZIR_KOK || path.join(os.homedir(), '.empp-agent', 'windows-hazir'),
     // Runner'ın imza adımına ayırdığı süre (dk → ms). Dolarsa (imza kuyruğu kilidi dolu / _hazir
     // kopyası / yuva penceresi; takas BAŞLAMADAN) paket hazır kuyruğa alınır, sunucuya imza-bekliyor

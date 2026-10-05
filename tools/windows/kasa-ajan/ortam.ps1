@@ -1,4 +1,5 @@
 ﻿# windows-kasa ajan ortamı (ajan-baslat.ps1 ve duman testleri dot-source eder). Sır YOK.
+# EMPP_WIN_IMZA_HEP_HAZIR=1 (kasada elle açılır, buraya EKLENMEZ): satır içi imza denenmez, paket hep hazır kuyruğa; imza bekçisi imzalar.
 $ErrorActionPreference = 'Continue'
 $K = 'C:\empp-ajan'   # 04.10: D: (HDD) ölüyor, üretim C: (SSD); D: yalnız arşiv
 $R = "$K\paketleyici"

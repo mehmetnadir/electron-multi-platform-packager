@@ -120,3 +120,19 @@ test('win32 dosya kilidi: ikinci alma 75; sahibi ölmüş kilit devralınır; b�
   assert.ok(c.tutucu, 'ölü sahibin kilidi devralındı');
   assert.ok(fs.readdirSync(path.dirname(yol)).some((x) => x.startsWith('k.bayat-')), 'bayat kilit silinmedi, kenara alındı');
 });
+
+test('imzaKipiSec: HEP_HAZIR + hazır açık → hazir, yuva probu HİÇ çağrılmaz; hazır kapalıysa bayrak etkisiz', async () => {
+  const c = W.varsayilanAyarlar('win32', {});
+  assert.equal(require('./windows-hazir').hazirAyarlari({}).winImzaHepHazir, false, 'varsayılan kapalı');
+  assert.equal(require('./windows-hazir').hazirAyarlari({ EMPP_WIN_IMZA_HEP_HAZIR: '1' }).winImzaHepHazir, true);
+  let prob = 0;
+  const casus = { get winImzaYuvaSunucu() { prob += 1; return ''; }, get winImzaYuvaKoku() { prob += 1; return ''; } };
+  const cfg = Object.create(casus);
+  Object.assign(cfg, { winImzaHepHazir: true, winHazirAcik: true });
+  const k = await W.imzaKipiSec(cfg);
+  assert.equal(k.kip, 'hazir');
+  assert.match(k.sebep, /HEP_HAZIR/);
+  assert.equal(prob, 0, 'yuva probu yapılmadı');
+  const kapali = await W.imzaKipiSec({ ...c, winImzaYuvaSunucu: '', winImzaYuvaKoku: '', winImzaHepHazir: true, winHazirAcik: false });
+  assert.equal(kapali.kip, 'yuva', 'hazır kuyruk kapalı → eski davranış');
+});

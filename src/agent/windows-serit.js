@@ -429,6 +429,11 @@ async function araclariDenetle(cfg, { yuva = true } = {}) {
  * @returns {Promise<{kip:'yuva'|'hazir', sebep:string}>}
  */
 async function imzaKipiSec(cfg) {
+  // Hep-hazır bayrağı: yuva probu bile yapılmaz. winHazirAcik kapalıysa bayrak ETKİSİZ
+  // (hazır kuyruk yoksa paket bekletilemez; yayın güvenliği için eski davranış kalır).
+  if (cfg.winImzaHepHazir && cfg.winHazirAcik) {
+    return { kip: 'hazir', sebep: 'EMPP_WIN_IMZA_HEP_HAZIR — satır içi imza denenmez, imza bekçisi imzalar' };
+  }
   if (await imzaYuvasiErisilirMi(cfg)) return { kip: 'yuva', sebep: 'imza yuvası erişilir' };
   if (cfg.winHazirAcik) {
     return { kip: 'hazir', sebep: `imza yuvası erişilemiyor (İmpark VPN / Storage7: ${cfg.winImzaYuvaKoku})` };

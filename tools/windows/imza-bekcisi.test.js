@@ -406,3 +406,16 @@ test('win32: bekçi VPN/disk bağlamaz (servis + cmdkey), ping -n kullanır', as
   assert.match(r.sebep, /win32/);
   assert.deepEqual(komutlar, [], 'win32\'de ne ping ne sudo ne disk betiği');
 });
+
+test('bekçi imzalı kabul zincirine kasa kilit beklemesini 120 dk geçirir (env ile ezilir)', async () => {
+  assert.equal(B.bekciAyarlari({}).bekciKasaKilitBeklemeMs, 120 * 60 * 1000);
+  assert.equal(B.bekciAyarlari({ EMPP_BEKCI_KILIT_BEKLEME_DK: '45' }).bekciKasaKilitBeklemeMs, 45 * 60 * 1000);
+  const o = ortam({ yuva: true });
+  await o.ekle('301');
+  const gorulen = [];
+  const d = o.bagimlilik();
+  const asil = d.imzaliYayinZinciri;
+  d.imzaliYayinZinciri = async (a) => { gorulen.push(a.cfg.winKasaKilitBeklemeMs); return asil(a); };
+  await B.tur(d);
+  assert.deepEqual(gorulen, [120 * 60 * 1000]);
+});

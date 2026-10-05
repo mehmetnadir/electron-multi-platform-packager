@@ -964,3 +964,15 @@ test('mapPlatform: windows anahtarı hâlâ yalnız EMPP_RUNNER_WINDOWS=1 ile a�
 test('imzaDosyaAdi: runner önekli, sürümlü, boşluksuz', () => {
   assert.equal(W.imzaDosyaAdi('59835', 'Super Monsters 2 Set', '2.51.2'), 'runner-59835-Super-Monsters-2-Set-2.51.2-Setup.exe');
 });
+
+test('HEP_HAZIR: yuva AÇIKKEN bile imza denenmez; paket üretilir, kabul, hazır kuyruk, imza-bekliyor', async () => {
+  const hazirKok = path.join(tmp('hazir'), 'windows-hazir');
+  const r = await windowsIsiKostur({ ayar: { winImzaHepHazir: true, winHazirKoku: hazirKok } });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.api.putlar.length, 0);
+  assert.doesNotMatch(r.gunluk, /^imza /m, 'imza betiği çağrılmadı');
+  assert.ok(r.paketleyici.istekler.includes('POST /api/package'));
+  assert.equal(r.api.release[0].durum, 'imza-bekliyor');
+  assert.match(r.loglar, /imza kipi HAZIR — EMPP_WIN_IMZA_HEP_HAZIR/);
+  assert.ok(await H.hazirBul({ winHazirKoku: hazirKok }, '74390', '2.51.3'));
+});
