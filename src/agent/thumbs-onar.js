@@ -52,7 +52,7 @@ function sayfaGorseli(buf) {
  * thumb'ı olmayan ya da thumb'ı aday (geçerliliği okunarak denetlenecek) olanlar döner.
  * @returns {Array<{grup, n, sayfa, thumb, mevcut}>}
  */
-function onarimPlani(dizin) {
+function onarimPlani(dizin, ornekGecerli = null) {
   const gruplar = new Map();
   for (const g of dizin.values()) {
     if (g.dizin) continue;
@@ -65,8 +65,10 @@ function onarimPlani(dizin) {
   const plan = [];
   for (const [grup, sayfalar] of gruplar) {
     const thumbSay = sayfalar.filter((s) => dizin.has(`${grup}thumbs/${s.n}.jpg`)).length;
-    // Sayılar eşitse thumbs'a güvenilir (okuma maliyeti yok). Eksikse grubun tamamı denetlenir.
-    if (thumbSay >= sayfalar.length) continue;
+    // Sayılar eşitse grubun İLK thumb'ı örnek okunur (74405, 06.10: 392/392 thumb şifreliydi);
+    // örnek geçerliyse grup atlanır. Eksikse grubun tamamı denetlenir.
+    if (thumbSay >= sayfalar.length
+      && !(ornekGecerli && !ornekGecerli(`${grup}thumbs/${sayfalar[0].n}.jpg`))) continue;
     for (const s of sayfalar) {
       const thumb = `${grup}thumbs/${s.n}.jpg`;
       plan.push({ grup, n: s.n, sayfa: s.sayfa, thumb, mevcut: dizin.has(thumb) });
@@ -164,14 +166,24 @@ function zipeEkle(zipYolu, ekler) {
  */
 async function thumbsOnar({ zip, log = () => {}, warn = log, sharpFn = null }) {
   const dizin = M.zipDizini(zip);
-  const plan = onarimPlani(dizin);
+  const plan = onarimPlani(dizin, (ad) => {
+    try { return gorselMi(M.zipGirdiOku(zip, dizin.get(ad))); } catch (_) { return false; }
+  });
   if (!plan.length) return { durum: 'atlandi', onarilan: 0, gruplar: [] };
   const sharp = sharpFn || require('sharp');
   const ekler = [];
   const uyarilar = [];
   for (const x of plan) {
     if (x.mevcut) {
-      try { if (gorselMi(M.zipGirdiOku(zip, dizin.get(x.thumb)))) continue; } catch (_) { /* yeniden üret */ }
+      let ham = null;
+      try { ham = M.zipGirdiOku(zip, dizin.get(x.thumb)); } catch (_) { /* yeniden üret */ }
+      if (ham && gorselMi(ham)) continue;
+      // Şifreli (mod1) thumb: çözmek yeterli — İmpark kuralı thumbs DÜZ (74405).
+      // Küçük JPEG ise aynen; sayfa kopyası (büyük/PNG) ise aşağıda sayfadan küçültülür.
+      const coz = ham ? mod1Cevir(ham) : null;
+      if (coz && gorselMi(coz) && coz.subarray(0, 3).equals(JPG) && coz.length <= 200 * 1024) {
+        ekler.push({ ad: x.thumb, veri: coz }); continue;
+      }
     }
     let gorsel = null;
     try { gorsel = sayfaGorseli(M.zipGirdiOku(zip, dizin.get(x.sayfa))); } catch (e) { uyarilar.push(`${x.sayfa}: ${e.message}`); }

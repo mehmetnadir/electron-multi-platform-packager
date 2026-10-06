@@ -339,6 +339,9 @@ def kaldir(dizin):
     return "KALDIRILAMADI(kalanMB=%s)" % round(klasor_boyut(dizin) / 1e6, 1)
 
 # ─────────────────────────── JS olcumleri ───────────────────────────
+JS_UNITE_TIKLA = ("(()=>{const e=document.querySelector('#unitModal:not([hidden]) .unit-item');"
+                  "if(!e) return false; e.click(); return true;})()")
+
 JS_MENU = r"""
 (()=>{ // IKI VARYANT: A) img.button[data-url]  B) .book-item (React, onclick yok)
  const kutu=e=>{const r=e.getBoundingClientRect();
@@ -354,6 +357,10 @@ JS_MENU = r"""
  if(!l.length) l=[...document.images].filter(i=>/images\/book\d+\.(png|jpe?g)/i.test(i.currentSrc||i.src||''))
    .map((i,n)=>{const e=i.closest('a, div')||i;
      return Object.assign({varyant:'C',indis:n,id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:false},kutu(e));});
+ // D) Flashy web-proxy-modern karti (59482/74405, 06.10): <article class="flashy-card" data-id>, kapak bozuksa img yok
+ if(!l.length) l=[...document.querySelectorAll('article.flashy-card[data-id]')].map((e,i)=>
+   Object.assign({varyant:'D',indis:i,id:e.dataset.id||('book'+(i+1)),url:null,
+     ad:((e.querySelector('.fc-title')||e).innerText||'').trim().slice(0,40),seri:false},kutu(e)));
  return JSON.stringify(l.filter(o=>o.w>40&&o.h>40));})()"""
 
 # Menude kitap OLMAYAN ogeler: config/settings.json'da contentType/type "link" (45551 "Worksheets" ->
@@ -386,7 +393,7 @@ def baglanti_ayir(kitaplar, ayar):
         else: kalan.append(k)
     return kalan, ayrilan
 
-def menu_varyant_sec(a_var, b_var, c_var):
+def menu_varyant_sec(a_var, b_var, c_var, d_var=False):
     """SAF KARAR: JS_MENU'nun ayna/mirror'i (yukarida) — tarayici disi (Python) test icin.
     JS_MENU string'i DEGISMEDI; bu fonksiyon onun BELGELENEN A->B->C oncelik kuralini
     kilitler: A varsa A, yoksa B varsa B, yoksa C varsa C, hicbiri yoksa None (tek-kitap
@@ -394,6 +401,7 @@ def menu_varyant_sec(a_var, b_var, c_var):
     if a_var: return "A"
     if b_var: return "B"
     if c_var: return "C"
+    if d_var: return "D"
     return None
 
 def js_kutu_guncelle(varyant, ad, indis):
@@ -409,6 +417,9 @@ def js_kutu_guncelle(varyant, ad, indis):
       }} else if(v==='B') {{
          let els=[...document.querySelectorAll('.book-item')].filter(x=>!x.classList.contains('book-group-back'));
          e = els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) || els[indis];
+      }} else if(v==='D') {{
+         let els=[...document.querySelectorAll('article.flashy-card[data-id]')];
+         e = (ad ? els.find(x=>((x.querySelector('.fc-title')||x).innerText||'').trim().slice(0,40)===ad) : null) || els[indis];
       }} else {{
          let imgs=[...document.images].filter(i=>/images\\/book\\d+\\.(png|jpe?g)/i.test(i.currentSrc||i.src||''));
          let els=imgs.map(i=>i.closest('a, div')||i);
@@ -1566,9 +1577,12 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
             cagirici("tikla", kit)
             
             gecis = False
-            for _ in range(30):
+            for n in range(30):
                 time.sleep(2)
                 if c.js(JS_KITAPTA) is True: gecis = True; break
+                # Flashy UNITE SECICI (59482, 06.10): uniteli kitapta kart #unitModal acar, kitap ilk
+                # uniteye tiklaninca acilir (Pardus cdp-kitap-ac.js UNITE_TIKLAMA_IFADESI ile ayni).
+                if n in (1, 4) and c.js(JS_UNITE_TIKLA) is True: kit["unite"] = True
             if not gecis:
                 r["kitaplar"].append({"sira": i, "id": kit.get("id"), "ad": kit.get("ad"),
                                       "sonuc": "KALDI", "sebep": "ACILMADI"})

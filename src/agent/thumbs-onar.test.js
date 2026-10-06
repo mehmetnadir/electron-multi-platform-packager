@@ -76,3 +76,21 @@ test('thumbsOnar: şifreli sayfalardan thumb üretir, eski şifreli thumb\'ı de
   const iki = await T.thumbsOnar({ zip });
   assert.equal(iki.durum, 'atlandi', 'ikinci koşu idempotent');
 });
+
+test('74405 kalıbı: thumb sayısı tam ama hepsi şifreli → çözülerek düz yazılır', async (t) => {
+  if (!sharp || !zipVar) return t.skip('sharp/zip yok');
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), 'thumbs-sifreli-'));
+  const yaz = (rel, v) => { fs.mkdirSync(path.dirname(path.join(kok, rel)), { recursive: true }); fs.writeFileSync(path.join(kok, rel), v); };
+  const jpg = await sharp({ create: { width: 100, height: 120, channels: 3, background: { r: 9, g: 99, b: 199 } } }).jpeg().toBuffer();
+  for (let i = 1; i <= 3; i++) {
+    yaz(`book1/assets/70167/pages/${i}.png`, T.mod1Cevir(await png(i, 2, 3)));
+    yaz(`book1/assets/70167/thumbs/${i}.jpg`, T.mod1Cevir(jpg));
+  }
+  const zip = path.join(kok, 'build.zip');
+  execFileSync('zip', ['-q', '-r', zip, 'book1'], { cwd: kok });
+  const r = await T.thumbsOnar({ zip });
+  assert.equal(r.onarilan, 3);
+  const sonra = M.zipDizini(zip);
+  assert.ok(M.zipGirdiOku(zip, sonra.get('book1/assets/70167/thumbs/2.jpg')).equals(jpg), 'şifre çözülmüş özgün thumb');
+  assert.equal((await T.thumbsOnar({ zip })).durum, 'atlandi');
+});

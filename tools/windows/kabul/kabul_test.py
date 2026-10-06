@@ -1314,3 +1314,13 @@ def test_ikinci_sayfa_gecer():
     assert kabul.ikinci_sayfa_gecer({"canvasDolu": 3000, "canvasRenk": 14})
     assert not kabul.ikinci_sayfa_gecer({"canvasDolu": 3000, "canvasRenk": 1})
     assert not kabul.ikinci_sayfa_gecer({"canvasDolu": 10, "canvasRenk": 9})
+
+
+# ── Flashy D varyanti + unite modali (59482/74405, 06.10) ──
+def test_flashy_d_varyanti_ve_unite():
+    assert kabul.menu_varyant_sec(False, False, False, True) == "D"
+    assert kabul.menu_varyant_sec(False, False, True, True) == "C"
+    assert "article.flashy-card[data-id]" in kabul.JS_MENU
+    js = kabul.js_kutu_guncelle("D", "Practice Book", 0)
+    assert "article.flashy-card[data-id]" in js and ".fc-title" in js
+    assert "#unitModal:not([hidden]) .unit-item" in kabul.JS_UNITE_TIKLA
