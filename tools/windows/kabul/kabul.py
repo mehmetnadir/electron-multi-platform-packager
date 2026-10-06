@@ -139,7 +139,9 @@ def hedef_sec(dizin, tavan=180):
             try:
                 c = CDP(t["webSocketDebuggerUrl"]); c.cmd("Runtime.enable")
                 n = c.js("document.querySelectorAll('canvas').length*10+document.images.length"
-                         "+document.querySelectorAll('img.button[data-url],.book-item').length*10")
+                         "+document.querySelectorAll('img.button[data-url],.book-item').length*10"
+                         # Varyant C (45792 MP11, 06.10): <a href="bookN/index.html"><img class="button-book">
+                         "+document.querySelectorAll('img.button-book,a[href*=\"index.html\"] img').length*10")
                 n = n if isinstance(n, int) else 0
                 if n >= 3: return c, t, n
                 if yedek: yedek[0].kapat()
@@ -350,7 +352,7 @@ JS_MENU = r"""
  if(!l.length) l=[...document.querySelectorAll('.book-item')].filter(e=>!e.classList.contains('book-group-back')).map((e,i)=>
    Object.assign({varyant:'B',indis:i,id:'book'+(i+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:e.classList.contains('book-group')},kutu(e)));
  if(!l.length) l=[...document.images].filter(i=>/images\/book\d+\.(png|jpe?g)/i.test(i.currentSrc||i.src||''))
-   .map((i,n)=>{const e=i.closest('div')||i;
+   .map((i,n)=>{const e=i.closest('a, div')||i;
      return Object.assign({varyant:'C',indis:n,id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:false},kutu(e));});
  return JSON.stringify(l.filter(o=>o.w>40&&o.h>40));})()"""
 
@@ -409,8 +411,8 @@ def js_kutu_guncelle(varyant, ad, indis):
          e = els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) || els[indis];
       }} else {{
          let imgs=[...document.images].filter(i=>/images\\/book\\d+\\.(png|jpe?g)/i.test(i.currentSrc||i.src||''));
-         let els=imgs.map(i=>i.closest('div')||i);
-         e = els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) || els[indis];
+         let els=imgs.map(i=>i.closest('a, div')||i);
+         e = (ad ? els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) : null) || els[indis];
       }}
       if(!e) return null;
       e.scrollIntoView({{block: 'center', inline: 'center'}});
