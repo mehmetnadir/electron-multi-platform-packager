@@ -123,6 +123,7 @@ function sahteBag(ev, o = {}) {
         : { atla: false, sebep: null }),
     }),
     panelMenu: () => ({ kokIcerikVarMi: (z, id) => (o.kokteDuran || []).includes(id) }),
+    tabanTekMotor: () => Boolean(o.tekMotor),
     aracDenetle: () => o.aracEksik || null,
     webzSha: async () => {
       kayit.webz += 1;
@@ -657,7 +658,7 @@ test('üreteç tabanı (R2 tabanı üreteç build\'i): ek üretilmez, bildir, ka
   assert.equal(kayit.kabuk.length, 0);
   assert.equal(kayit.merdiven, 0); // karar merdivenden ÖNCE (runner sırası)
   assert.deepEqual(yazmalar(kayit), []);
-  assert.match(kayit.bildir[0], /üreteç tabanı/);
+  assert.match(kayit.bildir[0], /bookN üreteç tabanı: eşlik ölçülmedi/);
   const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
   assert.equal(d['45550'].kesin, true);
   assert.match(d['45550'].durum, /atlandi/);
@@ -676,7 +677,7 @@ test('taban kapsama: set eki sonrası eksik kitap → üreteç tabanı; içerik 
     const a = sahteBag(geciciDizin(), { kitapEksik: ['333'] });
     const r1 = await E.setIsle(a.bag, tekSatir(), { kuru: true });
     assert.equal(r1.durum, 'atlandi');
-    assert.match(r1.neden, /üreteç tabanı: set eki sonrası eksik: 333/);
+    assert.match(r1.neden, /bookN üreteç tabanı: eşlik ölçülmedi — set eki sonrası eksik: 333/);
     assert.equal(a.kayit.kabuk.length, 0);
     const b = sahteBag(geciciDizin(), { kitapEksik: ['333'], kokteDuran: ['333'] });
     const r2 = await E.setIsle(b.bag, tekSatir(), { kuru: true });
@@ -757,4 +758,24 @@ test('--kuru: bildirim gönderilmez, loga düşer', async () => {
   assert.equal(await E.main(['--set', '45550', '--kuru'], bag), 0);
   assert.equal(kayit.bildir.length, 0);
   assert.ok(kayit.log.some((l) => /bildirim gönderilmedi.*üreteç tabanı/.test(l)));
+});
+
+test('A1 (tek motor) üreteç tabanı: kural yok, ek üretilir', async () => {
+  const ev = geciciDizin();
+  const { bag, kayit } = sahteBag(ev, { tekMotor: true, uretecTabani: true, kitapEksik: ['9'] });
+  const r = await E.setIsle(bag, tekSatir(), { kuru: true });
+  assert.equal(r.durum, 'kuru');
+  assert.equal(kayit.kabuk.length, 1);
+  assert.equal(kayit.bildir.length, 0);
+});
+
+test('tekMotorDuzeniMi: bookN yok + ImWin32 → true; bookN varsa false; sarmalayıcı soyulur', () => {
+  const onEkBul = require('../../src/agent/set-kabuk-tazele').onEkBul;
+  assert.equal(E.tekMotorDuzeniMi(['index.html', 'classlibraries/ImWin32.dll',
+    'assets/1/data/BookContent.xml'], onEkBul), true);
+  assert.equal(E.tekMotorDuzeniMi(['index.html', 'classlibraries/ImWin32.dll',
+    'book1/index.html'], onEkBul), false);
+  assert.equal(E.tekMotorDuzeniMi(['set/index.html', 'set/classlibraries/ImWin32.dll'], onEkBul),
+    true);
+  assert.equal(E.tekMotorDuzeniMi(['index.html', 'book2/index.html'], onEkBul), false);
 });

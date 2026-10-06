@@ -156,7 +156,7 @@ function kaynakKurKabukKarari({
 /**
  * A1 girdi ÖZETİ (girdi parmak izi için; birleşik inceleme D9). Swift yalnız şu alanları okur:
  * menüde kapak kimliği + `actName`, `BookContent.xml`'de İLK `<Unit name>`, motor sayfasının
- * varlığı. Dosyanın tamamı yerine bu alanların sha'sı girer: merdiven iki makinede farklı içerik
+ * varlığı (içeriği değil — üreteç tabanıyla R2 tabanı burada ayrışır, 06.10 ölçümü). Dosyanın tamamı yerine bu alanların sha'sı girer: merdiven iki makinede farklı içerik
  * (sürüm özniteliği, ünite gövdesi) üretse de aynı kabuk girdisi aynı parmak izini verir. SAF.
  * @param {Map<string, Buffer>} a1Girdi
  * @returns {Object<string, string>} yol → sha256 hex
@@ -180,6 +180,12 @@ function a1GirdiOzeti(a1Girdi) {
         }
       } catch (_) { liste = null; }
       out[y] = liste ? sha256(`menu-kapaklar:${JSON.stringify(liste)}`) : sha256(v);
+    } else if (y === A1.A1_MOTOR_SAYFASI) {
+      // Swift motor sayfasının yalnız VARLIĞINA bakar (webz-kabuk-uret tek-motor: fileExists).
+      // İçerik motor kalıbına bağlıdır: ölçüm 06.10 45485 — R2 2.51.5 (bundle bd0c1a…) ile üreteç
+      // tabanı (kalıp 45549, bundle ab436b…) yalnız bu dosyada ayrıştı; diğer bütün girdiler aynı.
+      // Motor sayfası ekte yok; ProBook kendi tabanından üretir ve A1 kapıları onu yerelde denetler.
+      out[y] = sha256('motor-sayfasi:var');
     } else {
       out[y] = sha256(v);
     }
