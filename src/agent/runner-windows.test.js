@@ -24,6 +24,9 @@ const AdmZip = require('adm-zip');
 
 // TEST YALITIMI (2026-09-28, agent-test-borcu-20260928 — bkz. test-yalitim.js).
 const { izoleOrtam } = require('./test-yalitim');
+// Bu dosya imzalı kopyaya ikinci tam kabulün koştuğu yolu kilitler (06.10'dan beri varsayılan
+// ATLA, bkz. windows-imzali-kabul.test.js) — eski yolu açık tutmak için bayrak açık.
+process.env.EMPP_WIN_IMZALI_KABUL = '1';
 const YALITIM = izoleOrtam();
 
 const SRC = fs.readFileSync(path.join(__dirname, 'runner.js'), 'utf8');

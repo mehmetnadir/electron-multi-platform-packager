@@ -903,6 +903,18 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
  * tamamlanır ve diske yazılır. Düşerse FIRLATIR (R2'ye hiçbir şey yazılmamıştır).
  * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
  */
+/**
+ * İmzalı kopya için ikinci tam kabul gerekli mi (06.10, Nadir: "imza beklesin, üretim sürsün")?
+ * İmzasız paket kabulden GEÇTİYSE ve `imzaDogrula` gövdenin bayt bayt aynı olduğunu kanıtladıysa
+ * imzalı kopya aynı programdır; ikinci kabul tek şeritli kabul kilidini 15-20 dk tutup imzalı
+ * paketleri imzasız kuyruğun arkasında bekletiyordu (45551 16:34'te imzalandı, kilit bekledi).
+ * `EMPP_WIN_IMZALI_KABUL=1` eski davranışı (her imzalıya tam kabul) geri açar. Saf.
+ */
+function imzaliKabulGerekliMi(kanit, env = process.env) {
+  if (env.EMPP_WIN_IMZALI_KABUL === '1') return true;
+  return !(kanit && kanit.kabulImzasiz === 'GECTI' && kanit.imzali && kanit.imzali.imzaci);
+}
+
 async function imzaliYayinZinciri({
   imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit, esikMs = 0, hazirlaAtla = false, hazirlandi = null,
 }) {
@@ -928,10 +940,16 @@ async function imzaliYayinZinciri({
   }
 
   kanit.imzali = await imzaDogrula({ imzasiz, imzali: imzaliYol, cfg, log });
-  const k2 = await kabulKos({ exe: imzaliYol, job, work, cfg, log, aktivasyon, etiket: 'imzali', sleep: bekle });
-  kanit.kabulImzali = 'GECTI';
-  kanit.kabulImzaliKapi = k2.kapi;
-  if (k2.kanitDizini) kanit.kabulImzaliKanit = k2.kanitDizini;
+  if (imzaliKabulGerekliMi(kanit)) {
+    const k2 = await kabulKos({ exe: imzaliYol, job, work, cfg, log, aktivasyon, etiket: 'imzali', sleep: bekle });
+    kanit.kabulImzali = 'GECTI';
+    kanit.kabulImzaliKapi = k2.kapi;
+    if (k2.kanitDizini) kanit.kabulImzaliKanit = k2.kanitDizini;
+  } else {
+    kanit.kabulImzali = 'ESDEGER';
+    kanit.kabulImzaliSebep = 'imzasız kabul GEÇTİ + gövde bayt bayt eşit + Authenticode geçerli';
+    log('windows: imzalı kabul ATLANDI — imzasız kabul GEÇTİ, gövde eşit, yalnız imza bloğu eklendi');
+  }
   kanit.durum = 'imzali-dogrulandi';
   const yol = await kanitYaz(cfg, kanit);
   log('windows: iş kanıtı (md5 + kök index + sürüm) →', yol);
@@ -963,6 +981,7 @@ async function bekciBildir({ bookId, bookTitle, hata }, log) {
 }
 
 module.exports = {
+  imzaliKabulGerekliMi,
   ISARET, YUVA_ID, SURUM_DESENI, KAPI_ZORUNLU_PASS, KAPI_IZINLI_OLCULEMEDI, KOK_INDEX_YOLU,
   varsayilanAyarlar, onKosul, imzaDosyaAdi, kapiCiktisiniAyristir, kapiKarari, imzaDogrulamaKarari,
   peKonumlari, peImzaDizini, komutKos, ozetHesapla, govdeEsitMi, araclariDenetle, imzaYuvasiErisilirMi, imzaKipiSec,
