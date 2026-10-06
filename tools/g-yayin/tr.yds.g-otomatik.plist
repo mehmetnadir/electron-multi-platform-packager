@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  G otomatik yayın (TASLAK, 06.10): 15 dk'da bir dört platformda yeni kabukla biten YDS setlerinin
+  kanonik motorunu kurulu paketlerin G kanalına yayınlar (tools/g-yayin/otomatik-yayin.js).
+  Bu dosya kendi kendine KURULMAZ. Kurmadan önce:
+    1) dal ana ağaca birleşmiş olmalı (yol ana ağacı gösterir),
+    2) launchd bağlamında Anahtar Zinciri okunabilmeli:
+       node tools/g-yayin/yayinla.js kuru-imza  → GEÇTİ (launchd altında bir kez kickstart ile sına),
+    3) yukle.js YUKLEME_BEYAZ_LISTE hedef setleri içermeli (Nadir onayı).
+  Kurulum:
+    cp tools/g-yayin/tr.yds.g-otomatik.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tr.yds.g-otomatik.plist
+  Geri alma:
+    launchctl bootout gui/$(id -u)/tr.yds.g-otomatik
+  Kanıt: ~/.empp-agent/log/g-otomatik.log (JSON satırı, set başına); stdout/stderr aşağıda.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>tr.yds.g-otomatik</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/nadir/01dev/electron-multi-platform-packager/tools/g-yayin/otomatik-yayin.js</string>
+    <string>--tum-yds</string>
+    <string>--uygula</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nadir/01dev/electron-multi-platform-packager</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nadir/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nadir/.empp-agent/log/g-otomatik.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nadir/.empp-agent/log/g-otomatik.launchd.log</string>
+</dict>
+</plist>
