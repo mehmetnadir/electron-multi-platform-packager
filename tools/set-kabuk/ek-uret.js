@@ -46,7 +46,8 @@ const EK_BUCKET = 'ydsdigital';
 const RCLONE_AYAR = ['--contimeout', '30s', '--timeout', '5m', '--retries', '3',
   '--low-level-retries', '10'];
 /** Aynı istek + taban için yeniden denenmeyen "uygun değil" nedenleri (kabukTazele uygunluk). */
-const UYGUN_DEGIL = /bookN düzeni yok|tek kitaplı paket|dokunulmaz|Web-Z listesinde kitap yok/;
+const UYGUN_DEGIL = new RegExp('bookN düzeni yok|tek kitaplı paket|dokunulmaz'
+  + '|Web-Z listesinde kitap yok|üreteç tabanı');
 /** Geçici hatada geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. */
 const GERI_TABAN_MS = 15 * 60 * 1000;
 const GERI_TAVAN_MS = 6 * 60 * 60 * 1000;
@@ -221,7 +222,7 @@ function atlamaNedeni(kayit, s, { webzSha = null, simdi = Date.now() } = {}) {
 
 /** Sonuç kesin mi (durum dosyasında yeniden denenmez). Kuru koşu hiç kaydedilmez. SAF. */
 function kesinSonucMu(sonuc) {
-  if (['yuklendi', 'tavan'].includes(sonuc.durum)) return true;
+  if (['yuklendi', 'mevcut', 'tavan'].includes(sonuc.durum)) return true;
   if (sonuc.durum === 'ret') return sonuc.retYazildi === true;
   return sonuc.durum === 'atlandi' && UYGUN_DEGIL.test(String(sonuc.neden || ''));
 }
@@ -299,21 +300,22 @@ function canliMi(pid) {
   }
 }
 
-/** Dizini os.tmpdir altına taşır (silmez; OS temizler). Taşınamazsa false. */
+/** Dizini os.tmpdir altına taşır (silmez; OS temizler). @returns {string|null} yeni yol */
 function kenaraAl(dizin) {
   try {
-    const hedef = fs.mkdtempSync(path.join(os.tmpdir(), 'kabuk-ek-kilit-'));
-    fs.renameSync(dizin, path.join(hedef, 'kilit'));
-    return true;
+    const hedef = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kabuk-ek-kilit-')), 'kilit');
+    fs.renameSync(dizin, hedef);
+    return hedef;
   } catch (_) {
-    return false;
+    return null;
   }
 }
 
 /**
  * Tek kopya kilidi (mkdir atomik). Sahip pid ölmüşse kilit bayattır: kenara alınır, yeniden
  * denenir. pid dosyası henüz yazılmamış taze kilit (<30 sn) MEŞGUL sayılır. Bayat kilit kenara
- * alınamazsa (yarış) MEŞGUL sayılır.
+ * alınamazsa (yarış) MEŞGUL sayılır. Taşınan dizindeki pid okunan bayat pid değilse (arada başka
+ * kopya kilidi devraldı) dizin GERİ taşınır ve MEŞGUL dönülür.
  * @returns {null | (() => void)} null = başka kopya çalışıyor; fonksiyon = bırak
  */
 function kilitAl(kilit, {
@@ -348,7 +350,12 @@ function kilitAl(kilit, {
     try { yas = simdi() - fs.statSync(kilit).mtimeMs; } catch (_) { /* yok */ }
     if (yas < 30000) return null;
   }
-  if (!kenar(kilit)) return null;
+  const tasinan = kenar(kilit);
+  if (!tasinan) return null;
+  if (okuSessiz(path.join(tasinan, 'pid')) !== sahipMetni) {
+    try { fs.renameSync(tasinan, kilit); } catch (_) { /* yeni sahip zaten kurdu */ }
+    return null;
+  }
   try {
     fs.mkdirSync(kilit);
   } catch (e) {
@@ -425,6 +432,9 @@ function varsayilanBag(env = process.env) {
     r2Onbellek: (...a) => require('../../src/agent/kaynak-arsivi').r2Onbellek(...a),
     merdivenAcik: () => require('../../src/agent/icerik-merdiven').merdivenAcik(env),
     setEki: () => require('../../src/agent/set-uyelik-ek'),
+    // ProBook r2-kur'un üreteç kararı: runner'ın kullandığı AYNI modül işlevleri (kopya yok).
+    uretec: () => require('../../src/agent/uretec-kaynak'),
+    panelMenu: () => require('../../src/agent/panel-menu-hizala'),
     aracSurumu: () => aracSurumuAyristir(okuSessiz(`${kabuk().ikiliYolu(env)}.surum`)),
     webzSha: (kisaKod) => webzSettingsShaGetir(kabuk().WEBZ_KOKU, kisaKod),
     /** Swift ikilisi + zip + rclone; eksikse neden döner. */
@@ -467,7 +477,7 @@ async function tabanHazirla(bag, s, calisma) {
   });
   if (onb) {
     await klonla(onb.zip, hedef);
-    return { zip: hedef, kaynak: 'arsiv' };
+    return { zip: hedef, kaynak: 'arsiv', indirilenBayt: 0 };
   }
   const dizin = path.join(bag.ev, 'kabuk-ek-onbellek', String(s.bookId));
   const dosya = path.join(dizin, 'taban.zip');
@@ -484,7 +494,7 @@ async function tabanHazirla(bag, s, calisma) {
     if (st.size === s.boyut && (kayitTutar || await sha256Dosya(dosya) === s.sha256)) {
       if (!kayitTutar) kayitYaz(st);
       await klonla(dosya, hedef);
-      return { zip: hedef, kaynak: 'onbellek' };
+      return { zip: hedef, kaynak: 'onbellek', indirilenBayt: 0 };
     }
     bag.log(`${ISARET} ${s.bookId}: önbellek tabanı ${kayit && kayit.surum || '?'} ≠ ${s.surum}`
       + ' — yenisi indirilip üzerine yazılacak');
@@ -509,7 +519,72 @@ async function tabanHazirla(bag, s, calisma) {
   kayitYaz(fs.statSync(dosya));
   bag.log(`${ISARET} ${s.bookId}: taban indirildi ${((Date.now() - basla) / 1000).toFixed(0)} sn`);
   await klonla(dosya, hedef);
-  return { zip: hedef, kaynak: 'indirme' };
+  return { zip: hedef, kaynak: 'R2', indirilenBayt: st.size };
+}
+
+/** `kabuk-ek-onbellek` altındaki dosyaların toplam baytı (yoksa 0). */
+function onbellekBoyutu(ev) {
+  const kok = path.join(ev, 'kabuk-ek-onbellek');
+  let top = 0;
+  const gez = (d) => {
+    let girdiler = [];
+    try { girdiler = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of girdiler) {
+      const y = path.join(d, e.name);
+      if (e.isDirectory()) gez(y);
+      else if (e.isFile()) { try { top += fs.statSync(y).size; } catch (_) { /* yarış */ } }
+    }
+  };
+  gez(kok);
+  return top;
+}
+
+/**
+ * ProBook r2-kur tabanı ÜRETEÇLE yeniden kurar mı (runner `r2KurTabanHazirla` + TABAN KAPSAMA ile
+ * aynı karar, aynı modül işlevleri). Kurarsa Mac'in geçerli R2 build'inden ürettiği ekin
+ * girdiSha'sı
+ * ProBook'unkiyle tutmaz → set atlanır. `asama`: 'taban' (merdivenden önce, `tabanUretecMi`) |
+ * 'kapsama' (set ekinden sonra, `tabanKitapEksik` + panel içerik istisnası).
+ * @returns {string|null} neden
+ */
+function uretecTabaniNedeni({ U, P, zip, setListesi = null, asama, env }) {
+  if (!U.uretecAcik(env)) return null;
+  if (asama === 'taban') {
+    const d = U.tabanUretecMi(zip);
+    return d.atla ? `ProBook tabanı üreteçle kurar (${d.sebep})` : null;
+  }
+  const e = U.tabanKitapEksik(zip, setListesi);
+  if (!e.atla) return null;
+  const duran = e.eksik.filter((id) => P.kokIcerikVarMi(zip, id));
+  if (duran.length && duran.length === e.eksik.length) return null; // runner istisnası
+  return `set eki sonrası eksik: ${e.eksik.join(', ')} (${e.sebep}) — ProBook üreteçle kurar`;
+}
+
+/**
+ * R2'de bu girdiSha için doğrulanmış ek var mı: son.json (girdiSha + webzSettingsSha eşit) +
+ * ek zip `ekAc` + imza açık anahtarla geçerli. Herhangi bir adım düşerse false (yüklenir).
+ */
+async function r2EkGecerliMi(bag, ek, o) {
+  const { bookId, girdiSha, kip, webzSettingsSha, klasorler, acikAnahtar, calisma } = o;
+  const al = async (anahtar, yerel) => {
+    const r = await bag.rclone(['copyto', `${R2_UZAK}:${EK_BUCKET}/${anahtar}`, yerel]);
+    return r.code === 0 ? fs.readFileSync(yerel) : null;
+  };
+  try {
+    const sonHam = await al(ek.sonAnahtari(bookId), path.join(calisma, 'r2-son.json'));
+    if (!sonHam) return false;
+    const son = JSON.parse(sonHam.toString('utf8'));
+    if (son.girdiSha !== girdiSha || !webzSettingsSha || son.webzSettingsSha !== webzSettingsSha) {
+      return false;
+    }
+    const zip = await al(ek.ekAnahtari(bookId, girdiSha), path.join(calisma, 'r2-ek.zip'));
+    const imza = await al(ek.imzaAnahtari(bookId, girdiSha), path.join(calisma, 'r2-ek.imza'));
+    if (!zip || !imza) return false;
+    ek.ekAc(zip, { bookId, girdiSha, kip, ...(klasorler ? { klasorler } : {}) });
+    return ek.ekImzaDogrula(zip, imza.toString('utf8'), acikAnahtar);
+  } catch (_) {
+    return false;
+  }
 }
 
 /** Merdiven + set eki (runner r2-kur zinciri; aynı env bayrakları, aynı fonksiyonlar). */
@@ -572,16 +647,18 @@ async function retYaz(bag, s, ek, girdiSha, neden, o, calisma) {
  * Bir seti işler. FIRLATMAZ.
  * @param {{kuru: boolean, cikti?: string, ozelAnahtar?: string|null}} o  ozelAnahtar = PEM
  *   (kuru koşu dışında ZORUNLU; main denetler)
- * @returns {Promise<{bookId, durum: 'yuklendi'|'kuru'|'tavan'|'ret'|'atlandi'|'hata', neden,
- *   girdiSha?, bayt?, dosyaSayisi?, anahtar?, webzSettingsSha?, retYazildi?, sureMs}>}
+ * @returns {Promise<{bookId, durum: 'yuklendi'|'mevcut'|'kuru'|'tavan'|'ret'|'atlandi'|'hata',
+ *   neden, girdiSha?, bayt?, dosyaSayisi?, anahtar?, webzSettingsSha?, retYazildi?, taban?,
+ *   indirilenBayt?, onbellekBayt?, sureMs}>}
  */
 async function setIsle(bag, s, o) {
   const basla = Date.now();
   const sonuc = { bookId: s.bookId, durum: 'hata', neden: null };
   const bitir = (durum, neden, ek = {}) => {
     Object.assign(sonuc, ek, { durum, neden, sureMs: Date.now() - basla });
-    const alanlar = ['girdiSha', 'kip', 'bayt', 'dosyaSayisi', 'anahtar', 'taban']
-      .filter((k) => sonuc[k] != null).map((k) => `${k}=${sonuc[k]}`).join(' ');
+    if (sonuc.taban) sonuc.onbellekBayt = onbellekBoyutu(bag.ev);
+    const alanlar = ['girdiSha', 'kip', 'bayt', 'dosyaSayisi', 'anahtar', 'taban', 'indirilenBayt',
+      'onbellekBayt'].filter((k) => sonuc[k] != null).map((k) => `${k}=${sonuc[k]}`).join(' ');
     const satir = `${ISARET} SONUÇ ${s.bookId} durum=${durum} ${alanlar} sure=${sonuc.sureMs}ms`
       + `${neden ? ` — ${neden}` : ''}`;
     (['hata', 'tavan', 'ret'].includes(durum) ? bag.warn : bag.log)(satir);
@@ -595,7 +672,22 @@ async function setIsle(bag, s, o) {
     await fsp.mkdir(calisma, { recursive: true });
     const taban = await tabanHazirla(bag, s, calisma);
     sonuc.taban = `${s.surum}/${taban.kaynak}`;
+    sonuc.indirilenBayt = taban.indirilenBayt;
+    // ProBook bu tabanı üreteçle yeniden kuracaksa ek girdiSha'sı tutmaz: üretme, bildir (kesin).
+    const uretecAtla = async (neden) => {
+      await bag.bildir(`kabuk-ek ${s.bookId}: üreteç tabanı — ek üretilmedi (${neden})`);
+      return bitir('atlandi', `üreteç tabanı: ${neden}`);
+    };
+    const U = bag.uretec();
+    const P = bag.panelMenu();
+    const n1 = uretecTabaniNedeni({ U, P, zip: taban.zip, asama: 'taban', env: bag.env });
+    if (n1) return uretecAtla(n1);
     const job = await kaynakAdimlari(bag, s, taban.zip, calisma);
+    const liste = bag.setEki().setListesiCoz({ job, env: bag.env });
+    const n2 = uretecTabaniNedeni({
+      U, P, zip: taban.zip, setListesi: liste ? liste.ham : null, asama: 'kapsama', env: bag.env,
+    });
+    if (n2) return uretecAtla(n2);
 
     let cikti = null;
     const kt = await bag.kabukTazele({
@@ -658,7 +750,7 @@ async function setIsle(bag, s, o) {
     sonuc.anahtar = anahtar;
     const son = {
       bookId: String(s.bookId), girdiSha, kip, uretildi: new Date().toISOString(),
-      tabanSurum: s.surum,
+      tabanSurum: s.surum, webzSettingsSha: cikti.webzSettingsSha || null,
     };
     const sonMetni = `${JSON.stringify(son, null, 2)}\n`;
     const ekDosyasi = path.join(calisma, 'ek.zip');
@@ -683,7 +775,16 @@ async function setIsle(bag, s, o) {
       await bag.bildir(`kabuk-ek ${s.bookId}: özel anahtar yok — ek yüklenmedi`);
       return bitir('hata', 'özel anahtar yok — yükleme yok');
     }
-    // SIRA: ek (içerik adresli) → imza → son.json; son.json yalnız imzalı, var olan eki gösterir.
+    // Anahtar girdiSha ile adreslenir ama bayt aynı DEĞİL (manifest `uretildi` saati taşır). R2'de
+    // aynı girdiSha + aynı Web-Z settings için doğrulanmış (ekAc + imza) ek varsa yüklenmez:
+    // ProBook'un okuduğu nesne yarış sırasında değişmez (TOCTOU penceresi daralır).
+    if (await r2EkGecerliMi(bag, ek, {
+      bookId: String(s.bookId), girdiSha, kip, webzSettingsSha: cikti.webzSettingsSha,
+      klasorler: secenek.klasorler, acikAnahtar: crypto.createPublicKey(o.ozelAnahtar), calisma,
+    })) {
+      return bitir('mevcut', 'R2\'de aynı girdiSha ve Web-Z settings için doğrulanmış ek var');
+    }
+    // SIRA: ek → imza → son.json; son.json yalnız imzalı, var olan eki gösterir.
     const yuklemeler = [
       [ekDosyasi, anahtar, 'ek'], [imzaDosyasi, imzaAnahtar, 'imza'],
       [sonDosyasi, sonAnahtar, 'son.json'],
@@ -774,6 +875,12 @@ async function main(argv, bag = varsayilanBag()) {
     } else if (!ozelAnahtar) {
       bag.log(`${ISARET} --kuru: özel anahtar yok, ek imzasız üretilecek`);
     }
+    // --kuru yalnız rapordur: bildirim telefona gitmez, loga düşer.
+    if (o.kuru) {
+      const log = bag.log;
+      const bildir = async (m) => { log(`${ISARET} (--kuru, bildirim gönderilmedi) ${m}`); };
+      bag = { ...bag, bildir };
+    }
     const sorgu = sqlSonucu(await bag.ssh(sqlKur(o)));
     if (sorgu.durum === 'hata') {
       bag.warn(`${ISARET} DB sorgusu başarısız (ssh ${sorgu.kod}): ${sorgu.hata}`);
@@ -843,7 +950,8 @@ if (require.main === module) {
 
 module.exports = {
   ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
-  kaliciRetMi, aracSurumuAyristir, sqlSonucu, geriCekilmeMs, atlamaNedeni, kesinSonucMu,
+  kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, onbellekBoyutu, kenaraAl,
+  geriCekilmeMs, atlamaNedeni, kesinSonucMu,
   durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
   varsayilanBag,
 };

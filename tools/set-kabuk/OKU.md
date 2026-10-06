@@ -33,10 +33,12 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
 
 | Durum | Sonuç |
 |---|---|
-| `--kuru` | R2'ye hiçbir şey yazılmaz. Taban indirmesi (okuma) yapılabilir. Anahtar varsa ek imzalanır. |
+| `--kuru` | R2'ye hiçbir şey yazılmaz. Bildirim gönderilmez (loga düşer). Taban indirmesi (okuma) yapılabilir. Anahtar varsa ek imzalanır. |
 | Özel anahtar yok (kuru değil) | Hiçbir set işlenmez, yükleme yok. Çıkış 1, `bildir`. |
 | Araç eksik | Taban indirilmez. Çıkış 1. |
 | Tavan aşıldı | Yükleme yok. Log + `bildir kosucu`. Kesin sonuç. |
+| ProBook tabanı üreteçle kurar | Ek üretilmez (`atlandi: üreteç tabanı`), `bildir`. Kesin sonuç. Ayrıntı aşağıda. |
+| R2'de aynı girdiSha + Web-Z sha için doğrulanmış ek var | Yükleme yok (`mevcut`). Kesin sonuç. |
 | Kapı RED, eşleme, kapak 404 ya da küçük gövde | Ek yok. girdiSha varsa `<girdiSha>.ret.json` yazılır. `bildir`. |
 | Kapak HTTP 5xx, ağ, Web-Z hatası | Geçici. Geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. |
 | Bir yükleme düştü | Sonrakiler YÜKLENMEZ (ek düşerse imza ve son.json da). Çıkış 1, `bildir`. |
@@ -69,6 +71,38 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
   - `--set` kayıtlara bakmadan her zaman üretir.
 - **Tavan:** A modülünün `tavanAl()` değeri (`EMPP_KABUK_EK_TAVAN`, varsayılan 2 MiB). **DİKKAT:**
   değer Mac ve ProBook'ta EŞİT olmalı. Mac'te büyük tavanla üretilen ek ProBook'ta reddedilir.
+
+## Üreteç tabanı (girdiSha eşliği)
+
+ProBook r2-kur, geçerli R2 build'ini iki durumda taban almaz, build'i üreteçle yeniden kurar
+(runner `r2KurTabanHazirla` + "TABAN KAPSAMA"):
+
+1. Taban üreteç build'idir ya da kökte Electron girişi yoktur (`uretec-kaynak.tabanUretecMi`).
+2. Set ekinden sonra listedeki bir kitap build'de yoktur (`tabanKitapEksik`). İçeriği kökte duran
+   kitap eksik sayılmaz (`panel-menu-hizala.kokIcerikVarMi`).
+
+Bu durumda Mac'in geçerli build'den ürettiği ekin girdiSha'sı ProBook'unkiyle tutmaz. ProBook her
+seferinde "ek yok" ile erteler. `ek-uret.js` aynı modül işlevleriyle aynı kararı verir. Karar
+olumluysa seti atlar ve `bildir` gönderir. `EMPP_INDEX_URETECI=0` iken karar uygulanmaz.
+
+**DİKKAT:** A1 seti 45485 (geçerli build 2.51.5) üreteç build'idir (06.10 ölçümü). Bu set şu an ek
+alamaz. Mac'te üreteç yolu açılırsa (ayrı karar) bu sınırlama kalkar.
+
+## Evde taban indirme (karar 06.10)
+
+- Evde taban indirmesi SERBESTTİR. Ek hattının amacı Mac evdeyken de ek üretmektir.
+- Nadir'in ev kuralı büyük YÜKLEMEYİ kapsar (dmg, apk, noter). İndirme bu kuralın dışındadır.
+- Taban 1-3 GB'dir. Önce Mac arşivi ve önbellek denenir. İndirme yalnız ikisi de tutmazsa olur.
+- SONUÇ satırı ölçüm taşır: `taban=<sürüm>/<arsiv|onbellek|R2>`, `indirilenBayt=<bayt>`,
+  `onbellekBayt=<kabuk-ek-onbellek toplamı>`.
+
+## CDN önbellek notu (`?t=`)
+
+- ProBook `son.json` ve ret işaretini `?t=<ms>` önbellek kırıcıyla okur.
+- Kırıcı yalnız sorgu dizgisi Cloudflare önbellek anahtarına giriyorsa işe yarar. Bir kenar kuralı
+  sorguyu yok sayarsa bayat `son.json` gelir.
+- **DİKKAT:** bunu kenardan ölç (ev ya da ofis bağlantısı), srv21'den ölçme. srv21 kenar kuralını
+  farklı görür.
 
 ## Disk (silme yok)
 
