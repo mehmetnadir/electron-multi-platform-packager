@@ -352,13 +352,15 @@ test('ölü sahibin kilidi devralınır; koşu sonunda kilit bırakılır', asyn
 
 test('uygula: beyaz liste dışı set atlanır + bildirim (24 sa tekrar etmez)', async () => {
   const { ops, bildirimler } = ortam();
-  const ek = { ...ops, getir: sahteGetir({}), sql: sahteSql(),
+  // 06.10: 45550 artık listede (36 YDS seti). Liste dışı ama YDS yayıncılı (tabanı bilinen)
+  // 99999 kullanılır: 'taban-bilinmiyor' değil, 'beyaz-liste-disi' yoluna düşmeli.
+  const ek = { ...ops, getir: sahteGetir({}), sql: sahteSql({ id: '99999' }),
     adimKos: async () => assert.fail('beyaz liste dışında adım koşmamalı') };
-  const r = await oy.kos(oy.argsAyristir(['45550', '--uygula']), ek);
+  const r = await oy.kos(oy.argsAyristir(['99999', '--uygula']), ek);
   assert.equal(r.setler[0].karar, 'atla');
   assert.match(r.setler[0].sebep, /beyaz-liste-disi/);
   assert.equal(bildirimler.length, 1);
-  await oy.kos(oy.argsAyristir(['45550', '--uygula']), ek);
+  await oy.kos(oy.argsAyristir(['99999', '--uygula']), ek);
   assert.equal(bildirimler.length, 1, 'aynı durum 24 saatte bir bildirilir');
 });
 
