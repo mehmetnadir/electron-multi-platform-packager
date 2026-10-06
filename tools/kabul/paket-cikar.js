@@ -50,11 +50,43 @@ function calistir(komut, argumanlar, secenek = {}) {
   return spawnSync(komut, argumanlar, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...secenek });
 }
 
-function yedizBul() {
-  for (const aday of ['/opt/homebrew/bin/7zz', '/usr/local/bin/7zz', '7zz', '/usr/local/bin/7z', '7z']) {
-    const r = calistir('which', [aday]);
-    if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
-    if (aday.startsWith('/') && fs.existsSync(aday)) return aday;
+/**
+ * Windows'ta 7z adayları (06.10, kasa envanteri): kasa 7-Zip'i kurulu DEĞİL, taşınabilir kopya
+ * `C:\empp-ajan\araclar\7zip\7z.exe` (ortam.ps1 PATH'e ekler). `which` Windows'ta yok; kasada Git'in
+ * `usr\bin\which.exe` var ama MSYS yolu döner (`/c/empp-ajan/...`) — Node `spawn` onu ÇALIŞTIRAMAZ.
+ * Bu yüzden Windows'ta `where` (gerçek Windows yolu) + bilinen tam yollar kullanılır.
+ */
+const WIN_YEDIZ_YOLLARI = [
+  'C:\\empp-ajan\\araclar\\7zip\\7z.exe',
+  'C:\\Program Files\\7-Zip\\7z.exe',
+  'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+];
+
+/**
+ * 7z ikilisini bulur. `EMPP_7Z` (tam yol) her platformda önce gelir.
+ * @param {{platform?:string, env?:object, varMi?:Function, kos?:Function}} [o] test için enjekte edilebilir
+ * @returns {string|null} çalıştırılabilir tam yol
+ */
+function yedizBul(o = {}) {
+  const platform = o.platform || process.platform;
+  const env = o.env || process.env;
+  const varMi = o.varMi || fs.existsSync;
+  const kos = o.kos || calistir;
+  if (env.EMPP_7Z && varMi(env.EMPP_7Z)) return env.EMPP_7Z;
+  if (platform === 'win32') {
+    for (const y of WIN_YEDIZ_YOLLARI) if (varMi(y)) return y;
+    for (const ad of ['7z', '7za', '7zz']) {
+      const r = kos('where', [ad]);
+      const ilk = r && r.status === 0
+        ? String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) : null;
+      if (ilk && !ilk.startsWith('/')) return ilk; // MSYS biçimi (/c/...) spawn edilemez
+    }
+    return null;
+  }
+  for (const aday of ['/opt/homebrew/bin/7zz', '/usr/local/bin/7zz', '7zz', '/usr/local/bin/7z', '7z', '7za']) {
+    const r = kos('which', [aday]);
+    if (r && r.status === 0 && String(r.stdout || '').trim()) return String(r.stdout).trim().split('\n')[0];
+    if (aday.startsWith('/') && varMi(aday)) return aday;
   }
   return null;
 }
@@ -332,4 +364,5 @@ module.exports = {
   kokEnvanteri,
   paketiAc,
   yedizBul,
+  WIN_YEDIZ_YOLLARI,
 };

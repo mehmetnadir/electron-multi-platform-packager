@@ -20,6 +20,9 @@
  *        a. kayıt kilidi (runner devralma / bekçi ile ortak `.kilit`) — doluysa atla;
  *        b. sunucu yoklaması `/result/presign` (yükleme yok) — 409 (kira bizde değil) → atla;
  *        c. bayat kontrolü (bekçiyle aynı: kaynak sürümü + kanonik damga) — bayatsa `bayat/` + failed;
+ *       c2. okuyucu sürümü kapısı (06.10): exe'deki okuyucu kabuğu ÖLÇÜLÜR (damga kanıt değil) —
+ *           kanonikle eşit değilse `bayat/` + failed (kabul.py koşmaz); ölçülemezse ÖLÇÜLEMEDİ yolu;
+ *           `KABUL_OKUYUCU_SURUM=uyar` → yalnız log;
  *        d. `windows-serit.kabulKos` (etiket imzasiz; kasa kabul kilidi 120 dk beklenir):
  *             GEÇTİ       → manifest `durum:'imza-bekliyor'` + kabulKapi/kabulKanit; iş kanıtı güncellenir.
  *                           Kayıt artık imza bekçisinin listesindedir. Sunucu tutması değişmez.
@@ -45,6 +48,7 @@ const runner = require('../../src/agent/runner.js');
 const W = require('../../src/agent/windows-serit');
 const H = require('../../src/agent/windows-hazir');
 const { kabulKaldiMi, kiraBizdeDegilMi } = require('./imza-bekcisi');
+const OSK = require('../kabul/okuyucu-surumu-kapisi');
 
 const TEKIL_KILIT = '.kabul-iscisi.kilit';
 
@@ -121,6 +125,63 @@ async function sonucuBildirVeTasi(giris, job, sonuc, d) {
   return { durum: sonuc.tur, sebep: sonuc.mesaj, dizin: s.dizin, ...(sonuc.ek && sonuc.ek.kabulDeneme ? { deneme: sonuc.ek.kabulDeneme } : {}) };
 }
 
+/** Okuyucu kapısı ÖLÇÜLEMEDİ hata metni işareti (kabulKaldiMi / kasaMesgulMu ile EŞLEŞMEZ). */
+const OKUYUCU_OLCULEMEDI_ISARETI = '[okuyucu-surumu]';
+
+/**
+ * Paketteki okuyucu kabuğu sürümünü ölçer (`d.okuyucuOlc`, varsayılan OSK.paketOlc; exe NSIS'ten açılır).
+ * Açılan ağaç `work/okuyucu` altındadır ve kabul.py'den ÖNCE silinir (disk: exe ~1,5 GB × 2).
+ * @returns {Promise<{red?:object, sonuc:object}>} red: sonucuBildirVeTasi'ye gidecek bayat sonucu.
+ *   ÖLÇÜLEMEDİ → throw (OKUYUCU_OLCULEMEDI_ISARETI): çağıranın ÖLÇÜLEMEDİ yolu deneme sayar.
+ */
+async function okuyucuKapisi(giris, gecerliKanonik, work, d) {
+  const { log } = d;
+  const olc = d.okuyucuOlc || OSK.paketOlc;
+  const calisma = path.join(work, 'okuyucu');
+  const ad = path.basename(giris.dizin);
+  let sonuc;
+  try {
+    sonuc = await olc({
+      paket: giris.exeYolu, platform: 'windows', calisma,
+      kanonik: (gecerliKanonik && gecerliKanonik.kabukSurum) || undefined, env: d.env || process.env,
+    });
+  } catch (e) {
+    const kp = OSK.kip(d.env || process.env);
+    sonuc = {
+      karar: kp === 'uyar' ? OSK.KARAR.GECTI : OSK.KARAR.OLCULEMEDI, hamKarar: OSK.KARAR.OLCULEMEDI,
+      olculen: null, kanonik: (gecerliKanonik && gecerliKanonik.kabukSurum) || null, kip: kp, birimler: [],
+      sebepler: [`paket açılamadı: ${e.message}`],
+    };
+    if (kp === 'uyar') sonuc.uyari = `KABUL_OKUYUCU_SURUM=uyar: paket açılamadı (${e.message}) — yalnız uyarı`;
+  } finally {
+    await fsp.rm(calisma, { recursive: true, force: true }).catch(() => {});
+  }
+  log(`kabul-işçisi: ${ad} ${OSK.ozetSatiri(sonuc)}`);
+  const iz = {
+    karar: sonuc.karar, hamKarar: sonuc.hamKarar, olculen: sonuc.olculen || null, kanonik: sonuc.kanonik || null,
+    sebepler: (sonuc.sebepler || []).slice(0, 5), zaman: new Date().toISOString(),
+  };
+  if (OSK.gecerMi(sonuc)) {
+    await H.manifestGuncelle(giris.dizin, { okuyucuSurumu: iz });
+    return { sonuc };
+  }
+  if (sonuc.hamKarar === OSK.KARAR.RED) {
+    const ayrinti = `okuyucu ${sonuc.olculen || '?'} ≠ kanonik ${sonuc.kanonik || '?'}`;
+    return {
+      sonuc,
+      red: {
+        tur: 'bayat', alt: 'bayat',
+        mesaj: `[imza-bekliyor] ${H.KABUL_KUYRUGU_ISARETI} hazır kayıt bayat (${ayrinti}: `
+          + `${(sonuc.sebepler || []).slice(0, 3).join('; ')})`.slice(0, 1500),
+        ek: {
+          durum: 'bayat', sebep: `okuyucu-surumu: ${ayrinti}`, zamanBayat: new Date().toISOString(), okuyucuSurumu: iz,
+        },
+      },
+    };
+  }
+  throw new Error(`${OKUYUCU_OLCULEMEDI_ISARETI} okuyucu sürümü ÖLÇÜLEMEDİ: ${(sonuc.sebepler || []).join('; ').slice(0, 600)}`);
+}
+
 /**
  * Tek kaydı kabul et. @returns {Promise<{durum:'gecti'|'red'|'olculemedi'|'birakildi'|'bayat'|'atlandi'|'hata',
  *   sebep?:string, dizin?:string, deneme?:number}>}
@@ -152,7 +213,8 @@ async function kaydiIsle(listedeki, d) {
     // BAYAT KONTROLÜ — imza-bekcisi.js ile AYNI ölçüt (kabul de bayat pakete harcanmasın).
     const gecerli = d.gecerliKaynakSurumu ? await d.gecerliKaynakSurumu(job, yoklama)
       : (yoklama && (yoklama.gecerliKaynakSurumu || yoklama.kaynakSurumu)) || null;
-    const karar = H.bayatKarari(m, { gecerliKaynakSurumu: gecerli, gecerliKanonik: await H.gecerliKanonikOku(cfg) });
+    const gecerliKanonik = await H.gecerliKanonikOku(cfg);
+    const karar = H.bayatKarari(m, { gecerliKaynakSurumu: gecerli, gecerliKanonik });
     if (karar.bilinmiyor) log(`kabul-işçisi: ${path.basename(giris.dizin)} bayat kıyası yapılamadı: ${karar.bilinmiyor}`);
     if (karar.bayat) {
       const ayrinti = karar.kayitli ? `kayıt ${karar.kayitli}, geçerli ${karar.gecerli}` : karar.sebep;
@@ -165,11 +227,19 @@ async function kaydiIsle(listedeki, d) {
     await H.manifestGuncelle(giris.dizin, { kabulIsleniyor: { pid: process.pid, zaman: new Date().toISOString() } });
     work = await fsp.mkdtemp(path.join(os.tmpdir(), 'kabul-iscisi-'));
     let k;
+    let okuyucuRed = null;
     try {
-      k = await d.kabulKos({
-        exe: giris.exeYolu, job, work, cfg: { ...cfg, winKasaKilitBeklemeMs: cfg.isciKasaKilitBeklemeMs },
-        log, aktivasyon: d.aktivasyonBeklenir(job.bookTitle), etiket: 'imzasiz', sleep: d.sleep,
-      });
+      // OKUYUCU SÜRÜMÜ KAPISI (06.10, A1 olayı): manifest damgası kanıt DEĞİL — paketteki okuyucu kabuğu
+      // ÖLÇÜLÜR (tools/kabul/okuyucu-surumu-kapisi.js, tanım tek kaynak). RED (eski/yeni okuyucu) → bayat;
+      // ÖLÇÜLEMEDİ → aşağıdaki ÖLÇÜLEMEDİ yolu (deneme sayılır, paket suçlanmaz).
+      // `KABUL_OKUYUCU_SURUM=uyar` → kapı yalnız loglar, kabul sürer (geri alma).
+      okuyucuRed = (await okuyucuKapisi(giris, gecerliKanonik, work, d)).red || null;
+      if (!okuyucuRed) {
+        k = await d.kabulKos({
+          exe: giris.exeYolu, job, work, cfg: { ...cfg, winKasaKilitBeklemeMs: cfg.isciKasaKilitBeklemeMs },
+          log, aktivasyon: d.aktivasyonBeklenir(job.bookTitle), etiket: 'imzasiz', sleep: d.sleep,
+        });
+      }
     } catch (e) {
       const zaman = new Date().toISOString();
       if (kabulKaldiMi(e)) {
@@ -197,6 +267,8 @@ async function kaydiIsle(listedeki, d) {
       await H.manifestGuncelle(giris.dizin, { kabulDeneme: deneme, sonHata: e.message, sonDeneme: zaman, sonrakiDeneme, kabulIsleniyor: null });
       return { durum: 'olculemedi', sebep: e.message, deneme };
     }
+    // Okuyucu RED: kabul.py hiç koşmadı; kayıt bayat/'a, sunucuya failed (bayat kontrolüyle aynı yol).
+    if (okuyucuRed) return await sonucuBildirVeTasi(giris, job, okuyucuRed, d);
     // GEÇTİ: kayıt yerinde kalır, imza bekçisinin listesine geçer (aynı kayıt, durum değişir).
     await H.kabulGectiIsle(cfg, giris, k, log);
     return { durum: 'gecti', dizin: giris.dizin };
@@ -301,4 +373,7 @@ if (require.main === module) {
   ana().then(() => process.exit(0)).catch((e) => { console.error('kabul-işçisi HATA:', e && e.stack); process.exit(1); });
 }
 
-module.exports = { isciAyarlari, kasaMesgulMu, kaydiIsle, sonucuBildirVeTasi, yasAlarmi, tur, dongu, ana, TEKIL_KILIT };
+module.exports = {
+  isciAyarlari, kasaMesgulMu, kaydiIsle, sonucuBildirVeTasi, okuyucuKapisi, yasAlarmi, tur, dongu, ana, TEKIL_KILIT,
+  OKUYUCU_OLCULEMEDI_ISARETI,
+};

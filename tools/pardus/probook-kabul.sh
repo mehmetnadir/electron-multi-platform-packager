@@ -260,6 +260,58 @@ kanit_sakla(){
 }
 trap 'temizle' EXIT
 
+# OKUYUCU SURUMU KAPISI (06.10, A1 olayi): paketteki okuyucu kabugunun surumu kanonikle ESIT mi?
+# 45477/45478/45480/45485/45487/45496 A1 setleri okuyucu 1.13.3 ile (kanonik 1.13.14) uretildi; bu kapi
+# okuyucu surumunu OLCMEDIGI icin 5 pardus paketi yayinlandi. Damga kanit degil: olcum
+# tools/kabul/okuyucu-surumu-kapisi.js (tanim tek kaynak). .impark asar'i diske ACILMAZ — 7z akisindan
+# yalniz olcum dosyalari alinir (tools/kabul/impark-okuyucu-cikar.js). ProBook kilidinden ve kopyadan
+# ONCE kosar: bayat paket ProBook'u mesgul etmez.
+#   RED (eski/yeni okuyucu) → cikis 1 · OLCULEMEDI → cikis 4 (paket kusuru degil, is ertelenir).
+#   KABUL_OKUYUCU_SURUM=uyar → yalniz UYARI, kabul surer (geri alma). Node: KABUL_OKUYUCU_NODE >
+#   KABUL_NODE (runner process.execPath verir) > node > ~/empp-serit/node/bin/node.
+#   Uzak girdide (uzak:) olcum ProBook'ta kosar (node + 7z orada; sonuc Mac'te karara baglanir).
+okuyucu_kapisi(){ # $@ = paket [ek okuyucu-surumu-kapisi.js argumanlari]
+  local node="${KABUL_OKUYUCU_NODE:-${KABUL_NODE:-node}}" kapi="$BETIK_DIZIN/../kabul/okuyucu-surumu-kapisi.js"
+  local uyar=0 cikti rc karar ham olculen kanonik sebep
+  [ "$(printf '%s' "${KABUL_OKUYUCU_SURUM:-}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')" = "uyar" ] && uyar=1
+  if ! command -v "$node" >/dev/null 2>&1 && [ -x "$HOME/empp-serit/node/bin/node" ]; then
+    node="$HOME/empp-serit/node/bin/node"
+  fi
+  if ! command -v "$node" >/dev/null 2>&1; then
+    cikti="OKUYUCU_KARAR=OLCULEMEDI"$'\n'"OKUYUCU_SEBEP=node yok ($node)"; rc=127
+  elif [ ! -f "$kapi" ]; then
+    cikti="OKUYUCU_KARAR=OLCULEMEDI"$'\n'"OKUYUCU_SEBEP=kapi betigi yok ($kapi)"; rc=127
+  else
+    cikti=$("$node" "$kapi" "$@" --platform pardus ${KABUL_OKUYUCU_KANONIK:+--kanonik "$KABUL_OKUYUCU_KANONIK"} 2>&1)
+    rc=$?
+  fi
+  printf '%s\n' "$cikti" > "$KANIT/okuyucu-surumu.txt"
+  karar=$(printf '%s\n' "$cikti" | sed -n 's/^OKUYUCU_KARAR=//p' | tail -1)
+  ham=$(printf '%s\n' "$cikti" | sed -n 's/^OKUYUCU_HAM_KARAR=//p' | tail -1)
+  olculen=$(printf '%s\n' "$cikti" | sed -n 's/^OKUYUCU_OLCULEN=//p' | tail -1)
+  kanonik=$(printf '%s\n' "$cikti" | sed -n 's/^OKUYUCU_KANONIK=//p' | tail -1)
+  sebep=$(printf '%s\n' "$cikti" | sed -n 's/^OKUYUCU_SEBEP=//p' | tail -1 | cut -c1-400)
+  [ -n "$sebep" ] || sebep="kapi cikti vermedi (rc=$rc): $(printf '%s\n' "$cikti" | tail -1 | cut -c1-200)"
+  if [ "$karar" = "GECTI" ] && [ "${ham:-GECTI}" = "GECTI" ] && [ "$rc" = "0" ]; then
+    say "okuyucu surumu GECTI: ${olculen:-?} = kanonik ${kanonik:-?}"
+    return 0
+  fi
+  [ -n "$ham" ] || ham="${karar:-OLCULEMEDI}"
+  if [ "$uyar" = "1" ]; then
+    say "UYARI: okuyucu surumu $ham (olculen ${olculen:-?}, kanonik ${kanonik:-?}): $sebep — KABUL_OKUYUCU_SURUM=uyar, kabul suruyor"
+    return 0
+  fi
+  if [ "$ham" = "RED" ]; then
+    red "okuyucu surumu kanonikle esit degil (olculen ${olculen:-?}, kanonik ${kanonik:-?}): $sebep — paket yeniden uretilmeli"
+  fi
+  olculemedi "okuyucu surumu olculemedi: $sebep"
+}
+if [ "$YEREL" = "1" ]; then
+  okuyucu_kapisi "$UZAK"
+elif [ "$KOPYALA" = "1" ]; then
+  okuyucu_kapisi "$GIRDI"
+fi
+
 # ORTAK KILIT (uzak + yerel kapi ayni ~/.kabul.lock; bkz. probook-kilit.sh). Bekleme tavani
 # ajanin kapi zaman asimindan (Mac 8 dk) uzun: once ajan zaman asimi olur → "ertelenebilir".
 BOSLUK_TAVAN="${KABUL_BOSLUK_TAVAN:-1800}"
@@ -430,6 +482,10 @@ else
 
   ssh_kur "$SECILEN_HOST"
   say "ProBook: $HOST (denenen: $DENENEN_STR)"
+  # Uzak girdi: paket ProBook'ta → olcum orada (kilitten ONCE). Kopyalanan paket yukarida olculdu.
+  if [ "$KOPYALA" = "0" ]; then
+    okuyucu_kapisi "$UZAK" --uzak-konak "$HOST" --uzak-anahtar "$KEY" ${KABUL_UZAK_NODE:+--uzak-node "$KABUL_UZAK_NODE"}
+  fi
   BEKLENEN=0
   until C=$(kilit al); do
     [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: kabul kilidi ${C##*KILIT_MESGUL }"; exit 1; }

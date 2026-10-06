@@ -166,6 +166,12 @@ function asarGerekliMi(rel) {
   return duzeyUygun && (ad === 'index.html' || ad === 'app.config.js' || H20_JS.test(ad));
 }
 
+/** asar dizini ölçüm ağacında (boş da olsa) açılmalı mı: kök düzeyindeki bookN (okuyucusuz kitap ayrımı). Saf. */
+function asarDizinGerekliMi(rel) {
+  const p = String(rel || '').split('/');
+  return p.length === 1 && KITAP_DIZINI.test(p[0]);
+}
+
 /**
  * asar'dan ölçüm için gereken dosyaları `hedef`e çıkarır (bookN dizinleri boş da olsa açılır:
  * okuyucusuz kitap ayrımı korunur). I/O.
@@ -179,7 +185,7 @@ function asarCikar(asarYolu, hedef) {
   let dosya = 0;
   for (const rel of liste) {
     const p = rel.split('/');
-    if (p.length === 1 && KITAP_DIZINI.test(p[0])) fs.mkdirSync(path.join(hedef, p[0]), { recursive: true });
+    if (asarDizinGerekliMi(rel)) fs.mkdirSync(path.join(hedef, p[0]), { recursive: true });
     if (!asarGerekliMi(rel)) continue;
     let buf;
     try { buf = asar.extractFile(asarYolu, rel); } catch (_) { continue; } // dizin ya da okunamayan
@@ -272,19 +278,58 @@ function ozetSatiri(sonuc) {
 }
 
 /**
- * Paket DOSYASINI (dmg/impark/exe/apk/zip) ya da dizini açıp ölçer (`paket-cikar.js` ile).
- * @param {{paket:string, platform?:string, calisma?:string, kanonik?:string, env?:object, log?:Function}} p
+ * Pardus .impark: asar AKIŞINDAN yalnız ölçüm dosyaları çıkarılır (paket/asar diske açılmaz; 06.10).
+ * `p.uzak` verilirse paket ProBook'tadır: çıkarıcı orada `node -` ile koşar, seçim burada yapılır.
+ * @returns {Promise<object>} okuyucuSurumuOlc sonucu + `cikarma` özeti
+ */
+async function imparkOlc(p, calisma) {
+  // eslint-disable-next-line global-require
+  const IC = require('./impark-okuyucu-cikar');
+  const hedef = path.join(calisma, 'impark-okuyucu');
+  const ortak = { paket: p.paket, hedef, gerekliMi: asarGerekliMi, dizinGerekliMi: asarDizinGerekliMi };
+  let cikarma;
+  if (p.uzak) {
+    cikarma = await IC.uzakImparkAgaciCikar({ ...ortak, sshArgv: p.uzak.sshArgv, uzakNode: p.uzak.node });
+  } else {
+    // eslint-disable-next-line global-require
+    const { yedizBul } = require('./paket-cikar');
+    cikarma = await IC.imparkAgaciCikar({ ...ortak, yediz: yedizBul() });
+  }
+  if (p.log) p.log(`impark ölçüm ağacı: ${cikarma.dosya} dosya, ${cikarma.bayt} B (${cikarma.yontem})`);
+  const sonuc = await okuyucuSurumuOlc(hedef, { asar: false, kanonik: p.kanonik, env: p.env });
+  sonuc.cikarma = { yontem: cikarma.yontem, dosya: cikarma.dosya, bayt: cikarma.bayt, eksik: cikarma.eksik };
+  if (cikarma.eksik && cikarma.eksik.length) {
+    sonuc.sebepler.push(`asar dışı/okunamayan gerekli dosya: ${cikarma.eksik.slice(0, 5).join(', ')}`);
+  }
+  return sonuc;
+}
+
+/**
+ * Uzak (ProBook) ssh argv'si: `ssh <seçenekler> [-i anahtar] <konak>`; komut çıkarıcıda eklenir. Saf.
+ * @param {{konak:string, anahtar?:string|null}} u
+ */
+function uzakSshArgv(u) {
+  return ['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
+    ...(u.anahtar ? ['-i', u.anahtar] : []), u.konak];
+}
+
+/**
+ * Paket DOSYASINI (dmg/impark/exe/apk/zip) ya da dizini açıp ölçer (`paket-cikar.js` ile; pardus
+ * .impark akıştan, bkz. imparkOlc).
+ * @param {{paket:string, platform?:string, calisma?:string, kanonik?:string, env?:object, log?:Function,
+ *   uzak?:{sshArgv:string[], node?:string|null}}} p
  */
 async function paketOlc(p) {
   // eslint-disable-next-line global-require
   const { paketiAc, platformTahmin, platformNormalize } = require('./paket-cikar');
-  const dizinMi = fs.statSync(p.paket).isDirectory();
-  const platform = platformNormalize(p.platform) || platformTahmin(p.paket, dizinMi);
+  const dizinMi = p.uzak ? false : fs.statSync(p.paket).isDirectory();
+  const platform = p.uzak ? 'pardus' : (platformNormalize(p.platform) || platformTahmin(p.paket, dizinMi));
   if (!platform) throw new Error(`platform belirlenemedi (--platform ver): ${p.paket}`);
   const kendi = !p.calisma;
   const calisma = p.calisma || fs.mkdtempSync(path.join(os.tmpdir(), 'okuyucu-surumu-paket-'));
   let acilis = null;
   try {
+    if (platform === 'pardus') return await imparkOlc(p, calisma);
     acilis = paketiAc({ paket: p.paket, platform, calisma, log: p.log || (() => {}) });
     return await okuyucuSurumuOlc(acilis.kok, { asar: acilis.asar, kanonik: p.kanonik, calisma, env: p.env });
   } finally {
@@ -296,13 +341,19 @@ async function paketOlc(p) {
 }
 
 function argumanCoz(argv) {
-  const s = { yol: null, kanonik: null, json: false, platform: null, calisma: null, yardim: false };
+  const s = {
+    yol: null, kanonik: null, json: false, platform: null, calisma: null, yardim: false,
+    uzakKonak: null, uzakAnahtar: null, uzakNode: null,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--kanonik') s.kanonik = argv[++i];
     else if (a === '--json') s.json = true;
     else if (a === '--platform') s.platform = argv[++i];
     else if (a === '--calisma') s.calisma = argv[++i];
+    else if (a === '--uzak-konak') s.uzakKonak = argv[++i];
+    else if (a === '--uzak-anahtar') s.uzakAnahtar = argv[++i];
+    else if (a === '--uzak-node') s.uzakNode = argv[++i];
     else if (a === '-h' || a === '--help' || a === '--yardim') s.yardim = true;
     else if (!a.startsWith('-') && !s.yol) s.yol = a;
   }
@@ -314,15 +365,20 @@ async function calis(argv, yaz = (x) => process.stdout.write(`${x}\n`), env = pr
   const s = argumanCoz(argv);
   if (s.yardim || !s.yol) {
     yaz('Kullanım: node tools/kabul/okuyucu-surumu-kapisi.js <paket-kökü|app.asar|paket> '
-      + '[--platform mac|android|windows|pardus|dizin|zip] [--kanonik X.Y.Z] [--json] [--calisma <dizin>]');
+      + '[--platform mac|android|windows|pardus|dizin|zip] [--kanonik X.Y.Z] [--json] [--calisma <dizin>] '
+      + '[--uzak-konak kullanıcı@konak [--uzak-anahtar <ssh anahtarı>] [--uzak-node <uzak node yolu>]]');
     return { kod: 2 };
   }
-  const yol = path.resolve(s.yol);
-  if (!fs.existsSync(yol)) { yaz(`HATA: yol yok — ${yol}`); return { kod: 2 }; }
+  const uzak = s.uzakKonak
+    ? { sshArgv: uzakSshArgv({ konak: s.uzakKonak, anahtar: s.uzakAnahtar }), node: s.uzakNode } : null;
+  const yol = uzak ? s.yol : path.resolve(s.yol);
+  if (!uzak && !fs.existsSync(yol)) { yaz(`HATA: yol yok — ${yol}`); return { kod: 2 }; }
   let sonuc;
   try {
-    const dizinMi = fs.statSync(yol).isDirectory();
-    if (dizinMi || /\.asar$/i.test(yol)) {
+    const dizinMi = !uzak && fs.statSync(yol).isDirectory();
+    if (uzak) {
+      sonuc = await paketOlc({ paket: yol, uzak, calisma: s.calisma, kanonik: s.kanonik, env });
+    } else if (dizinMi || /\.asar$/i.test(yol)) {
       sonuc = await okuyucuSurumuOlc(yol, { kanonik: s.kanonik, calisma: s.calisma, env });
     } else {
       sonuc = await paketOlc({ paket: yol, platform: s.platform, calisma: s.calisma, kanonik: s.kanonik, env });
@@ -355,7 +411,10 @@ module.exports = {
   kararVer,
   olculenOzeti,
   asarGerekliMi,
+  asarDizinGerekliMi,
   asarCikar,
+  imparkOlc,
+  uzakSshArgv,
   okuyucuSurumuOlc,
   paketOlc,
   gecerMi,

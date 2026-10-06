@@ -311,9 +311,12 @@ function kabulKos(ek) {
   const uzakKok = path.join(o.kok, 'probook');
   fs.mkdirSync(home);
   fs.mkdirSync(path.join(uzakKok, 'tmp'), { recursive: true });
+  // Okuyucu sürümü kapısı (06.10) kopyadan ÖNCE koşar: aktarım testinde sahte node GEÇTİ basar.
+  const okuyucuNode = path.join(o.kok, 'okuyucu-node');
+  fs.writeFileSync(okuyucuNode, "#!/bin/bash\nprintf 'OKUYUCU_KARAR=GECTI\\nOKUYUCU_HAM_KARAR=GECTI\\n'\n", { mode: 0o755 });
   const env = {
     ...o.env, HOME: home, KABUL_KILIT: path.join(o.kok, 'kabul.lock'), SAHTE_UZAK_KOK: uzakKok,
-    KABUL_BOSLUK_TAVAN: '5', KABUL_BOSLUK_ARALIK: '1',
+    KABUL_BOSLUK_TAVAN: '5', KABUL_BOSLUK_ARALIK: '1', KABUL_OKUYUCU_NODE: okuyucuNode, KABUL_OKUYUCU_SURUM: '',
   };
   for (const k of ['KABUL_CDP', 'KABUL_AYRI_EV', 'KABUL_EV', 'KABUL_SET_TUM', 'KABUL_K4', 'EMPP_KANIT_ARSIV']) delete env[k];
   const r = spawnSync('bash', [KABUL, o.yerel, o.kanit], { encoding: 'utf8', env, timeout: 60000 });

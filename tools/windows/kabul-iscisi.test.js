@@ -51,6 +51,11 @@ function ortam() {
     releaseJob: async (auth, job, sebep) => { cagri.release.push({ job, sebep }); return true; },
     bekciBildir: async () => { cagri.bildir += 1; },
     kabulKos: async (p) => { cagri.kabul.push(p); return { kapi: 'kasa', kanitDizini: '/kanit/k1' }; },
+    // Okuyucu sürümü kapısı (06.10): varsayılan GEÇTİ; kapı testleri kendi ölçümünü verir.
+    okuyucuOlc: async (p) => {
+      cagri.okuyucu = (cagri.okuyucu || []).concat([p]);
+      return { karar: 'GECTI', hamKarar: 'GECTI', olculen: '1.13.14', kanonik: '1.13.14', birimler: [], sebepler: [] };
+    },
     ...ek,
   });
   const ekle = async (bookId, { yasMs = 60000 } = {}) => {
@@ -417,4 +422,92 @@ test('Ö3: dosyaKilidiDene (win32 kilidi) açılıştan ESKİ kilidi pid yaşasa
   const r2 = await W.dosyaKilidiDene(yol, { pidYasiyor: () => true, acilisMs });
   assert.equal(r2.kod, 75, 'bu açılışta alınan kilit dolu');
   assert.ok(Math.abs(W.acilisZamaniMs() - (Date.now() - os.uptime() * 1000)) < 5000);
+});
+
+// ---------------------------------------------------------------------------
+// OKUYUCU SÜRÜMÜ KAPISI (06.10, A1 olayı): manifest damgası kanıt DEĞİL — exe'deki okuyucu kabuğu ÖLÇÜLÜR.
+// RED → bayat (kabul.py hiç koşmaz) · ÖLÇÜLEMEDİ → deneme sayılır (paket suçlanmaz) · uyar → geçer.
+// ---------------------------------------------------------------------------
+const F = require('../kabul/fikstur/okuyucu-paket');
+
+test('okuyucu RED: kabul.py KOŞMAZ, kayıt bayat/\'a, /result failed "okuyucu 1.12.7 ≠ kanonik 1.13.14"', async () => {
+  const o = ortam();
+  const k = await o.ekle('501');
+  const olc = async (p) => {
+    o.cagri.okuyucu = (o.cagri.okuyucu || []).concat([p]);
+    return { karar: 'RED', hamKarar: 'RED', olculen: '1.12.7', kanonik: '1.13.14', birimler: [],
+      sebepler: ['kapak/index.html: okuyucu 1.12.7 < kanonik 1.13.14'] };
+  };
+  const z = await K.tur(o.bagimlilik({ okuyucuOlc: olc }));
+  assert.equal(z.bayat, 1, JSON.stringify(z));
+  assert.equal(o.cagri.kabul.length, 0, 'bayat pakete kabul harcanmaz');
+  assert.equal(o.cagri.okuyucu.length, 1);
+  assert.equal(o.cagri.okuyucu[0].paket, k.dizin + path.sep + k.manifest.exe);
+  assert.equal(o.cagri.okuyucu[0].platform, 'windows');
+  assert.match(o.cagri.okuyucu[0].calisma, /kabul-iscisi-[^/\\]+[/\\]okuyucu$/);
+  assert.equal(o.cagri.failure.length, 1);
+  assert.match(o.cagri.failure[0].mesaj, /^\[imza-bekliyor\] \[kabul-kuyrugu\] hazır kayıt bayat \(okuyucu 1\.12\.7 ≠ kanonik 1\.13\.14: kapak\/index\.html/);
+  assert.equal(o.cagri.release.length, 0);
+  assert.equal(o.alt('bayat').length, 1);
+  const m = JSON.parse(fs.readFileSync(path.join(o.cfg.winHazirKoku, 'bayat', o.alt('bayat')[0], 'manifest.json'), 'utf8'));
+  assert.equal(m.durum, 'bayat');
+  assert.equal(m.sebep, 'okuyucu-surumu: okuyucu 1.12.7 ≠ kanonik 1.13.14');
+  assert.equal(m.okuyucuSurumu.olculen, '1.12.7');
+  assert.equal(m.kabulIsleniyor, null);
+});
+
+test('okuyucu ÖLÇÜLEMEDİ: paket suçlanmaz — deneme sayılır, kabul.py koşmaz, bayat/failed YOK; 3. denemede release', async () => {
+  const o = ortam();
+  const k = await o.ekle('502');
+  const olc = async () => ({ karar: 'OLCULEMEDI', hamKarar: 'OLCULEMEDI', olculen: null, kanonik: '1.13.14', birimler: [],
+    sebepler: ['paket açılamadı: 7z yok — NSIS açılamadı'] });
+  const z = await K.tur(o.bagimlilik({ okuyucuOlc: olc }));
+  assert.equal(z.olculemedi, 1, JSON.stringify(z));
+  assert.equal(o.cagri.kabul.length, 0);
+  assert.equal(o.cagri.failure.length, 0);
+  assert.equal(o.alt('bayat').length, 0);
+  const m = o.manifest(k.dizin);
+  assert.equal(m.kabulDeneme, 1);
+  assert.match(m.sonHata, /^\[okuyucu-surumu\] okuyucu sürümü ÖLÇÜLEMEDİ: paket açılamadı: 7z yok/);
+  // ölçüm fırlatırsa (beklenmeyen) da aynı yol
+  o.ileri(60 * 60 * 1000);
+  await K.tur(o.bagimlilik({ okuyucuOlc: async () => { throw new Error('ENOSPC'); } }));
+  assert.equal(o.manifest(k.dizin).kabulDeneme, 2);
+  o.ileri(60 * 60 * 1000);
+  const z3 = await K.tur(o.bagimlilik({ okuyucuOlc: olc }));
+  assert.equal(z3.birakildi, 1);
+  assert.equal(o.cagri.release.length, 1);
+  assert.equal(o.cagri.failure.length, 0, 'failed yazılmaz');
+});
+
+test('okuyucu UÇTAN UCA (gerçek paketOlc + 7z, NSIS benzeri exe): damga "guncel" ama okuyucu 1.12.7 → bayat; '
+  + 'KABUL_OKUYUCU_SURUM=uyar → kabul.py koşar', { skip: !F.yediz() && '7z yok' }, async () => {
+  const agac = F.a1Agaci('1.12.7');
+  const d = F.gecici('ki-nsis');
+  try {
+    const exe = await F.nsisYap(agac, d);
+    const govde = fs.readFileSync(exe);
+    const kur = async (o, id) => {
+      const k = await o.ekle(id);
+      fs.copyFileSync(exe, k.dizin + path.sep + k.manifest.exe);
+      // A1 olayındaki gibi: manifest damgası "güncel" diyor (kanıt değil)
+      await H.manifestGuncelle(k.dizin, { kanonik: { motorDurum: 'guncel', kabukDurum: 'guncel', kabukSurum: '1.13.14' },
+        md5: md5(govde), boyut: govde.length });
+      o.cfg.winKanonikYukleyici = async () => ({ motorSha12: null, kabukSurum: '1.13.14' });
+      return k;
+    };
+    const o = ortam();
+    await kur(o, '503');
+    const z = await K.tur(o.bagimlilik({ okuyucuOlc: undefined, env: { KABUL_OKUYUCU_SURUM: '' } }));
+    assert.equal(z.bayat, 1, JSON.stringify(z));
+    assert.equal(o.cagri.kabul.length, 0);
+    assert.match(o.cagri.failure[0].mesaj, /okuyucu 1\.12\.7 ≠ kanonik 1\.13\.14/);
+    const o2 = ortam();
+    await kur(o2, '504');
+    const loglar = [];
+    const z2 = await K.tur(o2.bagimlilik({ okuyucuOlc: undefined, env: { KABUL_OKUYUCU_SURUM: 'uyar' }, log: (s) => loglar.push(s) }));
+    assert.equal(z2.gecti, 1, JSON.stringify(z2) + loglar.join('\n'));
+    assert.equal(o2.cagri.kabul.length, 1);
+    assert.match(loglar.join('\n'), /okuyucu sürümü: GEÇTİ — ölçülen 1\.12\.7, kanonik 1\.13\.14 .*KABUL_OKUYUCU_SURUM=uyar/);
+  } finally { F.temizle(agac, d); }
 });
