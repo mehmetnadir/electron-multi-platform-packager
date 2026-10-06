@@ -483,3 +483,137 @@ test('aday listesi: PROBOOK_HOST verilmis ve cevap veriyor -> baska aday denenme
   const calls = fs.readFileSync(o.iz, 'utf8');
   assert.doesNotMatch(calls, /etapadmin@192\.168\.1\.55/);
 });
+
+// ---------------------------------------------------------------------------
+// ARTIK UYGULAMA KAPATMA + LOG SELI (06.10): elle acik DijiTap uygulamasi kabulu 45 dk
+// bekletti, bekleme satiri ayni milisaniyede yuzlerce kez yazildi.
+// ---------------------------------------------------------------------------
+function artikUygulama(o, ad, govde) {
+  const dizin = path.join(o.home, 'DijiTap', 'alan', ad);
+  fs.mkdirSync(dizin, { recursive: true });
+  const app = path.join(dizin, 'app.sh');
+  fs.writeFileSync(app, `#!/bin/bash\n${govde}\n`, { mode: 0o755 });
+  const cocuk = spawn('bash', [app], { stdio: 'ignore', detached: true });
+  spawnSync('sleep', ['0.3']);
+  return cocuk;
+}
+const yasiyor = (pid) => {
+  // Zombi (toplanmamis cocuk) olmus sayilir.
+  const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  const st = r.stdout.trim();
+  return st !== '' && !st.startsWith('Z');
+};
+const kabulKos = (o, ek) => spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+  encoding: 'utf8', timeout: 60000,
+  env: { ...o.env, KABUL_BOSLUK_TAVAN: '6', KABUL_ARTIK_BEKLE: '1', KABUL_ARTIK_TERM_SN: '1', ...ek },
+});
+
+test('artik uygulama: BEKLE sonrasi TERM, hala yasiyorsa KILL; her adim loglanir', () => {
+  const o = yerelOrtam();
+  // TERM'i yok sayan inatci uygulama + cocugu.
+  const cocuk = artikUygulama(o, 'Inatci', 'trap "" TERM\nsleep 60 &\nwait');
+  try {
+    assert.ok(yasiyor(cocuk.pid));
+    const r = kabulKos(o, {});
+    assert.match(r.stdout, new RegExp(`ARTIK uygulama kapatiliyor: pid=${cocuk.pid} acilis=\\[.+\\] komut=\\[.*app\\.sh`));
+    assert.match(r.stdout, new RegExp(`ARTIK TERM pid=${cocuk.pid}`));
+    assert.match(r.stdout, /ARTIK KILL pid=\d+ \(TERM sonrasi hala yasiyordu\)/);
+    assert.ok(r.stdout.indexOf('ARTIK TERM') < r.stdout.indexOf('ARTIK KILL'), 'TERM KILL den once olmali');
+    assert.equal(yasiyor(cocuk.pid), false, 'artik uygulama olmedi');
+    assert.equal(fs.existsSync(o.iz), false, 'yerel kipte ssh/scp yok');
+  } finally {
+    try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* bitti */ }
+  }
+});
+
+test('artik uygulama: TERM ile kapanan uygulamaya KILL gonderilmez', () => {
+  const o = yerelOrtam();
+  const cocuk = artikUygulama(o, 'Uyumlu', 'sleep 60');
+  try {
+    const r = kabulKos(o, {});
+    assert.match(r.stdout, /ARTIK TERM pid=/);
+    assert.doesNotMatch(r.stdout, /ARTIK KILL/);
+    assert.equal(yasiyor(cocuk.pid), false);
+  } finally {
+    try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* bitti */ }
+  }
+});
+
+test('KABUL_ARTIK_KAPAT=0: yalniz bekler, oldurmez', () => {
+  const o = yerelOrtam();
+  const cocuk = artikUygulama(o, 'Kalir', 'sleep 60');
+  try {
+    const r = kabulKos(o, { KABUL_ARTIK_KAPAT: '0' });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /DijiTap uygulamasi acik/);
+    assert.doesNotMatch(r.stdout, /ARTIK/);
+    assert.ok(yasiyor(cocuk.pid), 'KAPAT=0 iken uygulama olduruldu');
+  } finally {
+    try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* bitti */ }
+  }
+});
+
+test('artik uygulama: kabulun kendi sureci (komut satirinda ~/Indirilenler/*.impark) ESLESMEZ', () => {
+  const o = yerelOrtam();
+  // Paket yolu ~/Indirilenler altinda: kabulun KENDI argumani pgrep desenine uyar.
+  const ind = path.join(o.home, 'İndirilenler');
+  fs.mkdirSync(ind);
+  const paket = path.join(ind, 'Shall We 5.impark');
+  fs.copyFileSync(o.paket, paket);
+  fs.chmodSync(paket, 0o755);
+  const r = spawnSync('bash', [BETIK, paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', timeout: 60000,
+    env: { ...o.env, KABUL_BOSLUK_TAVAN: '3', KABUL_ARTIK_BEKLE: '1', KABUL_ARTIK_TERM_SN: '1' },
+  });
+  assert.doesNotMatch(r.stdout, /ARTIK uygulama kapatiliyor/, r.stdout);
+  assert.doesNotMatch(r.stdout, /DijiTap uygulamasi acik/, r.stdout);
+});
+
+test('artik uygulama: ~/Indirilenler/*.impark acik sureci (kabulun degil) kapatilir', () => {
+  const o = yerelOrtam();
+  const ind = path.join(o.home, 'İndirilenler');
+  fs.mkdirSync(ind);
+  const elle = path.join(ind, 'Elle Acilan.impark');
+  fs.writeFileSync(elle, '#!/bin/bash\nsleep 60\n', { mode: 0o755 });
+  const cocuk = spawn('bash', [elle], { stdio: 'ignore', detached: true });
+  spawnSync('sleep', ['0.3']);
+  try {
+    const r = kabulKos(o, {});
+    assert.match(r.stdout, new RegExp(`ARTIK uygulama kapatiliyor: pid=${cocuk.pid}`));
+    assert.equal(yasiyor(cocuk.pid), false);
+  } finally {
+    try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* bitti */ }
+  }
+});
+
+test('log seli: ayni mesaj 100 turda <=1 satir, mesaj degisince / 60 sn sonra yeniden', () => {
+  const m = kaynak().match(/^SON_MESAJ=.*\nsay_sinirli\(\)\{[\s\S]*?\n\}\n/m);
+  assert.ok(m, 'say_sinirli bulunamadi');
+  const kod = `say(){ printf '[kabul] %s\\n' "$*"; }
+${m[0]}
+SECONDS=0
+for i in $(seq 1 100); do say_sinirli "ProBook mesgul: x"; done
+echo ---A
+SECONDS=10
+for i in $(seq 1 100); do say_sinirli "ProBook mesgul: x"; done
+echo ---B
+for i in 1 2 3; do say_sinirli "baska sebep"; done
+echo ---C
+SECONDS=70
+say_sinirli "baska sebep"; say_sinirli "baska sebep"
+`;
+  const r = spawnSync('bash', ['-c', kod], { encoding: 'utf8' });
+  const [a, b, c, d] = r.stdout.split(/---[ABC]\n/);
+  assert.equal(a.trim().split('\n').length, 1, a);
+  assert.equal(b.trim(), '', 'ayni mesaj 10 sn icinde tekrar yazildi');
+  assert.equal(c.trim().split('\n').length, 1, 'mesaj degisince hemen yazilmali');
+  assert.equal(d.trim().split('\n').length, 1, '60 sn sonra tekrar yazilmali (bir kez)');
+});
+
+test('bekleme dongusu say_sinirli kullanir (ham say yok), artik kapatma bayragi acik', () => {
+  const k = kaynak();
+  assert.match(k, /say_sinirli "ProBook mesgul, bekleniyor: \$SEBEP"/);
+  assert.doesNotMatch(k, /BEKLENEN % 60/);
+  assert.match(k, /KABUL_ARTIK_KAPAT="\$\{KABUL_ARTIK_KAPAT:-1\}"/);
+  assert.match(k, /KABUL_ARTIK_BEKLE="\$\{KABUL_ARTIK_BEKLE:-120\}"/);
+});
