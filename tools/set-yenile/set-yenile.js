@@ -119,14 +119,14 @@ const idListesi = (idler) => idler.map((x) => `'${idDogrula(x)}'`).join(',');
 
 const sql = {
   kitaplar: (idler) => 'SELECT book_id, kaynak_modu, kaynak_kur_istegi_at, kaynak_kurulum_baslangic, '
-    + 'kaynak_kurulum_bitis, kaynak_kurulum_surum, kaynak_kur_ret_at, kaynak_kur_ret_nedenleri '
+    + 'kaynak_kurulum_bitis, kaynak_kurulum_ajan, kaynak_kurulum_surum, kaynak_kur_ret_at, kaynak_kur_ret_nedenleri '
     + `FROM pipeline_book_summaries WHERE book_id IN (${idListesi(idler)})`,
   platformlar: (idler, platformlar) => 'SELECT book_id, platform, status, last_result, progress, '
     + 'current_phase, last_run_at, last_queued_at FROM pipeline_platform_summaries '
     + `WHERE book_id IN (${idListesi(idler)}) AND platform IN `
     + `(${platformlar.map((p) => `'${platformDogrula(p)}'`).join(',')})`,
   // MAX(surum) varchar'da sözlük sırası verir (2.9 > 2.25); en yeni kayıt olusturma ile seçilir.
-  tohum: (idler) => 'SELECT set_id, surum, olusturma FROM kaynak_build_surumleri '
+  tohum: (idler) => 'SELECT set_id, surum, kaynak, olusturma FROM kaynak_build_surumleri '
     + `WHERE set_id IN (${idListesi(idler)}) AND durum='gecerli' ORDER BY olusturma DESC`,
   kurIstegi: (id) => [
     'SELECT NOW(3);',
@@ -206,25 +206,31 @@ function retNedenleri(metin) {
   } catch (_) { return [String(metin)]; }
 }
 
+/** Açık kurulum kilidi (SAF, yalnız bilgi): başlangıç dolu + bitiş boş. Yoksa null. */
+function kilitNotu(satir) {
+  if (!satir || !satir.kaynak_kurulum_baslangic || satir.kaynak_kurulum_bitis) return null;
+  return `kurulum kilidi açık, ajan: ${satir.kaynak_kurulum_ajan || '?'}, başlangıç: ${satir.kaynak_kurulum_baslangic}`;
+}
+
 /**
  * Kaynak kurulum durumu (SAF). t0 = kur isteği anındaki DB NOW(3).
- * Başarı: bitis > t0 VE surum dolu. Kurulum t0'dan ÖNCE başlamışsa (eski istekten süren kurulum,
- * yeni ek yayımlanmadan başlamış olabilir) başarı sayılmaz; yeni kurulum beklenir.
+ * Başarı: `kaynak_build_surumleri`'nde bu set için `durum='gecerli'` ve `olusturma > t0` olan YENİ
+ * satır. `kaynak_kurulum_*` alanları canlıda hiç dolmuyor (06.10 ölçümü: 0 satır) — yalnız bilgi.
+ * t0'dan önce başlamış açık kilit bekletmez; yeni satır gelirse başarı.
+ * Ret: yeni satır yokken `kaynak_kur_ret_at > t0`.
+ * @param {object} satir pipeline_book_summaries satırı
+ * @param {object[]} surumler bu setin kaynak_build_surumleri satırları (gecerli)
  */
-function kurDegerlendir(satir, t0) {
+function kurDegerlendir(satir, surumler, t0) {
   if (!satir) return { durum: 'hata', neden: 'kitap satırı okunamadı' };
-  const retSonra = dbSonra(satir.kaynak_kur_ret_at, t0);
-  const bitisSonra = dbSonra(satir.kaynak_kurulum_bitis, t0);
-  if (retSonra && !(bitisSonra && dbSonra(satir.kaynak_kurulum_bitis, satir.kaynak_kur_ret_at))) {
-    return { durum: 'ret', zaman: satir.kaynak_kur_ret_at, nedenler: retNedenleri(satir.kaynak_kur_ret_nedenleri) };
+  const not = kilitNotu(satir);
+  const yeni = (surumler || []).filter((s) => dbSonra(s.olusturma, t0))
+    .sort((a, b) => (dbZaman(b.olusturma) > dbZaman(a.olusturma) ? 1 : -1))[0];
+  if (yeni) return { durum: 'bitti', surum: yeni.surum, kaynak: yeni.kaynak || null, olusturma: yeni.olusturma, not };
+  if (dbSonra(satir.kaynak_kur_ret_at, t0)) {
+    return { durum: 'ret', zaman: satir.kaynak_kur_ret_at, nedenler: retNedenleri(satir.kaynak_kur_ret_nedenleri), not };
   }
-  if (bitisSonra && satir.kaynak_kurulum_surum) {
-    if (satir.kaynak_kurulum_baslangic && dbSonra(t0, satir.kaynak_kurulum_baslangic)) {
-      return { durum: 'bekliyor', not: `t0 öncesi başlamış kurulum bitti (${satir.kaynak_kurulum_baslangic}); yeni kurulum bekleniyor` };
-    }
-    return { durum: 'bitti', surum: satir.kaynak_kurulum_surum, bitis: satir.kaynak_kurulum_bitis, baslangic: satir.kaynak_kurulum_baslangic };
-  }
-  return { durum: 'bekliyor' };
+  return { durum: 'bekliyor', not };
 }
 
 /** ek-uret çıktısındaki son SONUÇ satırı (SAF). */
@@ -495,6 +501,8 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     };
     yaz(`  ${id}: kaynak_modu=${b.kaynak_modu} · ${satirlar.map((r) => `${r.platform}=${r.status}`).join(' ') || 'platform yok'}`
       + ` · tohum db=${tohumDb ? tohumDb.surum : 'yok'} arşiv=${arsivVar ? 'var' : 'yok'}`);
+    const kilit = kilitNotu(b);
+    if (kilit) { yaz(`  ! ${id}: ${kilit} (bilgi; bekletmez)`); k.adimlar.onkontrol.kanit.kilit = kilit; }
     for (const r of satirlar) {
       if (r.status === 'running') yaz(`  ! ${id}: ${r.platform} şu an running — requeue sırasında ATLANIR (çalışan iş ezilmez)`);
     }
@@ -551,7 +559,7 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     if (kuru) {
       yaz(`  ${k.id}: (2) yedek: ${y.komut}`);
       yaz(`  ${k.id}: (2) SQL: ${sql.kurIstegi(k.id).replace(/\n/g, ' ')}`);
-      yaz(`  ${k.id}: (3) bekle: kaynak_kurulum_bitis > t0 VE kaynak_kurulum_surum dolu (tavan ${o.kurTavanDk} dk, 60 sn); ret = kaynak_kur_ret_at > t0`);
+      yaz(`  ${k.id}: (3) bekle: kaynak_build_surumleri set_id=${k.id} durum='gecerli' olusturma > t0 YENİ satır (tavan ${o.kurTavanDk} dk, 60 sn); ret = kaynak_kur_ret_at > t0`);
       continue;
     }
     adimBasla(k, 'kur');
@@ -590,20 +598,23 @@ async function yurut(o, cfg, d, durum, durumYolu) {
   for (;;) {
     const bekleyen = canli().filter((k) => bitmis(k.adimlar.kur) && !bitmis(k.adimlar.bekle));
     if (bekleyen.length) {
-      const satir = new Map((await db.oku(sql.kitaplar(bekleyen.map((k) => k.id)))).map((r) => [r.book_id, r]));
+      const bIdler = bekleyen.map((k) => k.id);
+      const satir = new Map((await db.oku(sql.kitaplar(bIdler))).map((r) => [r.book_id, r]));
+      const surumler = await db.oku(sql.tohum(bIdler));
       for (const k of bekleyen) {
         if (!k.adimlar.bekle || k.adimlar.bekle.durum !== 'suruyor') adimBasla(k, 'bekle');
-        const ev = kurDegerlendir(satir.get(k.id), k.adimlar.kur.kanit.t0);
+        const ev = kurDegerlendir(satir.get(k.id), surumler.filter((s) => s.set_id === k.id), k.adimlar.kur.kanit.t0);
+        if (ev.not && k.adimlar.bekle.not !== ev.not) { k.adimlar.bekle.not = ev.not; d.uyar(`${k.id}: ${ev.not}`); }
         if (ev.durum === 'bitti') {
-          adimBit(k, 'bekle', 'tamam', { kanit: { surum: ev.surum, bitis: ev.bitis, baslangic: ev.baslangic } });
-          yaz(`  ✓ ${k.id}: yeni kaynak kuruldu (sürüm ${ev.surum}, bitiş ${ev.bitis})`);
+          adimBit(k, 'bekle', 'tamam', { kanit: { surum: ev.surum, kaynak: ev.kaynak, olusturma: ev.olusturma } });
+          yaz(`  ✓ ${k.id}: yeni kaynak geçerli (sürüm ${ev.surum}, kaynak ${ev.kaynak || '?'}, oluşturma ${ev.olusturma})`);
         } else if (ev.durum === 'ret') {
           await durdur(k, 'bekle', `kaynak kurulumu REDDEDİLDİ (${ev.zaman}): ${ev.nedenler.join(' · ').slice(0, 300)}`);
         } else if (ev.durum === 'hata') {
           await durdur(k, 'bekle', ev.neden);
         } else if (d.simdi() - k.adimlar.bekle.basMs > kurTavanMs) {
           await durdur(k, 'bekle', `kaynak kurulumu ${o.kurTavanDk} dk içinde bitmedi (eylemsiz duruldu)${ev.not ? ` — ${ev.not}` : ''}`);
-        } else if (ev.not && !k.adimlar.bekle.not) { k.adimlar.bekle.not = ev.not; d.uyar(`${k.id}: ${ev.not}`); }
+        }
       }
       kaydet();
     }
@@ -839,7 +850,7 @@ async function ana(argv = process.argv.slice(2), d = varsayilanBag(), cfg = ayar
 
 module.exports = {
   IZINLI_PLATFORMLAR, ayarlar, argAyristir, sql, yedekKomutu, yedekDogrulandiMi, tsvAyristir, dbZaman,
-  dbSonra, retNedenleri, kurDegerlendir, ekSonucAyristir, ekDegerlendir, oncelikBirlestir, oncelikPs,
+  dbSonra, retNedenleri, kurDegerlendir, kilitNotu, ekSonucAyristir, ekDegerlendir, oncelikBirlestir, oncelikPs,
   yayinBul, damga, baglantiHatasiMi, srv21Istemci, kasaIstemci, yeniDurum, kitapDurumu, yurut,
   ozetMetni, varsayilanBag, ana,
 };

@@ -46,7 +46,7 @@ function sahteDunya(ayar = {}) {
   };
   const idleri = (q) => [...String(q).matchAll(/'(\d+)'/g)].map((m) => m[1]);
   const KITAP_K = ['book_id', 'kaynak_modu', 'kaynak_kur_istegi_at', 'kaynak_kurulum_baslangic', 'kaynak_kurulum_bitis',
-    'kaynak_kurulum_surum', 'kaynak_kur_ret_at', 'kaynak_kur_ret_nedenleri'];
+    'kaynak_kurulum_ajan', 'kaynak_kurulum_surum', 'kaynak_kur_ret_at', 'kaynak_kur_ret_nedenleri'];
   const PLAT_K = ['book_id', 'platform', 'status', 'last_result', 'progress', 'current_phase', 'last_run_at', 'last_queued_at'];
 
   async function calistir(cmd, args, opts = {}) {
@@ -72,7 +72,7 @@ function sahteDunya(ayar = {}) {
         }
         if (/FROM kaynak_build_surumleri/.test(q)) {
           const r = w.tohum.filter((t) => ids.includes(t.set_id));
-          return r.length ? tamam(tsv(r, ['set_id', 'surum', 'olusturma'])) : { kod: 1, stdout: '', stderr: '' };
+          return r.length ? tamam(tsv(r, ['set_id', 'surum', 'kaynak', 'olusturma'])) : { kod: 1, stdout: '', stderr: '' };
         }
         throw new Error(`beklenmeyen okuma: ${q}`);
       }
@@ -137,9 +137,9 @@ const YAZMA = (c) => (c.cmd === 'ssh' && /^(mkdir -p|mariadb |powershell )/.test
 const mariadbCagrilari = (w) => w.cagrilar.filter((c) => c.cmd === 'ssh' && /^mariadb /.test(c.args[c.args.length - 1]));
 const durumOku = (w) => JSON.parse(Object.values(w.yazilan)[0]);
 
-/** Kur isteğinden sonra n. tikte kurulumu bitir (DB saatleri DB_T0'dan sonra). */
-const kurBitir = (id, tik = 1, ek = {}) => (w) => {
-  if (w.tik === tik) Object.assign(w.kitaplar[id], { kaynak_kurulum_baslangic: '2026-10-06 09:00:05.000', kaynak_kurulum_bitis: '2026-10-06 09:30:00.000', kaynak_kurulum_surum: '2.25.7', ...ek });
+/** Kur isteğinden sonra n. tikte yeni geçerli kaynak satırı (olusturma > DB_T0) gelir. */
+const kurBitir = (id, tik = 1, olusturma = '2026-10-06 09:30:00.000') => (w) => {
+  if (w.tik === tik) w.tohum.push({ set_id: id, surum: '2.25.7', kaynak: 'probook', olusturma });
 };
 
 // ─── Saf birimler ─────────────────────────────────────────────────────────────────────────
@@ -169,18 +169,26 @@ test('tsvAyristir: NULL → null; ERROR satırı istisna', () => {
   assert.throws(() => S.tsvAyristir('ERROR 1054 (42S22) at line 1: Unknown column'), /DB hatası/);
 });
 
-test('kurDegerlendir: t0 DB zamanıyla kıyaslanır; ret; t0 öncesi başlayan kurulum sayılmaz', () => {
+test('kurDegerlendir: başarı = olusturma > t0 olan yeni geçerli satır; kurulum_* alanları yalnız bilgi', () => {
   const t0 = '2026-10-06 09:00:00.5';
-  assert.equal(S.kurDegerlendir({ kaynak_kurulum_bitis: '2026-10-06 09:00:00.400', kaynak_kurulum_surum: '1' }, t0).durum, 'bekliyor');
-  assert.equal(S.kurDegerlendir({ kaynak_kurulum_bitis: '2026-10-06 09:00:00.600', kaynak_kurulum_surum: null }, t0).durum, 'bekliyor');
-  assert.equal(S.kurDegerlendir({ kaynak_kurulum_bitis: '2026-10-06 09:00:00.600', kaynak_kurulum_surum: '2.1' }, t0).durum, 'bitti');
-  const eski = S.kurDegerlendir({ kaynak_kurulum_baslangic: '2026-10-06 08:00:00', kaynak_kurulum_bitis: '2026-10-06 09:10:00', kaynak_kurulum_surum: '2.1' }, t0);
-  assert.equal(eski.durum, 'bekliyor');
-  assert.match(eski.not, /t0 öncesi/);
-  const r = S.kurDegerlendir({ kaynak_kur_ret_at: '2026-10-06 09:05:00.000', kaynak_kur_ret_nedenleri: '[{"kod":"kitap-eksik","ayrinti":"6 ≠ 5"}]' }, t0);
+  const eskiSatir = { set_id: '1', surum: '2.25.6', kaynak: 'otomatik', olusturma: '2026-10-01 10:00:00.000' };
+  // kurulum_* dolu olsa da yeni satır yoksa bitmedi.
+  assert.equal(S.kurDegerlendir({ kaynak_kurulum_bitis: '2026-10-06 09:10:00', kaynak_kurulum_surum: '2.1' }, [eskiSatir], t0).durum, 'bekliyor');
+  assert.equal(S.kurDegerlendir({}, [{ ...eskiSatir, olusturma: '2026-10-06 09:00:00.400' }], t0).durum, 'bekliyor', 'ms düzeyinde t0 öncesi');
+  const b = S.kurDegerlendir({}, [eskiSatir, { set_id: '1', surum: '2.25.7', kaynak: 'probook', olusturma: '2026-10-06 09:00:00.600' },
+    { set_id: '1', surum: '2.25.8', kaynak: 'mac', olusturma: '2026-10-06 09:20:00.000' }], t0);
+  assert.deepEqual([b.durum, b.surum, b.kaynak], ['bitti', '2.25.8', 'mac']);
+  // t0 öncesi başlamış açık kilit bekletmez: yeni satır gelirse başarı, not taşır.
+  const kilitli = { kaynak_kurulum_baslangic: '2026-10-05 19:31:44.250', kaynak_kurulum_ajan: 'probook-etap' };
+  const k = S.kurDegerlendir(kilitli, [{ ...eskiSatir, olusturma: '2026-10-06 09:30:00.000' }], t0);
+  assert.equal(k.durum, 'bitti');
+  assert.equal(k.not, 'kurulum kilidi açık, ajan: probook-etap, başlangıç: 2026-10-05 19:31:44.250');
+  assert.match(S.kurDegerlendir(kilitli, [], t0).not, /kilidi açık/);
+  assert.equal(S.kilitNotu({ kaynak_kurulum_baslangic: '2026-10-05 19:31:44', kaynak_kurulum_bitis: '2026-10-05 20:00:00' }), null);
+  const r = S.kurDegerlendir({ kaynak_kur_ret_at: '2026-10-06 09:05:00.000', kaynak_kur_ret_nedenleri: '[{"kod":"kitap-eksik","ayrinti":"6 ≠ 5"}]' }, [eskiSatir], t0);
   assert.equal(r.durum, 'ret');
   assert.deepEqual(r.nedenler, ['kitap-eksik: 6 ≠ 5']);
-  assert.equal(S.kurDegerlendir({ kaynak_kur_ret_at: '2026-10-02 12:00:00.000' }, t0).durum, 'bekliyor', 'eski ret sayılmaz');
+  assert.equal(S.kurDegerlendir({ kaynak_kur_ret_at: '2026-10-02 12:00:00.000' }, [], t0).durum, 'bekliyor', 'eski ret sayılmaz');
 });
 
 test('ekDegerlendir: çıkış kodu kanıt değil, son.json uretildi adım başlangıcından sonra olmalı', () => {
@@ -394,4 +402,27 @@ test('ek-uret yoksa kuru kip uyarır, uygula kipinde kitap durur (UPDATE yok)', 
   const kod = await S.ana(['45550', '--uygula', '--platform', 'pardus'], gercek.d, CFG);
   assert.equal(kod, 1);
   assert.equal(mariadbCagrilari(gercek.w).length, 0);
+});
+
+test('akış: t0 öncesi açık kilit bekletmez; yeni geçerli satır gelince requeue, kanıtta sürüm + kaynak', async () => {
+  const { w, d } = sahteDunya({
+    kitaplar: { 45550: { book_id: '45550', kaynak_modu: 'otomatik', kaynak_kurulum_baslangic: '2026-10-05 19:31:44.250', kaynak_kurulum_ajan: 'probook-etap' } },
+    tikHook: kurBitir('45550', 1),
+  });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus'], d, CFG);
+  assert.equal(kod, 0, w.loglar.join('\n'));
+  const k = durumOku(w).kitaplar['45550'];
+  assert.deepEqual(k.adimlar.bekle.kanit, { surum: '2.25.7', kaynak: 'probook', olusturma: '2026-10-06 09:30:00.000' });
+  assert.match(k.adimlar.bekle.not, /kurulum kilidi açık, ajan: probook-etap/);
+  assert.equal(k.adimlar.requeue.platformlar.pardus.durum, 'tamam');
+  assert.ok(w.loglar.some((l) => /kilidi açık.*bilgi; bekletmez/.test(l)));
+});
+
+test('akış: kurulum_* dolsa da yeni geçerli satır yoksa başarı sayılmaz (tavan, requeue yok)', async () => {
+  const { w, d } = sahteDunya({
+    tikHook: (x) => { if (x.tik === 1) Object.assign(x.kitaplar['45550'], { kaynak_kurulum_bitis: '2026-10-06 09:30:00.000', kaynak_kurulum_surum: '2.25.7' }); },
+  });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '3'], d, CFG);
+  assert.equal(kod, 1);
+  assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 0);
 });

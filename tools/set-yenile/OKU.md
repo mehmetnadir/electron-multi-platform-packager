@@ -18,7 +18,7 @@ node tools/set-yenile/set-yenile.js <bookId...> [--platform windows,pardus] [--u
 | `--ek-atla` | (1) kabuk eki adımını atlar | kapalı |
 | `--kur-atla` | (2) ve (3) kaynak kur adımlarını atlar | kapalı |
 | `--devam <dosya>` | Durum dosyasından sürer, biten adımları atlar | — |
-| `--ek-uret <yol>` | ek-uret.js yolu (ortam: `EMPP_EK_URET`) | `tools/set-kabuk/ek-uret.js` |
+| `--ek-uret <yol>` | ek-uret.js yolu (ortam: `EMPP_EK_URET`) | `<repo>/tools/set-kabuk/ek-uret.js` (dal incelemede) |
 | `--kur-tavan <dk>` | Kaynak kurulumu bekleme tavanı | 120 dk |
 | `--izle-tavan <sa>` | İzleme tavanı | 8 sa |
 
@@ -39,14 +39,25 @@ node tools/set-yenile/set-yenile.js 45550 --uygula --izle
 | Adım | Ne yapar | Kanıt |
 |---|---|---|
 | 0 ön kontrol | Kitap satırı, platform satırları, tohum kaynak, srv21/kasa/ProBook erişimi | SELECT sonuçları |
-| 1 ek | `node ek-uret.js --set <id>` | `son.json` `uretildi` adım başlangıcından sonra |
+| 1 ek | `node ek-uret.js --set <id>` | `son.json` `girdiSha` + `uretildi` (adım başlangıcından sonra) |
 | 2 kur | Yedek, sonra `kaynak_kur_istegi_at = NOW(3)` | t0 = DB `NOW(3)`, ROW_COUNT 1 |
-| 3 bekle | 60 sn aralıkla okur | `kaynak_kurulum_bitis > t0` ve `kaynak_kurulum_surum` dolu |
+| 3 bekle | 60 sn aralıkla okur | `kaynak_build_surumleri`: `durum='gecerli'` ve `olusturma > t0` olan YENİ satır (sürüm + kaynak raporlanır) |
 | 4 requeue | Yedek, sonra platform satırını `queued` yapar | ROW_COUNT 1 |
 | 5 öncelik | Kasada `imza-oncelik.txt` başına id ekler | Geri okuma bayt eşitliği |
 | 6 izle | 2 dk aralıkla platform satırlarını okur | completed/failed; Windows için bekçi logu |
 
 Çok kitapta (1) ve (2) sırayla koşar. Beklemeleri tek döngü paralel izler.
+
+**DİKKAT:** Sıra önemlidir. Ek hattında kaynağı ProBook kurar.
+Ek, kur isteğinden ÖNCE yayımlanmış olmalıdır.
+
+```
+(1) ek → son.json yayımlandı → (2) kur isteği → ProBook kurar → kaynak_build_surumleri yeni satır
+```
+
+- Ek yoksa ProBook kurulumu erteler. `son.json` değişince ProBook yeniden dener.
+- set-yenile bu durumu (3) adımında bekleyerek karşılar. Ek ayrıca bir eylem istemez.
+- ek-uret çıkış kodları: 0 tamam, 1 hata, 2 eylem yok (kaynak yok). Çıkış 2'de kitap durur.
 
 ## Kurallar
 
@@ -59,7 +70,10 @@ node tools/set-yenile/set-yenile.js 45550 --uygula --izle
 - Araç book_id'yi yalnız rakam olarak kabul eder. Platform izinli listeden gelir.
 - Araç `running` satırı kuyruğa almaz. UPDATE de `status <> 'running'` koşulu taşır.
 - Araç DB saatlerini yalnız DB saatleriyle kıyaslar. Mac saatini kullanmaz.
-- Kurulum t0'dan önce başladıysa araç onu başarı saymaz. Yeni kurulumu bekler.
+- Araç başarıyı `kaynak_build_surumleri` yeni satırından ölçer. `kaynak_kurulum_bitis` ve
+  `kaynak_kurulum_surum` canlıda dolmaz (06.10 ölçümü: 0 satır). Araç bu alanları yalnız bilgi olarak gösterir.
+- Başlangıç dolu ve bitiş boşsa araç uyarı basar: "kurulum kilidi açık, ajan: …, başlangıç: …".
+  Açık kilit kitabı bekletmez. Yeni geçerli satır gelirse adım başarılıdır.
 - Ret gelirse (`kaynak_kur_ret_at > t0`) o kitap durur. Diğer kitaplar sürer.
 - Tavan dolarsa araç eylem yapmaz. Kitap durur ve bildirim gider.
 - `kaynak_modu = manuel` ise (1)-(3) atlanır.
