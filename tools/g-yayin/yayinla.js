@@ -9,7 +9,9 @@
  * Kapsam (Nadir 26.09): kök `index.html`, set bileşimi (kitap ekle/çıkar), her kitabın
  * `bookN/43e23fce2b7009474555a77.js` motoru. Set bileşimi MENÜYÜ de kapsar: `--ekle`/`--cikar`
  * kurulu paketin menü dosyalarını tutarlı günceller (`menu.js`; taban `--menu-taban` ya da önceki
- * G durumu); menü biçimi tanınmazsa yayın RED. Sözleşmeler: `windows-paketleme-sozlesmesi.md`
+ * G durumu); menü biçimi tanınmazsa yayın RED. `--menu-kaynak <build.zip|dizin>` kitap kümesi
+ * değişmeden menü içeriği (kapak data: URI) değişimini build baytlarıyla yayınlar
+ * (`menu-kaynak.js`; kart kümesi değişirse RED). Sözleşmeler: `windows-paketleme-sozlesmesi.md`
  * G3/G4, `platform-kanallari-sozlesmesi.md` O3/O4, tasarım `g-yayin-r2-yol-tasarimi.md`.
  *
  *   Sürüm   `2.<panel>.<sayaç>`, bilinen her önceki sürümden KESİN büyük (g-surum.js).
@@ -45,6 +47,7 @@ const anahtar = require('./anahtar');
 const zip = require('./zip-yaz');
 const durum = require('./durum');
 const menu = require('./menu');
+const menuKaynak = require('./menu-kaynak');
 // Paketleyicinin alt-kitap fs-shim enjeksiyonu — TEK KAYNAK (bağımlılıksız saf modül).
 const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
 
@@ -171,6 +174,7 @@ function argsAyristir(argv) {
     cikar: [],
     dusur: [],
     menuTaban: null,
+    menuKaynak: null,
     baslik: {},
     anahtarZinciri: false,
     anahtarDosya: null,
@@ -221,6 +225,7 @@ function argsAyristir(argv) {
           .filter(Boolean),
       );
     else if (b === '--menu-taban') a.menuTaban = deger();
+    else if (b === '--menu-kaynak') a.menuKaynak = deger();
     else if (b === '--baslik') {
       const [k, v] = ciftAyir(deger(), b);
       a.baslik[k] = v;
@@ -687,6 +692,49 @@ async function yayinla(a, ops = {}) {
       throw new Error(`--baslik ${d}: yalnız --ekle edilen kitaba verilir`);
   }
   let menuRaporu = null;
+
+  // 4c) `--menu-kaynak`: build'in menü baytları AYNEN (kapak data: URI dahil) — kitap kümesi
+  //     değişmeden menü içeriği (kapak) değişimi. Kart kümesi değişiyorsa `--ekle/--cikar`.
+  if (a.menuKaynak) {
+    if (Object.keys(degisiklik.ekle).length || degisiklik.cikar.length || a.index) {
+      throw new Error('--menu-kaynak; --ekle/--cikar/--index ile birlikte verilmez');
+    }
+    const mk = menuKaynak.oku(a.menuKaynak);
+    const inc = menuKaynak.incele(mk.dosyalar);
+    const t = await menuTabanlariTopla({
+      menuTaban: a.menuTaban,
+      onceki,
+      setDizini,
+      taban,
+      setKimligi,
+      indexVeri: null,
+      getir: ops.getir,
+    });
+    const tk = menuKaynak.tabanKartlari(t.tabanlar);
+    // Kıyas tabanı: kurulu/önceki menünün kartları; taban yoksa build'in kendi bookN dizinleri.
+    const referans = tk ? tk.kartlar : mk.kitapDizinleri;
+    if (tk && tk.tur !== inc.tur) {
+      throw new Error(`menu-bicimi-degisti: kurulu menü ${tk.tur}, build menüsü ${inc.tur}`);
+    }
+    if (!referans.length) throw new Error('menu-tabani-yok: kart kümesi kıyaslanamıyor');
+    if (!menuKaynak.kumeAyni(referans, inc.kartlar)) {
+      throw new Error(
+        'menu-kart-kumesi-degisti: --ekle/--cikar kullan ' +
+          `(kurulu [${[...referans].join(',')}] ≠ build menüsü [${inc.kartlar.join(',')}])`,
+      );
+    }
+    for (const [yol, v] of inc.menuDosyalari) {
+      yazilacakKabuk.set(yol, v);
+      (degisiklik.menu = degisiklik.menu || {})[yol] = { sha256: sha256(v), boyut: v.length };
+    }
+    menuRaporu = {
+      bicim: inc.tur,
+      kaynak: 'menu-kaynak',
+      kitaplar: {},
+      degisen: [...inc.menuDosyalari.keys()].sort(),
+      tabanlar: t.kaynaklar,
+    };
+  }
   if (Object.keys(degisiklik.ekle).length || degisiklik.cikar.length) {
     const t = await menuTabanlariTopla({
       menuTaban: a.menuTaban,

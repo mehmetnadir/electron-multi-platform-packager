@@ -78,6 +78,8 @@ const kg = require('../../src/runtime/kitap-guncelleyici');
 const gSurum = require('./g-surum');
 const anahtar = require('./anahtar');
 const yukleMod = require('./yukle');
+const durum = require('./durum');
+const menuKaynak = require('./menu-kaynak');
 
 const AJAN = path.join(os.homedir(), '.empp-agent');
 const HEDEF_PLATFORMLAR = Object.freeze(['windows', 'pardus', 'mac', 'android']);
@@ -316,6 +318,73 @@ function bilesimKiyasla(gecerli, onceki) {
   return { degisti, sebep: degisti ? 'bilesim-degisti' : null, eklenen, cikan, degisen };
 }
 
+const ELECTRON_PLATFORMLAR = Object.freeze(['windows', 'pardus', 'mac']);
+
+/**
+ * Yeni kitap önerisi (saf): build'de olup önceki build'de olmayan kitaplar. Electron kurulu
+ * paketlere `yayinla.js --ekle bookN=<dizin>` ile gider; ANDROID'e ekleme YAPILMAZ (donma riski,
+ * Nadir 06.10: Android'e yeni paket gider) → `android-yeni-paket`. Aynı manifest dört platformda
+ * ortak olduğundan `--ekle` Android kapısında (`--android-ekleme-dondurur-kabul` olmadan) RED'dir;
+ * bu yüzden öneri YALNIZ rapora yazılır, `--uygula` onu koşturmaz (Nadir A/B kararı bekliyor).
+ */
+function yeniKitapOnerisi(bil) {
+  const dizinler = (bil && bil.eklenen ? bil.eklenen : []).map((n) => `book${n}`);
+  if (!dizinler.length) return null;
+  return {
+    ekle: dizinler,
+    electron: ELECTRON_PLATFORMLAR.slice(),
+    android: 'android-yeni-paket',
+    komut: `node tools/g-yayin/yayinla.js yayinla … ${dizinler
+      .map((d) => `--ekle ${d}=<build>/${d}`).join(' ')} --menu-taban <paket kökü>`,
+    not: 'Android kapısı --ekle yayınını RED eder (kalıcı donma); Android yeni pakete gider',
+  };
+}
+
+/** Menü dosyası sha256'ları canlı manifestteki girdilerle kıyaslanır (saf). */
+function menuFarki(menuDosyalari, manifest) {
+  const kabuk = new Map(((manifest && manifest.kabuk) || []).map((g) => [g.yol, g.sha256]));
+  const farkli = [];
+  for (const [yol, v] of menuDosyalari) {
+    const sha = crypto.createHash('sha256').update(v).digest('hex');
+    if (kabuk.get(yol) !== sha) farkli.push(yol);
+  }
+  return farkli.sort();
+}
+
+/** Build menü kaynağı: test enjeksiyonu (`ops.menuKaynak`) > yerel kaynak arşivi zip'i. */
+function menuKaynagiBul(id, gecerli, ops) {
+  if ('menuKaynak' in ops) {
+    return typeof ops.menuKaynak === 'function' ? ops.menuKaynak(id, gecerli) : ops.menuKaynak;
+  }
+  if ('zipListe' in ops) return null; // test izolasyonu: gerçek ~/.empp-agent okunmaz
+  const yol = yerelBuildZipYolu(id, gecerli);
+  if (!yol) return null;
+  try {
+    return { yol, ...menuKaynak.oku(yol) };
+  } catch (e) {
+    return { yol, hata: e.message };
+  }
+}
+
+/**
+ * Menü kararı (saf): durum ∈ kaynak-yok | okunamadi | k17 | red | ayni | farkli.
+ * K17: kartlar index.html'de, ham build index'i shim'siz → G'ye menü olarak gitmez.
+ */
+function menuKarari(mk, manifest) {
+  if (!mk) return { durum: 'kaynak-yok' };
+  if (mk.hata) return { durum: 'okunamadi', hata: mk.hata };
+  let inc;
+  try {
+    inc = menuKaynak.incele(mk.dosyalar);
+  } catch (e) {
+    const m = e && e.message ? e.message : String(e);
+    if (m.startsWith(menuKaynak.K17_YASAK)) return { durum: 'k17', hata: m };
+    return { durum: 'red', hata: m };
+  }
+  const farkli = menuFarki(inc.menuDosyalari, manifest);
+  return { durum: farkli.length ? 'farkli' : 'ayni', farkli, tur: inc.tur };
+}
+
 function dizinSirala(x, y) {
   return Number(x.slice(4)) - Number(y.slice(4));
 }
@@ -415,12 +484,13 @@ function canliKarari(canli, dizinler, kanonikSha256) {
 
 /** Plan komutları: e2e'nin üç adımı açık hâliyle (üret → yükle --onayli → doğrula --uzak). */
 function komutlariKur({ setKimligi, taban, cikti, panel, paketSurum, ilk, dizinler, motorYolu,
-  tahminiSurum }) {
+  tahminiSurum, menuKaynakYolu = null }) {
   const uret = ['yayinla', '--set-kimligi', setKimligi, '--taban', taban, '--cikti', cikti,
     '--panel', String(panel), '--onceki-surum', paketSurum,
     '--onceki-manifest', `${taban}/set/${setKimligi}/manifest.json`];
   if (ilk) uret.push('--ilk');
   for (const d of dizinler) uret.push('--motor', `${d}=${motorYolu}`);
+  if (menuKaynakYolu) uret.push('--menu-kaynak', menuKaynakYolu);
   uret.push('--anahtar-zinciri');
   return [
     { ad: 'uret', arg: uret },
@@ -453,13 +523,24 @@ function kanonikMotorOku(jsonYolu = KANONIK_MOTOR_JSON, dosyaYolu = KANONIK_MOTO
   }
 }
 
-/** Yerel kaynak arşivi geçerli build'le birebir mi? Öyleyse zip girdi listesi (merkez dizin). */
-function yerelBuildListesi(setKimligi, gecerli) {
+/** Yerel kaynak arşivi geçerli build'le birebir mi? Öyleyse zip yolu; değilse null. */
+function yerelBuildZipYolu(setKimligi, gecerli) {
   try {
     const dizin = path.join(KAYNAK_ARSIVI, String(setKimligi));
     const k = JSON.parse(fs.readFileSync(path.join(dizin, 'kaynak.json'), 'utf8'));
     if (k.r2Surum !== gecerli.surum || k.sha256 !== gecerli.sha256) return null;
-    const r = spawnSync('unzip', ['-Z1', path.join(dizin, k.dosya || 'build.zip')], {
+    return path.join(dizin, k.dosya || 'build.zip');
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Yerel kaynak arşivi geçerli build'le birebir mi? Öyleyse zip girdi listesi (merkez dizin). */
+function yerelBuildListesi(setKimligi, gecerli) {
+  try {
+    const zipYolu = yerelBuildZipYolu(setKimligi, gecerli);
+    if (!zipYolu) return null;
+    const r = spawnSync('unzip', ['-Z1', zipYolu], {
       encoding: 'utf8', timeout: 60000, maxBuffer: 256 * 1024 * 1024,
     });
     return r.status === 0 ? r.stdout.split('\n').filter(Boolean) : null;
@@ -635,6 +716,7 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
   const bil = bilesimKiyasla(bs.gecerli, bs.onceki);
   s.bilesim = bil;
   if (bil.degisti) {
+    if (!bil.cikan.length && !bil.degisen.length) s.oneri = yeniKitapOnerisi(bil);
     return Object.assign(s, { karar: 'nadir', sebep: `${bil.sebep} (eklenen [${bil.eklenen}], ` +
       `çıkan [${bil.cikan}], değişen [${bil.degisen}]) — ekleme --ekle ister, Android kapısında ` +
       'RED; Nadir kararı' });
@@ -675,14 +757,43 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
       'index.html (Nadir kararı)' });
   }
   const ck = canliKarari(s.canli, mdz.dizinler, kanonik.sha256);
+  s.tur = ck.karar === 'sec' ? 'motor' : null;
+  if (ck.karar !== 'hata') {
+    // Menü: motor aynı olsa da build menüsü (kapak data: URI) canlı G'dekinden farklıysa SEÇ.
+    const mk = menuKaynagiBul(id, bs.gecerli, ops);
+    const mkr = menuKarari(mk, s.canli.manifest);
+    s.menu = { durum: mkr.durum, farkli: mkr.farkli || [] };
+    const menuYolu = ['farkli', 'ayni'].includes(mkr.durum) ? null : mkr.durum;
+    if (mkr.durum === 'farkli') {
+      s.menuKaynakYolu = mk.yol;
+      s.tur = ck.karar === 'sec' ? 'motor+menu' : 'menu';
+      if (ck.karar === 'guncel') ck.karar = 'sec';
+      ck.sebep = ck.karar === 'sec' && s.tur === 'menu'
+        ? `menu-degisti(${mkr.farkli.join(',')})`
+        : `${ck.sebep}; menu-degisti(${mkr.farkli.join(',')})`;
+    } else if (mkr.durum === 'k17') {
+      s.uyarilar.push(`${menuKaynak.K17_YASAK}: ${mkr.hata}`);
+      if (ck.karar === 'guncel') ck.sebep = `${ck.sebep}; ${menuKaynak.K17_YASAK}`;
+    } else if (menuYolu && mkr.hata) {
+      s.uyarilar.push(`menu-kaynak-${menuYolu}: ${mkr.hata}`);
+    }
+    const menuGirdisi = ((s.canli.manifest && s.canli.manifest.kabuk) || [])
+      .filter((g) => durum.MENU_YOLLARI.includes(g.yol)).map((g) => g.yol);
+    if (menuGirdisi.length && !['farkli', 'ayni'].includes(mkr.durum)) {
+      // Birikimli menü örtüsü (durum.js): canlı manifest menü taşıyor ama build menüsü
+      // doğrulanamadı → yeni paketin menüsünü eski örtü ezebilir.
+      s.uyarilar.push(`menu-ortusu-dogrulanamadi: canlı manifest [${menuGirdisi.join(',')}] ` +
+        'taşıyor; gerekirse yayinla.js --dusur <yol> (örtüyü düşür)');
+    }
+  }
   s.karar = ck.karar;
   s.sebep = ck.sebep;
   if (s.karar !== 'sec') return s;
   const panel = gSurum.coz(bs.gecerli.surum).panel;
   s.tahminiSurum = gSurum.sonraki(panel, gSurum.enBuyuk([s.canli.surum, s.paketSurum]));
   s.komutlar = komutlariKur({ setKimligi: id, taban, cikti, panel, paketSurum: s.paketSurum,
-    ilk: s.canli.http === 404, dizinler: mdz.dizinler, motorYolu: kanonik.yol,
-    tahminiSurum: s.tahminiSurum });
+    ilk: s.canli.http === 404, dizinler: s.tur === 'menu' ? [] : mdz.dizinler, motorYolu: kanonik.yol,
+    tahminiSurum: s.tahminiSurum, menuKaynakYolu: s.menuKaynakYolu || null });
   s.plan = s.komutlar.map((k) => komutMetni(k.arg));
   return s;
 }
@@ -789,6 +900,10 @@ function ozetMetni(r) {
     satir.push(`- ${s.set} ${s.ad || ''} → ${s.karar}: ${s.sebep}${ek}`);
     if ((s.bekleyen || []).length) satir.push(`    … bekleyen: [${s.bekleyen.join(', ')}]`);
     for (const u of s.uyarilar || []) satir.push(`    ! ${u}`);
+    if (s.oneri) {
+      satir.push(`    > öneri: ${s.oneri.electron.join('+')} için ${s.oneri.ekle.join(',')} --ekle; ` +
+        `${s.oneri.android} (Android'e ekleme YOK)`);
+    }
     for (const p of s.plan || []) satir.push(`    $ ${p}`);
   }
   if (r.nadirKarari.length) {
@@ -826,6 +941,9 @@ module.exports = {
   motorDenetle,
   buildSec,
   bilesimKiyasla,
+  yeniKitapOnerisi,
+  menuFarki,
+  menuKarari,
   motorDizinleri,
   paketSurumu,
   canliOku,
@@ -836,6 +954,7 @@ module.exports = {
   kilitBirak,
   planiUygula,
   kos,
+  ozetMetni,
   main,
 };
 
