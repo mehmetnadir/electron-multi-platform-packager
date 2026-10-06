@@ -852,3 +852,95 @@ test('kart var motor yok -> RED', () => {
   });
   assert.ok(ihlal.some(x => /kart-motorda-yok: 5/.test(x)), ihlal.join('|'));
 });
+
+// ─── Kart geri kurma (06.10: claim'de var, panelde yok, menüde kartı yok, içerik pakette) ───────
+const KART_IDLER = ['61633', '61635'];
+const kartsizXml = () => MENU_XML.replace(
+  /<cover\b[^>]*\sID="(?:61633|61635)"[^>]*?(?:\/>|>[\s\S]*?<\/cover>)/g, '');
+const kartsizPanel = () => {
+  const j = JSON.parse(PANEL_GOVDE);
+  return JSON.stringify({ ...j, Books: j.Books.filter((b) => !KART_IDLER.includes(String(b.Id))) });
+};
+const kartsizClaim = (adlar = ['Sınav Bir', 'Sınav İki']) => JSON.parse(PANEL_GOVDE).Books
+  .filter((b) => !KART_IDLER.includes(String(b.Id)) && !['73010', '73147'].includes(String(b.Id)))
+  .map((b) => `${b.Id} | ${b.Adi}`).concat(KART_IDLER.map((id, i) => `${id} | ${adlar[i]}`)).join('\n');
+const kartsizKos = async (o, ek = {}) => P.panelMenuHizala({
+  ...o.ortak, claimListesi: kartsizClaim(), panelGetir: async () => ({ status: 200, govde: kartsizPanel() }),
+  warn: () => {}, ...ek,
+});
+const kartlar = (zip) => P.kapakSirasi(zipMenu(zip).xml);
+
+test('kart geri kurma: menüde yok + içerik var + settings kartı var → kurulur, settings adıyla', async () => {
+  assert.ok(!kartsizXml().includes('ID="61633"'));
+  const o = ortam({
+    xml: kartsizXml(),
+    kitapEkle: (k) => yaz(k, 'config/settings.json', JSON.stringify({ books: {
+      a: { assetId: '61633', title: 'Settings Adı Bir', displayOrder: 3 },
+      b: { assetId: '61635', title: 'Settings Adı İki', displayOrder: 4 },
+    } })),
+  });
+  const r = await kartsizKos(o);
+  assert.deepEqual(r.eklenen.filter((i) => KART_IDLER.includes(i)).sort(), KART_IDLER);
+  assert.equal(o.sayac.teklif.filter((u) => /id=6163[35]/.test(u)).length, 0, 'İmpark sorulmaz');
+  const k = kartlar(o.zip).filter((c) => KART_IDLER.includes(c.id));
+  assert.equal(k.length, 2);
+  assert.equal(attr(k[0].etiket, 'actName'), 'Settings Adı Bir');
+  assert.equal(attr(k[0].etiket, 'xmlSource'), 'assets/61633/data/BookContent.xml');
+  assert.ok(r.panelSetListesi.split('\n').some((s) => s.startsWith('61635 | Settings Adı İki')));
+  assert.equal(r.atlananUyeler.length, 0);
+});
+
+test('kart geri kurma: settings kartı yok → claim adı; claim adı da yoksa BookContent adı', async () => {
+  const o = ortam({ xml: kartsizXml() });
+  const r = await kartsizKos(o);
+  assert.deepEqual(r.eklenen.filter((i) => KART_IDLER.includes(i)).sort(), KART_IDLER);
+  const k = kartlar(o.zip).find((c) => c.id === '61633');
+  assert.equal(attr(k.etiket, 'actName'), 'Sınav Bir');
+  const o2 = ortam({
+    xml: kartsizXml(),
+    kitapEkle: (kk) => yaz(kk, 'assets/61633/data/BookContent.xml',
+      '<Book kitapId="1" pdfUrl="pdf/sınavlar.pdf"></Book>'),
+  });
+  const claim = kartsizClaim().replace('61633 | Sınav Bir', '61633');
+  const r2 = await kartsizKos(o2, { claimListesi: claim });
+  assert.deepEqual(r2.eklenen.filter((i) => KART_IDLER.includes(i)).sort(), KART_IDLER);
+  const k2 = kartlar(o2.zip).find((c) => c.id === '61633');
+  assert.equal(attr(k2.etiket, 'actName'), 'sınavlar');
+});
+
+test('kart geri kurma: içerik pakette yok → kurulmaz, atlananUyeler raporu; diğeri kurulur', async () => {
+  const o = ortam({ xml: kartsizXml() });
+  execFileSync('zip', ['-q', '-d', o.zip, 'assets/61633/*']);
+  const log = [];
+  const r = await kartsizKos(o, { log: (x) => log.push(x) });
+  assert.deepEqual(r.eklenen.filter((i) => KART_IDLER.includes(i)), ['61635']);
+  assert.equal(r.atlananUyeler.length, 1);
+  assert.equal(r.atlananUyeler[0].kitapId, '61633');
+  assert.match(r.atlananUyeler[0].sebep, /içerik pakette yok/);
+  assert.ok(!kartlar(o.zip).some((c) => c.id === '61633'));
+  assert.ok(!r.panelSetListesi.includes('61633'));
+});
+
+test('kart geri kurma: panelde olan üye eski davranış (menüde kartı varsa taşınır, eklenmez)', async () => {
+  const o = ortam();
+  const r = await P.panelMenuHizala({
+    ...o.ortak, claimListesi: kartsizClaim(), warn: () => {},
+  });
+  assert.ok(!r.eklenen.includes('61633'));
+  assert.ok(kartlar(o.zip).some((c) => c.id === '61633'));
+});
+
+test('kart geri kurma: grup/sekme settings sırasındaki komşu kartın yerinden gelir', async () => {
+  const o = ortam({
+    xml: kartsizXml(),
+    kitapEkle: (k) => yaz(k, 'config/settings.json', JSON.stringify({ books: {
+      a: { assetId: '31456', title: 'Komşu', displayOrder: 1 },
+      b: { assetId: '61633', title: 'Yeni', displayOrder: 2 },
+    } })),
+  });
+  await kartsizKos(o);
+  const p = P.menuParcala(zipMenu(o.zip).xml);
+  const sekme = p.gruplar.flatMap((g) => g.sekmeler).find((t) => t.kapaklar.some((c) => c.id === '61633'));
+  const komsu = p.gruplar.flatMap((g) => g.sekmeler).find((t) => t.kapaklar.some((c) => c.id === '31456'));
+  assert.equal(attr(sekme.etiket, 'ID'), attr(komsu.etiket, 'ID'));
+});

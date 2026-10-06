@@ -534,6 +534,70 @@ function panelSetListesi(books) {
 }
 
 /**
+ * Menüde kartı olmayan ama claim'de olan kimlik için kart bilgisi (Nadir 06.10, 1a: set listesini
+ * Platform Ayarları belirler). İçerik pakette yoksa atla. Ad sırası: settings.json → claim → BookContent.
+ * Grup/sekme: settings sırasında önceki (yoksa sonraki) kartın menüdeki yeri, yoksa ilk grup/sekme.
+ */
+function kartGeriKurBilgisi({ id, pXML, once, zip, varMi, claimAd, books = [] }) {
+  if (!varMi(`assets/${id}/${ICERIK}`)) {
+    return { atla: true, adi: claimAd || '', sebep: 'claim\'de var, menüde ve panelde yok, içerik pakette yok' };
+  }
+  let kartlar = [];
+  try {
+    const g = once.get('config/settings.json');
+    if (g && !g.dizin) {
+      const j = JSON.parse(M.zipGirdiOku(zip, g).toString('utf8').replace(/^\uFEFF/, ''));
+      kartlar = Object.values(j.books || {}).filter((b) => b && b.assetId != null)
+        .map((b) => ({ id: String(b.assetId), ad: String(b.title || ''), sira: Number(b.displayOrder) }));
+    }
+  } catch (_) { kartlar = []; }
+  const kendi = kartlar.find((k) => k.id === id);
+  let adi = kendi && kendi.ad.trim();
+  let kaynak = 'settings.json';
+  if (!adi && claimAd && claimAd.trim()) { adi = claimAd.trim(); kaynak = 'claim'; }
+  if (!adi) {
+    try {
+      const b = M.zipGirdiOku(zip, once.get(`assets/${id}/${ICERIK}`)).toString('utf8');
+      const tag = (/<Book\b[^>]*>/.exec(b) || [''])[0];
+      const t = attrOku(tag, 'title') || attrOku(tag, 'name');
+      const pdf = attrOku(tag, 'pdfUrl');
+      adi = (t || (pdf && path.basename(pdf).replace(/\.pdf$/i, '')) || '').trim();
+    } catch (_) { adi = ''; }
+    kaynak = 'BookContent';
+    if (!adi) { adi = id; kaynak = 'kimlik'; }
+  }
+  const yer = (kid) => {
+    // Önce panelin (hizalamanın kuracağı) yeri: komşu kart panelde hangi sekmedeyse yeni kart oraya.
+    const pb = books.find((b) => String(b.id) === kid);
+    if (pb) {
+      return { g: { etiket: `<Group ID="${pb.groupId}" label="${xmlKacis(pb.groupName)}">` },
+        t: { etiket: `<Tab ID="${pb.tabId}" label="${xmlKacis(pb.tabName)}">` } };
+    }
+    for (const g of pXML.gruplar) for (const t of g.sekmeler) {
+      if (t.kapaklar.some((c) => c.id === kid)) return { g, t };
+    }
+    return null;
+  };
+  let konum = null;
+  if (kendi && Number.isFinite(kendi.sira)) {
+    const onceki = kartlar.filter((k) => k.sira < kendi.sira).sort((x, y) => y.sira - x.sira);
+    const sonraki = kartlar.filter((k) => k.sira > kendi.sira).sort((x, y) => x.sira - y.sira);
+    for (const k of onceki.concat(sonraki)) { konum = yer(k.id); if (konum) break; }
+  }
+  if (!konum) {
+    const g = pXML.gruplar[0];
+    const t = g && g.sekmeler[0];
+    if (g && t) konum = { g, t };
+  }
+  const al = (e, a, d) => (e && attrOku(e, a)) || d;
+  return {
+    atla: false, adi, kaynak, groupId: al(konum && konum.g.etiket, 'ID', '1'),
+    groupName: al(konum && konum.g.etiket, 'label', ''), tabId: al(konum && konum.t.etiket, 'ID', '1'),
+    tabName: al(konum && konum.t.etiket, 'label', ''),
+  };
+}
+
+/**
  * Claim set listesi ↔ panel farkı (yalnız İmpark kimlikli kitap satırları). SAF.
  * @returns {{claimVar:boolean, listeFazla:string[], panelYeni:string[]}}
  */
@@ -768,7 +832,11 @@ async function panelMenuHizala(o) {
   let { books } = panel;
   rapor.panel = books.length;
 
+  rapor.atlananUyeler = [];
+  const yerelKurulan = new Map(); // menüde kartı yok, içeriği pakette: İmpark'a sorulmadan kurulur
   if (o.claimListesi) {
+    const claimAdlari = new Map(setEk.setListesiAyristir(o.claimListesi)
+      .filter((g) => !g.link && sayisalKimlik(g.assetId)).map((g) => [String(g.assetId), g.ad || '']));
     const claimFarki = setListesiFarki(o.claimListesi, books);
     if (claimFarki.claimVar && claimFarki.listeFazla.length > 0) {
       warn(`${ISARET} panel-farki: Impark'ta yok ama Platform Ayarlari'nda var: ${claimFarki.listeFazla.join(', ')}`);
@@ -785,6 +853,19 @@ async function panelMenuHizala(o) {
               if (cXML) break;
             }
             if (cXML) break;
+          }
+          if (!cXML) {
+            // Kart menüde YOK (önceki hizalama sildi): içerik pakette ise kart geri kurulur.
+            const k = kartGeriKurBilgisi({ id, pXML, once, zip: o.zip, varMi, claimAd: claimAdlari.get(id), books });
+            if (k.atla) {
+              rapor.atlananUyeler.push({ kitapId: id, ad: k.adi || '', sebep: k.sebep });
+              log(uyeAtla.logSatiri(setId, rapor.atlananUyeler[rapor.atlananUyeler.length - 1]));
+            } else {
+              books.push({ id, fixName: id, groupId: k.groupId, groupName: k.groupName,
+                tabId: k.tabId, tabName: k.tabName, adi: k.adi, resim: null, domain: null });
+              yerelKurulan.set(id, { vs: 1, url: '', fx: id });
+              log(`${ISARET} kart geri kuruldu ${id} (${k.kaynak}; grup ${k.groupId}/sekme ${k.tabId})`);
+            }
           }
           if (cXML) {
             const xs = attrOku(cXML.etiket, 'xmlSource') || '';
@@ -808,7 +889,6 @@ async function panelMenuHizala(o) {
 
   // ÖNCEDEN ATLANAN ÜYELER (Nadir 06.10): üreteç `empp-uretec.json`'a `atlananUyeler` yazdı (ya da runner
   // `o.atlananUyeler` verdi) → o üyeler panel listesinden de düşer; eklenmeye çalışılmaz, kapıya gitmez.
-  rapor.atlananUyeler = [];
   {
     const onceden = new Set((o.atlananUyeler || []).map(String));
     for (const a of uyeAtla.zipIsaretindenOku(o.zip, once)) onceden.add(a.kitapId);
@@ -889,7 +969,10 @@ async function panelMenuHizala(o) {
   try {
     const izinli = new Set();
     const yeniler = new Map();
-    const eksik = eksikUyeler(xml, books, varMi);
+    for (const [id, y] of yerelKurulan) {
+      if (books.some((b) => String(b.id) === id)) yeniler.set(id, y);
+    }
+    const eksik = eksikUyeler(xml, books, varMi).filter((e) => !yerelKurulan.has(String(e.book.id)));
     if (eksik.length) {
       const sablon = M.ucSablonu(appConfig);
       if (!sablon || !/^https?:\/\//i.test(sablon)) {
@@ -1090,5 +1173,5 @@ module.exports = {
   kapakSirasi, hSimule, okuyucuSurumu, eksikUyeler, menuHizala, imKeysYolu, yazmaIzinli,
   kokKorumaIhlalleri, hizalamaKapisi, resimAdi, panelMenuHizala, varsayilanBagimliliklar,
   varsayilanPanelGetir, varsayilanResimIndir, panelSetListesi, setListesiFarki, kokIcerikVarMi,
-  tabanHostu, CIKARMA_TAVAN_ORANI, eklemeTavani,
+  kartGeriKurBilgisi, tabanHostu, CIKARMA_TAVAN_ORANI, eklemeTavani,
 };
