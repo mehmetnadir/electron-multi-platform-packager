@@ -6,22 +6,28 @@
  * Tasarım: `~/.empp-agent/arastirma/set-kabuk-0510/kabuk-eki-tasarim.md` §1, §2, §4, §5 C.
  *
  * Akış (set başına):
- *   geçerli build (Mac kaynak arşivi → kabuk-ek önbelleği → `rclone copyto` indirme;
- *   sha256 doğrulanır)
+ *   araç denetimi (Swift ikilisi, zip, rclone) — tabandan ÖNCE
+ *   → geçerli build (Mac kaynak arşivi → `kabuk-ek-onbellek/<id>/taban.zip` → `rclone copyto`;
+ *     sha256 doğrulanır)
  *   → merdiven + set eki (runner `kaynakAdim`, r2-kur zinciriyle AYNI JS, aynı env bayrakları)
  *   → `kabukTazele({kabukKaynagi:'ikili', ekCikti})` (Swift ikilisi + mevcut kapı)
- *   → `manifestKur` + `ekPaketle` → tavan denetimi
- *   → `rclone copyto` ek → `kabuk-ek/<id>/<girdiSha>.zip`, SONRA `kabuk-ek/<id>/son.json`.
- *   Kalıcı ret (kapı RED, eşleme, kapak) + girdiSha biliniyorsa →
+ *   → `manifestKur` + `ekPaketle` → tavan (A `tavanAl()`) → ed25519 imza (`ekImzala`)
+ *   → yükleme sırası: `<girdiSha>.zip` → `<girdiSha>.imza` → `son.json` (`kabuk-ek/<id>/`).
+ *   Kalıcı ret (kapı RED, eşleme, kapak 404/küçük gövde) + girdiSha biliniyorsa →
  *   `kabuk-ek/<id>/<girdiSha>.ret.json`.
  *
- * Kipler: `--set <id>[,<id>…]` (elle) · `--bekleyen` (srv21 DB, tek SELECT, SSH/Tailscale).
+ * Kipler: `--set <id>[,<id>…]` (elle) · `--bekleyen` (srv21 DB, tek SELECT, SSH/Tailscale) ·
+ * `--anahtar-uret` (ed25519 çifti `~/.empp-agent/kabuk-ek-imza/`; var olanı EZMEZ).
  * Seçenekler: `--kuru` (R2'ye HİÇBİR şey yazılmaz) · `--cikti <dizin>` (ek yerelde de bırakılır).
  * Tek kopya kilidi `~/.empp-agent/kabuk-ek.kilit` (mkdir; sahip süreç ölünce bayat sayılır).
  * `~/.empp-agent/duraklat.istek` varsa hiç çalışmaz.
  *
- * SİLME YOK: geçici dizinler `os.tmpdir()` altında mkdtemp ile açılır ve bırakılır (OS temizler);
- * kilit bırakılırken os.tmpdir altına TAŞINIR.
+ * DİSK: çalışma dizini sabittir (`~/.empp-agent/kabuk-ek-calisma/<id>/`), her koşu dosyaların
+ * ÜZERİNE yazar; taban önbelleği set başına TEK dosyadır (`taban.zip` + `taban.json`), yeni sürüm
+ * rename ile eskisinin üzerine gelir. Bu dosya hiçbir şey SİLMEZ (rm/rmdir/unlink yok); kilit
+ * bırakılırken os.tmpdir altına taşınır. Not: çağrılan mevcut adımlar (set-kabuk-tazele,
+ * icerik-merdiven, set-uyelik-ek) KENDİ açtıkları sahne/aday dosyalarını çalışma dizininde
+ * `fsp.rm` ile kaldırır; bu onların bugünkü davranışıdır, bu dosya silme EKLEMEZ.
  */
 
 const fs = require('fs');
@@ -32,44 +38,57 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const ISARET = '[kabuk-ek]';
-const SSH_HEDEF = ['-o', 'ConnectTimeout=20', '-o', 'BatchMode=yes', '-p', '2222',
-  'root@100.117.187.26'];
+const SSH_SECENEK = ['-o', 'ConnectTimeout=20', '-o', 'BatchMode=yes'];
+const SSH_VARSAYILAN = '-p 2222 root@100.117.187.26';
 const R2_UZAK = 'ydsr2';
 /** Ekin yazıldığı TEK bucket: ProBook eki `cdn.ydspublishing.com/<yol>` adresinden okur (G6). */
 const EK_BUCKET = 'ydsdigital';
 const RCLONE_AYAR = ['--contimeout', '30s', '--timeout', '5m', '--retries', '3',
   '--low-level-retries', '10'];
-/** Kalıcı ret sayılan kabukTazele nedenleri (tasarım §2): eşleme, kapak, kapı RED. */
-const KALICI_RET = [/kapı RED/, /eşlenemeyen Web-Z üyesi/, /kapak geçersiz/];
 /** Aynı istek + taban için yeniden denenmeyen "uygun değil" nedenleri (kabukTazele uygunluk). */
 const UYGUN_DEGIL = /bookN düzeni yok|tek kitaplı paket|dokunulmaz|Web-Z listesinde kitap yok/;
+/** Geçici hatada geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. */
+const GERI_TABAN_MS = 15 * 60 * 1000;
+const GERI_TAVAN_MS = 6 * 60 * 60 * 1000;
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) '
+  + 'Chrome/126.0 Safari/537.36';
 
 // ─── Saf yardımcılar ──────────────────────────────────────────────────────────────────────
 
 /** Komut satırı. SAF. @returns {{kip, setler, kuru, cikti, hata?}} */
 function argAyristir(argv) {
   const o = { kip: null, setler: [], kuru: false, cikti: null };
+  const kipKoy = (k) => { o.kip = o.kip ? 'cift' : k; };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--kuru') o.kuru = true;
-    else if (a === '--bekleyen') o.kip = o.kip ? 'cift' : 'bekleyen';
+    else if (a === '--bekleyen') kipKoy('bekleyen');
+    else if (a === '--anahtar-uret') kipKoy('anahtar');
     else if (a === '--set' || a === '--cikti') {
       const v = argv[i + 1];
       if (!v || v.startsWith('--')) return { ...o, hata: `${a} değer ister` };
       i += 1;
       if (a === '--cikti') o.cikti = path.resolve(v);
       else {
-        o.kip = o.kip ? 'cift' : 'set';
+        kipKoy('set');
         o.setler = v.split(',').map((s) => s.trim()).filter(Boolean);
       }
     } else return { ...o, hata: `bilinmeyen argüman: ${a}` };
   }
-  if (!o.kip) return { ...o, hata: '--set <id>[,<id>…] ya da --bekleyen gerekli' };
-  if (o.kip === 'cift') return { ...o, hata: '--set ve --bekleyen birlikte kullanılmaz' };
+  if (!o.kip) return { ...o, hata: '--set <id>[,<id>…], --bekleyen ya da --anahtar-uret gerekli' };
+  if (o.kip === 'cift') {
+    return { ...o, hata: 'kipler (--set, --bekleyen, --anahtar-uret) birlikte kullanılmaz' };
+  }
   if (o.kip === 'set' && (!o.setler.length || o.setler.some((s) => !/^\d+$/.test(s)))) {
     return { ...o, hata: `--set yalnız sayısal kimlik alır: ${o.setler.join(',')}` };
   }
   return o;
+}
+
+/** SSH argümanları: `EMPP_SRV21_SSH` (boşlukla ayrık, ör. `-p 2222 root@host`) ya da varsayılan. */
+function sshHedefi(env = {}) {
+  const ham = String(env.EMPP_SRV21_SSH || '').trim() || SSH_VARSAYILAN;
+  return [...SSH_SECENEK, ...ham.split(/\s+/)];
 }
 
 const SQL_SECIM = 'SELECT s.book_id, (SELECT bp.short_code FROM book_pages bp'
@@ -154,9 +173,16 @@ function satirEngeli(s) {
   return null;
 }
 
-/** kabukTazele nedeni kalıcı ret mi. SAF. */
+/**
+ * kabukTazele nedeni kalıcı ret mi. SAF.
+ * Kalıcı: kapı RED, eşlenemeyen Web-Z üyesi, kapak 404 ya da 200 + geçersiz/küçük gövde.
+ * Geçici: kapak HTTP 5xx/diğer, ağ hatası ("alınamadı"), Web-Z settings hatası.
+ */
 function kaliciRetMi(neden) {
-  return KALICI_RET.some((d) => d.test(String(neden || '')));
+  const n = String(neden || '');
+  if (/kapı RED|eşlenemeyen Web-Z üyesi/.test(n)) return true;
+  const m = /kapak geçersiz \([^)]*\): HTTP (\S+?),/.exec(n);
+  return Boolean(m && (m[1] === '404' || m[1] === '200'));
 }
 
 /** `webz-kabuk-uret.surum` satırı (`kaynak=… sha256=…`) → {kaynak, sha256}. SAF. */
@@ -168,17 +194,54 @@ function aracSurumuAyristir(metin) {
   return { kaynak: al('kaynak'), sha256: al('sha256') };
 }
 
-/** --bekleyen: aynı istek + aynı taban için kesin sonuç kaydı varsa yeniden üretilmez. SAF. */
-function zatenIslendi(durum, s) {
-  const d = durum && durum[s.bookId];
-  return Boolean(d && d.istekAt === s.istekAt && d.tabanSurum === s.surum);
+/** Geri çekilme aralığı: n. ardışık geçici hatadan sonra. SAF. */
+function geriCekilmeMs(hataSayisi) {
+  const n = Math.max(1, Number(hataSayisi) || 1);
+  return Math.min(GERI_TABAN_MS * 2 ** (n - 1), GERI_TAVAN_MS);
 }
 
-/** Sonuç durum dosyasına yazılır mı (kesin sonuç; geçici hata yeniden denenir). SAF. */
-function kesinSonucMu(sonuc, kuru) {
-  if (kuru) return false;
-  if (['yuklendi', 'tavan', 'ret'].includes(sonuc.durum)) return true;
+/**
+ * --bekleyen: set bu turda atlanır mı. SAF.
+ * Kesin kayıt + aynı istek + aynı taban + Web-Z settings sha'sı değişmemiş → 'islendi'.
+ * Geçici kayıt + aynı istek + geri çekilme süresi dolmamış → 'geri'.
+ * `webzSha` null (okunamadı) → settings değişimi bilinmez, kesin kayıt korunur.
+ * @returns {null|'islendi'|'geri'}
+ */
+function atlamaNedeni(kayit, s, { webzSha = null, simdi = Date.now() } = {}) {
+  if (!kayit || kayit.istekAt !== s.istekAt) return null;
+  if (kayit.kesin) {
+    if (kayit.tabanSurum !== s.surum) return null;
+    if (webzSha && kayit.webzSettingsSha !== webzSha) return null;
+    return 'islendi';
+  }
+  const son = Date.parse(kayit.sonDeneme || '');
+  if (Number.isFinite(son) && simdi - son < geriCekilmeMs(kayit.hataSayisi)) return 'geri';
+  return null;
+}
+
+/** Sonuç kesin mi (durum dosyasında yeniden denenmez). Kuru koşu hiç kaydedilmez. SAF. */
+function kesinSonucMu(sonuc) {
+  if (['yuklendi', 'tavan'].includes(sonuc.durum)) return true;
+  if (sonuc.durum === 'ret') return sonuc.retYazildi === true;
   return sonuc.durum === 'atlandi' && UYGUN_DEGIL.test(String(sonuc.neden || ''));
+}
+
+/** Durum kaydı (kesin ya da geçici). SAF. */
+function durumKaydi(onceki, s, sonuc, { simdi = new Date() } = {}) {
+  const kesin = kesinSonucMu(sonuc);
+  const ayniIstek = onceki && onceki.istekAt === s.istekAt;
+  return {
+    istekAt: s.istekAt, tabanSurum: s.surum, webzSettingsSha: sonuc.webzSettingsSha || null,
+    durum: sonuc.durum, girdiSha: sonuc.girdiSha || null, kesin,
+    hataSayisi: kesin ? 0 : (ayniIstek && !onceki.kesin ? Number(onceki.hataSayisi) || 0 : 0) + 1,
+    sonDeneme: simdi.toISOString(),
+  };
+}
+
+/** Açık anahtarın parmak izi: SPKI DER'in sha256'sı. SAF (anahtar nesnesi verilir). */
+function parmakIzi(acikAnahtar) {
+  const der = acikAnahtar.export({ type: 'spki', format: 'der' });
+  return `sha256:${crypto.createHash('sha256').update(der).digest('hex')}`;
 }
 
 // ─── IO yardımcıları ─────────────────────────────────────────────────────────────────────
@@ -219,6 +282,13 @@ function okuSessiz(dosya) {
   try { return fs.readFileSync(dosya, 'utf8'); } catch (_) { return null; }
 }
 
+/** JSON'u geçici adla yazıp rename eder (üzerine yazma; silme yok). */
+function jsonYaz(dosya, veri) {
+  const gecici = `${dosya}.${process.pid}.yaziliyor`;
+  fs.writeFileSync(gecici, `${JSON.stringify(veri, null, 2)}\n`);
+  fs.renameSync(gecici, dosya);
+}
+
 function canliMi(pid) {
   if (!(pid > 0)) return false;
   try {
@@ -242,11 +312,13 @@ function kenaraAl(dizin) {
 
 /**
  * Tek kopya kilidi (mkdir atomik). Sahip pid ölmüşse kilit bayattır: kenara alınır, yeniden
- * denenir.
- * pid dosyası henüz yazılmamış taze kilit (<30 sn) MEŞGUL sayılır.
+ * denenir. pid dosyası henüz yazılmamış taze kilit (<30 sn) MEŞGUL sayılır. Bayat kilit kenara
+ * alınamazsa (yarış) MEŞGUL sayılır.
  * @returns {null | (() => void)} null = başka kopya çalışıyor; fonksiyon = bırak
  */
-function kilitAl(kilit, { pid = process.pid, canli = canliMi, simdi = Date.now } = {}) {
+function kilitAl(kilit, {
+  pid = process.pid, canli = canliMi, simdi = Date.now, kenar = kenaraAl,
+} = {}) {
   const pidDosyasi = path.join(kilit, 'pid');
   const yaz = () => {
     fs.writeFileSync(pidDosyasi, `${pid}\n`);
@@ -256,7 +328,7 @@ function kilitAl(kilit, { pid = process.pid, canli = canliMi, simdi = Date.now }
       birakildi = true;
       if (Number(okuSessiz(pidDosyasi)) !== pid) return;
       // Taşınamazsa pid boşaltılır: sonraki kopya kilidi bayat sayar.
-      if (!kenaraAl(kilit)) {
+      if (!kenar(kilit)) {
         try { fs.writeFileSync(pidDosyasi, ''); } catch (_) { /* yok */ }
       }
     };
@@ -276,7 +348,7 @@ function kilitAl(kilit, { pid = process.pid, canli = canliMi, simdi = Date.now }
     try { yas = simdi() - fs.statSync(kilit).mtimeMs; } catch (_) { /* yok */ }
     if (yas < 30000) return null;
   }
-  if (!kenaraAl(kilit)) return yaz(); // taşınamadı: bayat kilit devralınır
+  if (!kenar(kilit)) return null;
   try {
     fs.mkdirSync(kilit);
   } catch (e) {
@@ -284,6 +356,54 @@ function kilitAl(kilit, { pid = process.pid, canli = canliMi, simdi = Date.now }
     throw e;
   }
   return yaz();
+}
+
+/**
+ * ed25519 anahtar çifti üretir. Özel anahtar VARSA EZİLMEZ (yalnız açık anahtar türetilip
+ * eksikse yazılır). Özel anahtar hiçbir yere basılmaz.
+ * @returns {{durum: 'uretildi'|'var', parmakIzi: string, acik: string}}
+ */
+function anahtarUret(dizin) {
+  fs.mkdirSync(dizin, { recursive: true, mode: 0o700 });
+  const ozel = path.join(dizin, 'ozel.pem');
+  const acik = path.join(dizin, 'acik.pem');
+  if (fs.existsSync(ozel)) {
+    const acikAnahtar = crypto.createPublicKey(fs.readFileSync(ozel));
+    if (!fs.existsSync(acik)) {
+      fs.writeFileSync(acik, acikAnahtar.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
+    }
+    return { durum: 'var', parmakIzi: parmakIzi(acikAnahtar), acik };
+  }
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  fs.writeFileSync(ozel, privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(ozel, 0o600);
+  fs.writeFileSync(acik, publicKey.export({ type: 'spki', format: 'pem' }), { mode: 0o644 });
+  return { durum: 'uretildi', parmakIzi: parmakIzi(publicKey), acik };
+}
+
+/** Web-Z settings.json gövdesinin sha256'sı (B `webzSettingsSha` ile aynı ölçü); hata → null. */
+async function webzSettingsShaGetir(webzKoku, kisaKod) {
+  try {
+    const r = await fetch(`${webzKoku}/go/${kisaKod}/web-stream/config/settings.json`, {
+      redirect: 'follow', headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(20000),
+    });
+    if (r.status !== 200) return null;
+    return crypto.createHash('sha256').update(Buffer.from(await r.arrayBuffer())).digest('hex');
+  } catch (_) {
+    return null;
+  }
+}
+
+function komutVarMi(ad, env) {
+  return String(env.PATH || '').split(':').filter(Boolean).some((d) => {
+    try {
+      fs.accessSync(path.join(d, ad), fs.constants.X_OK);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  });
 }
 
 /** Varsayılan bağımlılıklar (testler hepsini değiştirir; require tembel). */
@@ -295,7 +415,7 @@ function varsayilanBag(env = process.env) {
     ev,
     log: (...a) => console.log(new Date().toISOString(), ...a),
     warn: (...a) => console.warn(new Date().toISOString(), ...a),
-    ssh: (sql) => komutKostur('ssh', [...SSH_HEDEF, `pipeline-sql "${sql}"`],
+    ssh: (sql) => komutKostur('ssh', [...sshHedefi(env), `pipeline-sql "${sql}"`],
       { zamanAsimiMs: 90000 }),
     rclone: (args) => komutKostur('rclone', [...args, ...RCLONE_AYAR]),
     bildir: (metin) => komutKostur('bildir', ['kosucu', metin], { zamanAsimiMs: 20000 }),
@@ -306,39 +426,68 @@ function varsayilanBag(env = process.env) {
     merdivenAcik: () => require('../../src/agent/icerik-merdiven').merdivenAcik(env),
     setEki: () => require('../../src/agent/set-uyelik-ek'),
     aracSurumu: () => aracSurumuAyristir(okuSessiz(`${kabuk().ikiliYolu(env)}.surum`)),
+    webzSha: (kisaKod) => webzSettingsShaGetir(kabuk().WEBZ_KOKU, kisaKod),
+    /** Swift ikilisi + zip + rclone; eksikse neden döner. */
+    aracDenetle: () => {
+      const ikili = kabuk().ikiliYolu(env);
+      try {
+        fs.accessSync(ikili, fs.constants.X_OK);
+      } catch (_) {
+        return `Swift ikilisi yok: ${ikili} (tools/set-kabuk/kur-webz-kabuk-uret.sh)`;
+      }
+      const eksik = ['zip', 'rclone'].filter((k) => !komutVarMi(k, env));
+      return eksik.length ? `komut yok: ${eksik.join(', ')}` : null;
+    },
   };
 }
 
 // ─── Adımlar ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * `kaynak` dosyasını `hedef`'e klonlar. Klon her zaman VAR OLMAYAN bir ada yapılır (APFS clone;
+ * var olan hedefe kopya tam veri yazar), sonra rename ile hedefin ÜZERİNE gelir.
+ */
+async function klonla(kaynak, hedef) {
+  const yeni = `${hedef}.yeni`;
+  if (fs.existsSync(yeni)) await fsp.rename(yeni, hedef); // yarım kalmış koşu: üzerine yaz
+  await fsp.copyFile(kaynak, yeni, fs.constants.COPYFILE_FICLONE);
+  await fsp.rename(yeni, hedef);
+}
+
+/**
  * Taban build'i iş kopyasına koyar: (1) Mac kaynak arşivi (r2Surum + sha256 aynı) →
- * (2) `kabuk-ek-onbellek/<id>/<sürüm>.zip` (boyut + sha damgası) → (3) rclone indirme + sha256.
- * Kaynak dosyalar DEĞİŞMEZ (klon kopya).
+ * (2) `kabuk-ek-onbellek/<id>/taban.zip` (+ `taban.json`: sürüm, sha256, boyut, mtime) →
+ * (3) rclone indirme + sha256; yeni taban rename ile eskisinin ÜZERİNE gelir (set başına tek
+ * dosya).
  */
 async function tabanHazirla(bag, s, calisma) {
   const hedef = path.join(calisma, 'build.zip');
-  const klon = (kaynak) => fsp.copyFile(kaynak, hedef, fs.constants.COPYFILE_FICLONE);
   const onb = await bag.r2Onbellek(s.bookId, {
     surum: s.surum, sha256: s.sha256, boyut: s.boyut, bilgi: bag.log,
   });
   if (onb) {
-    await klon(onb.zip);
+    await klonla(onb.zip, hedef);
     return { zip: hedef, kaynak: 'arsiv' };
   }
   const dizin = path.join(bag.ev, 'kabuk-ek-onbellek', String(s.bookId));
-  const dosya = path.join(dizin, `${s.surum}.zip`);
-  const damgaDosyasi = `${dosya}.sha256`;
-  const damga = (st) => `${s.sha256} ${st.size} ${Math.floor(st.mtimeMs)}`;
+  const dosya = path.join(dizin, 'taban.zip');
+  const kayitDosyasi = path.join(dizin, 'taban.json');
+  const kayitYaz = (st) => jsonYaz(kayitDosyasi, {
+    surum: s.surum, sha256: s.sha256, boyut: st.size, mtimeMs: Math.floor(st.mtimeMs),
+  });
   if (fs.existsSync(dosya)) {
     const st = fs.statSync(dosya);
-    if (st.size === s.boyut && (String(okuSessiz(damgaDosyasi) || '').trim() === damga(st)
-      || await sha256Dosya(dosya) === s.sha256)) {
-      fs.writeFileSync(damgaDosyasi, `${damga(st)}\n`);
-      await klon(dosya);
+    let kayit = null;
+    try { kayit = JSON.parse(okuSessiz(kayitDosyasi)); } catch (_) { /* yok */ }
+    const kayitTutar = kayit && kayit.sha256 === s.sha256 && kayit.boyut === st.size
+      && kayit.mtimeMs === Math.floor(st.mtimeMs);
+    if (st.size === s.boyut && (kayitTutar || await sha256Dosya(dosya) === s.sha256)) {
+      if (!kayitTutar) kayitYaz(st);
+      await klonla(dosya, hedef);
       return { zip: hedef, kaynak: 'onbellek' };
     }
-    bag.warn(`${ISARET} ${s.bookId}: önbellek ${s.surum}.zip tutmuyor — yeniden indirilecek`);
+    bag.log(`${ISARET} ${s.bookId}: önbellek tabanı ${kayit && kayit.surum || '?'} ≠ ${s.surum}`
+      + ' — yenisi indirilip üzerine yazılacak');
   }
   await fsp.mkdir(dizin, { recursive: true });
   const parca = `${dosya}.indiriliyor`;
@@ -357,9 +506,9 @@ async function tabanHazirla(bag, s, calisma) {
       + `≠ ${s.boyut}/${s.sha256.slice(0, 12)}`);
   }
   await fsp.rename(parca, dosya);
-  fs.writeFileSync(damgaDosyasi, `${damga(fs.statSync(dosya))}\n`);
+  kayitYaz(fs.statSync(dosya));
   bag.log(`${ISARET} ${s.bookId}: taban indirildi ${((Date.now() - basla) / 1000).toFixed(0)} sn`);
-  await klon(dosya);
+  await klonla(dosya, hedef);
   return { zip: hedef, kaynak: 'indirme' };
 }
 
@@ -393,13 +542,13 @@ async function rcloneYaz(bag, yerel, anahtar) {
   if (r.code !== 0) throw new Error(`rclone ${r.code}: ${String(r.stderr).trim().slice(-200)}`);
 }
 
-async function retYaz(bag, s, ek, girdiSha, neden, o) {
+/** Ret işaretini yazar. @returns {Promise<boolean>} R2'ye yazıldı mı */
+async function retYaz(bag, s, ek, girdiSha, neden, o, calisma) {
   const govde = `${JSON.stringify({
     neden: String(neden), bookId: String(s.bookId), girdiSha, uretildi: new Date().toISOString(),
   }, null, 2)}\n`;
   const anahtar = ek.retAnahtari(String(s.bookId), girdiSha);
-  const dizin = await fsp.mkdtemp(path.join(os.tmpdir(), `kabuk-ek-ret-${s.bookId}-`));
-  const dosya = path.join(dizin, path.basename(anahtar));
+  const dosya = path.join(calisma, 'ret.json');
   await fsp.writeFile(dosya, govde);
   if (o.cikti) {
     await fsp.mkdir(path.join(o.cikti, String(s.bookId)), { recursive: true });
@@ -407,20 +556,24 @@ async function retYaz(bag, s, ek, girdiSha, neden, o) {
   }
   if (o.kuru) {
     bag.log(`${ISARET} ${s.bookId}: ret işareti ${anahtar} (--kuru, yazılmadı)`);
-    return;
+    return false;
   }
   try {
     await rcloneYaz(bag, dosya, anahtar);
     bag.log(`${ISARET} ${s.bookId}: ret işareti yazıldı ${anahtar}`);
+    return true;
   } catch (e) {
     bag.warn(`${ISARET} ${s.bookId}: ret işareti yazılamadı — ${e.message}`);
+    return false;
   }
 }
 
 /**
  * Bir seti işler. FIRLATMAZ.
+ * @param {{kuru: boolean, cikti?: string, ozelAnahtar?: string|null}} o  ozelAnahtar = PEM
+ *   (kuru koşu dışında ZORUNLU; main denetler)
  * @returns {Promise<{bookId, durum: 'yuklendi'|'kuru'|'tavan'|'ret'|'atlandi'|'hata', neden,
- *   girdiSha?, bayt?, dosyaSayisi?, anahtar?, sureMs}>}
+ *   girdiSha?, bayt?, dosyaSayisi?, anahtar?, webzSettingsSha?, retYazildi?, sureMs}>}
  */
 async function setIsle(bag, s, o) {
   const basla = Date.now();
@@ -438,7 +591,8 @@ async function setIsle(bag, s, o) {
     const engel = satirEngeli(s);
     if (engel) return bitir('atlandi', engel);
     const ek = bag.ek();
-    const calisma = await fsp.mkdtemp(path.join(os.tmpdir(), `kabuk-ek-${s.bookId}-`));
+    const calisma = path.join(bag.ev, 'kabuk-ek-calisma', String(s.bookId));
+    await fsp.mkdir(calisma, { recursive: true });
     const taban = await tabanHazirla(bag, s, calisma);
     sonuc.taban = `${s.surum}/${taban.kaynak}`;
     const job = await kaynakAdimlari(bag, s, taban.zip, calisma);
@@ -450,12 +604,13 @@ async function setIsle(bag, s, o) {
     });
     const girdiSha = (cikti && cikti.girdiSha) || (kt && kt.girdiSha) || null;
     if (girdiSha) sonuc.girdiSha = girdiSha;
+    if (cikti && cikti.webzSettingsSha) sonuc.webzSettingsSha = cikti.webzSettingsSha;
     const ktDurum = kt && kt.durum;
     if (!cikti || !['uygulandi', 'guncel'].includes(ktDurum)) {
       const neden = `kabuk ${ktDurum || '?'}: ${(kt && kt.neden) || 'ek çıktısı yok'}`;
       if (ktDurum === 'atlandi' && kaliciRetMi(kt.neden)) {
-        if (girdiSha) await retYaz(bag, s, ek, girdiSha, kt.neden, o);
-        const notu = girdiSha ? '' : ' (girdiSha yok, ret işareti yazılmadı)';
+        if (girdiSha) sonuc.retYazildi = await retYaz(bag, s, ek, girdiSha, kt.neden, o, calisma);
+        const notu = sonuc.retYazildi ? '' : ' (ret işareti yazılmadı)';
         const kisa = String(kt.neden).slice(0, 160);
         await bag.bildir(`kabuk-ek ${s.bookId}: KALICI RET${notu} — ${kisa}`);
         return bitir('ret', neden);
@@ -476,13 +631,14 @@ async function setIsle(bag, s, o) {
     const kitaplar = cikti.girdi && Array.isArray(cikti.girdi.kitaplar)
       ? cikti.girdi.kitaplar : null;
     const secenek = kitaplar ? { klasorler: new Set(kitaplar.map((k) => String(k.klasor))) } : {};
+    // Tavan çağrı anında A'dan okunur (EMPP_KABUK_EK_TAVAN; ProBook ile eşit olmalı).
+    const tavan = typeof ek.tavanAl === 'function' ? ek.tavanAl() : ek.EK_TAVAN_BAYT;
     let paket = null;
     try {
       paket = ek.ekPaketle({ manifest, dosyalar }, secenek);
     } catch (e) {
       if (!(e && e.kod === 'tavan')) throw e;
     }
-    const tavan = ek.EK_TAVAN_BAYT;
     if (!paket || paket.length > tavan) {
       const bayt = paket ? paket.length : null;
       if (bayt != null) sonuc.bayt = bayt;
@@ -491,8 +647,10 @@ async function setIsle(bag, s, o) {
       return bitir('tavan', `ek ${bayt ?? '?'} bayt > tavan ${tavan}`);
     }
     sonuc.bayt = paket.length;
+    const imza = o.ozelAnahtar ? ek.ekImzala(paket, o.ozelAnahtar) : null;
     const ekSha = crypto.createHash('sha256').update(paket).digest('hex');
     const anahtar = ek.ekAnahtari(String(s.bookId), girdiSha);
+    const imzaAnahtar = imza ? ek.imzaAnahtari(String(s.bookId), girdiSha) : null;
     const sonAnahtar = ek.sonAnahtari(String(s.bookId));
     sonuc.anahtar = anahtar;
     const son = {
@@ -500,32 +658,40 @@ async function setIsle(bag, s, o) {
       tabanSurum: s.surum,
     };
     const sonMetni = `${JSON.stringify(son, null, 2)}\n`;
-    const ekDosyasi = path.join(calisma, `${girdiSha}.zip`);
+    const ekDosyasi = path.join(calisma, 'ek.zip');
+    const imzaDosyasi = path.join(calisma, 'ek.imza');
     const sonDosyasi = path.join(calisma, 'son.json');
     await fsp.writeFile(ekDosyasi, paket);
+    if (imza) await fsp.writeFile(imzaDosyasi, imza);
     await fsp.writeFile(sonDosyasi, sonMetni);
     bag.log(`${ISARET} ${s.bookId}: ek ${paket.length} bayt, ${dosyalar.size} dosya, `
-      + `girdiSha ${girdiSha}, ek sha256 ${ekSha.slice(0, 12)}, kabuk ${ktDurum}`);
+      + `girdiSha ${girdiSha}, ek sha256 ${ekSha.slice(0, 12)}, imza ${imza ? 'VAR' : 'YOK'}, `
+      + `kabuk ${ktDurum}`);
     if (o.cikti) {
       const yerel = path.join(o.cikti, String(s.bookId));
       await fsp.mkdir(yerel, { recursive: true });
       await fsp.writeFile(path.join(yerel, `${girdiSha}.zip`), paket);
+      if (imza) await fsp.writeFile(path.join(yerel, path.basename(imzaAnahtar)), imza);
       await fsp.writeFile(path.join(yerel, 'son.json'), sonMetni);
       bag.log(`${ISARET} ${s.bookId}: yerel çıktı ${yerel}`);
     }
     if (o.kuru) return bitir('kuru', 'R2 yazılmadı (--kuru)');
-    // SIRA: önce ek (içerik adresli), SONRA son.json — son.json yalnız var olan eki gösterir.
-    try {
-      await rcloneYaz(bag, ekDosyasi, anahtar);
-    } catch (e) {
-      await bag.bildir(`kabuk-ek ${s.bookId}: ek yüklenemedi — ${e.message.slice(0, 160)}`);
-      return bitir('hata', `ek yüklenemedi: ${e.message}`);
+    if (!imza) {
+      await bag.bildir(`kabuk-ek ${s.bookId}: özel anahtar yok — ek yüklenmedi`);
+      return bitir('hata', 'özel anahtar yok — yükleme yok');
     }
-    try {
-      await rcloneYaz(bag, sonDosyasi, sonAnahtar);
-    } catch (e) {
-      await bag.bildir(`kabuk-ek ${s.bookId}: son.json yüklenemedi — ${e.message.slice(0, 160)}`);
-      return bitir('hata', `son.json yüklenemedi (ek yüklendi): ${e.message}`);
+    // SIRA: ek (içerik adresli) → imza → son.json; son.json yalnız imzalı, var olan eki gösterir.
+    const yuklemeler = [
+      [ekDosyasi, anahtar, 'ek'], [imzaDosyasi, imzaAnahtar, 'imza'],
+      [sonDosyasi, sonAnahtar, 'son.json'],
+    ];
+    for (const [yerel, uzak, ad] of yuklemeler) {
+      try {
+        await rcloneYaz(bag, yerel, uzak);
+      } catch (e) {
+        await bag.bildir(`kabuk-ek ${s.bookId}: ${ad} yüklenemedi — ${e.message.slice(0, 160)}`);
+        return bitir('hata', `${ad} yüklenemedi: ${e.message}`);
+      }
     }
     return bitir('yuklendi', null);
   } catch (e) {
@@ -537,22 +703,23 @@ function durumOku(dosya) {
   try { return JSON.parse(fs.readFileSync(dosya, 'utf8')) || {}; } catch (_) { return {}; }
 }
 
-function durumYaz(dosya, durum) {
-  const gecici = `${dosya}.${process.pid}.yaziliyor`;
-  fs.writeFileSync(gecici, `${JSON.stringify(durum, null, 2)}\n`);
-  fs.renameSync(gecici, dosya);
-}
-
 /**
- * Giriş. Çıkış kodu: 0 (iş yok / meşgul / duraklatıldı / hepsi tamam), 1 (en az bir set hata
- * ya da DB okunamadı), 2 (kullanım).
+ * Giriş. Çıkış kodu: 0 (iş yok / meşgul / duraklatıldı / hepsi tamam), 1 (en az bir set hata,
+ * DB okunamadı, araç ya da imza anahtarı yok), 2 (kullanım).
  */
 async function main(argv, bag = varsayilanBag()) {
   const o = argAyristir(argv);
   if (o.hata) {
-    bag.warn(`${ISARET} kullanım: ek-uret.js (--set <id>[,<id>…] | --bekleyen) [--kuru]`
-      + ` [--cikti <dizin>] — ${o.hata}`);
+    bag.warn(`${ISARET} kullanım: ek-uret.js (--set <id>[,<id>…] | --bekleyen | --anahtar-uret)`
+      + ` [--kuru] [--cikti <dizin>] — ${o.hata}`);
     return 2;
+  }
+  const imzaDizini = path.join(bag.ev, 'kabuk-ek-imza');
+  if (o.kip === 'anahtar') {
+    const r = anahtarUret(imzaDizini);
+    bag.log(`${ISARET} imza anahtarı ${r.durum === 'var' ? 'ZATEN VAR (ezilmedi)' : 'üretildi'}: `
+      + `açık ${r.acik}, parmak izi ${r.parmakIzi}`);
+    return 0;
   }
   const duraklat = path.join(bag.ev, 'duraklat.istek');
   if (fs.existsSync(duraklat)) {
@@ -569,6 +736,25 @@ async function main(argv, bag = varsayilanBag()) {
   const dinle = bag.sinyalDinle !== false;
   if (dinle) for (const [ad, f] of isleyiciler) process.on(ad, f);
   try {
+    const aracEksik = bag.aracDenetle();
+    if (aracEksik) {
+      bag.warn(`${ISARET} araç denetimi: ${aracEksik} — taban indirilmedi`);
+      return 1;
+    }
+    const ozelAnahtar = okuSessiz(path.join(imzaDizini, 'ozel.pem'));
+    if (!o.kuru) {
+      const ek = bag.ek();
+      const eksik = !ozelAnahtar ? `özel anahtar yok (${imzaDizini}/ozel.pem; --anahtar-uret)`
+        : (typeof ek.ekImzala !== 'function' || typeof ek.imzaAnahtari !== 'function')
+          ? 'kabuk-ek modülünde ekImzala/imzaAnahtari yok' : null;
+      if (eksik) {
+        bag.warn(`${ISARET} ${eksik} — yükleme yapılmaz`);
+        await bag.bildir(`kabuk-ek: ${eksik} — yükleme yapılmadı`);
+        return 1;
+      }
+    } else if (!ozelAnahtar) {
+      bag.log(`${ISARET} --kuru: özel anahtar yok, ek imzasız üretilecek`);
+    }
     const r = await bag.ssh(sqlKur(o));
     if (r.code !== 0) {
       bag.warn(`${ISARET} DB sorgusu başarısız (ssh ${r.code}): `
@@ -585,10 +771,20 @@ async function main(argv, bag = varsayilanBag()) {
     const durumDosyasi = path.join(bag.ev, 'kabuk-ek-durum.json');
     const durum = durumOku(durumDosyasi);
     if (o.kip === 'bekleyen') {
-      const once = satirlar.length;
-      satirlar = satirlar.filter((s) => !zatenIslendi(durum, s));
-      bag.log(`${ISARET} bekleyen ${once} set, ${once - satirlar.length} zaten işlendi`
-        + `${satirlar.length ? `: ${satirlar.map((s) => s.bookId).join(',')}` : ''}`);
+      const kalan = [];
+      const atlanan = [];
+      for (const s of satirlar) {
+        const kayit = durum[s.bookId];
+        // Web-Z settings yalnız kesin kayıtlı sette çekilir (küçük GET): değiştiyse yeniden üret.
+        const webzSha = kayit && kayit.kesin && kayit.istekAt === s.istekAt && s.kisaKod
+          ? await bag.webzSha(s.kisaKod) : null;
+        const neden = atlamaNedeni(kayit, s, { webzSha });
+        if (neden) atlanan.push(`${s.bookId}:${neden}`);
+        else kalan.push(s);
+      }
+      bag.log(`${ISARET} bekleyen ${satirlar.length} set; atlanan ${atlanan.join(',') || '-'};`
+        + ` işlenecek ${kalan.map((s) => s.bookId).join(',') || '-'}`);
+      satirlar = kalan;
     }
     let hata = 0;
     for (const s of satirlar) {
@@ -596,14 +792,14 @@ async function main(argv, bag = varsayilanBag()) {
         bag.log(`${ISARET} duraklat.istek geldi — kalan setler bırakıldı`);
         break;
       }
-      const sonuc = await setIsle(bag, s, o);
+      const sonuc = await setIsle(bag, s, { ...o, ozelAnahtar });
       if (sonuc.durum === 'hata') hata += 1;
-      if (kesinSonucMu(sonuc, o.kuru)) {
-        durum[s.bookId] = {
-          istekAt: s.istekAt, tabanSurum: s.surum, durum: sonuc.durum,
-          girdiSha: sonuc.girdiSha || null, zaman: new Date().toISOString(),
-        };
-        durumYaz(durumDosyasi, durum);
+      if (!o.kuru) {
+        if (!sonuc.webzSettingsSha && s.kisaKod) {
+          sonuc.webzSettingsSha = await bag.webzSha(s.kisaKod);
+        }
+        durum[s.bookId] = durumKaydi(durum[s.bookId], s, sonuc);
+        jsonYaz(durumDosyasi, durum);
       }
     }
     return hata ? 1 : 0;
@@ -621,7 +817,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  ISARET, EK_BUCKET, argAyristir, sqlKur, satirlariAyristir, satirEngeli, kaliciRetMi,
-  aracSurumuAyristir, zatenIslendi, kesinSonucMu, kilitAl, canliMi, tabanHazirla, setIsle, main,
-  varsayilanBag,
+  ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
+  kaliciRetMi, aracSurumuAyristir, geriCekilmeMs, atlamaNedeni, kesinSonucMu, durumKaydi,
+  parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main, varsayilanBag,
 };

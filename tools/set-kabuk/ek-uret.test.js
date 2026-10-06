@@ -10,6 +10,7 @@ const E = require('./ek-uret');
 
 const TABAN = Buffer.from('PK\u0003\u0004 sahte taban build içeriği');
 const TABAN_SHA = crypto.createHash('sha256').update(TABAN).digest('hex');
+const SHA_A = 'a'.repeat(64);
 
 function geciciDizin() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ek-uret-test-'));
@@ -31,17 +32,20 @@ function satir(id, ek = {}) {
   };
 }
 
-/** Sahte A modülü (kabuk-ek.js arayüzü). */
+/** Sahte A modülü (kabuk-ek.js arayüzü; imza gerçek ed25519). */
 function sahteEk({ tavan = 4096 } = {}) {
   return {
-    EK_TAVAN_BAYT: tavan,
+    EK_TAVAN_BAYT: 1,
+    tavanAl: () => tavan,
     manifestKur: (m) => ({ sozlesme: 1, ...m, dosyalar: [...m.dosyalar.keys()].sort() }),
     ekPaketle: ({ manifest, dosyalar }, s) => Buffer.from(JSON.stringify({
       klasorler: [...((s && s.klasorler) || [])],
       manifest: { ...manifest, uretildi: undefined },
       dosyalar: [...dosyalar].map(([k, v]) => [k, v.toString('base64')]),
     })),
+    ekImzala: (buf, pem) => crypto.sign(null, buf, crypto.createPrivateKey(pem)).toString('base64'),
     ekAnahtari: (b, s) => `kabuk-ek/${b}/${s}.zip`,
+    imzaAnahtari: (b, s) => `kabuk-ek/${b}/${s}.imza`,
     retAnahtari: (b, s) => `kabuk-ek/${b}/${s}.ret.json`,
     sonAnahtari: (b) => `kabuk-ek/${b}/son.json`,
   };
@@ -49,14 +53,16 @@ function sahteEk({ tavan = 4096 } = {}) {
 
 /** Sahte bağımlılıklar; çağrılar `kayit`'a düşer. */
 function sahteBag(ev, o = {}) {
-  const kayit = { rclone: [], ssh: [], bildir: [], kabuk: [], merdiven: 0, setEki: [] };
+  const kayit = {
+    rclone: [], ssh: [], bildir: [], kabuk: [], merdiven: 0, setEki: [], webz: 0, log: [],
+  };
   const dosyalar = o.dosyalar || new Map([
     ['index.html', Buffer.from('<html>kabuk</html>')],
     ['scripts/language-set.js', Buffer.from('sonrakiSatirDugmesi')],
   ]);
   const bag = {
     env: {}, ev, sinyalDinle: false,
-    log: () => {}, warn: () => {},
+    log: (...a) => kayit.log.push(a.join(' ')), warn: (...a) => kayit.log.push(a.join(' ')),
     ssh: async (sql) => {
       kayit.ssh.push(sql);
       return { code: 0, stdout: o.tsv || tsv([satir(45550)]), stderr: '' };
@@ -71,17 +77,16 @@ function sahteBag(ev, o = {}) {
       return { code: 0, stdout: '', stderr: '' };
     },
     bildir: async (m) => { kayit.bildir.push(m); return { code: 0 }; },
-    ek: () => sahteEk(o),
+    ek: () => o.ekModulu || sahteEk(o),
     kabukTazele: async (x) => {
       kayit.kabuk.push(x);
       if (o.kabuk) return o.kabuk(x);
       assert.equal(x.kabukKaynagi, 'ikili');
       await x.ekCikti({
-        girdiSha: 'a'.repeat(64), kip: 'bookN', girdi: { kitaplar: [{ klasor: 'book1' }] },
-        dosyalar, kapaklar: {},
-        a1Girdi: null, webzSettingsSha: 'b'.repeat(64),
+        girdiSha: SHA_A, kip: 'bookN', girdi: { kitaplar: [{ klasor: 'book1' }] },
+        dosyalar, kapaklar: {}, a1Girdi: null, webzSettingsSha: o.ktWebz || 'b'.repeat(64),
       });
-      return { durum: 'uygulandi', neden: null, girdiSha: 'a'.repeat(64) };
+      return { durum: 'uygulandi', neden: null, girdiSha: SHA_A };
     },
     kaynakAdim: () => ({
       merdiven: async () => { kayit.merdiven += 1; },
@@ -95,24 +100,45 @@ function sahteBag(ev, o = {}) {
         ? { ham: job.setListesi, kaynak: 'claim' } : null),
     }),
     aracSurumu: () => ({ kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' }),
+    aracDenetle: () => o.aracEksik || null,
+    webzSha: async () => {
+      kayit.webz += 1;
+      return o.webzSha === undefined ? 'b'.repeat(64) : o.webzSha;
+    },
   };
   return { bag, kayit };
+}
+
+/** Test ev dizinine imza anahtarı kurar. */
+function anahtarKur(ev) {
+  return E.anahtarUret(path.join(ev, 'kabuk-ek-imza'));
 }
 
 const yazmalar = (kayit) => kayit.rclone
   .filter((a) => a[0] === 'copyto' && String(a[2]).startsWith('ydsr2:'))
   .map((a) => a[2]);
 
+const tekSatir = (ek) => E.satirlariAyristir(tsv([satir(45550, ek)]))[0];
+
 // ─── Saf ─────────────────────────────────────────────────────────────────────────────────
 
 test('argAyristir: kipler, hatalar', () => {
   assert.deepEqual(E.argAyristir(['--set', '45550,45485', '--kuru']).setler, ['45550', '45485']);
   assert.equal(E.argAyristir(['--bekleyen']).kip, 'bekleyen');
+  assert.equal(E.argAyristir(['--anahtar-uret']).kip, 'anahtar');
   assert.match(E.argAyristir([]).hata, /gerekli/);
   assert.match(E.argAyristir(['--set', '45x']).hata, /sayısal/);
   assert.match(E.argAyristir(['--set', '1', '--bekleyen']).hata, /birlikte/);
+  assert.match(E.argAyristir(['--anahtar-uret', '--bekleyen']).hata, /birlikte/);
   assert.match(E.argAyristir(['--cikti']).hata, /değer/);
   assert.match(E.argAyristir(['--sil']).hata, /bilinmeyen/);
+});
+
+test('sshHedefi: varsayılan ve EMPP_SRV21_SSH', () => {
+  assert.deepEqual(E.sshHedefi({}).slice(-3), ['-p', '2222', 'root@100.117.187.26']);
+  assert.deepEqual(E.sshHedefi({ EMPP_SRV21_SSH: ' -p 22  root@10.0.0.21 ' }).slice(-3),
+    ['-p', '22', 'root@10.0.0.21']);
+  assert.ok(E.sshHedefi({}).includes('BatchMode=yes'));
 });
 
 test('sqlKur: tek SELECT, uzak kabuğu bozan karakter yok, bekleyen koşulu', () => {
@@ -143,54 +169,163 @@ test('satirEngeli: YDS dışı bucket, kisaKod yok, bozuk anahtar', () => {
   assert.match(t({ r2_anahtar: '../x' }), /anahtarı/);
 });
 
-test('aracSurumuAyristir + kaliciRetMi', () => {
-  assert.deepEqual(E.aracSurumuAyristir('kaynak=a810e9f9 sha256=6ccb35b1ae0c kuruldu=x'),
-    { kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' });
+test('kaliciRetMi: kapı RED, eşleme, kapak 404/küçük gövde kalıcı; 5xx ve ağ geçici', () => {
   assert.equal(E.kaliciRetMi('kapı RED (2; ilk: x)'), true);
+  assert.equal(E.kaliciRetMi('A1 atlandı — eşlenemeyen Web-Z üyesi: x (eski düzen korundu)'), true);
+  assert.equal(E.kaliciRetMi('kapak geçersiz (book1): HTTP 404, 9 bayt'), true);
+  assert.equal(E.kaliciRetMi('kapak geçersiz (book1): HTTP 200, 12 bayt'), true);
+  assert.equal(E.kaliciRetMi('kapak geçersiz (book1): HTTP 503, 0 bayt'), false);
+  assert.equal(E.kaliciRetMi('kapak geçersiz (book1): HTTP undefined, 0 bayt'), false);
+  assert.equal(E.kaliciRetMi('kapak alınamadı (book1): fetch failed'), false);
   assert.equal(E.kaliciRetMi('Web-Z settings.json HTTP 503'), false);
 });
 
+test('aracSurumuAyristir', () => {
+  assert.deepEqual(E.aracSurumuAyristir('kaynak=a810e9f9 sha256=6ccb35b1ae0c kuruldu=x'),
+    { kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' });
+});
+
+test('geri çekilme: 15 → 30 → 60 → 120 dk, tavan 6 sa', () => {
+  const dk = (n) => E.geriCekilmeMs(n) / 60000;
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 10].map(dk), [15, 30, 60, 120, 240, 360, 360]);
+});
+
+test('atlamaNedeni: kesin/aynı → islendi; webz sha değişti → yeniden; geçici → geri', () => {
+  const s = tekSatir();
+  const kesin = { istekAt: s.istekAt, tabanSurum: s.surum, kesin: true, webzSettingsSha: 'x' };
+  assert.equal(E.atlamaNedeni(kesin, s, { webzSha: 'x' }), 'islendi');
+  assert.equal(E.atlamaNedeni(kesin, s, { webzSha: null }), 'islendi');
+  assert.equal(E.atlamaNedeni(kesin, s, { webzSha: 'y' }), null);
+  assert.equal(E.atlamaNedeni({ ...kesin, tabanSurum: '2.25.7' }, s, { webzSha: 'x' }), null);
+  assert.equal(E.atlamaNedeni({ ...kesin, istekAt: 'eski' }, s, { webzSha: 'x' }), null);
+  const simdi = Date.parse('2026-10-06T10:00:00Z');
+  const gecici = (n, dkOnce) => ({
+    istekAt: s.istekAt, kesin: false, hataSayisi: n,
+    sonDeneme: new Date(simdi - dkOnce * 60000).toISOString(),
+  });
+  assert.equal(E.atlamaNedeni(gecici(1, 10), s, { simdi }), 'geri');
+  assert.equal(E.atlamaNedeni(gecici(1, 16), s, { simdi }), null);
+  assert.equal(E.atlamaNedeni(gecici(3, 59), s, { simdi }), 'geri');
+  assert.equal(E.atlamaNedeni(gecici(3, 61), s, { simdi }), null);
+});
+
+test('durumKaydi: ret işareti yazılmadıysa kesin değil, hata sayacı artar', () => {
+  const s = tekSatir();
+  const r1 = E.durumKaydi(null, s, { durum: 'ret', retYazildi: false });
+  assert.equal(r1.kesin, false);
+  assert.equal(r1.hataSayisi, 1);
+  const r2 = E.durumKaydi(r1, s, { durum: 'hata' });
+  assert.equal(r2.hataSayisi, 2);
+  const r3 = E.durumKaydi(r2, s, { durum: 'yuklendi', webzSettingsSha: 'w' });
+  assert.equal(r3.kesin, true);
+  assert.equal(r3.hataSayisi, 0);
+  assert.equal(E.durumKaydi(null, s, { durum: 'ret', retYazildi: true }).kesin, true);
+});
+
+// ─── İmza anahtarı ───────────────────────────────────────────────────────────────────────
+
+test('--anahtar-uret: 600 izinli özel anahtar, ikinci çağrı EZMEZ, özel anahtar loga düşmez',
+  async () => {
+    const ev = geciciDizin();
+    const { bag, kayit } = sahteBag(ev);
+    assert.equal(await E.main(['--anahtar-uret'], bag), 0);
+    const ozel = path.join(ev, 'kabuk-ek-imza', 'ozel.pem');
+    const pem = fs.readFileSync(ozel, 'utf8');
+    assert.equal(fs.statSync(ozel).mode & 0o777, 0o600);
+    assert.match(kayit.log[0], /üretildi.*parmak izi sha256:[0-9a-f]{64}/);
+    assert.equal(await E.main(['--anahtar-uret'], bag), 0);
+    assert.equal(fs.readFileSync(ozel, 'utf8'), pem);
+    assert.match(kayit.log[1], /ZATEN VAR/);
+    const govde = pem.split('\n').filter((l) => l && !l.startsWith('-----'))[0];
+    assert.ok(kayit.log.every((l) => !l.includes(govde)));
+    assert.equal(kayit.log[0].split('parmak izi ')[1], kayit.log[1].split('parmak izi ')[1]);
+  });
+
 // ─── Akış ────────────────────────────────────────────────────────────────────────────────
 
-test('yükleme sırası: önce ek, sonra son.json; taban indirilip önbelleğe girer', async () => {
+test('yükleme sırası: zip → imza → son.json; imza açık anahtarla doğrulanır', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev);
   assert.equal(await E.main(['--set', '45550'], bag), 0);
   assert.deepEqual(yazmalar(kayit), [
-    `ydsr2:ydsdigital/kabuk-ek/45550/${'a'.repeat(64)}.zip`,
+    `ydsr2:ydsdigital/kabuk-ek/45550/${SHA_A}.zip`,
+    `ydsr2:ydsdigital/kabuk-ek/45550/${SHA_A}.imza`,
     'ydsr2:ydsdigital/kabuk-ek/45550/son.json',
   ]);
-  const sonYerel = kayit.rclone.find((a) => String(a[2]).endsWith('son.json'))[1];
-  const son = JSON.parse(fs.readFileSync(sonYerel, 'utf8'));
-  assert.equal(son.girdiSha, 'a'.repeat(64));
+  const yerel = (son) => kayit.rclone.find((a) => String(a[2]).endsWith(son))[1];
+  const son = JSON.parse(fs.readFileSync(yerel('son.json'), 'utf8'));
+  assert.equal(son.girdiSha, SHA_A);
   assert.equal(son.tabanSurum, '2.25.6');
-  assert.ok(fs.existsSync(path.join(ev, 'kabuk-ek-onbellek', '45550', '2.25.6.zip')));
+  const acik = crypto.createPublicKey(fs.readFileSync(path.join(ev, 'kabuk-ek-imza', 'acik.pem')));
+  const imza = Buffer.from(fs.readFileSync(yerel('.imza'), 'utf8'), 'base64');
+  assert.ok(crypto.verify(null, fs.readFileSync(yerel('.zip')), acik, imza));
   assert.equal(kayit.kabuk[0].job.kisaKod, 'abc12');
 });
 
-test('tavan aşımında yükleme yok, bildirim var', async () => {
+test('özel anahtar yoksa: yükleme yok, DB sorgusu yok, bildirim', async () => {
   const ev = geciciDizin();
-  const { bag, kayit } = sahteBag(ev, { tavan: 10 });
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
-  const r = await E.setIsle(bag, s, { kuru: false });
-  assert.equal(r.durum, 'tavan');
+  const { bag, kayit } = sahteBag(ev);
+  assert.equal(await E.main(['--set', '45550'], bag), 1);
+  assert.equal(kayit.ssh.length, 0);
   assert.deepEqual(yazmalar(kayit), []);
-  assert.match(kayit.bildir[0], /TAVANI/);
+  assert.match(kayit.bildir[0], /özel anahtar yok/);
 });
 
-test('aynı girdiyle ikinci koşu aynı anahtar ve aynı ek baytı üretir', async () => {
+test('araç eksikse taban indirilmez, DB sorgusu yok', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit } = sahteBag(ev, { aracEksik: 'Swift ikilisi yok: /x' });
+  assert.equal(await E.main(['--set', '45550'], bag), 1);
+  assert.equal(kayit.ssh.length, 0);
+  assert.equal(kayit.rclone.length, 0);
+});
+
+test('tavan (A tavanAl) aşımında yükleme yok, bildirim var', async () => {
+  const ev = geciciDizin();
+  const { bag, kayit } = sahteBag(ev, { tavan: 10 });
+  const r = await E.setIsle(bag, tekSatir(), { kuru: false, ozelAnahtar: 'x' });
+  assert.equal(r.durum, 'tavan');
+  assert.deepEqual(yazmalar(kayit), []);
+  assert.match(kayit.bildir[0], /TAVANI.*> 10 bayt/);
+});
+
+test('ikinci koşu: aynı anahtar, taban önbellekten, sabit çalışma dizini', async () => {
   const ev = geciciDizin();
   const cikti = geciciDizin();
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
+  const s = tekSatir();
   const r1 = await E.setIsle(sahteBag(ev).bag, s, { kuru: true, cikti });
-  const b1 = fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`));
+  const b1 = fs.readFileSync(path.join(cikti, '45550', `${SHA_A}.zip`));
   const { bag, kayit } = sahteBag(ev);
   const r2 = await E.setIsle(bag, s, { kuru: true, cikti });
-  const b2 = fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`));
+  const b2 = fs.readFileSync(path.join(cikti, '45550', `${SHA_A}.zip`));
   assert.equal(r1.anahtar, r2.anahtar);
   assert.ok(b1.equals(b2));
-  assert.equal(r2.taban, '2.25.6/onbellek'); // ikinci koşu indirmedi
+  assert.equal(r2.taban, '2.25.6/onbellek');
   assert.equal(kayit.rclone.length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(ev, 'kabuk-ek-calisma')), ['45550']);
+  assert.deepEqual(fs.readdirSync(path.join(ev, 'kabuk-ek-calisma', '45550')).sort(),
+    ['build.zip', 'ek.zip', 'son.json']);
+  assert.deepEqual(fs.readdirSync(path.join(ev, 'kabuk-ek-onbellek', '45550')).sort(),
+    ['taban.json', 'taban.zip']);
+});
+
+test('yeni taban sürümü önbellekte eskisinin ÜZERİNE yazılır (tek dosya)', async () => {
+  const ev = geciciDizin();
+  await E.setIsle(sahteBag(ev).bag, tekSatir(), { kuru: true });
+  const yeni = Buffer.from('PK\u0003\u0004 yeni sürüm tabanı, daha uzun içerik');
+  const s2 = tekSatir({
+    surum: '2.25.7', r2_anahtar: 'kaynak/45550/2.25.7/build.zip', boyut: String(yeni.length),
+    sha256: crypto.createHash('sha256').update(yeni).digest('hex'),
+  });
+  const { bag, kayit } = sahteBag(ev, { indirilen: yeni });
+  const r = await E.setIsle(bag, s2, { kuru: true });
+  assert.equal(r.taban, '2.25.7/indirme');
+  assert.equal(kayit.rclone.length, 1);
+  const dizin = path.join(ev, 'kabuk-ek-onbellek', '45550');
+  assert.deepEqual(fs.readdirSync(dizin).sort(), ['taban.json', 'taban.zip']);
+  assert.ok(fs.readFileSync(path.join(dizin, 'taban.zip')).equals(yeni));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dizin, 'taban.json'))).surum, '2.25.7');
 });
 
 test('--kuru hiç yüklemez, --cikti dosyaları bırakır, durum dosyası yazmaz', async () => {
@@ -203,16 +338,18 @@ test('--kuru hiç yüklemez, --cikti dosyaları bırakır, durum dosyası yazmaz
   assert.ok(!fs.existsSync(path.join(ev, 'kabuk-ek-durum.json')));
 });
 
-test('ek yüklenemezse son.json yüklenmez', async () => {
+test('ek yüklenemezse imza ve son.json yüklenmez', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, { yaziHatasi: true });
   assert.equal(await E.main(['--set', '45550'], bag), 1);
   assert.equal(yazmalar(kayit).length, 1);
   assert.match(yazmalar(kayit)[0], /\.zip$/);
 });
 
-test('kalıcı ret: ek yok, .ret.json yazılır, bildirim', async () => {
+test('kalıcı ret: ek yok, .ret.json yazılır, kayıt kesin', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, {
     kabuk: async () => ({
       durum: 'atlandi', neden: 'kapı RED (1; ilk: x)', girdiSha: 'c'.repeat(64),
@@ -221,20 +358,42 @@ test('kalıcı ret: ek yok, .ret.json yazılır, bildirim', async () => {
   assert.equal(await E.main(['--set', '45550'], bag), 0);
   assert.deepEqual(yazmalar(kayit), [`ydsr2:ydsdigital/kabuk-ek/45550/${'c'.repeat(64)}.ret.json`]);
   assert.match(kayit.bildir[0], /KALICI RET/);
+  const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
+  assert.equal(d['45550'].kesin, true);
 });
 
-test('geçici atlama (ağ) ret yazmaz, durum kaydı da düşmez', async () => {
+test('kalıcı ret ama girdiSha yok: ret yazılmaz, kayıt kesin DEĞİL', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, {
-    kabuk: async () => ({ durum: 'atlandi', neden: 'Web-Z settings.json HTTP 503' }),
+    kabuk: async () => ({ durum: 'atlandi', neden: 'kapak geçersiz (book1): HTTP 404, 9 bayt' }),
   });
-  assert.equal(await E.main(['--bekleyen'], bag), 0);
+  await E.main(['--bekleyen'], bag);
   assert.deepEqual(yazmalar(kayit), []);
-  assert.ok(!fs.existsSync(path.join(ev, 'kabuk-ek-durum.json')));
+  const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
+  assert.equal(d['45550'].kesin, false);
+  assert.equal(d['45550'].hataSayisi, 1);
 });
 
-test('kilit tutulurken ikinci kopya çıkar; bayat kilit devralınır', async () => {
+test('kapak HTTP 5xx: ret değil, geçici; ikinci koşu geri çekilir', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
+  const kabuk = async () => ({
+    durum: 'atlandi', neden: 'kapak geçersiz (book1): HTTP 503, 0 bayt', girdiSha: 'c'.repeat(64),
+  });
+  const ilk = sahteBag(ev, { kabuk });
+  assert.equal(await E.main(['--bekleyen'], ilk.bag), 0);
+  assert.deepEqual(yazmalar(ilk.kayit), []);
+  assert.equal(ilk.kayit.bildir.length, 0);
+  const ikinci = sahteBag(ev, { kabuk });
+  await E.main(['--bekleyen'], ikinci.bag);
+  assert.equal(ikinci.kayit.kabuk.length, 0);
+  assert.ok(ikinci.kayit.log.some((l) => /45550:geri/.test(l)));
+});
+
+test('kilit: tutulurken ikinci kopya çıkar; bayat devralınır; taşınamazsa null', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
   const kilit = path.join(ev, 'kabuk-ek.kilit');
   fs.mkdirSync(kilit);
   fs.writeFileSync(path.join(kilit, 'pid'), `${process.pid}\n`);
@@ -242,6 +401,7 @@ test('kilit tutulurken ikinci kopya çıkar; bayat kilit devralınır', async ()
   assert.equal(await E.main(['--set', '45550', '--kuru'], bag), 0);
   assert.equal(kayit.ssh.length, 0);
 
+  assert.equal(E.kilitAl(kilit, { pid: 4141, canli: () => false, kenar: () => false }), null);
   const bayat = E.kilitAl(kilit, { pid: 4242, canli: () => false });
   assert.equal(typeof bayat, 'function');
   assert.equal(fs.readFileSync(path.join(kilit, 'pid'), 'utf8').trim(), '4242');
@@ -270,16 +430,21 @@ test('duraklat.istek varsa çalışmaz', async () => {
   assert.ok(!fs.existsSync(path.join(ev, 'kabuk-ek.kilit')));
 });
 
-test('--bekleyen aynı istek + taban için ikinci kez üretmez', async () => {
+test('--bekleyen: aynı istek + taban + Web-Z sha → üretmez; sha değişince üretir', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const ilk = sahteBag(ev);
   assert.equal(await E.main(['--bekleyen'], ilk.bag), 0);
-  assert.equal(yazmalar(ilk.kayit).length, 2);
+  assert.equal(yazmalar(ilk.kayit).length, 3);
   const ikinci = sahteBag(ev);
   assert.equal(await E.main(['--bekleyen'], ikinci.bag), 0);
   assert.equal(ikinci.kayit.kabuk.length, 0);
+  assert.equal(ikinci.kayit.webz, 1); // yalnız settings.json çekildi
+  const degisti = sahteBag(ev, { webzSha: 'd'.repeat(64), ktWebz: 'd'.repeat(64) });
+  assert.equal(await E.main(['--bekleyen'], degisti.bag), 0);
+  assert.equal(degisti.kayit.kabuk.length, 1);
   const yeniSatir = satir(45550, { kaynak_kur_istegi_at: '2026-10-07 01:00:00' });
-  const yeniIstek = sahteBag(ev, { tsv: tsv([yeniSatir]) });
+  const yeniIstek = sahteBag(ev, { tsv: tsv([yeniSatir]), webzSha: 'd'.repeat(64) });
   assert.equal(await E.main(['--bekleyen'], yeniIstek.bag), 0);
   assert.equal(yeniIstek.kayit.kabuk.length, 1);
 });
@@ -289,24 +454,33 @@ test('taban: arşiv eşleşirse indirme yok; sha tutmazsa hata, yükleme yok', a
   const arsivZip = path.join(geciciDizin(), 'build.zip');
   fs.writeFileSync(arsivZip, TABAN);
   const a = sahteBag(ev, { arsiv: { zip: arsivZip } });
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
-  const r = await E.setIsle(a.bag, s, { kuru: true });
+  const r = await E.setIsle(a.bag, tekSatir(), { kuru: true });
   assert.equal(r.taban, '2.25.6/arsiv');
   assert.equal(a.kayit.rclone.length, 0);
+  assert.ok(fs.readFileSync(arsivZip).equals(TABAN)); // arşiv değişmedi
 
   const b = sahteBag(geciciDizin(), { indirilen: Buffer.from('bozuk') });
-  const r2 = await E.setIsle(b.bag, s, { kuru: false });
+  const r2 = await E.setIsle(b.bag, tekSatir(), { kuru: false, ozelAnahtar: 'x' });
   assert.equal(r2.durum, 'hata');
   assert.match(r2.neden, /doğrulanamadı/);
   assert.deepEqual(yazmalar(b.kayit), []);
   assert.equal(b.kayit.kabuk.length, 0);
 });
 
+test('klonla: yarım kalmış .yeni dosyası üzerine yazılır, kaynak değişmez', async () => {
+  const d = geciciDizin();
+  fs.writeFileSync(path.join(d, 'kaynak'), 'yeni içerik');
+  fs.writeFileSync(path.join(d, 'hedef'), 'eski');
+  fs.writeFileSync(path.join(d, 'hedef.yeni'), 'yarım');
+  await E.klonla(path.join(d, 'kaynak'), path.join(d, 'hedef'));
+  assert.equal(fs.readFileSync(path.join(d, 'hedef'), 'utf8'), 'yeni içerik');
+  assert.deepEqual(fs.readdirSync(d).sort(), ['hedef', 'kaynak']);
+});
+
 test('merdiven + set eki env bayraklarıyla, liste DB satırından', async () => {
   const ev = geciciDizin();
   const { bag, kayit } = sahteBag(ev, { merdiven: true, setEki: true });
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
-  await E.setIsle(bag, s, { kuru: true });
+  await E.setIsle(bag, tekSatir(), { kuru: true });
   assert.equal(kayit.merdiven, 1);
   assert.equal(kayit.setEki[0].liste, '111|A\n222|B');
   assert.equal(kayit.kabuk[0].zip, kayit.setEki[0].zip);
@@ -314,30 +488,32 @@ test('merdiven + set eki env bayraklarıyla, liste DB satırından', async () =>
 
 test('YDS dışı set atlanır, taban okunmaz', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, { tsv: tsv([satir(74427, { bucket: 'akillitahtalar' })]) });
   assert.equal(await E.main(['--set', '74427'], bag), 0);
   assert.equal(kayit.rclone.length, 0);
   assert.equal(kayit.kabuk.length, 0);
 });
 
-test('ekCikti çağrılmazsa (kabuk atlandı) ek yok', async () => {
+test('ekCikti çağrılmazsa (kabuk atlandı, uygun değil) ek yok, kayıt kesin', async () => {
   const ev = geciciDizin();
+  anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, {
     kabuk: async () => ({ durum: 'atlandi', neden: 'bookN düzeni yok' }),
   });
   assert.equal(await E.main(['--bekleyen'], bag), 0);
   assert.deepEqual(yazmalar(kayit), []);
   const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
-  assert.equal(d['45550'].durum, 'atlandi'); // uygun değil: aynı istekte yeniden denenmez
+  assert.equal(d['45550'].durum, 'atlandi');
+  assert.equal(d['45550'].kesin, true);
 });
 
 test('ekPaketle beyaz liste klasörlerini girdi.kitaplar\'dan alır', async () => {
   const ev = geciciDizin();
   const cikti = geciciDizin();
   const { bag } = sahteBag(ev);
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
-  await E.setIsle(bag, s, { kuru: true, cikti });
-  const paket = JSON.parse(fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`)));
+  await E.setIsle(bag, tekSatir(), { kuru: true, cikti });
+  const paket = JSON.parse(fs.readFileSync(path.join(cikti, '45550', `${SHA_A}.zip`)));
   assert.deepEqual(paket.klasorler, ['book1']);
 });
 
@@ -352,20 +528,20 @@ test('gerçek kabuk-ek modülü: üretilen ek ekAc doğrulamasından geçer', as
   const ev = geciciDizin();
   const cikti = geciciDizin();
   const { bag } = sahteBag(ev, {
+    ekModulu: A,
     dosyalar: new Map([
       ['index.html', Buffer.from('<html>kabuk</html>')],
       ['scripts/language-set.js', Buffer.from('sonrakiSatirDugmesi')],
       ['images/book1.png', Buffer.alloc(2048, 1)],
     ]),
   });
-  bag.ek = () => A;
-  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
-  const r = await E.setIsle(bag, s, { kuru: true, cikti });
+  const r = await E.setIsle(bag, tekSatir(), { kuru: true, cikti });
   assert.equal(r.durum, 'kuru');
-  assert.equal(r.anahtar, `kabuk-ek/45550/${'a'.repeat(64)}.zip`);
-  const buf = fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`));
-  const acik = A.ekAc(buf, { bookId: '45550', girdiSha: 'a'.repeat(64), kip: 'bookN',
-    klasorler: ['book1'] });
+  assert.equal(r.anahtar, `kabuk-ek/45550/${SHA_A}.zip`);
+  const buf = fs.readFileSync(path.join(cikti, '45550', `${SHA_A}.zip`));
+  const acik = A.ekAc(buf, {
+    bookId: '45550', girdiSha: SHA_A, kip: 'bookN', klasorler: ['book1'],
+  });
   assert.equal(acik.dosyalar.size, 3);
   assert.equal(acik.manifest.tabanSurum, '2.25.6');
   assert.deepEqual(acik.manifest.arac, { kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' });
