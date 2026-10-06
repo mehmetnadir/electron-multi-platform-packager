@@ -49,6 +49,7 @@ const W = require('../../src/agent/windows-serit');
 const H = require('../../src/agent/windows-hazir');
 const { kabulKaldiMi, kiraBizdeDegilMi } = require('./imza-bekcisi');
 const OSK = require('../kabul/okuyucu-surumu-kapisi');
+const MK = require('../kabul/menu-kapak');
 
 const TEKIL_KILIT = '.kabul-iscisi.kilit';
 
@@ -183,6 +184,44 @@ async function okuyucuKapisi(giris, gecerliKanonik, work, d) {
 }
 
 /**
+ * MENÜ KAPAK KAPISI (06.10, 59835 Teacher's Pack/Worksheets): menüdeki her kartın kapağı pakette var mı
+ * (`tools/kabul/menu-kapak.js`, tanım tek kaynak). Kip `KABUL_MENU_KAPAK`: uyar (varsayılan; yalnız log) |
+ * reddet (RED → bayat; ÖLÇÜLEMEDİ yine yalnız uyarı) | kapali. Ölçüm hatası kabulü ASLA düşürmez.
+ * @returns {Promise<{red?:object, kip:string, sonuc?:object}>}
+ */
+async function menuKapakKapisi(giris, work, d) {
+  const { log } = d;
+  const kp = MK.kip(d.env || process.env);
+  if (kp === 'kapali') return { kip: kp };
+  const olc = d.menuKapakOlc || MK.paketMenuKapakOlc;
+  const calisma = path.join(work, 'menu-kapak');
+  let sonuc;
+  try {
+    sonuc = await olc({ paket: giris.exeYolu, platform: 'windows', calisma });
+  } catch (e) {
+    sonuc = { durum: MK.DURUM.OLCULEMEDI, kartlar: [], sebepler: [`paket açılamadı: ${e.message}`], uyarilar: [] };
+  } finally {
+    await fsp.rm(calisma, { recursive: true, force: true }).catch(() => {});
+  }
+  const k = MK.kapiKarari(sonuc, kp);
+  log(`kabul-işçisi: ${path.basename(giris.dizin)} ${k.log}`);
+  if (!k.dusur) return { kip: kp, sonuc };
+  const iz = { karar: sonuc.durum, sebepler: sonuc.sebepler.slice(0, 5), zaman: new Date().toISOString() };
+  return {
+    kip: kp,
+    sonuc,
+    red: {
+      tur: 'bayat', alt: 'bayat',
+      mesaj: `[imza-bekliyor] ${H.KABUL_KUYRUGU_ISARETI} hazır kayıt bayat (menü kapak eksik: `
+        + `${sonuc.sebepler.slice(0, 3).join('; ')})`.slice(0, 1500),
+      ek: {
+        durum: 'bayat', sebep: `menu-kapak: ${k.sebep}`, zamanBayat: new Date().toISOString(), menuKapak: iz,
+      },
+    },
+  };
+}
+
+/**
  * Tek kaydı kabul et. @returns {Promise<{durum:'gecti'|'red'|'olculemedi'|'birakildi'|'bayat'|'atlandi'|'hata',
  *   sebep?:string, dizin?:string, deneme?:number}>}
  */
@@ -234,6 +273,8 @@ async function kaydiIsle(listedeki, d) {
       // ÖLÇÜLEMEDİ → aşağıdaki ÖLÇÜLEMEDİ yolu (deneme sayılır, paket suçlanmaz).
       // `KABUL_OKUYUCU_SURUM=uyar` → kapı yalnız loglar, kabul sürer (geri alma).
       okuyucuRed = (await okuyucuKapisi(giris, gecerliKanonik, work, d)).red || null;
+      // MENÜ KAPAK KAPISI: okuyucu geçtikten sonra; varsayılan UYAR (yalnız log), RED → bayat yalnız `reddet` kipinde.
+      if (!okuyucuRed) okuyucuRed = (await menuKapakKapisi(giris, work, d)).red || null;
       if (!okuyucuRed) {
         k = await d.kabulKos({
           exe: giris.exeYolu, job, work, cfg: { ...cfg, winKasaKilitBeklemeMs: cfg.isciKasaKilitBeklemeMs },
@@ -374,6 +415,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  menuKapakKapisi,
   isciAyarlari, kasaMesgulMu, kaydiIsle, sonucuBildirVeTasi, okuyucuKapisi, yasAlarmi, tur, dongu, ana, TEKIL_KILIT,
   OKUYUCU_OLCULEMEDI_ISARETI,
 };

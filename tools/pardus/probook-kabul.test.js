@@ -754,3 +754,71 @@ test('okuyucu kapisi kaynakta: kilit dongusunden ONCE cagrilir (yerel + kopya), 
   const uzak = k.indexOf('okuyucu_kapisi "$UZAK" --uzak-konak');
   assert.ok(uzak > k.indexOf('ssh_kur "$SECILEN_HOST"') && uzak < k.indexOf('until C=$(kilit al)'), 'uzak kapisi kilitten once');
 });
+
+// ---------------------------------------------------------------------------
+// MENU KAPAK KAPISI (06.10, 59835 Teacher's Pack/Worksheets kapaksiz): KABUL_MENU_KAPAK = uyar (varsayilan)
+// | reddet | kapali. Sahte node: ozet satiri basar, cikis kodu verilir (0 GECTI · 1 RED · 3 OLCULEMEDI).
+// ---------------------------------------------------------------------------
+function sahteMenuNode(dizin, rc, ozet) {
+  const yol = path.join(dizin, `menu-node-${rc}`);
+  const iz = `${yol}.iz`;
+  fs.writeFileSync(`${yol}.ozet`, `${ozet}\n`);
+  fs.writeFileSync(yol, ['#!/bin/bash', `printf '%s\\n' "$*" >> "${iz}"`,
+    `cat "${yol}.ozet"`, `exit ${rc}`, ''].join('\n'), { mode: 0o755 });
+  return { yol, iz };
+}
+const MK_RED_OZET = "menü kapak: RED · 3 kart — link4 (Teacher's Pack): images/book1.png pakette yok";
+
+test('menu kapak uyar (varsayilan): RED kabulu DUSURMEZ, UYARI + kilide ulasir; node paket + --platform pardus alir', () => {
+  const o = yerelOrtam();
+  const n = sahteMenuNode(o.kok, 1, MK_RED_OZET);
+  fs.writeFileSync(path.join(o.isaret, 'kabul-onceki-1.txt'), '');
+  const kanit = path.join(o.kok, 'kanit');
+  const r = spawnSync('bash', [BETIK, o.paket, kanit], {
+    encoding: 'utf8', env: { ...o.env, KABUL_MENU_KAPAK_NODE: n.yol, KABUL_BOSLUK_TAVAN: '1' }, timeout: 30000,
+  });
+  assert.match(r.stdout, /\[kabul\] menu kapak UYARI: menü kapak: RED · 3 kart — link4 \(Teacher's Pack\): images\/book1\.png pakette yok/);
+  assert.match(r.stdout, /ProBook mesgul/, 'kapi gecirmeli, akis kilide ulasmali');
+  const arg = fs.readFileSync(n.iz, 'utf8');
+  assert.ok(arg.includes(o.paket) && /--platform pardus/.test(arg), arg);
+  assert.match(fs.readFileSync(path.join(kanit, 'menu-kapak.txt'), 'utf8'), /RED/);
+});
+
+test('menu kapak reddet: RED → cikis 1 kilitten ONCE; OLCULEMEDI (rc 3) ve node yok yine UYARI + surer', () => {
+  const o = yerelOrtam();
+  const red = sahteMenuNode(o.kok, 1, MK_RED_OZET);
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_MENU_KAPAK_NODE: red.yol, KABUL_MENU_KAPAK: 'reddet' }, timeout: 30000,
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /\[kabul\] RED: menu kapak eksik: .*Teacher's Pack.* — paket yeniden uretilmeli/);
+  assert.doesNotMatch(r.stdout, /ProBook mesgul/);
+  assert.equal(fs.existsSync(path.join(o.home, '.kabul.lock')), false);
+  fs.writeFileSync(path.join(o.isaret, 'kabul-onceki-1.txt'), '');
+  const olc = sahteMenuNode(o.kok, 3, 'menü kapak: ÖLÇÜLEMEDİ · 0 kart — yama okunamadı');
+  for (const node of [olc.yol, path.join(o.kok, 'yok-node')]) {
+    const r2 = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit2')], {
+      encoding: 'utf8', env: { ...o.env, KABUL_MENU_KAPAK_NODE: node, KABUL_MENU_KAPAK: 'reddet', KABUL_BOSLUK_TAVAN: '1' },
+      timeout: 30000,
+    });
+    assert.match(r2.stdout, /menu kapak UYARI: /);
+    assert.match(r2.stdout, /ProBook mesgul/);
+  }
+});
+
+test('menu kapak kapali: olcum koşmaz (node cagrilmaz); GECTI satiri; ayar yok = uyar', () => {
+  const o = yerelOrtam();
+  const n = sahteMenuNode(o.kok, 1, MK_RED_OZET);
+  fs.writeFileSync(path.join(o.isaret, 'kabul-onceki-1.txt'), '');
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_MENU_KAPAK_NODE: n.yol, KABUL_MENU_KAPAK: 'kapali', KABUL_BOSLUK_TAVAN: '1' },
+    timeout: 30000,
+  });
+  assert.doesNotMatch(r.stdout, /menu kapak/);
+  assert.equal(fs.existsSync(n.iz), false, 'kapali kipte node cagrilmamali');
+  const g = sahteMenuNode(o.kok, 0, 'menü kapak: GEÇTİ · 3 kart');
+  const r2 = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit2')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_MENU_KAPAK_NODE: g.yol, KABUL_BOSLUK_TAVAN: '1' }, timeout: 30000,
+  });
+  assert.match(r2.stdout, /\[kabul\] menu kapak GECTI/);
+});
