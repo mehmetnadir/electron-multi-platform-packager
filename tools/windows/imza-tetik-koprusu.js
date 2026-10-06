@@ -75,8 +75,44 @@ function defterYaz(yol, set, azami = 500) {
   fs.renameSync(`${yol}.part`, yol);
 }
 
-async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = null, isaretle = () => {} }) {
-  const ozet = { islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0 };
+/**
+ * 06.10 OLAYI: yayincilikadm hesap kilidi (aynı panel hesabını başka süreç tutuyor) `exe-create`'i
+ * "İş BAŞLAMADAN durduruldu" ile çıkış 1 döndürdü; köprü yine de isteği `islendi\`ye taşıdı → kasa
+ * imza bekçisi 2 sa yuva bekledi, 9 paket imzasız kaldı. Bu çıktı = iş HİÇ koşmadı.
+ */
+const KILIT_DESENI = /HESAP_KILIDI|İş BAŞLAMADAN durduruldu/i;
+const KILIT_BEKLE_SN = '90';
+const KILIT_BILDIR_ESIK = 3;
+const BILDIRIM_TAVAN_MS = 3600 * 1000;
+
+function kilitMi(r) { return !!r && r.kod !== 0 && KILIT_DESENI.test(String(r.cikti || '')); }
+
+/** Saatte en çok 1 bildirim: damga dosyası. @returns {boolean} gönderildi mi */
+function tavanliBildir(damgaYol, mesaj, gonder, simdi = Date.now) {
+  let son = 0;
+  try { son = Number(fs.readFileSync(damgaYol, 'utf8')) || 0; } catch (_) { son = 0; }
+  if (simdi() - son < BILDIRIM_TAVAN_MS) return false;
+  fs.mkdirSync(path.dirname(damgaYol), { recursive: true });
+  fs.writeFileSync(damgaYol, String(simdi()));
+  gonder(mesaj);
+  return true;
+}
+
+/** Tek-kopya kilidi: pid canlıysa ve 15 dk'dan yeniyse başka köprü koşuyor. @returns {boolean} alındı mı */
+function tekKopyaAl(yol, simdi = Date.now, canli = (pid) => { try { process.kill(pid, 0); return true; } catch (_) { return false; } }) {
+  try {
+    const [pid, ts] = fs.readFileSync(yol, 'utf8').trim().split(' ').map(Number);
+    if (pid && canli(pid) && simdi() - ts < 15 * 60000) return false;
+  } catch (_) { /* kilit yok */ }
+  fs.mkdirSync(path.dirname(yol), { recursive: true });
+  fs.writeFileSync(yol, `${process.pid} ${simdi()}`);
+  return true;
+}
+
+async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = null, isaretle = () => {}, bildir = () => {} }) {
+  const ozet = { islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0, kilitli: 0 };
+  let ardisikKilit = 0;
+  let bildirildi = false;
   const tasi = (ad, sonuc) => {
     if (uzak.tasi(ad, sonuc) === false) {
       ozet.tasinamayan += 1;
@@ -103,14 +139,28 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
     if (sonuc === undefined) {
       if (kuru) { log(`köprü (kuru): çalıştırılırdı: ${k.argv.join(' ')}`); sonuc = 'kuru'; } else {
         const r = await kos(k.argv);
-        sonuc = r.kod === 0 ? 'tamam' : `hata${r.kod}`;
+        sonuc = kilitMi(r) ? 'kilit' : (r.kod === 0 ? 'tamam' : `hata${r.kod}`);
         log(`köprü: ${k.argv.join(' ')} → ${sonuc}${r.cikti ? ` · ${String(r.cikti).trim().slice(-160)}` : ''}`);
         ozet.calisan.push(k.komut);
       }
       yapildi.set(k.komut, sonuc);
-    } else {
+    } else if (sonuc !== 'kilit') {
       sonuc = `birlesik-${sonuc}`;
     }
+    if (sonuc === 'kilit') {
+      // İŞ KOŞMADI: istek yerinde kalır, defterlenmez, taşınmaz; sonraki turda yeniden denenir.
+      // Bayatlık eşiği (6 sa) DEĞİŞMEDİ: kilit 6 sa sürerse istek bayat sayılıp reddedilir — bu bilinçli
+      // (6 sa kilit = bildirim zaten gitti, insan bakmalı; sonsuz bekleyen istek eski sürümü imzalatır).
+      log(`köprü: ${ad} hesap kilidi — sonraki turda yeniden`);
+      ozet.kilitli += 1;
+      ardisikKilit += 1;
+      if (ardisikKilit >= KILIT_BILDIR_ESIK && !bildirildi && !kuru) {
+        bildirildi = true;
+        bildir(`imza tetiği hesap kilidinde bekliyor (${k.komut})`);
+      }
+      continue;
+    }
+    ardisikKilit = 0;
     if (!kuru) {
       if (islenmis) { islenmis.add(ad); isaretle(ad); }
       tasi(ad, sonuc);
@@ -123,20 +173,30 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
 async function ana(argv = process.argv.slice(2)) {
   const cfg = ayarlar();
   const log = (...a) => console.log(new Date().toISOString(), ...a);
+  const kilitYol = path.join(os.homedir(), '.empp-agent', 'imza-tetik-koprusu.lock');
+  if (!argv.includes('--kuru') && !tekKopyaAl(kilitYol)) {
+    log('köprü: başka kopya koşuyor — tur atlandı');
+    return { islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0, kilitli: 0 };
+  }
   const kos = async (a) => {
-    const r = spawnSync(a[0], a.slice(1), { encoding: 'utf8', timeout: 10 * 60000 });
+    // Hesap kilidi doluysa çağrı 90 sn bekler (YAYINCILIKADM_HESAP_KILIDI=0 KULLANILMAZ: ortak freni kapatır).
+    const r = spawnSync(a[0], a.slice(1), { encoding: 'utf8', timeout: 10 * 60000,
+      env: { ...process.env, YAYINCILIKADM_HESAP_BEKLE: KILIT_BEKLE_SN } });
     return { kod: r.status === null ? -1 : r.status, cikti: `${r.stdout || ''}${r.stderr || ''}` };
   };
   const islenmis = defterOku(cfg.defter);
   const ozet = await tur({
     uzak: sshUzak(cfg), kos, log, kuru: argv.includes('--kuru'),
     islenmis, isaretle: () => defterYaz(cfg.defter, islenmis),
+    bildir: (m) => tavanliBildir(path.join(os.homedir(), '.empp-agent', 'imza-kopru-bildirim.damga'), m,
+      (x) => spawnSync('bildir', ['bekci', x], { encoding: 'utf8', timeout: 20000 })),
   });
-  if (ozet.islenen || ozet.reddedilen || ozet.tasinamayan) log('köprü: tur özeti', JSON.stringify(ozet));
+  try { fs.rmSync(kilitYol, { force: true }); } catch (_) { /* yoksay */ }
+  if (ozet.islenen || ozet.reddedilen || ozet.tasinamayan || ozet.kilitli) log('köprü: tur özeti', JSON.stringify(ozet));
   return ozet;
 }
 
-module.exports = { ayarlar, tasiKomutu, sshUzak, defterOku, defterYaz, tur, ana };
+module.exports = { ayarlar, tasiKomutu, sshUzak, defterOku, defterYaz, tur, ana, kilitMi, tavanliBildir, tekKopyaAl };
 
 if (require.main === module) {
   ana().then(() => process.exit(0)).catch((e) => { console.error('köprü HATA:', e && e.stack); process.exit(1); });

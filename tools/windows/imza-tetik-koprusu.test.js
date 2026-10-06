@@ -110,3 +110,66 @@ test('defter: diske yazılır/okunur, son 500 ad tutulur, bozuk dosya boş küme
   fs.writeFileSync(yol, '{bozuk');
   assert.equal(K.defterOku(yol).size, 0);
 });
+
+const KILIT_METNI = 'yayincilikadm: hesap kilidi dolu. İş BAŞLAMADAN durduruldu — o iş bitince yeniden çalıştırın. YAYINCILIKADM_HESAP_KILIDI=0';
+
+test('hesap kilidi metni: istek TAŞINMAZ, defterlenmez, "hesap kilidi" loglanır; sonraki turda yeniden denenir', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kopru5-'));
+  await I.istekYaz(d, 'exe-create', {});
+  const uzak = yerelUzak(d);
+  const loglar = [];
+  const islenmis = new Set();
+  const o = await K.tur({ uzak, kos: async () => ({ kod: 1, cikti: KILIT_METNI }), log: (m) => loglar.push(m), islenmis });
+  assert.equal(uzak.tasinan.length, 0);
+  assert.equal(uzak.listele().length, 1);
+  assert.equal(islenmis.size, 0);
+  assert.equal(o.islenen, 0);
+  assert.equal(o.kilitli, 1);
+  assert.ok(loglar.some((m) => /hesap kilidi — sonraki turda yeniden/.test(m)));
+  const kosulan = [];
+  const o2 = await K.tur({ uzak, kos: async (a) => { kosulan.push(a); return { kod: 0 }; }, log: () => {}, islenmis });
+  assert.equal(kosulan.length, 1);
+  assert.equal(o2.islenen, 1);
+  assert.equal(uzak.listele().length, 0);
+});
+
+test('başka hata → eski davranış (hata1 ile taşınır); başarı → tamam taşınır', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kopru6-'));
+  await I.istekYaz(d, 'exe-create', {});
+  const uzak = yerelUzak(d);
+  await K.tur({ uzak, kos: async () => ({ kod: 1, cikti: 'panel 500' }), log: () => {} });
+  assert.deepEqual(uzak.tasinan.map((x) => x[1]), ['hata1']);
+  assert.equal(K.kilitMi({ kod: 0, cikti: KILIT_METNI }), false);
+  assert.equal(K.kilitMi({ kod: 1, cikti: 'HESAP_KILIDI' }), true);
+});
+
+test('aynı turda kilitli birleşik istekler de taşınmaz; 3 ardışık kilit reddi tek bildirim', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kopru7-'));
+  let t = Date.now();
+  const simdi = () => (t += 10);
+  for (let i = 0; i < 3; i += 1) await I.istekYaz(d, 'exe-create', {}, { simdi });
+  const uzak = yerelUzak(d);
+  const bildirimler = [];
+  let cagri = 0;
+  const o = await K.tur({ uzak, kos: async () => { cagri += 1; return { kod: 1, cikti: KILIT_METNI }; }, log: () => {}, bildir: (m) => bildirimler.push(m) });
+  assert.equal(cagri, 1);
+  assert.equal(o.kilitli, 3);
+  assert.equal(uzak.tasinan.length, 0);
+  assert.equal(bildirimler.length, 1);
+  assert.match(bildirimler[0], /hesap kilidinde bekliyor \(exe-create\)/);
+});
+
+test('bildirim tavanı: saatte en çok 1; tek-kopya kilidi canlı pid ile ikinciyi reddeder', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kopru8-'));
+  const damga = path.join(d, 'damga');
+  const gonder = []; const t = 1e12;
+  assert.equal(K.tavanliBildir(damga, 'a', (m) => gonder.push(m), () => t), true);
+  assert.equal(K.tavanliBildir(damga, 'b', (m) => gonder.push(m), () => t + 59 * 60000), false);
+  assert.equal(K.tavanliBildir(damga, 'c', (m) => gonder.push(m), () => t + 61 * 60000), true);
+  assert.deepEqual(gonder, ['a', 'c']);
+  const kilit = path.join(d, 'k.lock');
+  assert.equal(K.tekKopyaAl(kilit, () => t, () => true), true);
+  assert.equal(K.tekKopyaAl(kilit, () => t + 1000, () => true), false);
+  assert.equal(K.tekKopyaAl(kilit, () => t + 1000, () => false), true, 'ölü pid');
+  assert.equal(K.tekKopyaAl(kilit, () => t + 16 * 60000, () => true), true, 'bayat kilit');
+});
