@@ -114,3 +114,41 @@ test('yamaAyarlari: dizgi içindeki süslü parantez sınırı bozmaz', () => {
   const a = K.yamaAyarlari('x; window.__setSettings = {"books":{"b":{"title":"a } b"}}};\nvar y = {};');
   assert.equal(a.books.b.title, 'a } b');
 });
+
+// ── data: (gömülü) kapak doğrulaması (06.10 kapak gömme) ──────────────────────────────────────────
+
+test('data: kapak: > 1 KB ama imza baytları görsel değil → RED (imza)', () => {
+  const sahte = Buffer.alloc(3000, 0x41); // 'AAAA…' — boyut geçer, görsel değil
+  const s = K.menuKapakOlcKok(paket({ b: books({ linkKapak: `data:image/jpeg;base64,${sahte.toString('base64')}` }) }));
+  assert.equal(s.durum, K.DURUM.RED);
+  assert.match(s.sebepler.join(' | '), /link4 .*gömülü kapak görsel imzası yok \(image\/jpeg, 3000 bayt\)/);
+});
+
+test('data: kapak: görsel baytı ama türü image/* değil → RED; tür etiketi büyük harfli image/JPEG → GEÇTİ', () => {
+  const metin = K.menuKapakOlcKok(paket({ b: books({ linkKapak: `data:text/plain;base64,${JPG.toString('base64')}` }) }));
+  assert.equal(metin.durum, K.DURUM.RED);
+  assert.match(metin.sebepler[0], /türü görsel değil \(text\/plain\)/);
+  const buyuk = K.menuKapakOlcKok(paket({ b: books({ linkKapak: `data:image/JPEG;base64,${JPG.toString('base64')}` }) }));
+  assert.equal(buyuk.durum, K.DURUM.GECTI, buyuk.sebepler.join(' | '));
+});
+
+test('data: kapak: png/webp/svg imzaları geçer; gömülü yer tutucu SVG UYARI verir', () => {
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2000, 3)]);
+  const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(2000, 5)]);
+  for (const [mime, v] of [['image/png', PNG], ['image/webp', WEBP]]) {
+    const s = K.menuKapakOlcKok(paket({ b: books({ linkKapak: `data:${mime};base64,${v.toString('base64')}` }) }));
+    assert.equal(s.durum, K.DURUM.GECTI, `${mime}: ${s.sebepler.join(' | ')}`);
+  }
+  const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" ${K.YER_TUTUCU_IMZASI}="1">${' '.repeat(1200)}</svg>`);
+  const s = K.menuKapakOlcKok(paket({ b: books({ linkKapak: `data:image/svg+xml;base64,${svg.toString('base64')}` }) }));
+  assert.equal(s.durum, K.DURUM.GECTI);
+  assert.equal(s.uyarilar.length, 2);
+});
+
+test('gorselTuru: imza baytları; adresSinifi data: tür + imza döndürür', () => {
+  assert.equal(K.gorselTuru(JPG), 'jpg');
+  assert.equal(K.gorselTuru(Buffer.from('Not Found')), null);
+  const a = K.adresSinifi(`data:image/jpeg;base64,${JPG.toString('base64')}`);
+  assert.deepEqual([a.tur, a.bayt, a.mime, a.gorsel], ['data', JPG.length, 'image/jpeg', 'jpg']);
+  assert.deepEqual([K.adresSinifi('data:bozuk').tur, K.adresSinifi('data:bozuk').gorsel], ['data', null]);
+});

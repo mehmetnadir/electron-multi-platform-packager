@@ -29,8 +29,21 @@
  *   4. Aday kopyaya `zip` ile yaz → KAPI: kabul ölçütü GEÇTİ + yazılmayan her girdi aynı (crc+boyut)
  *      → tek rename. Kapı düşerse iş kopyası DEĞİŞMEZ ve hata FIRLATILIR (görünür).
  *
- * Sonuç: { durum: 'uygulandi'|'gerek-yok'|'atlandi'|'olculemedi', kartlar:[{anahtar, kaynak, yol,
- * bayt}], uyarilar:[] }.
+ * LİSTE KAPAĞI TAZELEME (06.10, r2-al bayat kapak): link kartı zaten `coverUrl`'lü ve geçerli olsa
+ * bile panel listesinde kapağı varsa liste baytı (data: ya da indirilen) paketteki kapakla sha256
+ * ile kıyaslanır; farklıysa yenilenir, aynıysa DOKUNULMAZ (gereksiz yazım yok).
+ *
+ * GÖMME KİPİ `EMPP_MENU_KAPAK_GOMME` (06.10; G kanalı `images/`'ı kurulu pakete taşımaz, yalnız
+ * index.html + menü dosyalarını taşır — `tools/g-yayin/durum.js` gYoluMu):
+ *   link  (varsayılan) link kartlarının kapağı iki menü dosyasına `coverUrl='data:image/<tür>;base64,…'`
+ *         olarak gömülür (iki dosyanın books'u eşit kalır); kitap kartları değişmez.
+ *   hepsi kitap kartları da gömülür.
+ *   kapali eski davranış: kapak `images/kapak-<anahtar>.<uz>` dosyası.
+ *   Kapak > 200 KB → sharp ile en uzun kenar 400 px JPEG q80; hâlâ > 200 KB ise gömülmez, dosya
+ *   yolunda kalır ve UYARI yazılır.
+ *
+ * Sonuç: { durum: 'uygulandi'|'gerek-yok'|'atlandi'|'olculemedi', gommeKip, kartlar:[{anahtar,
+ * kaynak, yol, gomulu, bayt}], uyarilar:[] }.
  */
 
 const fs = require('fs');
@@ -52,20 +65,55 @@ class MenuKapakHatasi extends Error {
   constructor(mesaj) { super(`${ISARET} ${mesaj}`); }
 }
 
-/** Bayttan görsel uzantısı; görsel değilse null. SAF. */
-function gorselUzantisi(b) {
-  if (!b || b.length < 12) return null;
-  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
-  if (b.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
-  if (b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
-  if (b.slice(0, 4).toString('latin1') === 'GIF8') return 'gif';
-  const bas = b.slice(0, 512).toString('utf8').trimStart();
-  if (/^(<\?xml[^>]*>\s*)?<svg\b/i.test(bas)) return 'svg';
-  return null;
-}
+/** Bayttan görsel uzantısı; görsel değilse null. SAF. Tek tanım: kabul modülü (`K.gorselTuru`). */
+const gorselUzantisi = K.gorselTuru;
 
 /** Kapak olarak kullanılabilir mi: görsel imzası + > 1 KB. SAF. */
 const kapakGecerli = (b) => !!(b && b.length > K.KAPAK_ALT_SINIR && gorselUzantisi(b));
+
+/** Gömme kipi tavanı/küçültme ölçüleri (06.10 kapak gömme). */
+const GOMME_TAVANI = 200 * 1024;
+const GOMME_KENAR = 400;
+const GOMME_KALITE = 80;
+const GOMME_KIPLERI = Object.freeze(['link', 'kapali', 'hepsi']);
+const MIME = Object.freeze({
+  jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml',
+});
+
+/** `EMPP_MENU_KAPAK_GOMME`: link (varsayılan) | kapali | hepsi; tanınmayan → link. SAF. */
+function gommeKipi(env = process.env) {
+  const v = String((env && env.EMPP_MENU_KAPAK_GOMME) || '').trim().toLowerCase();
+  return GOMME_KIPLERI.includes(v) ? v : 'link';
+}
+
+/**
+ * Gömülecek baytı hazırlar: ≤ 200 KB aynen; üstüyse sharp ile en uzun kenar 400 px JPEG q80.
+ * Dönüş {veri, mime, kucultuldu} ya da gömülemezse {sebep}. Saf değil (sharp).
+ */
+async function gommeHazirla(bayt, sharpFn) {
+  const tur = gorselUzantisi(bayt);
+  if (!tur) return { sebep: 'kapak görsel değil' };
+  if (bayt.length <= GOMME_TAVANI) return { veri: bayt, mime: MIME[tur], kucultuldu: false };
+  let k = null;
+  try {
+    // eslint-disable-next-line global-require
+    const sharp = sharpFn || require('sharp');
+    k = await sharp(bayt).rotate()
+      .resize({ width: GOMME_KENAR, height: GOMME_KENAR, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: GOMME_KALITE })
+      .toBuffer();
+  } catch (e) {
+    return { sebep: `kapak ${bayt.length} bayt > 200 KB, küçültülemedi (${String(e && e.message || e).slice(0, 80)})` };
+  }
+  if (!kapakGecerli(k) || gorselUzantisi(k) !== 'jpg') {
+    return { sebep: `küçültme çıktısı geçersiz (${k ? k.length : 0} bayt)` };
+  }
+  if (k.length > GOMME_TAVANI) {
+    return { sebep: `kapak ${bayt.length} bayt; ${GOMME_KENAR} px JPEG q${GOMME_KALITE} sonrası ${k.length} bayt > 200 KB` };
+  }
+  return { veri: k, mime: 'image/jpeg', kucultuldu: true };
+}
 
 /** `data:` adresini çözer; çözülemezse null. SAF. */
 function dataCoz(adres) {
@@ -282,19 +330,34 @@ async function menuKapakGaranti(o) {
     kaynaklar.push({ ad: K.AYAR, tur: 'json', ayarlar: a });
   }
 
-  // Onarılacak anahtarlar: kabul ölçütünde sorunlu ya da yedek kapaklı link (kendi kapağı aranır).
-  const onarim = new Map(); // anahtar → {b, books, zorunlu}
+  // Gömme kipi (o.gommeKip önce; yoksa EMPP_MENU_KAPAK_GOMME).
+  const kip = gommeKipi(o.gommeKip != null ? { EMPP_MENU_KAPAK_GOMME: o.gommeKip } : process.env);
+  rapor.gommeKip = kip;
+  const gomulur = (b) => kip === 'hepsi' || (kip === 'link' && !!b && b.type === 'link');
+
+  // Kart durumu (iki menü dosyasının birleşimi): kabul ölçütünde sorunlu / yedek kapaklı link.
+  const durumlar = new Map(); // anahtar → {b, books, zorunlu, yedek}
   for (const k of kaynaklar) {
     const books = k.ayarlar.books;
     for (const kart of K.booksOlc(books, okuyucu, k.ad)) {
-      const mevcut = onarim.get(kart.anahtar);
-      const zorunlu = !!kart.sorun;
-      if (zorunlu || kart.yedekKapak) {
-        onarim.set(kart.anahtar, { b: books[kart.anahtar], books, zorunlu: zorunlu || !!(mevcut && mevcut.zorunlu) });
-      }
+      const m = durumlar.get(kart.anahtar) || { b: books[kart.anahtar], books, zorunlu: false, yedek: false };
+      m.zorunlu = m.zorunlu || !!kart.sorun;
+      m.yedek = m.yedek || !!kart.yedekKapak;
+      durumlar.set(kart.anahtar, m);
     }
   }
-  if (!onarim.size) {
+  // Adaylar: onarim (kabul sorunu) · yedek (coverUrl'süz link; kendi kapağı aranır) · liste (coverUrl'lü
+  // link, panel listesinde kapağı var — liste değişmiş olabilir, sha256 kıyası) · gomme (yerel kapak).
+  const adaylar = new Map(); // anahtar → {b, books, neden}
+  for (const [anahtar, m] of durumlar) {
+    let neden = null;
+    if (m.zorunlu) neden = 'onarim';
+    else if (m.yedek) neden = 'yedek';
+    else if (m.b.type === 'link' && listedenLinkKapagi(o.setListesi, { url: m.b.url, baslik: m.b.title })) neden = 'liste';
+    else if (gomulur(m.b) && K.adresSinifi(K.kapakYolu(anahtar, m.b, m.books)).tur === 'yerel') neden = 'gomme';
+    if (neden) adaylar.set(anahtar, { ...m, neden });
+  }
+  if (!adaylar.size) {
     rapor.durum = 'gerek-yok';
     log(`${ISARET} her kartın kapağı pakette — değişiklik yok`);
     return rapor;
@@ -302,7 +365,8 @@ async function menuKapakGaranti(o) {
 
   const setAdi = (kaynaklar[0].ayarlar.setTitle || kaynaklar[0].ayarlar.setAdi || '');
   let webzAyar = null;
-  const linkVar = [...onarim.values()].some((x) => x.b && x.b.type === 'link');
+  const linkVar = [...adaylar.values()]
+    .some((x) => x.b && x.b.type === 'link' && (x.neden === 'onarim' || x.neden === 'yedek'));
   const kod = String(o.kisaKod || '').trim();
   if (linkVar && /^[a-z0-9]{3,12}$/i.test(kod)) {
     try {
@@ -314,27 +378,87 @@ async function menuKapakGaranti(o) {
     }
   }
 
+  const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
+  const ayniBayt = (a, b) => !!(a && b && sha(a) === sha(b));
+  /** Kabuğun bugün yüklediği kapağın baytı (data: çözülür, yerel okunur; uzak/yok → null). */
+  const mevcutBayt = (anahtar, b, books) => {
+    const s = K.adresSinifi(K.kapakYolu(anahtar, b, books));
+    if (s.tur === 'data') return s.veri;
+    return s.tur === 'yerel' ? okuyucu.oku(s.yol) : null;
+  };
+  /** Menü adresi hedefle aynı mı (data: ise çözülmüş bayt kıyaslanır). SAF. */
+  const adresAyni = (adres, hedef) => {
+    if (adres === hedef) return true;
+    const x = K.adresSinifi(adres); const y = K.adresSinifi(hedef);
+    return x.tur === 'data' && y.tur === 'data' && ayniBayt(x.veri, y.veri);
+  };
+  const uyar = (u) => { rapor.uyarilar.push(u); warn(`${ISARET} UYARI ${u}`); };
+  /** Her iki menü dosyasında kabuğun yüklediği kapak bu bayt mı (yalnizYerel: data: sayılmaz). */
+  const herKaynaktaAyni = (anahtar, bayt, yalnizYerel) => kaynaklar.every((k) => {
+    const x = k.ayarlar.books[anahtar];
+    if (!x) return true;
+    const s = K.adresSinifi(K.kapakYolu(anahtar, x, k.ayarlar.books));
+    if (s.tur === 'data') return !yalnizYerel && ayniBayt(s.veri, bayt);
+    return s.tur === 'yerel' && ayniBayt(okuyucu.oku(s.yol), bayt);
+  });
+
   // Kapakları bul (anahtar başına bir kez); yedek kapaklı linkte kendi kapağı yoksa DOKUNMA.
   const yazilacak = new Map(); // yol → bayt
-  const yeniKapak = new Map(); // anahtar → yol
-  for (const [anahtar, { b, books, zorunlu }] of onarim) {
-    const r = await kapakBul({
-      anahtar, b, books, okuyucu, listeHam: o.setListesi, webzAyar, getir, setAdi, log,
-    });
-    if (!zorunlu && r.kaynak !== 'panel-listesi' && r.kaynak !== 'webz') continue; // yedek zaten çalışıyor
-    const yol = `images/kapak-${anahtar}.${gorselUzantisi(r.bayt)}`;
-    yazilacak.set(yol, r.bayt);
-    yeniKapak.set(anahtar, yol);
-    rapor.kartlar.push({ anahtar, baslik: b.title || '', kaynak: r.kaynak, yol, bayt: r.bayt.length });
-    if (r.uyari) {
-      rapor.uyarilar.push(r.uyari);
-      warn(`${ISARET} UYARI ${r.uyari}`);
+  const yeniKapak = new Map(); // anahtar → coverUrl (dosya yolu ya da data:)
+  for (const [anahtar, { b, books, neden }] of adaylar) {
+    const baslik = b.title || '';
+    const mevcut = mevcutBayt(anahtar, b, books);
+    let r;
+    if (neden === 'gomme') {
+      if (!kapakGecerli(mevcut)) continue; // görsel değil → gömülmez (kabul dosyayı ölçer)
+      r = { bayt: mevcut, kaynak: 'paket' };
+    } else {
+      r = await kapakBul({
+        anahtar, b, books, okuyucu, listeHam: o.setListesi, webzAyar, getir, setAdi, log,
+      });
+      if (neden === 'yedek' && r.kaynak !== 'panel-listesi' && r.kaynak !== 'webz') continue; // yedek zaten çalışıyor
+      if (neden === 'liste' && r.kaynak !== 'panel-listesi') {
+        // Liste kapağı alınamadı: mevcut kapak geçerli → dosya kipinde dokunma, gömme kipinde onu göm.
+        if (!gomulur(b) || !kapakGecerli(mevcut)) continue;
+        r = { bayt: mevcut, kaynak: 'paket' };
+      }
     }
-    log(`${ISARET} ${anahtar} "${b.title || ''}": kapak ${yol} (${r.bayt.length} bayt, kaynak ${r.kaynak})`);
+    // A: liste kapağı paketteki ile aynı (sha256) ve gömme yok → dokunma.
+    if (neden === 'liste' && !gomulur(b) && herKaynaktaAyni(anahtar, r.bayt, false)) {
+      log(`${ISARET} ${anahtar} "${baslik}": panel listesi kapağı paketteki ile aynı (sha256) — dokunulmadı`);
+      continue;
+    }
+    let hedef = null; let dosya = null; let son = r.bayt; let kucultuldu = false;
+    if (gomulur(b)) {
+      const g = await gommeHazirla(r.bayt, o.sharp);
+      if (g.veri) {
+        hedef = `data:${g.mime};base64,${g.veri.toString('base64')}`;
+        son = g.veri; kucultuldu = g.kucultuldu;
+      } else uyar(`${anahtar} "${baslik}": ${g.sebep} — gömülmedi, dosya yolunda kaldı`);
+    }
+    if (!hedef) {
+      if (herKaynaktaAyni(anahtar, r.bayt, true)) continue; // dosya yolu zaten bu baytı gösteriyor
+      dosya = `images/kapak-${anahtar}.${gorselUzantisi(r.bayt)}`;
+      hedef = dosya;
+    }
+    // Değişiklik yoksa (iki menü dosyasında aynı adres, dosya baytı aynı) DOKUNMA.
+    const adresler = kaynaklar.map((k) => k.ayarlar.books[anahtar]).filter(Boolean).map((x) => x.coverUrl);
+    if (adresler.every((x) => adresAyni(x, hedef)) && (!dosya || ayniBayt(okuyucu.oku(dosya), son))) {
+      log(`${ISARET} ${anahtar} "${baslik}": kapak zaten güncel — dokunulmadı`);
+      continue;
+    }
+    if (dosya) yazilacak.set(dosya, son);
+    yeniKapak.set(anahtar, hedef);
+    rapor.kartlar.push({
+      anahtar, baslik, kaynak: r.kaynak, yol: dosya, gomulu: !dosya, kucultuldu, bayt: son.length,
+    });
+    if (r.uyari) uyar(r.uyari);
+    log(`${ISARET} ${anahtar} "${baslik}": kapak ${dosya || `gömülü data: (${son.length} bayt${kucultuldu ? `, ${r.bayt.length} bayttan küçültüldü` : ''})`}`
+      + ` (kaynak ${r.kaynak})`);
   }
   if (!yeniKapak.size) {
     rapor.durum = 'gerek-yok';
-    log(`${ISARET} link kartları için ayrı kapak bulunamadı; kabuk yedeği (ilk kitap kapağı) pakette — değişiklik yok`);
+    log(`${ISARET} değişecek kart kapağı yok (kapaklar güncel ya da link kendi kapağını bulamadı; kabuk yedeği pakette)`);
     return rapor;
   }
 
@@ -406,4 +530,5 @@ async function menuKapakGaranti(o) {
 module.exports = {
   ISARET, MenuKapakHatasi, gorselUzantisi, kapakGecerli, dataCoz, listedenLinkKapagi, webzLinkKapagi,
   yerTutucuSvg, onEkBul, zipOkuyucu, kapakBul, menuKapakGaranti, varsayilanGetir,
+  GOMME_TAVANI, GOMME_KENAR, GOMME_KALITE, gommeKipi, gommeHazirla,
 };

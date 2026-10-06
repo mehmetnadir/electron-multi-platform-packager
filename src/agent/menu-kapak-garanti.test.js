@@ -14,6 +14,9 @@ const G = require('./menu-kapak-garanti');
 const M = require('./icerik-merdiven');
 const K = require('../../tools/kabul/menu-kapak');
 
+// Varsayılan gömme kipi (link) ölçülür; kabuktan sızan değer testi değiştirmesin.
+delete process.env.EMPP_MENU_KAPAK_GOMME;
+
 const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3000, 7)]);
 const JPG2 = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1]), Buffer.alloc(2500, 9)]);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2000, 3)]);
@@ -76,11 +79,11 @@ test('önce: 59835 kalıbı kabul ölçütünde RED (iki link kartı kırık)', 
   assert.deepEqual([...new Set(s.kartlar.filter((k) => k.sorun).map((k) => k.anahtar))].sort(), ['link4', 'link5']);
 });
 
-test('onarım: Teacher\'s Pack panel listesinden, Worksheets ilk kitap kapağı (UYARI) → kabul GEÇTİ', async () => {
+test('kapali kip (eski davranış) onarım: Teacher\'s Pack panel listesinden, Worksheets ilk kitap kapağı (UYARI) → kabul GEÇTİ', async () => {
   const { zip, calisma } = zipKur();
   const once = M.zipDizini(zip);
   const uyarilar = [];
-  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok, warn: (m) => uyarilar.push(m) });
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok, warn: (m) => uyarilar.push(m), gommeKip: 'kapali' });
   assert.equal(r.durum, 'uygulandi');
   const k = Object.fromEntries(r.kartlar.map((x) => [x.anahtar, x]));
   assert.equal(k.link4.kaynak, 'panel-listesi');
@@ -104,7 +107,7 @@ test('onarım: Teacher\'s Pack panel listesinden, Worksheets ilk kitap kapağı 
   assert.equal(K.yamaAyarlari(yama).books.link4.coverUrl, 'images/kapak-link4.jpg');
 });
 
-test('Web-Z kaynağı: listede kapak yoksa Web-Z settings.json coverUrl alınır', async () => {
+test('kapali kip Web-Z kaynağı: listede kapak yoksa Web-Z settings.json coverUrl alınır', async () => {
   const { zip, calisma } = zipKur();
   const istekler = [];
   const getir = async (url) => {
@@ -116,7 +119,7 @@ test('Web-Z kaynağı: listede kapak yoksa Web-Z settings.json coverUrl alınır
     }
     return { status: 404, govde: Buffer.from('Not Found') };
   };
-  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), kisaKod: 'k08ou', getir });
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), kisaKod: 'k08ou', getir, gommeKip: 'kapali' });
   const k5 = r.kartlar.find((x) => x.anahtar === 'link5');
   assert.equal(k5.kaynak, 'webz');
   assert.equal(k5.yol, 'images/kapak-link5.png');
@@ -145,15 +148,51 @@ test('kitap: thumbs yok → ilk sayfa (UYARI); o da yoksa yer tutucu SVG (UYARI)
   assert.ok(s.uyarilar.some((u) => /book3/.test(u)));
 });
 
-test('kapakları tam paket: gerek-yok, zip bayt bayt aynı', async () => {
+/** r2-al kalıbı: link kartları zaten coverUrl'lü, dosyalar pakette (önceki garanti koşusu). */
+function tamPaket({ link4 = JPG2, link4Url = 'images/kapak-link4.jpg' } = {}) {
   const a = ayarlar();
-  a.books.link4.coverUrl = 'images/kapak-link4.jpg';
+  a.books.link4.coverUrl = link4Url;
   a.books.link5.coverUrl = 'images/kapak-link5.jpg';
-  const { zip, calisma } = zipKur({ a, ek: { 'images/kapak-link4.jpg': JPG, 'images/kapak-link5.jpg': JPG } });
+  const ek = { 'images/kapak-link5.jpg': JPG };
+  if (!/^data:/.test(link4Url)) ek[link4Url] = link4;
+  return zipKur({ a, ek });
+}
+
+test('A kapali kip: liste kapağı paketteki ile aynı (sha256) → gerek-yok, zip bayt bayt aynı', async () => {
+  const { zip, calisma } = tamPaket();
   const once = fs.readFileSync(zip);
-  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok });
+  const loglar = [];
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok, gommeKip: 'kapali', log: (m) => loglar.push(m) });
   assert.equal(r.durum, 'gerek-yok');
   assert.ok(fs.readFileSync(zip).equals(once));
+  assert.ok(loglar.some((m) => /link4 .*aynı \(sha256\)/.test(m)));
+});
+
+test('A kapali kip: r2-al build\'inde coverUrl\'lü link, panel listesi kapağı değişmiş → yenilenir', async () => {
+  const { zip, calisma } = tamPaket({ link4: JPG }); // pakette eski kapak (JPG), listede yeni (JPG2)
+  const once = M.zipDizini(zip);
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok, gommeKip: 'kapali' });
+  assert.equal(r.durum, 'uygulandi');
+  assert.deepEqual(r.kartlar.map((x) => [x.anahtar, x.kaynak, x.yol]), [['link4', 'panel-listesi', 'images/kapak-link4.jpg']]);
+  const d = M.zipDizini(zip);
+  assert.ok(M.zipGirdiOku(zip, d.get('images/kapak-link4.jpg')).equals(JPG2), 'eski kapak yerine liste kapağı');
+  // link5 (listede kapağı yok) ve kitap kapakları dokunulmadı.
+  for (const ad of ['images/kapak-link5.jpg', 'book1/assets/58336/thumbs/1.jpg']) assert.equal(d.get(ad).crc, once.get(ad).crc, ad);
+  assert.equal(zipOlc(zip).durum, K.DURUM.GECTI);
+});
+
+test('A: liste kapağı https ise indirilir; indirilen bayt aynıysa dokunulmaz, farklıysa yenilenir', async () => {
+  const url = 'https://cdn.ornek.test/tp.jpg';
+  const getirB = (b) => async (u) => (u === url ? { status: 200, govde: b } : { status: 404, govde: Buffer.alloc(0) });
+  const ayni = tamPaket();
+  const once = fs.readFileSync(ayni.zip);
+  const r1 = await G.menuKapakGaranti({ ...ayni, setListesi: liste(url), getir: getirB(JPG2), gommeKip: 'kapali' });
+  assert.equal(r1.durum, 'gerek-yok');
+  assert.ok(fs.readFileSync(ayni.zip).equals(once));
+  const farkli = tamPaket();
+  const r2 = await G.menuKapakGaranti({ ...farkli, setListesi: liste(url), getir: getirB(PNG), gommeKip: 'kapali' });
+  assert.equal(r2.durum, 'uygulandi');
+  assert.equal(r2.kartlar[0].yol, 'images/kapak-link4.png');
 });
 
 test('Z2 kabuğu (images/book1.png var): link yedekle çalışıyor; listede kendi kapağı varsa o konur', async () => {
@@ -215,4 +254,150 @@ test('gorselUzantisi: jpg/png/svg tanınır, 404 gövdesi tanınmaz', () => {
   assert.equal(G.gorselUzantisi(G.yerTutucuSvg('Worksheets', 'Set')), 'svg');
   assert.equal(G.gorselUzantisi(Buffer.from('Not Found')), null);
   assert.ok(G.yerTutucuSvg('A', '').length > K.KAPAK_ALT_SINIR);
+});
+
+// ── B: GÖMME KİPİ (EMPP_MENU_KAPAK_GOMME) ─────────────────────────────────────────────────────────
+
+/** Zip'teki iki menü dosyasının books'u (yama + settings.json). */
+function menuBooks(zip) {
+  const d = M.zipDizini(zip);
+  const yama = M.zipGirdiOku(zip, d.get('scripts/cevrimdisi-yama.js')).toString('utf8');
+  const ayar = JSON.parse(M.zipGirdiOku(zip, d.get('config/settings.json')).toString('utf8'));
+  return { yama: K.yamaAyarlari(yama).books, ayar: ayar.books, yamaMetni: yama, d };
+}
+
+test('B link kipi (varsayılan): link kapakları iki menü dosyasına data: gömülür, books eşit, kitaplar değişmez', async () => {
+  const { zip, calisma } = zipKur();
+  const once = M.zipDizini(zip);
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok });
+  assert.equal(r.durum, 'uygulandi');
+  assert.equal(r.gommeKip, 'link');
+  const { yama, ayar, yamaMetni, d } = menuBooks(zip);
+  assert.deepEqual(yama, ayar, 'yama ve settings.json books alanı EŞİT (tools/g-yayin/menu.js ayrışma RED eder)');
+  assert.equal(yama.link4.coverUrl, `data:image/jpeg;base64,${JPG2.toString('base64')}`);
+  assert.match(yama.link5.coverUrl, /^data:image\/jpeg;base64,/); // ilk kitap kapağı (UYARI) gömüldü
+  assert.ok(G.dataCoz(yama.link5.coverUrl).equals(JPG));
+  for (const k of ['book1', 'book2', 'book3']) assert.equal(yama[k].coverUrl, ayarlar().books[k].coverUrl, k);
+  // images/ altına dosya EKLENMEDİ (G kurulu pakete images/ taşımaz); yalnız iki menü dosyası değişti.
+  assert.deepEqual([...d.keys()].filter((a) => !once.has(a)), []);
+  for (const [ad, g] of once) {
+    if (ad === 'config/settings.json' || ad === 'scripts/cevrimdisi-yama.js') continue;
+    assert.equal(d.get(ad).crc, g.crc, ad);
+  }
+  assert.match(yamaMetni, /var b = window\.__setSettings\.books;/);
+  assert.ok(r.kartlar.every((x) => x.gomulu && x.yol === null));
+  assert.equal(zipOlc(zip).durum, K.DURUM.GECTI);
+  // İdempotent: ikinci koşu zip'e dokunmaz.
+  const ara = fs.readFileSync(zip);
+  const r2 = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok });
+  assert.equal(r2.durum, 'gerek-yok');
+  assert.ok(fs.readFileSync(zip).equals(ara));
+});
+
+test('B link kipi: önceki koşunun images/kapak-*.jpg dosya yolu data:\'ya çevrilir (G menüyle taşır)', async () => {
+  const { zip, calisma } = tamPaket();
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(), getir: agYok });
+  assert.equal(r.durum, 'uygulandi');
+  const { yama, ayar } = menuBooks(zip);
+  assert.deepEqual(yama, ayar);
+  assert.ok(G.dataCoz(yama.link4.coverUrl).equals(JPG2));
+  const k5 = r.kartlar.find((x) => x.anahtar === 'link5');
+  assert.equal(k5.kaynak, 'paket');
+  assert.ok(G.dataCoz(yama.link5.coverUrl).equals(JPG));
+});
+
+test('A link kipi: gömülü kapak listeyle aynı → dokunulmaz; liste değişince data: yenilenir', async () => {
+  const eski = `data:image/jpeg;base64,${JPG2.toString('base64')}`;
+  const ayni = tamPaket({ link4Url: eski });
+  // link5 de gömülü olsun ki tek değişken link4 kalsın.
+  await G.menuKapakGaranti({ ...ayni, setListesi: liste(), getir: agYok });
+  const once = fs.readFileSync(ayni.zip);
+  const r1 = await G.menuKapakGaranti({ ...ayni, setListesi: liste(), getir: agYok });
+  assert.equal(r1.durum, 'gerek-yok');
+  assert.ok(fs.readFileSync(ayni.zip).equals(once));
+  const yeni = `data:image/png;base64,${PNG.toString('base64')}`;
+  const r2 = await G.menuKapakGaranti({ ...ayni, setListesi: liste(yeni), getir: agYok });
+  assert.equal(r2.durum, 'uygulandi');
+  const { yama, ayar } = menuBooks(ayni.zip);
+  assert.deepEqual(yama, ayar);
+  assert.equal(yama.link4.coverUrl, yeni);
+});
+
+test('B 200 KB: büyük liste kapağı sharp ile en uzun kenar 400 px JPEG q80\'e küçültülüp gömülür', async () => {
+  // eslint-disable-next-line global-require
+  const sharp = require('sharp');
+  const n = 200;
+  const ham = Buffer.alloc(n * n * 3);
+  for (let i = 0; i < ham.length; i++) ham[i] = (i * 7919 + (i >> 5) * 104729) % 251; // belirlenimci doku
+  const iri = await sharp(ham, { raw: { width: n, height: n, channels: 3 } }).resize(1200, 900, { kernel: 'cubic' }).jpeg({ quality: 95 }).toBuffer();
+  assert.ok(iri.length > G.GOMME_TAVANI, `fixture > 200 KB olmalı (${iri.length})`);
+  const { zip, calisma } = zipKur();
+  const r = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(`data:image/jpeg;base64,${iri.toString('base64')}`), getir: agYok });
+  const k4 = r.kartlar.find((x) => x.anahtar === 'link4');
+  assert.equal(k4.gomulu, true);
+  assert.equal(k4.kucultuldu, true);
+  const { yama, ayar } = menuBooks(zip);
+  assert.deepEqual(yama, ayar);
+  const gomulu = G.dataCoz(yama.link4.coverUrl);
+  assert.match(yama.link4.coverUrl, /^data:image\/jpeg;base64,/);
+  assert.ok(gomulu.length <= G.GOMME_TAVANI, `gömülü ${gomulu.length} bayt`);
+  const md = await sharp(gomulu).metadata();
+  assert.deepEqual([md.format, Math.max(md.width, md.height), md.width, md.height], ['jpeg', 400, 400, 300]);
+  assert.equal(zipOlc(zip).durum, K.DURUM.GECTI);
+  // Küçültme belirlenimci → ikinci koşu dokunmaz.
+  const ara = fs.readFileSync(zip);
+  const r2 = await G.menuKapakGaranti({ zip, calisma, setListesi: liste(`data:image/jpeg;base64,${iri.toString('base64')}`), getir: agYok });
+  assert.equal(r2.durum, 'gerek-yok');
+  assert.ok(fs.readFileSync(zip).equals(ara));
+});
+
+test('B 200 KB: küçültme sonrası hâlâ > 200 KB → gömülmez, dosya yolunda kalır, UYARI', async () => {
+  const iri = Buffer.concat([PNG.slice(0, 8), Buffer.alloc(G.GOMME_TAVANI + 5000, 4)]);
+  const cagri = [];
+  const sahteSharp = (girdi) => {
+    cagri.push(girdi.length);
+    const z = {
+      rotate: () => z, resize: (o) => { cagri.push(o); return z; }, flatten: () => z, jpeg: (o) => { cagri.push(o); return z; },
+      toBuffer: async () => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(G.GOMME_TAVANI + 10, 1)]),
+    };
+    return z;
+  };
+  const { zip, calisma } = zipKur();
+  const uyarilar = [];
+  const r = await G.menuKapakGaranti({
+    zip, calisma, setListesi: liste(`data:image/png;base64,${iri.toString('base64')}`), getir: agYok, sharp: sahteSharp, warn: (m) => uyarilar.push(m),
+  });
+  assert.deepEqual(cagri.slice(1), [{ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }, { quality: 80 }]);
+  const k4 = r.kartlar.find((x) => x.anahtar === 'link4');
+  assert.equal(k4.gomulu, false);
+  assert.equal(k4.yol, 'images/kapak-link4.png');
+  assert.ok(uyarilar.some((u) => /UYARI link4 .*> 200 KB — gömülmedi, dosya yolunda kaldı/.test(u)), uyarilar.join('\n'));
+  const { yama, ayar, d } = menuBooks(zip);
+  assert.deepEqual(yama, ayar);
+  assert.equal(yama.link4.coverUrl, 'images/kapak-link4.png');
+  assert.ok(M.zipGirdiOku(zip, d.get('images/kapak-link4.png')).equals(iri));
+  assert.match(yama.link5.coverUrl, /^data:image\/jpeg;base64,/); // küçük kapak yine gömülür
+  assert.equal(zipOlc(zip).durum, K.DURUM.GECTI);
+});
+
+test('B hepsi kipi: kitap kartları da gömülür; kapali kipte hiçbir coverUrl data: olmaz', async () => {
+  const h = zipKur();
+  await G.menuKapakGaranti({ ...h, setListesi: liste(), getir: agYok, gommeKip: 'hepsi' });
+  const hb = menuBooks(h.zip);
+  assert.deepEqual(hb.yama, hb.ayar);
+  for (const k of ['book1', 'book2', 'book3', 'link4', 'link5']) assert.match(hb.yama[k].coverUrl, /^data:image\//, k);
+  assert.equal(zipOlc(h.zip).durum, K.DURUM.GECTI);
+  const kp = zipKur();
+  await G.menuKapakGaranti({ ...kp, setListesi: liste(), getir: agYok, gommeKip: 'kapali' });
+  const kb = menuBooks(kp.zip);
+  assert.deepEqual(kb.yama, kb.ayar);
+  assert.ok(Object.values(kb.yama).every((b) => !/^data:/.test(b.coverUrl || '')));
+  assert.equal(kb.yama.link4.coverUrl, 'images/kapak-link4.jpg');
+});
+
+test('gommeKipi: link varsayılan; kapali/hepsi tanınır; tanınmayan → link', () => {
+  assert.equal(G.gommeKipi({}), 'link');
+  assert.equal(G.gommeKipi({ EMPP_MENU_KAPAK_GOMME: ' KAPALI ' }), 'kapali');
+  assert.equal(G.gommeKipi({ EMPP_MENU_KAPAK_GOMME: 'hepsi' }), 'hepsi');
+  assert.equal(G.gommeKipi({ EMPP_MENU_KAPAK_GOMME: 'evet' }), 'link');
 });
