@@ -259,7 +259,7 @@ test('atlamaNedeni: eski kuralla yazılmış kesin atlandi bir kez yeniden denen
   const eski = { istekAt: s.istekAt, tabanSurum: s.surum, kesin: true, durum: 'atlandi' };
   assert.equal(E.atlamaNedeni(eski, s, { webzSha: null }), null);
   const yeni = E.durumKaydi(eski, s, {
-    durum: 'atlandi', neden: 'bookN taban kapsaması eksik — set eki sonrası eksik: 333',
+    durum: 'atlandi', neden: 'tek kitaplı paket (1 kapak)',
   });
   assert.equal(yeni.kesin, true);
   assert.equal(yeni.atlamaKurali, E.ATLAMA_KURALI);
@@ -267,6 +267,36 @@ test('atlamaNedeni: eski kuralla yazılmış kesin atlandi bir kez yeniden denen
   // Yüklenmiş kesin kayıt kural sürümünden etkilenmez.
   assert.equal(E.atlamaNedeni({ ...eski, durum: 'yuklendi' }, s, { webzSha: null }), 'islendi');
   assert.equal(E.durumKaydi(null, s, { durum: 'yuklendi' }).atlamaKurali, undefined);
+});
+
+test('atlamaNedeni: kural 2 ile yazılmış kesin atlandi (eski kapsama) yeniden denenir', () => {
+  const s = tekSatir();
+  const eski = { istekAt: s.istekAt, tabanSurum: s.surum, kesin: true, durum: 'atlandi',
+    atlamaKurali: 2 };
+  assert.equal(E.ATLAMA_KURALI, 3);
+  assert.equal(E.atlamaNedeni(eski, s, { webzSha: null }), null);
+});
+
+test('ortamVarsayilanlari: merdiven + set eki ProBook gibi açık; açık 0 korunur', () => {
+  const bos = {};
+  assert.deepEqual(E.ortamVarsayilanlari(bos).sort(),
+    ['EMPP_ARSIV_MERDIVEN', 'EMPP_SET_UYELIK_EK']);
+  assert.equal(bos.EMPP_SET_UYELIK_EK, '1');
+  assert.equal(bos.EMPP_ARSIV_MERDIVEN, '1');
+  const kapali = { EMPP_SET_UYELIK_EK: '0', EMPP_ARSIV_MERDIVEN: '' };
+  assert.deepEqual(E.ortamVarsayilanlari(kapali), ['EMPP_ARSIV_MERDIVEN']);
+  assert.equal(kapali.EMPP_SET_UYELIK_EK, '0');
+  // ProBook serit-ortam.sh ile aynı anahtarlar varsayılan 1.
+  const serit = fs.readFileSync(path.join(__dirname, '../probook/serit-ortam.sh'), 'utf8');
+  for (const k of Object.keys(E.ORTAM_VARSAYILAN)) {
+    assert.match(serit, new RegExp(`export ${k}="\\$\\{${k}:-1\\}"`));
+  }
+});
+
+test('set eki kapalıyken uyarı: taban ProBook\'tan farklı olabilir', async () => {
+  const { bag, kayit } = sahteBag(geciciDizin());
+  await E.setIsle(bag, tekSatir(), { kuru: true });
+  assert.ok(kayit.log.some((l) => /merdiven\/set eki kapalı \(ProBook'ta açık\)/.test(l)));
 });
 
 test('durumKaydi: ret işareti yazılmadıysa kesin değil, hata sayacı artar', () => {
@@ -712,13 +742,19 @@ test('üreteç kapalıysa (EMPP_INDEX_URETECI=0 eşdeğeri) aynı taban işlenir
   assert.equal(kayit.kabuk.length, 1);
 });
 
-test('taban kapsama: set eki sonrası eksik kitap → üreteç tabanı; içerik kökte duruyorsa işlenir',
+test('taban kapsama: set eki eksik bıraktı → GEÇİCİ atla; içerik kökte duruyorsa işlenir',
   async () => {
+    // 73581 ölçümü 06.10: set eki eksiği tamamlayınca girdiSha üreteç yoluyla aynı; eksik kalırsa
+    // ek tutmaz → üretilmez ama kesin kayıt da yazılmaz (yeniden denenir).
     const a = sahteBag(geciciDizin(), { kitapEksik: ['333'] });
     const r1 = await E.setIsle(a.bag, tekSatir(), { kuru: true });
     assert.equal(r1.durum, 'atlandi');
-    assert.match(r1.neden, /bookN taban kapsaması eksik — set eki sonrası eksik: 333/);
+    assert.match(r1.neden, /set eki eksik bıraktı \(geçici\) — set eki sonrası eksik: 333/);
+    assert.equal(E.kesinSonucMu(r1), false);
     assert.equal(a.kayit.kabuk.length, 0);
+    const d = E.durumKaydi(null, tekSatir(), r1);
+    assert.equal(d.kesin, false);
+    assert.equal(d.hataSayisi, 1);
     const b = sahteBag(geciciDizin(), { kitapEksik: ['333'], kokteDuran: ['333'] });
     const r2 = await E.setIsle(b.bag, tekSatir(), { kuru: true });
     assert.equal(r2.durum, 'kuru');
@@ -797,7 +833,7 @@ test('--kuru: bildirim gönderilmez, loga düşer', async () => {
   const { bag, kayit } = sahteBag(ev, { kitapEksik: ['333'] });
   assert.equal(await E.main(['--set', '45550', '--kuru'], bag), 0);
   assert.equal(kayit.bildir.length, 0);
-  assert.ok(kayit.log.some((l) => /bildirim gönderilmedi.*taban kapsaması eksik/.test(l)));
+  assert.ok(kayit.log.some((l) => /bildirim gönderilmedi.*set eki eksik bıraktı/.test(l)));
 });
 
 test('A1 (tek motor) üreteç tabanı: kural yok, ek üretilir', async () => {

@@ -47,12 +47,29 @@ const RCLONE_AYAR = ['--contimeout', '30s', '--timeout', '5m', '--retries', '3',
   '--low-level-retries', '10'];
 /** Aynı istek + taban için yeniden denenmeyen "uygun değil" nedenleri (kabukTazele uygunluk). */
 const UYGUN_DEGIL = new RegExp('bookN düzeni yok|tek kitaplı paket|dokunulmaz'
-  + '|Web-Z listesinde kitap yok|taban kapsaması eksik');
+  + '|Web-Z listesinde kitap yok');
 /**
  * Atlama kuralı sürümü: kesin 'atlandi' kaydı bu sürümle yazılmadıysa bir kez yeniden denenir.
  * 2: bookN üreteç tabanı kuralı kalktı (59835 ölçümü 06.10) — eski kesin atlamalar yeniden işlenir.
+ * 3: "taban kapsaması eksik" kesin değil, geçici (73581 ölçümü 06.10).
  */
-const ATLAMA_KURALI = 2;
+const ATLAMA_KURALI = 3;
+/**
+ * ProBook ortamıyla AYNI varsayılanlar (tools/probook/serit-ortam.sh `${X:-1}`). Kapalı merdiven ya
+ * da set eki ProBook'tan farklı taban kurar → girdiSha tutmaz. 73581 (06.10): EMPP_SET_UYELIK_EK
+ * tanımsız elle koşu "taban kapsaması eksik: 66903" ile atladı; açıkken ek üretildi, girdiSha
+ * ProBook üreteç yoluyla aynı (582b7f82ff4c…).
+ */
+const ORTAM_VARSAYILAN = Object.freeze({ EMPP_ARSIV_MERDIVEN: '1', EMPP_SET_UYELIK_EK: '1' });
+
+/** Tanımsız ORTAM_VARSAYILAN anahtarlarını env'e yazar (açık '0' korunur). @returns {string[]} */
+function ortamVarsayilanlari(env) {
+  const yazilan = [];
+  for (const [k, v] of Object.entries(ORTAM_VARSAYILAN)) {
+    if (env[k] == null || env[k] === '') { env[k] = v; yazilan.push(k); }
+  }
+  return yazilan;
+}
 /** Geçici hatada geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. */
 const GERI_TABAN_MS = 15 * 60 * 1000;
 const GERI_TAVAN_MS = 6 * 60 * 60 * 1000;
@@ -576,7 +593,8 @@ function tekMotorDuzeniMi(adlar, onEkBul) {
 /**
  * ProBook r2-kur tabanı ÜRETEÇLE yeniden kurar mı (runner `r2KurTabanHazirla` + TABAN KAPSAMA ile
  * aynı karar, aynı modül işlevleri). 'taban' nedeni yalnız bilgi satırıdır (girdiSha iki yolda
- * eşit, 59835 ölçümü 06.10); 'kapsama' nedeni (eksik kitabı ProBook üreteçle ekler) seti atlatır.
+ * eşit, 59835 ölçümü 06.10); 'kapsama' nedeni (set eki bu koşuda eksiği tamamlayamadı) seti
+ * GEÇİCİ atlatır — yeniden denenir (73581 ölçümü 06.10).
  * `asama`: 'taban' (merdivenden önce, `tabanUretecMi`) |
  * 'kapsama' (set ekinden sonra, `tabanKitapEksik` + panel içerik istisnası).
  * @returns {string|null} neden
@@ -634,6 +652,10 @@ async function kaynakAdimlari(bag, s, zip, calisma) {
     zip, calisma, bookId: s.bookId, platform: job.platform, log: bag.log, warn: bag.warn,
   };
   if (bag.merdivenAcik()) await adim.merdiven({ ...ortak });
+  if (!bag.merdivenAcik() || !setEk.ekAcik(bag.env)) {
+    bag.warn(`${ISARET} ${s.bookId}: merdiven/set eki kapalı (ProBook'ta açık) — taban ProBook'tan`
+      + ' farklı olabilir, girdiSha tutmayabilir');
+  }
   if (setEk.ekAcik(bag.env)) {
     const liste = setEk.setListesiCoz({ job, env: bag.env });
     if (!liste) {
@@ -864,12 +886,14 @@ async function setIsle(bag, s, o) {
     //   · bookN, tam kapsama: girdiSha iki yolda EŞİT (59835 ölçümü 06.10: e49d25fb4217… R2
     //     tabanı ile üreteç tabanında aynı; klasörler/kapaklar aynı, Mac eki üreteç tabanına
     //     uygulandı). Kural YOK — yalnız bilgi satırı. Kalan sapma ProBook'ta ek-sapma → ertele.
-    //   · bookN, set eki sonrası EKSİK kitap: ProBook eksiği üreteçle ekler, Mac ekinde yok —
-    //     ölçülmedi → atla + bildir (kesin).
-    const uretecAtla = async (neden) => {
-      await bag.bildir(`kabuk-ek ${s.bookId}: bookN taban kapsaması eksik — ek üretilmedi`
-        + ` (${neden})`);
-      return bitir('atlandi', `bookN taban kapsaması eksik — ${neden}`);
+    //   · bookN, set eki sonrası EKSİK kitap: kural kalıcı DEĞİL. 73581 ölçümü 06.10: set eki
+    //     66903'ü (Games) R2 tabanına ekleyince girdiSha üreteç yoluyla aynı (582b7f82ff4c…); eksik
+    //     yalnız set eki kapalı/başarısızken kalır. Eksikle ek üretilmez (ProBook eksiği tamamlar,
+    //     ek tutmaz), ama GEÇİCİ: kesin kayıt yok, geri çekilmeyle yeniden denenir.
+    const kapsamaErtele = async (neden) => {
+      await bag.bildir(`kabuk-ek ${s.bookId}: set eki eksik bıraktı — ek üretilmedi, yeniden`
+        + ` denenecek (${neden})`);
+      return bitir('atlandi', `set eki eksik bıraktı (geçici) — ${neden}`);
     };
     const tekMotor = bag.tabanTekMotor(taban.zip);
     const U = bag.uretec();
@@ -882,7 +906,7 @@ async function setIsle(bag, s, o) {
     const n2 = tekMotor ? null : uretecTabaniNedeni({
       U, P, zip: taban.zip, setListesi: liste ? liste.ham : null, asama: 'kapsama', env: bag.env,
     });
-    if (n2) return uretecAtla(n2);
+    if (n2) return kapsamaErtele(n2);
 
     let cikti = null;
     const kt = await bag.kabukTazele({
@@ -1150,6 +1174,7 @@ async function main(argv, bag = varsayilanBag()) {
 }
 
 if (require.main === module) {
+  ortamVarsayilanlari(process.env);
   main(process.argv.slice(2)).then((kod) => { process.exitCode = kod; }, (e) => {
     console.error(new Date().toISOString(), `${ISARET} ölümcül:`, (e && e.stack) || e);
     process.exitCode = 1;
@@ -1160,6 +1185,7 @@ module.exports = {
   ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
   kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, tekMotorDuzeniMi,
   onbellekBoyutu, kenaraAl, geriCekilmeMs, atlamaNedeni, kesinSonucMu, ATLAMA_KURALI,
+  ORTAM_VARSAYILAN, ortamVarsayilanlari,
   durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
   varsayilanBag, httpIstemci, ekYukle, s3Kodu, NESNE_SIRASI,
 };
