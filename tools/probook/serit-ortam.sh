@@ -61,6 +61,9 @@ export KABUL_CDP="${KABUL_CDP:-1}" KABUL_SET_TUM="${KABUL_SET_TUM:-1}" KABUL_K4=
 #   EMPP_PARDUS_HAZIR_DIR (srv21 hazır şeridi; ProBook kendisi üretir), PROBOOK_AKTARIM (uzak kip aktarımı),
 #   EMPP_ICERIK_GUNCELLEME (pardus-yerel-build.sh OKUMAZ, PARDUS_ICERIK_GUNCELLEME=linux), EMPP_SAYFA_WEBP (linux'ta 0).
 export EMPP_SET_MENU="${EMPP_SET_MENU:-1}"
+# Disk kapısı → önce yer aç (Nadir 06.10): runner kapı kapanmadan disk-temizlik.sh'ı koşturur.
+# YALNIZ ProBook ve kasa açar; srv21/Mac'te bayrak yok → silme yok.
+export EMPP_DISK_TEMIZLIK="${EMPP_DISK_TEMIZLIK:-1}"
 export PROBOOK_BEKLE="${PROBOOK_BEKLE:-420}"
 # Kabul boşluk beklemesi (başka kapı/uygulama) ajan zaman aşımına sayılır; zaman aşımı
 # runner'da "ertelenebilir" sınıftır (failed YAZILMAZ). Derleme 2011 CPU'da uzun sürer.

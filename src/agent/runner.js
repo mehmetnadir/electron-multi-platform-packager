@@ -65,6 +65,8 @@ const windowsSerit = require('./windows-serit');
 const { ikiliKomutu } = require('./bildir-ikili');
 const windowsKasaKabul = require('./windows-kasa-kabul');
 const windowsHazir = require('./windows-hazir');
+// Disk kapısı → önce yer aç (Nadir 06.10). Modül nesnesi üzerinden çağrılır (testler yerAc'ı değiştirir).
+const diskTemizlik = require('./disk-temizlik');
 const {
   kaynakKarari, manuelZipBicimi, exeYoluMu, arsivOkunurMu,
 } = require('./kaynak-karari');
@@ -598,7 +600,13 @@ function kabulKuyruguAcik() {
 async function uretimKapisiDurumu() {
   if (!kabulKuyruguAcik()) return { acik: true };
   const liste = await windowsHazir.kabulListesi(CONFIG);
-  const bosGb = diskBosGb(os.tmpdir());
+  let bosGb = diskBosGb(os.tmpdir());
+  // DİSK DOLU → İŞİ DURDURMA, YER AÇ (Nadir 06.10): kapı kapanmadan önce temizlik bekçisi koşar
+  // (en eski bizim dosyamızdan; yalnız kasa/ProBook, EMPP_DISK_TEMIZLIK=1). Sonra yeniden ölçülür.
+  if (bosGb !== null && CONFIG.winUretMinBosGb > 0 && bosGb < CONFIG.winUretMinBosGb) {
+    await diskTemizlik.yerAc({ gerekliGb: CONFIG.winUretMinBosGb, log, warn });
+    bosGb = diskBosGb(os.tmpdir());
+  }
   if (bosGb === null && !uretimKapisiDurumu._bosGbUyarisi) {
     warn(`üretim kapısı: ${os.tmpdir()} boş alanı ölçülemedi — disk ölçütü atlandı (yalnız kuyruk derinliği)`);
     uretimKapisiDurumu._bosGbUyarisi = true;
@@ -2714,6 +2722,36 @@ async function hazirBayatKontrol(auth, job, bekleyen, gecerliKaynakSurumu) {
   return { bayat: true };
 }
 
+/**
+ * İŞ DİZİNİ AÇ — disk tam doluyken de iş DURMAZ (inceleme Ö-A, 06.10). mkdtemp ENOSPC verirse önce disk
+ * temizlik bekçisi (taban GB: pardus PARDUS_DISK_TABAN_GB, windows winUretMinBosGb), sonra BİR kez daha
+ * denenir; yine ENOSPC ise iş ERTELENİR (DISK_KAPISI_ISARETI — failed yazılmaz, kira bırakılır).
+ * @param {string} packagerPlatform
+ * @param {{mkdtemp?:(p:string)=>Promise<string>, temizlik?:(o:object)=>Promise<object>}} [enjekte] testler için
+ * @returns {Promise<string>} iş dizini
+ */
+async function isDiziniAc(packagerPlatform, { mkdtemp = (p) => fsp.mkdtemp(p), temizlik = (o) => diskTemizlik.yerAc(o) } = {}) {
+  const onEk = path.join(os.tmpdir(), 'empp-agent-');
+  try {
+    return await mkdtemp(onEk);
+  } catch (e) {
+    if (!e || e.code !== 'ENOSPC') throw e;
+    const taban = packagerPlatform === 'windows'
+      ? (Number(CONFIG.winUretMinBosGb) || 15)
+      : (Number(process.env.PARDUS_DISK_TABAN_GB) || 15);
+    warn(`iş dizini açılamadı (ENOSPC, ${os.tmpdir()}) — disk temizliği (hedef ${taban} GB), sonra bir kez daha`);
+    await temizlik({ gerekliGb: taban, log, warn, zorla: true });
+  }
+  try {
+    return await mkdtemp(onEk);
+  } catch (e) {
+    if (e && e.code === 'ENOSPC') {
+      throw new Error(`${DISK_KAPISI_ISARETI} iş dizini açılamadı (ENOSPC) — disk temizliği sonrası da yer yok; iş ertelendi`);
+    }
+    throw e;
+  }
+}
+
 async function processJob(auth, job) {
   const packagerPlatform = mapPlatform(job.platform);
   if (!packagerPlatform) {
@@ -2723,7 +2761,15 @@ async function processJob(auth, job) {
   // Mark in-flight so the heartbeat keeps this job's lease alive during a long build.
   currentJob = { bookId: job.bookId, platform: job.platform };
 
-  const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
+  let work;
+  try { work = await isDiziniAc(packagerPlatform); } catch (e) { currentJob = null; throw e; }
+  // Sahip işareti (inceleme Ö6, 06.10): disk temizlik bekçisi sahibi canlı iş dizinini atlar.
+  // Yazım yarım kalırsa (ENOSPC) dosya KALDIRILIR: boş/yarım işaret bekçide "yok" sayılır (K3).
+  const sahipDosyasi = path.join(work, '.empp-sahip.pid');
+  try { fs.writeFileSync(sahipDosyasi, String(process.pid)); } catch (e) {
+    try { fs.rmSync(sahipDosyasi, { force: true }); } catch (_) { /* dizin de yoksa iş zaten düşer */ }
+    warn(`iş dizini sahip işareti yazılamadı (${e.code || e.message}) — temizlik bekçisi yalnız yenilik kuralıyla korur`);
+  }
   try {
     // WINDOWS ŞERİDİ ön koşulu (SAF) — kaynak İNDİRİLMEDEN (windows-serit.js): claim sürümü
     // 2.<panel kodu>.<paket sayacı> (sözleşme madde 1), kimlik = book_id, G tabanı https. Düşerse iş
@@ -2857,8 +2903,19 @@ async function processJob(auth, job) {
         tabanGb: Number(process.env.PARDUS_DISK_TABAN_GB || 15),
         elleGb: process.env.PARDUS_MIN_FREE_GB ? Number(process.env.PARDUS_MIN_FREE_GB) : null,
       });
-      const bosGb = diskBosGb(os.tmpdir());
+      let bosGb = diskBosGb(os.tmpdir());
       const kaynakMb = kaynakBayt ? `${(kaynakBayt / 1e6).toFixed(0)} MB` : 'bilinmiyor';
+      // DİSK DOLU → İŞİ DURDURMA, YER AÇ (Nadir 06.10): ProBook'ta önce temizlik bekçisi (en eski
+      // bizim dosyamızdan), sonra yeniden ölç; kapı ancak temizlikten sonra hâlâ darsa erteler.
+      // ÇALIŞAN İŞİN KAYNAĞI KORUNUR (inceleme K1, 06.10): bu işin arşiv dizini ve iş dizini --koru ile
+      // verilir; temizlik sonrası arşiv zip'i yine de yoksa iş ERTELENİR (failed yazılmaz).
+      if (bosGb !== null && bosGb < gerekliGb) {
+        await diskTemizlik.yerAc({ gerekliGb, log, warn, koru: [work, ...(arsiv && arsiv.zip ? [path.dirname(arsiv.zip)] : [])] });
+        bosGb = diskBosGb(os.tmpdir());
+        if (arsiv && arsiv.zip && !fs.existsSync(arsiv.zip)) {
+          throw new Error(`${DISK_KAPISI_ISARETI} disk temizliği sonrası kaynak arşivi yok (${arsiv.zip}); iş ertelendi`);
+        }
+      }
       if (bosGb !== null && bosGb < gerekliGb) {
         throw new Error(
           `${DISK_KAPISI_ISARETI} pardus disk kapısı — ${bosGb} GB boş < ${gerekliGb} GB gerekli `
@@ -3478,7 +3535,7 @@ module.exports = {
   // Kira bırakma + yetim kira (2026-09-30) — testler sahte API ile uçtan uca ölçer.
   fetchNextJob, releaseJob,
   // Kabul kuyruğu (05.10) — üretim kapısı + iş alma adımı.
-  kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs,
+  kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs, isDiziniAc,
   // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
   kaynakAdim, kabukTazelemeGovdesi, kabukErteleBildir, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
   _platformAyarla: (p) => { _platform = p || process.platform; _sonYetenek = ''; },
