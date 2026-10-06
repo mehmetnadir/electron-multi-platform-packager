@@ -152,3 +152,26 @@ test('gorselTuru: imza baytları; adresSinifi data: tür + imza döndürür', ()
   assert.deepEqual([a.tur, a.bayt, a.mime, a.gorsel], ['data', JPG.length, 'image/jpeg', 'jpg']);
   assert.deepEqual([K.adresSinifi('data:bozuk').tur, K.adresSinifi('data:bozuk').gorsel], ['data', null]);
 });
+
+test('ATLANAN ÜYE (Nadir 06.10): atlanan kitabın kartı settings/yamada yok (book numarası boşluklu) → kapak kapısı GEÇTİ', () => {
+  // books(): book1, book2, link4 — book3 (atlanan üye) hiç yok; kapı bunu eksik saymaz.
+  const s = K.menuKapakOlcKok(paket({
+    b: books({ linkKapak: 'images/link4.png' }), dosyalar: { 'images/link4.png': JPG },
+  }));
+  assert.equal(s.durum, K.DURUM.GECTI, JSON.stringify(s.sebepler));
+  assert.ok(!s.kartlar.some((k) => k.anahtar === 'book3'));
+});
+
+test('ATLANAN ÜYE manifesti (empp-uretec.json): kapak kapısı listeyi sonuca + özet NOT\'una taşır; manifest yoksa alan yok', () => {
+  const manifest = JSON.stringify({ atlananUyeler: [{ kitapId: '14835', ad: 'Old Man', sebep: "İmpark'ta içerik yok (Data boş)" }] });
+  const s = K.menuKapakOlcKok(paket({
+    b: books({ linkKapak: 'images/link4.png' }), dosyalar: { 'images/link4.png': JPG, 'empp-uretec.json': manifest },
+  }));
+  assert.equal(s.durum, K.DURUM.GECTI, JSON.stringify(s.sebepler));
+  assert.deepEqual(s.atlananUyeler.map((a) => a.kitapId), ['14835']);
+  assert.match(K.ozetSatiri(s), /NOT: atlanan üye \(manifest, beklenenden düşüldü\): 14835 "Old Man"/);
+  const bozuk = K.menuKapakOlcKok(paket({
+    b: books({ linkKapak: 'images/link4.png' }), dosyalar: { 'images/link4.png': JPG, 'empp-uretec.json': '{bozuk' },
+  }));
+  assert.equal(bozuk.atlananUyeler, undefined, 'bozuk manifest = liste yok (eski davranış)');
+});

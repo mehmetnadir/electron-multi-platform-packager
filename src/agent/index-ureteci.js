@@ -39,6 +39,9 @@
  *
  * YA HEP YA HİÇ: listedeki bir KİTAP (contentType kitap/boş) HİÇBİR kaynaktan alınamazsa build YAZILMAZ
  * (`kitap-eksik`; sebep "hiçbir kaynakta yok — İmpark: …; denenenler: …"). Setten kitap düşürülmez.
+ * İSTİSNA (Nadir 06.10, `uye-atla.js`): TÜM kaynaklar KESİN "yok" derse (İmpark 404/Data boş + yedeklerin
+ * hepsi açık "yok") üye ATLANIR — build'e/menüye/kapı listesine girmez, rapor + log + bildirim; ağ/5xx/
+ * ölçülemedi sınıfı atlanmaz (erteleme). Tavan: ≤ setin yarısı, tek üyeli sette yok, başka eksik varsa yok.
  */
 
 const fs = require('fs');
@@ -51,6 +54,7 @@ const setEk = require('./set-uyelik-ek');
 const gMenu = require('../../tools/g-yayin/menu');
 const bicim = require('../packaging/set-menu-bicim');
 const temaKabuk = require('./webz-tema-kabuk');
+const uyeAtla = require('./uye-atla');
 
 const ISARET = '[index-ureteci]';
 const DUZEN = Object.freeze({ TEK_MOTOR: 'tek-motor', BOOKN: 'bookN', OTOMATIK: 'otomatik' });
@@ -556,10 +560,12 @@ function adCoz(k, arsiv, gDizin) {
  * Success≠true) bu sınıfa GİRMEZ: geçici sayılır, eskisi gibi ertelenir (yedekle tahmin üretilmez).
  */
 class ImparkZipYok extends Error {
-  constructor(mesaj, imparkVs) {
+  /** `kesinYok`: İmpark KESİN "yok" kanıtı verdi (404 / Data boş) — `uye-atla.js` sınıf ayrımı. */
+  constructor(mesaj, imparkVs, { kesinYok = false } = {}) {
     super(mesaj);
     this.yedekUygun = true;
     this.imparkVs = imparkVs;
+    this.kesinYok = kesinYok;
   }
 }
 
@@ -578,8 +584,14 @@ async function imparkIcerigi({ k, sablon, getir, indir, onbellek, log }) {
   const cevap = await getir(M.teklifUrl(sablon, k.id, 0), {});
   const c = imparkCevabi(cevap);
   const t = M.teklifYorumla({ id: k.id, surum: 0 }, cevap);
-  if (t.durum === M.DURUM.GUNCEL) throw new ImparkZipYok("İmpark'ta içerik yok (Data boş), yayınevi yüklemeli", c && c.vs);
+  if (t.durum === M.DURUM.GUNCEL) {
+    throw new ImparkZipYok("İmpark'ta içerik yok (Data boş), yayınevi yüklemeli", c && c.vs, { kesinYok: true });
+  }
   if (t.durum !== M.DURUM.GERIDE) {
+    // HTTP 404 = kesin "yok"; yedek kaynaklar yine denenir (başka kaynakta olabilir). 5xx/ağ: eskisi gibi.
+    if (uyeAtla.imparkTeklif404mu(cevap)) {
+      throw new ImparkZipYok("İmpark'ta içerik yok (HTTP 404), yayınevi yüklemeli", null, { kesinYok: true });
+    }
     if (c) throw new ImparkZipYok(`İmpark ölçülemedi: ${t.not}`, c.vs);
     throw new Error(`İmpark ölçülemedi: ${t.not}`);
   }
@@ -593,7 +605,8 @@ async function imparkIcerigi({ k, sablon, getir, indir, onbellek, log }) {
     gDizin = M.zipDizini(arsiv);
     icerikDenetle(gDizin, k.id);
   } catch (e) {
-    throw new ImparkZipYok(`İmpark zip'i alınamadı: ${String((e && e.message) || e).slice(0, 160)}`, t.vs);
+    throw new ImparkZipYok(`İmpark zip'i alınamadı: ${String((e && e.message) || e).slice(0, 160)}`, t.vs,
+      { kesinYok: uyeAtla.indirme404mu(e) });
   }
   return { vs: t.vs, url: t.data, arsiv, gDizin, kaynak: 'impark' };
 }
@@ -609,15 +622,23 @@ async function imparkIcerigi({ k, sablon, getir, indir, onbellek, log }) {
  */
 async function yedektenIcerik({ k, yedekler, kimlikReferansi, imparkVs, calisma, log }) {
   const denenen = [];
+  // Hepsi AÇIK "yok" (`kesin: true`) derse üye kesin-yok sayılır (uye-atla.js); hata/RED/işaretsiz → belirsiz.
+  let kesinYok = true;
   for (const y of yedekler) {
     let r;
     try {
       r = await y.getir({ id: k.id, ad: k.ad, imparkVs, calisma, log });
     } catch (e) {
+      kesinYok = false;
       denenen.push(`${y.ad}: hata ${String((e && e.message) || e).slice(0, 100)}`);
       continue;
     }
-    if (!r || !r.zip) { denenen.push(`${y.ad}: ${(r && r.yok) || 'yok'}`); continue; }
+    if (!r || !r.zip) {
+      if (!(r && r.yok && r.kesin === true)) kesinYok = false;
+      denenen.push(`${y.ad}: ${(r && r.yok) || 'yok'}`);
+      continue;
+    }
+    kesinYok = false; // kaynakta içerik VAR ama kapıdan geçemezse "yok" değildir
     try {
       if (String(r.kaynakId) !== String(k.id)) throw new Error(`kaynak kimliği ${r.kaynakId} ≠ ${k.id}`);
       if (!Number.isSafeInteger(r.vs) || r.vs < 0) throw new Error(`sürüm geçersiz (${r.vs})`);
@@ -630,13 +651,13 @@ async function yedektenIcerik({ k, yedekler, kimlikReferansi, imparkVs, calisma,
         + `kimlik ${ref ? `kitapId ${zid}` : 'kaynak dizini (referans ölçülemedi)'}`);
       return {
         secilen: { vs: r.vs, url: r.url || '', arsiv: r.zip, gDizin, kaynak: y.ad, kimlik: ref ? 'kitapId' : 'kaynak' },
-        denenen,
+        denenen, kesinYok: false,
       };
     } catch (e) {
       denenen.push(`${y.ad}: RED ${String((e && e.message) || e).slice(0, 140)}`);
     }
   }
-  return { secilen: null, denenen };
+  return { secilen: null, denenen, kesinYok };
 }
 
 /** Her kitabın içerik zip'i. Kitap alınamazsa `eksik`; kitap olmayan varlık `kitapDisi` (link/atla). */
@@ -652,24 +673,43 @@ async function icerikleriTopla({ plan, sablon, getir, indir, onbellek, log, bekl
         ic = await imparkIcerigi({ k, sablon, getir, indir, onbellek, log });
       } catch (e) {
         // Yedek yalnız KİTAP türünde (oyun/çalışma kâğıdı link kartına gider) ve İmpark cevap verdiyse.
-        if (!(e && e.yedekUygun) || !yedekler.length || !kitapTuruMu(k.contentType)) throw e;
+        if (!(e && e.yedekUygun) || !yedekler.length || !kitapTuruMu(k.contentType)) {
+          // Yedek kaynak yok ve İmpark kesin "yok" dedi → tüm kaynaklar denendi sayılır.
+          if (e && e.kesinYok && !yedekler.length && kitapTuruMu(k.contentType)) e.uyeYok = true;
+          throw e;
+        }
         const y = await yedektenIcerik({
           k, yedekler, kimlikReferansi, imparkVs: e.imparkVs, calisma: yedekCalisma, log,
         });
         if (!y.secilen) {
-          throw new Error(`hiçbir kaynakta yok — İmpark: ${e.message}; denenenler: ${y.denenen.join(' | ')}`);
+          const hata = new Error(`hiçbir kaynakta yok — İmpark: ${e.message}; denenenler: ${y.denenen.join(' | ')}`);
+          hata.uyeYok = Boolean(e.kesinYok && y.kesinYok);
+          throw hata;
         }
         ic = y.secilen;
       }
       sonuc.push({ ...k, ad: adCoz(k, ic.arsiv, ic.gDizin), ...ic });
     } catch (e) {
       const satir = { id: k.id, ad: k.ad, contentType: k.contentType, anahtar: k.anahtar,
-        sebep: String((e && e.message) || e).slice(0, 700) };
+        sebep: String((e && e.message) || e).slice(0, 700), uyeYok: Boolean(e && e.uyeYok) };
       (kitapTuruMu(k.contentType) ? eksik : kitapDisi).push(satir);
     }
     if (bekleMs) await new Promise((r) => { setTimeout(r, bekleMs); }); // İmpark'a ≥1,5 sn ara
   }
-  return { sonuc, eksik, kitapDisi };
+  // KESİN-YOK ÜYE ATLAMA (Nadir 06.10): tavan/tek üye/başka eksik yoksa kesin-yok üyeler build'den düşer.
+  const kesin = eksik.filter((x) => x.uyeYok);
+  const karar = uyeAtla.atlamaKarari({
+    toplam: plan.kitaplar.filter((k) => kitapTuruMu(k.contentType)).length,
+    kesin: kesin.length, digerEksik: eksik.length - kesin.length,
+  });
+  if (kesin.length && !karar.atla) log(`${uyeAtla.ISARET} üye atlanmadı (${karar.sebep}) — eski erteleme sürer`);
+  if (karar.atla) {
+    return {
+      sonuc, eksik: [], kitapDisi,
+      atlananUye: kesin.map((x) => ({ id: x.id, ad: x.ad, sebep: x.sebep })),
+    };
+  }
+  return { sonuc, eksik, kitapDisi, atlananUye: [] };
 }
 
 async function icerikAc(k, hedef, komut) {
@@ -749,7 +789,7 @@ async function uret(o) {
   // Yedek kaynakların kurduğu zip'ler (SMB/arşivden) — build bitince ya da erteleme yolunda silinir.
   const yedekCalisma = path.join(o.calisma, `uretec-yedek-${process.pid}`);
   const yedegiSil = () => fsp.rm(yedekCalisma, { recursive: true, force: true }).catch(() => {});
-  const { sonuc, eksik, kitapDisi } = await icerikleriTopla({
+  const { sonuc, eksik, kitapDisi, atlananUye } = await icerikleriTopla({
     plan, sablon: kalip.sablon || VARSAYILAN_SABLON, getir: o.getir || M.varsayilanGetir,
     indir: o.indir || M.varsayilanIndir, onbellek: o.onbellek || M.icerikOnbellekKoku(), log,
     bekleMs: o.bekleMs == null ? 1500 : o.bekleMs,
@@ -761,6 +801,16 @@ async function uret(o) {
     throw new UretecHatasi(`${eksik.length} kitap alınamadı (ilk: ${eksik[0].id} ${eksik[0].sebep})`
       + ' — build YAZILMADI', { kod: KOD.KITAP_EKSIK, eksik });
   }
+  // İÇERİKSİZ ÜYE ATLANDI (Nadir 06.10): log + bildirim (günde set×kitap başına 1). Bildirim FIRLATMAZ.
+  const atlananUyeler = atlananUye.map((a) => ({ kitapId: String(a.id), ad: a.ad || '', sebep: a.sebep }));
+  for (const a of atlananUyeler) {
+    log(uyeAtla.logSatiri(o.setId, a));
+    if (typeof o.bildir === 'function') {
+      try {
+        o.bildir({ setId: String(o.setId), setAdi: o.setAdi || '', kitapId: a.kitapId, ad: a.ad });
+      } catch (_) { /* bildirim üretimi durdurmaz */ }
+    }
+  }
   // Zip'i olmayan kitap-dışı varlık: bookN'de link kartı (adres verilirse), tek-motorda atlanır.
   const cevrilen = new Map();
   const linkKarti = [];
@@ -771,6 +821,8 @@ async function uret(o) {
     if (url) linkKarti.push({ ...g, url }); else atlanan.push(g);
     cevrilen.set(String(g.id), url || null);
   }
+  // Atlanan üye kapı listesinden de çıkar (yazma kapısı/sunucu `kitap-eksik` demesin).
+  for (const a of atlananUyeler) cevrilen.set(a.kitapId, null);
   const kapiListesi = kapiListesiKur(o.listeHam, cevrilen);
 
   await fsp.mkdir(o.calisma, { recursive: true });
@@ -862,6 +914,8 @@ async function uret(o) {
     await fsp.writeFile(path.join(kok, URETEC_ISARETI), `${JSON.stringify({
       kaynak: 'uretec', setId: String(o.setId), duzen, aktivasyon, kalip: path.basename(path.dirname(o.kalipZip)),
       kabuk: duzen === DUZEN.BOOKN ? (temaAdi ? `tema:${temaAdi}` : 'kalip') : null,
+      // Kesin-yok sebebiyle build'e GİRMEYEN üyeler: panel menü hizalama + kabul bunu okur (kitap-eksik değil).
+      ...(atlananUyeler.length ? { atlananUyeler } : {}),
     }, null, 2)}\n`);
 
     await fsp.mkdir(path.dirname(o.cikti), { recursive: true });
@@ -891,6 +945,8 @@ async function uret(o) {
         n: Number(String(g.anahtar || '').replace(/\D/g, '')) || null, assetId: g.id, ad: g.ad, url: g.url, sebep: g.sebep,
       })),
       atlanan: atlanan.map((g) => ({ assetId: g.id, ad: g.ad, sebep: g.sebep })),
+      // Kesin "içerik yok" nedeniyle atlanan KİTAP üyeleri (`uye-atla.js`); yoksa boş dizi.
+      atlananUyeler,
       linkler: plan.linkler.map((g) => ({ ad: g.ad, url: g.url })),
       kapiListesi,
       sahne: o.sahneyiTut ? sahne : null,
@@ -919,6 +975,7 @@ function uretecOzeti(r) {
     kalip: path.basename(path.dirname(r.motor.kalip)), motor: r.motor.dizin, kurum: r.motor.kurumYazilan || r.motor.kurum,
     kabuk: r.kabuk ? (r.kabuk === 'kalip' ? 'kalip' : path.basename(String(r.kabuk))) : null,
     kitap: r.kitaplar.length, linkKarti: r.linkKarti.length, atlanan: r.atlanan.length,
+    ...(r.atlananUyeler && r.atlananUyeler.length ? { atlananUyeler: r.atlananUyeler } : {}),
     ...(r.yedek && r.yedek.length ? { yedek: r.yedek.map((y) => `${y.id}:${y.kaynak}`) } : {}),
     ...(r.donusum ? { donusum: { kurum: r.donusum.kurum, uc: r.donusum.uc, motor: r.donusum.motorlar.length } } : {}),
     ...(r.kapak ? { kapak: r.kapak } : {}),

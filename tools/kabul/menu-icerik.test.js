@@ -93,3 +93,33 @@ test('kip: varsayılan uyar; RED yalnız uyarı olur, reddet katman üretir, kap
   const gecti = K.menuIcerikOlcKok(paket({ kitaplar: { book1: K1 }, icerik: ['33574', '14835'] }));
   assert.equal(K.kipliKarar(gecti, 'uyar').katman.durum, 'GECTI');
 });
+
+test('ATLANAN ÜYE (Nadir 06.10): kart menüden çıkarılmış, içerik yok → GEÇTİ; kart menüde kalsaydı RED (kapı kör değil)', () => {
+  // üreteç 14835'i atladı: menüde yok, assets/14835 yok
+  const atlanmis = K.menuIcerikOlcKok(paket({ kitaplar: { book1: [{ id: '33574' }], book3: [{ id: '40001' }] },
+    icerik: ['33574', '40001'] }));
+  assert.equal(atlanmis.durum, K.DURUM.GECTI, atlanmis.sebepler.join(' | '));
+  assert.ok(!atlanmis.kartlar.some((k) => k.id === '14835'));
+  // aynı paket, kart menüde bırakılmış → RED (atlama kartı menüden ÇIKARMAK zorunda)
+  const kartli = K.menuIcerikOlcKok(paket({ kitaplar: { book1: [{ id: '33574' }, { id: '14835' }], book3: [{ id: '40001' }] },
+    icerik: ['33574', '40001'] }));
+  assert.equal(kartli.durum, K.DURUM.RED);
+});
+
+test('ATLANAN ÜYE manifesti (empp-uretec.json): sonuç + özet notu; kart menüde kalmışsa RED "ATLANAN ÜYE" etiketli; manifest yoksa alan yok', () => {
+  const manifest = JSON.stringify({ kaynak: 'uretec', atlananUyeler: [{ kitapId: '14835', ad: 'Old Man', sebep: "İmpark'ta içerik yok (HTTP 404)" }] });
+  const atlanmis = paket({ kitaplar: { book1: [{ id: '33574' }] }, icerik: ['33574'] });
+  fs.writeFileSync(path.join(atlanmis, 'empp-uretec.json'), manifest);
+  const s = K.menuIcerikOlcKok(atlanmis);
+  assert.equal(s.durum, K.DURUM.GECTI);
+  assert.deepEqual(s.atlananUyeler.map((a) => a.kitapId), ['14835']);
+  assert.match(K.ozetSatiri(s), /NOT: atlanan üye \(manifest, beklenenden düşüldü\): 14835 "Old Man" — İmpark'ta içerik yok \(HTTP 404\)/);
+  const kartli = paket({ kitaplar: { book1: K1 }, icerik: ['33574'] });
+  fs.writeFileSync(path.join(kartli, 'empp-uretec.json'), manifest);
+  const k = K.menuIcerikOlcKok(kartli);
+  assert.equal(k.durum, K.DURUM.RED);
+  assert.match(k.sebepler[0], /14835 .*ATLANAN ÜYE — kart menüden çıkarılmalıydı/);
+  const yok = K.menuIcerikOlcKok(paket({ kitaplar: { book1: [{ id: '33574' }] }, icerik: ['33574'] }));
+  assert.equal(yok.atlananUyeler, undefined);
+  assert.doesNotMatch(K.ozetSatiri(yok), /NOT:/);
+});

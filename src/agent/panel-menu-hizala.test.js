@@ -303,14 +303,122 @@ test('key/activation korunur: main ve kapak key öznitelikleri aynen, yeni kapak
   assert.equal(attr(P.kapakSirasi(yeni)[0].etiket, 'key'), '');
 });
 
-test('eksik üye İmpark\'ta içeriksiz → görünür hata, iş kopyası değişmez', async () => {
+test('eksik üye İmpark\'ta BELİRSİZ (5xx/ağ) → ATLANMAZ, geçici hata; kesin yok ayrı testte', async () => {
   const o = ortam();
   const md = md5(fs.readFileSync(o.zip));
   const getir = async (url) => (/id=73147/.test(url)
-    ? { status: 200, govde: '{"Success":true,"Data":"","Vs":0}' } : o.ortak.getir(url));
-  await assert.rejects(P.panelMenuHizala({ ...o.ortak, getir }),
-    /PANEL MENÜ HİZALAMA: panel üyesi 73147 .*içeriksiz/);
+    ? { status: 502, govde: 'x' } : o.ortak.getir(url));
+  const e = await P.panelMenuHizala({ ...o.ortak, getir }).then(() => null, (x) => x);
+  assert.equal(e.gecici, true);
+  assert.match(e.message, /73147 .*İmpark ölçülemedi: HTTP 502/);
   assert.equal(md5(fs.readFileSync(o.zip)), md);
+});
+
+// ─── İçeriksiz üye ATLAMA (Nadir 06.10) ───────────────────────────────────────────────────────
+
+const UyeAtla = require('./uye-atla');
+const bos = '{"Success":true,"Data":"","Vs":0}';
+
+test('ATLAMA: eksik üye Data boş → atlanır; menü/panel kapı listesi/rapor/log/bildirim; kapı geçer', async () => {
+  const o = ortam();
+  const loglar = [];
+  const bildirimler = [];
+  const getir = async (url) => (/id=73147/.test(url) ? { status: 200, govde: bos } : o.ortak.getir(url));
+  const r = await P.panelMenuHizala({
+    ...o.ortak, getir, log: (m) => loglar.push(m), setAdi: 'YDT Impact 12',
+    bildir: (a) => bildirimler.push(a),
+  });
+  assert.match(r.sonuc, /^UYGULANDI/);
+  assert.deepEqual(r.eklenen, ['73010'], '73147 eklenmedi');
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['73147']);
+  assert.match(r.atlananUyeler[0].sebep, /İmpark'ta içerik yok \(Data boş\)/);
+  const { dz, xml } = zipMenu(o.zip);
+  assert.ok(!/\sID="73147"/.test(xml), 'menüde 73147 kartı yok');
+  assert.ok(!dz.has('assets/73147/data/BookContent.xml'));
+  assert.ok(dz.has('assets/73010/data/BookContent.xml'));
+  // Yazma kapısının okuyacağı panel listesi atlananı içermez.
+  assert.ok(!/(^|\n)73147 \|/.test(r.panelSetListesi));
+  assert.ok(/(^|\n)73010 \|/.test(r.panelSetListesi));
+  assert.ok(loglar.some((l) => /^\[uretec\] UYE ATLANDI 45449: 73147 ".*" — İmpark'ta içerik yok \(Data boş\)/.test(l)));
+  assert.equal(bildirimler.length, 1);
+  assert.equal(bildirimler[0].kitapId, '73147');
+  assert.equal(bildirimler[0].setAdi, 'YDT Impact 12');
+});
+
+test('ATLAMA: eksik üye teklifi HTTP 404 → atlanır; 503 → atlanmaz (sınıf ayrımı)', async () => {
+  const o = ortam();
+  const getir404 = async (url) => (/id=73147/.test(url) ? { status: 404, govde: '' } : o.ortak.getir(url));
+  const r = await P.panelMenuHizala({ ...o.ortak, getir: getir404 });
+  assert.deepEqual(r.atlananUyeler.map((a) => [a.kitapId, /HTTP 404/.test(a.sebep)]), [['73147', true]]);
+  const o2 = ortam();
+  const e = await P.panelMenuHizala({
+    ...o2.ortak, getir: async (url) => (/id=73147/.test(url) ? { status: 503, govde: '' } : o2.ortak.getir(url)),
+  }).then(() => null, (x) => x);
+  assert.equal(e.gecici, true);
+});
+
+test('ATLAMA: zip indirme HTTP 404 → atlanır; kod 28 ağ hatası → GEÇİCİ hata', async () => {
+  const o = ortam();
+  const indir = async (url, hedef) => {
+    if (/73147/.test(url)) throw Object.assign(new Error(`indirilemedi (indirme kodu 22): ${url}`), { httpDurum: 404 });
+    return o.ortak.indir(url, hedef);
+  };
+  const r = await P.panelMenuHizala({ ...o.ortak, indir });
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['73147']);
+  const o2 = ortam();
+  const e = await P.panelMenuHizala({
+    ...o2.ortak, indir: async (u) => { throw new Error(`indirilemedi (indirme kodu 28): ${u}`); },
+  }).then(() => null, (x) => x);
+  assert.equal(e.gecici, true);
+});
+
+test('ATLAMA tavanı: panel 3 üye, 2\'si kesin yok (> yarı) → atlanmaz (eski hata); 1\'i yok → atlanır', async () => {
+  const panelJ = JSON.parse(PANEL_GOVDE);
+  panelJ.Books = panelJ.Books.filter((b) => [73010, 73147, 31456].includes(b.Id));
+  const kucukXml = MENU_XML.replace(/<cover\b[^>]*\sID="(?!31456")\d+"[^>]*><\/cover>/g, '');
+  const kur = (getirBos) => {
+    const o = ortam({ xml: kucukXml });
+    return {
+      o,
+      ortak: {
+        ...o.ortak,
+        panelGetir: async () => ({ status: 200, govde: JSON.stringify(panelJ) }),
+        getir: async (url) => (getirBos.some((id) => url.includes(`id=${id}&`))
+          ? { status: 200, govde: bos } : o.ortak.getir(url)),
+      },
+    };
+  };
+  const a = kur(['73010', '73147']);
+  const md = md5(fs.readFileSync(a.o.zip));
+  await assert.rejects(P.panelMenuHizala(a.ortak), /PANEL MENÜ HİZALAMA: panel üyesi 73010 .*içeriksiz/);
+  assert.equal(md5(fs.readFileSync(a.o.zip)), md, 'iş kopyası değişmedi');
+  const b = kur(['73147']);
+  const r = await P.panelMenuHizala(b.ortak);
+  assert.deepEqual(r.atlananUyeler.map((x) => x.kitapId), ['73147']);
+  assert.deepEqual(r.eklenen, ['73010']);
+});
+
+test('ATLAMA: üreteç işareti (empp-uretec.json atlananUyeler) panel listesinden düşer; > yarı ise düşmez', async () => {
+  const isaret = (ids) => ({ kitapEkle: (kok) => yaz(kok, 'empp-uretec.json', JSON.stringify({
+    kaynak: 'uretec', atlananUyeler: ids.map((kitapId) => ({ kitapId, ad: 'x', sebep: 'yok' })),
+  })) });
+  // 73147 üreteçte atlanmış → panel hizalama onu EKLEMEYE çalışmaz (teklif sorulmaz)
+  const o = ortam(isaret(['73147']));
+  const r = await P.panelMenuHizala({ ...o.ortak });
+  assert.deepEqual(r.eklenen, ['73010']);
+  assert.ok(!o.sayac.teklif.some((u) => /id=73147/.test(u)));
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['73147']);
+  assert.ok(!/(^|\n)73147 \|/.test(r.panelSetListesi));
+  // runner'ın verdiği id listesi de aynı yoldan işler
+  const o1 = ortam();
+  const r1 = await P.panelMenuHizala({ ...o1.ortak, atlananUyeler: ['73147'] });
+  assert.deepEqual(r1.atlananUyeler.map((a) => a.kitapId), ['73147']);
+  // 30 üyenin yarısından fazlası (16) işaretliyse düşülmez: panel aynen
+  const idler = JSON.parse(PANEL_GOVDE).Books.slice(0, 16).map((b) => String(b.Id));
+  const o2 = ortam();
+  const r2 = await P.panelMenuHizala({ ...o2.ortak, atlananUyeler: idler });
+  assert.deepEqual(r2.atlananUyeler, []);
+  assert.deepEqual(r2.eklenen, ['73010', '73147']);
 });
 
 test('kapı adayda düşer (zip içeriği yazamadı) → hata, iş kopyası değişmez, aday kalmaz', async () => {

@@ -31,6 +31,7 @@ const U = require('./index-ureteci');
 const Y = require('./icerik-yedek');
 const setEk = require('./set-uyelik-ek');
 const temaKabuk = require('./webz-tema-kabuk');
+const uyeAtla = require('./uye-atla');
 
 const ISARET = '[uretec]';
 /**
@@ -304,6 +305,10 @@ async function uretecKaynagi(o) {
       aktivasyon: U.AKTIVASYON.OTOMATIK, anahtarliMi: o.anahtarliMi,
       kabuk, motorDonusumu, kapakGetir: o.kapakGetir, webzAdresi: webzAdresiKur(job),
       onbellek, getir: o.getir, indir: o.indir, yedekKaynaklar, kimlikReferansi, log,
+      // İçeriksiz üye atlanınca `bildir kosucu` (günde set×kitap başına 1; EMPP_BILDIRIM=0 kapatır).
+      bildir: o.bildir || ((a) => uyeAtla.bildirimGonder({
+        ...a, env: o.env || process.env, warn: o.warn || log,
+      })),
     });
   } catch (e) {
     if (e instanceof U.UretecHatasi) {

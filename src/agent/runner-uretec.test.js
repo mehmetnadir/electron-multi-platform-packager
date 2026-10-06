@@ -543,3 +543,45 @@ test('kalipSec: yalnız aynı KURUM ve motor taşıyan build; en yeni yazılma',
   assert.equal(uk.uretecAcik({}), true);
   assert.equal(uk.uretecAcik({ EMPP_INDEX_URETECI: '0' }), false);
 });
+
+// ─── İçeriksiz üye ATLAMA (Nadir 06.10) — runner zinciri ──────────────────────────────────────────
+
+const UC_KITAP = '501 | A |  |  | Books\n502 | B |  |  | Books\n503 | C |  |  | Books';
+/** Üretim yedek zinciri (SMB → önbellek → arşiv); SMB BAĞLI ama `WebDijitapDosyalar/503` yok = kesin "yok". */
+const kesinYedekler = (o) => {
+  const Y = require('./icerik-yedek');
+  const uploads = tmp('smb-bagli-uploads');
+  return [Y.webzDosyaYedegi({ uploadsKoku: uploads, smbDenetle: async () => true }),
+    Y.onbellekYedegi({ onbellek: path.join(o.d, 'onb') }), Y.arsivYedegi({ arsivKoku: o.arsivKoku })];
+};
+
+test('r2-kur: İmpark\'ta içeriksiz üye (Data boş) + tüm yedekler kesin "yok" → ATLANIR — iş ertelenmez; tamamla kalan üyeleri + atlananı taşır', async () => {
+  const o = await ortam({ idler: ['501', '502'] }); // 503: getir Data '' (içerik yok)
+  const r = await isKostur({ o, job: { setListesi: UC_KITAP }, ek: { yedekKaynaklar: kesinYedekler(o) } });
+  assert.match(r.hata && r.hata.message, /packager upload-build failed/, r.hata ? r.hata.stack : JSON.stringify(r.donus));
+  assert.equal(r.kayit.govdeler['kaynak/birak'], undefined, 'ertelenmedi');
+  const t = r.kayit.govdeler['kaynak/tamamla'][0];
+  assert.deepEqual(t.kitaplar.map((k) => k.id), ['501', '502']);
+  assert.deepEqual(t.uretec.atlananUyeler.map((a) => a.kitapId), ['503']);
+  assert.match(t.uretec.uyeAtlandiNotu, /^\[uretec\] UYE ATLANDI \(1\): 503 /);
+  assert.match(r.loglar, /\[uretec\] UYE ATLANDI 45480: 503 /);
+});
+
+test('r2-kur: İmpark Data boş AMA SMB bağlı değil (yedek ölçülemedi) → ATLANMAZ, iş ertelenir (eski davranış)', async () => {
+  const o = await ortam({ idler: ['501', '502'] });
+  const r = await isKostur({ o, job: { setListesi: UC_KITAP } }); // izole ortamda SMB kökü bağlı değil
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'], undefined, 'tamamla yok');
+  assert.ok(r.kayit.govdeler['kaynak/birak'], 'kira bırakıldı (ertelendi)');
+  assert.match(String(r.donus && r.donus.sebep), /kitap-eksik.*503.*SMB bağlı değil/);
+  assert.doesNotMatch(r.loglar, /UYE ATLANDI/);
+});
+
+test('r2-kur: üye için İmpark 5xx (belirsiz) → ATLANMAZ, iş ertelenir (eski davranış)', async () => {
+  const o = await ortam({ idler: ['501', '502', '503'] });
+  const getir5xx = async (url) => (/id=503&/.test(url) ? { status: 503, govde: 'x' } : o.getir(url));
+  const r = await isKostur({ o: { ...o, getir: getir5xx },
+    job: { setListesi: '501 | A |  |  | Books\n502 | B |  |  | Books\n503 | C |  |  | Books' } });
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'], undefined, 'tamamla yok');
+  assert.ok(r.kayit.govdeler['kaynak/birak'] || /ertelen|ERTELEN/.test(`${r.hata && r.hata.message}${r.loglar}`),
+    `ertelenmedi: ${r.hata && r.hata.message}\n${r.loglar.slice(-600)}`);
+});

@@ -419,7 +419,11 @@ async function varsayilanIndir(url, hedef) {
   });
   if (r.code !== 0) {
     await fsp.rename(gecici, `${gecici}.yarim`).catch(() => {});
-    throw new Error(`indirilemedi (indirme kodu ${r.code}): ${url}`);
+    const hata = new Error(`indirilemedi (indirme kodu ${r.code}): ${url}`);
+    // curl --fail: "The requested URL returned error: 404" → kesin "yok" kanıtı (uye-atla.js sınıf ayrımı).
+    const m = /returned error:\s*(\d{3})/i.exec(String(r.stderr || ''));
+    if (m) hata.httpDurum = Number(m[1]);
+    throw hata;
   }
   await fsp.rename(gecici, hedef);
 }

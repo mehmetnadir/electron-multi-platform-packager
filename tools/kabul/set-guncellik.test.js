@@ -221,3 +221,27 @@ test('tek kaynak: SET listesi/kimliği içerik merdiveni S0 çekirdeğinden (kop
   const m = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'agent', 'icerik-merdiven.js'), 'utf8');
   assert.match(m, /async function s0Olc\(\{ zip, getir = varsayilanGetir, zamanAsimiMs \} = \{\}\) \{\n\s+const dizin = zipDizini\(zip\);\n\s+return s0Kaynaktan\(/);
 });
+
+test('ATLANAN ÜYE manifesti: atlanan kimlik SET_TUM satırlarından düşer (404 ölçülemedi / Data boş sahte güncel olmaz), nota girer', async () => {
+  const kitaplar = { book1: [['58336', 17]], book2: [['58237', 7]], book3: [['14835', 3]] };
+  const tablo = { 58336: 17, 58237: 7 };
+  const hata = { 14835: { status: 404, govde: '' } };
+  // manifest yok → 14835 404 = ÖLÇÜLEMEDİ (eski davranış)
+  const eski = await olc(kitaplar, tablo, { hata });
+  assert.equal(eski.karar.durum, 'OLCULEMEDI');
+  // manifest var → 14835 beklenmez: GEÇTİ, satırda yok, not var
+  const kok = sahteSet(kitaplar);
+  fs.writeFileSync(path.join(kok, 'empp-uretec.json'), JSON.stringify({
+    kaynak: 'uretec', atlananUyeler: [{ kitapId: '14835', ad: 'Old Man', sebep: "İmpark'ta içerik yok" }],
+  }));
+  const i = sahteImpark(tablo, { hata });
+  const agac = ST.agacTopla(fs, path, kok);
+  assert.ok(agac.adlar.includes('empp-uretec.json'));
+  const olcum = await ST.agacOlc(agac, { getir: i.getir });
+  const karar = ST.setTumKarari(olcum);
+  assert.equal(karar.durum, 'GECTI', karar.sebep);
+  assert.deepEqual(karar.satirlar.map((s) => s.id), ['58336', '58237']);
+  assert.ok(karar.notlar.some((n) => /^SET: atlanan üye \(manifest, beklenenden düşüldü\): 14835 "Old Man"/.test(n)), karar.notlar.join());
+  // canlı sayfa ifadesi de manifesti taşır (agacTopla kendi kendine yeter)
+  assert.deepEqual(JSON.parse(vm.runInNewContext(ST.sayfaIfadesi(kok), { require })), agac);
+});

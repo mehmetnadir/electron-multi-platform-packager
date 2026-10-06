@@ -27,6 +27,7 @@ const path = require('path');
 const ig = require('../../src/runtime/icerik-guncelleme');
 const { menuKonumlari, imparkKimligiMi } = require('../../src/agent/icerik-merdiven');
 const { kokOkuyucu } = require('./menu-kapak');
+const atlananUye = require('./atlanan-uyeler');
 
 const DURUM = Object.freeze({
   GECTI: 'GECTI', RED: 'RED', OLCULEMEDI: 'OLCULEMEDI', ATLANDI: 'ATLANDI',
@@ -78,6 +79,16 @@ function menuIcerikOlc(o) {
       }
       sonuc.kartlar.push(kart);
     }
+  }
+  // ATLANAN ÜYE (Nadir 06.10): manifestteki üye beklenmez; kartı menüde kalmışsa RED açıkça etiketlenir.
+  const atlanan = atlananUye.atlananUyelerOku(o);
+  if (atlanan.length) {
+    const ak = atlananUye.kume(atlanan);
+    for (const k of sonuc.kartlar) {
+      if (k.sorun && ak.has(String(k.id))) k.sorun += ' (ATLANAN ÜYE — kart menüden çıkarılmalıydı)';
+    }
+    sonuc.atlananUyeler = atlanan;
+    sonuc.notlar = [atlananUye.notSatiri(atlanan)];
   }
   const sorunlu = sonuc.kartlar.filter((k) => k.sorun);
   for (const k of sorunlu) sonuc.sebepler.push(`${k.kitap} ${k.id} "${k.baslik}": ${k.sorun}`);
@@ -131,7 +142,8 @@ function ozetSatiri(s) {
   const tr = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', ATLANDI: 'ATLANDI' };
   const say = s.kartlar.filter((k) => !k.muaf).length;
   return `menü içerik: ${tr[s.durum] || s.durum} · ${say} kitap kartı`
-    + `${s.sebepler.length ? ` — ${s.sebepler.slice(0, 4).join(' | ')}` : ''}`;
+    + `${s.sebepler.length ? ` — ${s.sebepler.slice(0, 4).join(' | ')}` : ''}`
+    + `${s.notlar && s.notlar.length ? ` · NOT: ${s.notlar.join(' | ')}` : ''}`;
 }
 
 module.exports = { DURUM, kip, menuIcerikOlc, menuIcerikOlcKok, kipliKarar, ozetSatiri };

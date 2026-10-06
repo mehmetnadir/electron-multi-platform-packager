@@ -263,12 +263,13 @@ test('uret: kapak da ilk sayfa da yoksa RED (kitap-eksik), build yazılmaz', asy
   assert.equal(fs.existsSync(cikti), false);
 });
 
-test('uret YA HEP YA HİÇ: bir kitap İmpark\'ta yoksa build YAZILMAZ (kitap-eksik)', async () => {
-  const o = await ortam({ dataBos: ['502'] });
+test('uret YA HEP YA HİÇ: İmpark BELİRSİZ cevap verirse (5xx) build YAZILMAZ (kitap-eksik) — kesin "yok" değil', async () => {
+  const o = await ortam();
   const cikti = path.join(o.d, 'out', 'build.zip');
+  const b = imparkBoz(o, { status: 503 });
   await assert.rejects(U.uret({
     setId: '1', listeHam: LISTE, duzen: 'tek-motor', kalipZip: o.kalipZip, cikti, calisma: path.join(o.d, 'w'),
-    onbellek: path.join(o.d, 'onb'), getir: o.getir, indir: o.indir, bekleMs: 0,
+    onbellek: path.join(o.d, 'onb'), getir: b.getir, indir: b.indir, bekleMs: 0,
   }), (e) => e.kod === 'kitap-eksik' && e.eksik.some((x) => x.id === '502') && !e.eksik.some((x) => x.id === '3100010'));
   assert.equal(fs.existsSync(cikti), false);
 });
@@ -742,4 +743,216 @@ test('yedek: İmpark\'a ULAŞILAMADI (HTTP 500) ya da kitap-dışı varlık → 
   assert.equal(y2.cagri.length, 0);
   assert.deepEqual(r.atlanan.map((g) => g.assetId), ['3100010']);
   assert.deepEqual(r.yedek, []);
+});
+
+// ─── İçeriksiz üye ATLAMA (Nadir 06.10: "14835'i atlayarak devam et — atla ve rapor et") ──────────────
+
+const UyeAtla = require('./uye-atla');
+
+/** 502 için indirme HTTP 404 (curl --fail) — kesin yok kanıtı. */
+const indir404 = (o) => async (url, hedef) => {
+  if (/\/502-/.test(url)) {
+    const e = new Error(`indirilemedi (indirme kodu 22): ${url}`);
+    e.httpDurum = 404;
+    throw e;
+  }
+  return o.indir(url, hedef);
+};
+
+/** Bildirimi gerçek tekilleştirici (damga) üzerinden toplayan `bildir` + günlük. */
+function bildirimToplayici(d, simdi = new Date('2026-10-06T10:00:00')) {
+  const gonderilen = [];
+  return {
+    gonderilen,
+    bildir: (a) => UyeAtla.bildirimGonder({
+      ...a, env: {}, dizin: path.join(d, 'damga'), simdi, gonder: (args) => gonderilen.push(args),
+    }),
+  };
+}
+
+test('ATLAMA: İmpark HTTP 404 (kesin yok) → üye atlanır; menü/kapı listesi/rapor/log/bildirim; kapıdan GEÇER', async () => {
+  const o = await ortam();
+  const b = imparkBoz(o, { status: 404 });
+  const bt = bildirimToplayici(o.d);
+  const loglar = [];
+  const r = await uretTek(o, { getir: b.getir, indir: b.indir, bildir: bt.bildir, log: (s) => loglar.push(s) });
+  assert.deepEqual(r.kitaplar.map((k) => k.id), ['501', '503']);
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['502']);
+  assert.match(r.atlananUyeler[0].sebep, /İmpark'ta içerik yok \(HTTP 404\)/);
+  // Menü: 502 kartı yok.
+  const ids = ig.kapaklar(menuOku(r.zip, 'classlibraries/ImWin32.dll')).map((c) => c.ID);
+  assert.deepEqual(ids, ['501', '503']);
+  assert.ok(![...M.zipDizini(r.zip).keys()].some((a) => a.startsWith('assets/502/')), '502 içeriği pakette yok');
+  // Kapı listesi atlananı içermez → yazma kapısı kitap-eksik DEMEZ; ham listeyle de bozulmaz.
+  assert.ok(!/(^|\n)502 \|/.test(r.kapiListesi));
+  const kapi = yazmaKapisi({ zipYolu: r.zip, setListesi: r.kapiListesi, tur: 'otomatik' });
+  assert.equal(kapi.gecti, true, kapi.nedenler.join(' | '));
+  // Log satırı (sabit biçim) + bildirim (set adı: kitap atlandı — İmpark'ta içerik yok, -p yuksek).
+  assert.ok(loglar.includes('[uretec] UYE ATLANDI 45479: 502 "Workbook" — İmpark\'ta içerik yok (HTTP 404), yayınevi yüklemeli'),
+    loglar.filter((l) => /ATLANDI/.test(l)).join('|'));
+  assert.deepEqual(bt.gonderilen, [['kosucu', "Influence 11: Workbook atlandı — İmpark'ta içerik yok", '-p', 'yuksek']]);
+  // build.zip işareti + tamamla özeti atlananı taşır (kabul/tamamla kapıları buradan okur).
+  assert.deepEqual(UyeAtla.zipIsaretindenOku(r.zip).map((a) => a.kitapId), ['502']);
+  assert.deepEqual(U.uretecOzeti(r).atlananUyeler.map((a) => a.kitapId), ['502']);
+});
+
+test('ATLAMA: Data boş (14835 sınıfı) → atlanır; yedek kaynak YOK iken de tüm kaynaklar denenmiş sayılır', async () => {
+  const o = await ortam({ dataBos: ['502'] });
+  const r = await uretTek(o, {});
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['502']);
+  assert.match(r.atlananUyeler[0].sebep, /Data boş/);
+  assert.deepEqual(r.kitaplar.map((k) => k.id), ['501', '503']);
+});
+
+test('ATLAMA: bookN düzeni — kart settings.json/set-menu/dizinden çıkar, kalan üyeler sürer, kapıdan GEÇER', async () => {
+  const o = await ortam({ dataBos: ['502'] });
+  const liste = LISTE.split('\n').slice(0, 4).join('\n');
+  const r = await U.uret({
+    setId: '74430', setAdi: 'Flashy', listeHam: liste, duzen: 'bookN', kabuk: 'kalip', kalipZip: o.kalipZip,
+    cikti: path.join(o.d, 'out', 'build.zip'), calisma: path.join(o.d, 'w'), onbellek: path.join(o.d, 'onb'),
+    getir: o.getir, indir: o.indir, bekleMs: 0,
+  });
+  const dz = M.zipDizini(r.zip);
+  const ayar = JSON.parse(M.zipGirdiOku(r.zip, dz.get('config/settings.json')).toString());
+  assert.deepEqual(Object.values(ayar.books).map((x) => x.assetId || x.url), ['501', 'https://v.example/x', '503']);
+  assert.ok(![...dz.keys()].some((a) => /\/assets\/502\//.test(a)), '502 içeriği yok');
+  const kapi = yazmaKapisi({ zipYolu: r.zip, setListesi: r.kapiListesi, tur: 'otomatik' });
+  assert.equal(kapi.gecti, true, kapi.nedenler.join(' | '));
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['502']);
+});
+
+test('ATLAMA manifesti: build.zip empp-uretec.json `atlananUyeler` → kabul kapıları (menü içerik/kapak, SET_TUM) 502\'yi beklemez, nota yazar', async () => {
+  const o = await ortam({ dataBos: ['502'] });
+  const liste = LISTE.split('\n').slice(0, 4).join('\n');
+  const r = await U.uret({
+    setId: '74430', setAdi: 'Flashy', listeHam: liste, duzen: 'bookN', kabuk: 'kalip', kalipZip: o.kalipZip,
+    cikti: path.join(o.d, 'out', 'build.zip'), calisma: path.join(o.d, 'w'), onbellek: path.join(o.d, 'onb'),
+    getir: o.getir, indir: o.indir, bekleMs: 0,
+  });
+  const isaret = JSON.parse(M.zipGirdiOku(r.zip, M.zipDizini(r.zip).get('empp-uretec.json')).toString());
+  assert.deepEqual(isaret.atlananUyeler.map((a) => a.kitapId), ['502'], 'manifest alanı');
+  assert.match(isaret.atlananUyeler[0].sebep, /İmpark'ta içerik yok|Data boş/);
+  const acik = path.join(o.d, 'acik');
+  fs.mkdirSync(acik);
+  require('child_process').execFileSync('unzip', ['-q', r.zip, '-d', acik]);
+  const MI = require('../../tools/kabul/menu-icerik');
+  const MK = require('../../tools/kabul/menu-kapak');
+  const ST = require('../../tools/kabul/set-guncellik');
+  const mi = MI.menuIcerikOlcKok(acik);
+  assert.notEqual(mi.durum, MI.DURUM.RED, mi.sebepler.join(' | '));
+  assert.ok(!mi.kartlar.some((k) => k.id === '502'), 'menüde 502 kartı yok');
+  assert.deepEqual(mi.atlananUyeler.map((a) => a.kitapId), ['502']);
+  assert.match(MI.ozetSatiri(mi), /NOT: atlanan üye \(manifest, beklenenden düşüldü\): 502/);
+  const mk = MK.menuKapakOlcKok(acik);
+  assert.deepEqual(mk.atlananUyeler.map((a) => a.kitapId), ['502']);
+  assert.match(MK.ozetSatiri(mk), /NOT: atlanan üye .*502/);
+  const agac = ST.agacTopla(fs, path, acik);
+  assert.ok(agac.adlar.includes('empp-uretec.json'), 'SET_TUM ağacı manifesti taşır');
+  const olcum = await ST.agacOlc(agac, { getir: o.getir });
+  assert.ok(!olcum.satirlar.some((s) => String(s.id) === '502'));
+  assert.ok(ST.setTumKarari(olcum).notlar.some((n) => /atlanan üye .*502/.test(n)));
+});
+
+test('ATLAMA: indirme HTTP 404 → atlanır; indirme ağ hatası (kod 28, 404 değil) → ATLANMAZ (kitap-eksik)', async () => {
+  const o = await ortam();
+  const veri = 'https://x.example/Uploads/ZKitapZipH/502-7.zip';
+  const r = await uretTek(o, { getir: imparkBoz(o, { data: veri }).getir, indir: indir404(o) });
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['502']);
+  const o2 = await ortam();
+  await assert.rejects(uretTek(o2, { ...imparkBoz(o2, { data: veri, indirHata: true }) }),
+    (e) => e.kod === 'kitap-eksik' && e.eksik[0].id === '502' && e.eksik[0].uyeYok === false);
+  assert.equal(fs.existsSync(path.join(o2.d, 'out', 'build.zip')), false);
+});
+
+test('SINIF AYRIMI: ağ hatası · zaman aşımı · 5xx · bozuk JSON → ATLANMAZ (eski erteleme, kitap-eksik)', async () => {
+  const durumlar = [
+    ['5xx', { status: 500, govde: 'x' }],
+    ['502 geçit', { status: 502, govde: 'x' }],
+    ['zaman aşımı', { hata: 'zaman aşımı (20 sn)' }],
+    ['ağ', { hata: 'bağlantı kurulamadı' }],
+    ['JSON değil', { status: 200, govde: '<html>' }],
+    ['Success=false', { status: 200, govde: JSON.stringify({ Success: false }) }],
+    ['403', { status: 403, govde: 'x' }],
+  ];
+  for (const [ad, cevap] of durumlar) {
+    const o = await ortam();
+    const bt = bildirimToplayici(o.d);
+    await assert.rejects(uretTek(o, {
+      getir: async (url) => (/id=502&/.test(url) ? cevap : o.getir(url)), bildir: bt.bildir,
+    }), (e) => e.kod === 'kitap-eksik' && e.eksik.some((x) => x.id === '502' && x.uyeYok === false), ad);
+    assert.equal(bt.gonderilen.length, 0, `${ad}: bildirim yok`);
+  }
+});
+
+test('YEDEK sınıf ayrımı: tüm yedekler AÇIK "yok" (kesin) → atlanır; biri belirsiz/hata/RED → ATLANMAZ', async () => {
+  const kesin = (ad) => sahteYedek(ad, { yok: `${ad} yok`, kesin: true });
+  // hepsi kesin → atlanır
+  const o = await ortam({ dataBos: ['502'] });
+  const r = await uretTek(o, { yedekKaynaklar: [kesin('webz-smb'), kesin('onbellek'), kesin('arsiv')],
+    kimlikReferansi: async () => null });
+  assert.deepEqual(r.atlananUyeler.map((a) => a.kitapId), ['502']);
+  // biri işaretsiz "yok" (ör. SMB bağlı değil) → belirsiz
+  for (const [ad, ikinci] of [
+    ['işaretsiz yok', sahteYedek('webz-smb', { yok: 'SMB bağlı değil (/x)' })],
+    ['hata', sahteYedek('webz-smb', async () => { throw new Error('SMB koptu'); })],
+  ]) {
+    const o2 = await ortam({ dataBos: ['502'] });
+    await assert.rejects(uretTek(o2, { yedekKaynaklar: [kesin('onbellek'), ikinci], kimlikReferansi: async () => null }),
+      (e) => e.kod === 'kitap-eksik' && e.eksik[0].uyeYok === false, ad);
+  }
+  // RED: kaynakta içerik VAR ama kimlik tutmuyor → "yok" değil
+  const o3 = await ortam({ dataBos: ['502'] });
+  const yanlis = sahteYedek('arsiv', { zip: await yedekZip(o3.d, '502', { zid: '06003144' }), kaynakId: '502', vs: 3 });
+  await assert.rejects(uretTek(o3, { yedekKaynaklar: [kesin('onbellek'), yanlis], kimlikReferansi: async () => '0602126' }),
+    (e) => e.kod === 'kitap-eksik' && e.eksik[0].uyeYok === false);
+});
+
+test('TAVAN: setin yarısından fazlası kesin-yok → atlanmaz; tam yarısı atlanır; tek üyeli set atlanmaz', async () => {
+  // 3 üyeden 2'si yok (> yarı) → eski davranış
+  const o = await ortam({ dataBos: ['501', '502'] });
+  const loglar = [];
+  await assert.rejects(uretTek(o, { log: (s) => loglar.push(s) }),
+    (e) => e.kod === 'kitap-eksik' && e.eksik.length === 2);
+  assert.ok(loglar.some((l) => /üye atlanmadı \(tavan: 2\/3/.test(l)));
+  assert.equal(fs.existsSync(path.join(o.d, 'out', 'build.zip')), false);
+  // 4 üyeden 2'si yok (tam yarı) → atlanır
+  const liste4 = '501 | A\n502 | B\n503 | C\n504 | D';
+  const o2 = await ortam({ idler: ['501', '502', '503', '504'], dataBos: ['501', '502'] });
+  const r2 = await uretTek(o2, { listeHam: liste4 });
+  assert.deepEqual(r2.kitaplar.map((k) => k.id), ['503', '504']);
+  assert.deepEqual(r2.atlananUyeler.map((a) => a.kitapId), ['501', '502']);
+  // TEK üyeli set → atlanamaz
+  const o3 = await ortam({ idler: ['502'], dataBos: ['502'] });
+  await assert.rejects(uretTek(o3, { listeHam: '502 | Tek' }), (e) => e.kod === 'kitap-eksik');
+});
+
+test('BAŞKA EKSİK: kesin-yok üye + belirsiz sebepli eksik üye birlikte → hiçbiri atlanmaz (erteleme sürer)', async () => {
+  const o = await ortam({ dataBos: ['502'], kapaksiz: ['503'], sayfasiz: ['503'] });
+  await assert.rejects(uretTek(o, {}), (e) => e.kod === 'kitap-eksik' && e.eksik.length === 2);
+});
+
+test('BİLDİRİM: aynı gün set×kitap başına 1; ertesi gün yeniden; EMPP_BILDIRIM=0 sessiz', async () => {
+  const o = await ortam({ dataBos: ['502'] });
+  const gun1 = bildirimToplayici(o.d, new Date('2026-10-06T09:00:00'));
+  await uretTek(o, { bildir: gun1.bildir });
+  await uretTek(o, { bildir: gun1.bildir }); // aynı gün ikinci koşu
+  assert.equal(gun1.gonderilen.length, 1, 'tekilleştirildi');
+  const damgalar = fs.readdirSync(path.join(o.d, 'damga'));
+  assert.deepEqual(damgalar, ['45479-502-20261006']);
+  const gun2 = bildirimToplayici(o.d, new Date('2026-10-07T09:00:00'));
+  await uretTek(o, { bildir: gun2.bildir });
+  assert.equal(gun2.gonderilen.length, 1, 'ertesi gün yeniden');
+  // Başka set aynı kitap → ayrı bildirim
+  const baska = [];
+  UyeAtla.bildirimGonder({ setId: '99', setAdi: 'B', kitapId: '502', ad: 'W', env: {}, dizin: path.join(o.d, 'damga'),
+    simdi: new Date('2026-10-06T09:00:00'), gonder: (a) => baska.push(a) });
+  assert.equal(baska.length, 1);
+  // Kapalı
+  const kapali = [];
+  assert.equal(UyeAtla.bildirimGonder({ setId: '1', kitapId: '1', env: { EMPP_BILDIRIM: '0' },
+    dizin: path.join(o.d, 'damga2'), gonder: (a) => kapali.push(a) }), false);
+  assert.equal(kapali.length, 0);
+  // Bildirim hatası üretimi DÜŞÜRMEZ
+  const r = await uretTek(o, { bildir: () => { throw new Error('bildir yok'); } });
+  assert.equal(r.atlananUyeler.length, 1);
 });

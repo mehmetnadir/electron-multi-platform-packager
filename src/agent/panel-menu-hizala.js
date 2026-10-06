@@ -61,6 +61,7 @@ const M = require('./icerik-merdiven');
 const ig = require('../runtime/icerik-guncelleme');
 const imk = require('./imkeys');
 const setEk = require('./set-uyelik-ek');
+const uyeAtla = require('./uye-atla');
 const { BASE_ENDPOINT_HOST_RE } = require('../packaging/yayinci-domain-yamasi');
 
 const ISARET = '[panel-menu]';
@@ -764,8 +765,28 @@ async function panelMenuHizala(o) {
     return bitir(`panel listesi boş (${panel.neden}) — dokunulmadı`);
   }
   if (panel.durum === DURUM.BOZUK) return dokunma(`panel satırı bozuk: ${panel.neden}`);
-  const { books } = panel;
+  let { books } = panel;
   rapor.panel = books.length;
+  // ÖNCEDEN ATLANAN ÜYELER (Nadir 06.10): üreteç `empp-uretec.json`'a `atlananUyeler` yazdı (ya da runner
+  // `o.atlananUyeler` verdi) → o üyeler panel listesinden de düşer; eklenmeye çalışılmaz, kapıya gitmez.
+  rapor.atlananUyeler = [];
+  {
+    const onceden = new Set((o.atlananUyeler || []).map(String));
+    for (const a of uyeAtla.zipIsaretindenOku(o.zip, once)) onceden.add(a.kitapId);
+    const panelde = books.filter((b) => onceden.has(String(b.id)));
+    if (panelde.length) {
+      const karar = uyeAtla.atlamaKarari({ toplam: books.length, kesin: panelde.length, digerEksik: 0 });
+      if (karar.atla) {
+        books = books.filter((b) => !onceden.has(String(b.id)));
+        for (const b of panelde) {
+          rapor.atlananUyeler.push({ kitapId: String(b.id), ad: b.adi || '', sebep: 'üreteç atladı' });
+        }
+        log(`${ISARET} üreteçte atlanan üye(ler) panel listesinden düşüldü: ${panelde.map((b) => b.id).join(',')}`);
+      } else {
+        warn(`${ISARET} atlanan üye düşülmedi (${karar.sebep}) — panel listesi aynen`);
+      }
+    }
+  }
   try { menuParcala(xml); } catch (e) { return dokunma(`menü yapısı beklenmedik: ${e.message}`); }
   // TUTARLILIK: panel listesi bu setin listesi mi? Ortak kimlik yoksa ya da eski kapakların yarıdan
   // fazlası çıkacaksa yanlış set / yanlış alan şüphesi → dokunulmaz (panel listesi kapıya gitmez).
@@ -836,13 +857,20 @@ async function panelMenuHizala(o) {
         throw new PanelMenuHatasi(`${HATA}: ${eksik.length} eksik üye var ama app.config.js `
           + 'updateBookEndPoint yok — eksik içerikle paket üretilmedi');
       }
+      const kesinYok = []; // KESİN "içerik yok" (Data boş / HTTP 404): tavan geçerse atlanır (Nadir 06.10)
+      const yokHatasi = (b, sebep, nedeni) => new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} (${sebep}) `
+        + `İmpark'ta içeriksiz (${nedeni}) — yayınevi yüklemeli; eksik içerikle paket üretilmedi`);
       for (const { book: b, sebep } of eksik) {
         const soru = M.teklifUrl(sablon, b.id, 0);
         const cevap = await (o.getir || M.varsayilanGetir)(soru, {});
         const t = M.teklifYorumla({ id: b.id, surum: 0 }, cevap);
         if (t.durum === M.DURUM.GUNCEL) {
-          throw new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} (${sebep}) İmpark'ta içeriksiz `
-            + '(Data boş) — yayınevi yüklemeli; eksik içerikle paket üretilmedi');
+          kesinYok.push({ b, sebep, nedeni: 'Data boş' });
+          continue;
+        }
+        if (t.durum !== M.DURUM.GERIDE && uyeAtla.imparkTeklif404mu(cevap)) {
+          kesinYok.push({ b, sebep, nedeni: 'HTTP 404' });
+          continue;
         }
         if (t.durum !== M.DURUM.GERIDE) {
           throw new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} (${sebep}) İmpark ölçülemedi: `
@@ -856,6 +884,7 @@ async function panelMenuHizala(o) {
             log: (x) => log(x.replace('[merdiven] S1', ISARET)),
           });
         } catch (e) {
+          if (uyeAtla.indirme404mu(e)) { kesinYok.push({ b, sebep, nedeni: 'zip HTTP 404' }); continue; }
           throw new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} indirilemedi: ${e.message}`,
             { gecici: agHatasiMi(e) });
         }
@@ -867,6 +896,25 @@ async function panelMenuHizala(o) {
         izinli.add(b.fixName);
         yeniler.set(b.id, { vs: t.vs, url: t.data, fx: b.fixName });
         log(`${ISARET} üye ${b.id} v${t.vs} indirildi (${sebep}; ${gDizin.size} girdi)`);
+      }
+      if (kesinYok.length) {
+        const karar = uyeAtla.atlamaKarari({ toplam: books.length, kesin: kesinYok.length, digerEksik: 0 });
+        if (!karar.atla) {
+          warn(`${ISARET} üye atlanmadı (${karar.sebep}) — eski davranış`);
+          throw yokHatasi(kesinYok[0].b, kesinYok[0].sebep, kesinYok[0].nedeni);
+        }
+        const dusen = new Set(kesinYok.map((x) => String(x.b.id)));
+        books = books.filter((b) => !dusen.has(String(b.id)));
+        for (const { b, nedeni } of kesinYok) {
+          const a = { kitapId: String(b.id), ad: b.adi || '', sebep: `İmpark'ta içerik yok (${nedeni})` };
+          rapor.atlananUyeler.push(a);
+          log(uyeAtla.logSatiri(setId, a));
+          if (typeof o.bildir === 'function') {
+            try {
+              o.bildir({ setId, setAdi: o.setAdi || '', kitapId: a.kitapId, ad: a.ad });
+            } catch (_) { /* bildirim paketi durdurmaz */ }
+          }
+        }
       }
     }
 
