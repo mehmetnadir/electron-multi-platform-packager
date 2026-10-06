@@ -138,6 +138,12 @@ const CONFIG = {
   // Exe'siz sözleşme (01.10): build'siz işlerin ÖZET bildirim durumu (son gönderim + bekleyenler).
   kaynakYokDurumDosyasi: process.env.EMPP_KAYNAK_YOK_DURUM
     || path.join(os.homedir(), '.empp-agent', 'kaynak-yok-bildirim.json'),
+  // Kabuk eki (06.10): erteleme bildiriminin son gönderim zamanları (bookId|kod → ms).
+  kabukErteleDurumDosyasi: process.env.EMPP_KABUK_ERTELE_DURUM
+    || path.join(os.homedir(), '.empp-agent', 'kabuk-ertele-bildirim.json'),
+  // Kabuk eki ön kontrol belleği (bookId → {uretildi, girdiSha, zaman}).
+  kabukOnKontrolDosyasi: process.env.EMPP_KABUK_EK_ON_KONTROL
+    || path.join(os.homedir(), '.empp-agent', 'kabuk-ek-on-kontrol.json'),
   pardusKabul: process.env.EMPP_PARDUS_KABUL === '1',
   pardusKabulScript: process.env.PARDUS_KABUL_SCRIPT
     || path.join(__dirname, '..', '..', 'tools', 'pardus', 'probook-kabul.sh'),
@@ -466,10 +472,17 @@ async function probookErisimIlkOlcum(host, { sinirMs = 6000, port = 22 } = {}) {
   return v;
 }
 
-/** `kaynak-kur` yeteneğinin anlık girdisi (heartbeat ve r2-kur iş anı aynı karardan). */
+/** Platform (testler `_platformAyarla` ile Linux'u taklit eder). */
+let _platform = process.platform;
+
+/**
+ * `kaynak-kur` yeteneğinin anlık girdisi (heartbeat ve r2-kur iş anı aynı karardan). DEĞİŞMEZ
+ * (birleşik inceleme K1): Mac dışında kabuk tazeleme açık + kaynak 'ek' + açık anahtar yoksa
+ * `acik` false — build eski kabukla kurulmaz (45551 2.51.3).
+ */
 function kaynakKurDurumu() {
   return {
-    acik: CONFIG.kaynakKur,
+    acik: CONFIG.kaynakKur && setKabuk.kaynakKurKabukKarari({ platform: _platform }).uygun,
     ofiste: ofisteMi(),
     serbest: pauseRequested(CONFIG.kaynakKurSerbestFlag),
   };
@@ -2144,6 +2157,8 @@ const kaynakAdim = {
   setEki: (...a) => setEk.setUyelikEki(...a),
   // sf425 kabuk tazeleme (Z2): başsız Swift ikilisi; hiçbir hata fırlatmaz (adım atlanır).
   kabukTazele: (o) => setKabuk.kabukTazele(o),
+  // Kabuk eki ön kontrolü (r2-kur, 'ek' kipi, taban indirilmeden): CDN son.json'da bu kitap var mı.
+  kabukEkSonKontrol: (o) => setKabuk.ekSonKontrol(o),
   // imKeys: bağımlılıklar exports üzerinden çözülür (test-yalitim sahtesini koyabilsin; üretimde
   // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
   imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
@@ -2338,6 +2353,118 @@ function kaynakYokOzet({ bookId, bookTitle, platform, simdi = Date.now() }) {
   }
   kaynakYokDurumYaz({ sonGonderimMs: simdi, bekleyen: {} });
   return true;
+}
+
+// KABUK EKİ ERTELEME BİLDİRİMİ (06.10, kabuk-eki-tasarim.md §6 madde 2/4; birleşik inceleme D4):
+// ProBook ('ek' kipi) eki bulamayınca iş ertelenir; sunucu işi hemen yeniden kiralayabilir.
+// Bildirim `kaynakYokOzet` deseninde: bekleyen setler durum dosyasında bookId ANAHTARIYLA birikir (aynı set
+// tekrar gelirse kaydı tazelenir), en çok KABUK_ERTELE_ARALIK_MS'de (varsayılan 1 sa) TEK özet
+// ("N set kabuk eki bekliyor: …") gider. Son gönderim zamanı dosyada (yeniden başlatmada sel yok).
+const KABUK_ERTELE_ARALIK_MS = Number(process.env.EMPP_KABUK_ERTELE_BILDIRIM_ARALIK_MS
+  || 3600 * 1000);
+
+/** Özet metni (SAF): Mac'te `ek-uret --set <id,…>` ile yeniden üretmeye yeter. */
+function kabukErteleOzetMetni(bekleyenler) {
+  const liste = [...bekleyenler].sort((a, b) => String(a.bookId).localeCompare(String(b.bookId)));
+  const satir = liste.slice(0, KAYNAK_YOK_LISTE_TAVAN).map((b) => `${b.bookId} (${b.kod}`
+    + `${b.girdiSha ? `, ${String(b.girdiSha).slice(0, 12)}` : ''}`
+    + `${b.kaynakSurumu ? `, ${b.kaynakSurumu}` : ''})`).join('; ');
+  const fazla = liste.length - KAYNAK_YOK_LISTE_TAVAN;
+  const kalan = fazla > 0 ? ` … +${fazla}` : '';
+  return `${liste.length} set kabuk eki bekliyor: ${satir}${kalan}. `
+    + `Mac: ek-uret --set ${liste.map((b) => b.bookId).join(',')}`;
+}
+
+/**
+ * Bekleyen seti durum dosyasına ekler (anahtar bookId); aralık dolduysa TEK özet gönderir ve
+ * listeyi sıfırlar.
+ * @param {{bookId: string, kod: string, neden: string, girdiSha?: string|null,
+ *   kaynakSurumu?: string, simdi?: number, gonder?: (args: string[]) => void}} o
+ * @returns {boolean} bu çağrıda bildirim gönderildi mi
+ */
+function kabukErteleBildir({
+  bookId, kod, neden, girdiSha = null, kaynakSurumu = '', simdi = Date.now(), gonder,
+}) {
+  const dosya = CONFIG.kabukErteleDurumDosyasi;
+  let d = { sonGonderimMs: 0, bekleyen: {} };
+  try {
+    const o = JSON.parse(fs.readFileSync(dosya, 'utf8'));
+    if (o && typeof o === 'object') {
+      d = { sonGonderimMs: Number(o.sonGonderimMs) || 0,
+        bekleyen: o.bekleyen && typeof o.bekleyen === 'object' ? o.bekleyen : {} };
+    }
+  } catch (_) { /* yok/bozuk — sıfırdan */ }
+  const yaz = (v) => {
+    try {
+      fs.mkdirSync(path.dirname(dosya), { recursive: true });
+      const tmp = `${dosya}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(v));
+      fs.renameSync(tmp, dosya);
+    } catch (e) {
+      warn('kabuk erteleme durum dosyası yazılamadı:', e.message);
+    }
+  };
+  d.bekleyen[String(bookId)] = {
+    bookId: String(bookId), kod: String(kod || 'ertele'), neden: String(neden || '').slice(0, 200),
+    girdiSha, kaynakSurumu: kaynakSurumu || '', sonMs: simdi,
+  };
+  if (process.env.EMPP_BILDIRIM === '0' || simdi - d.sonGonderimMs < KABUK_ERTELE_ARALIK_MS) {
+    yaz(d);
+    return false;
+  }
+  const bekleyenler = Object.values(d.bekleyen);
+  const args = ['kosucu', kabukErteleOzetMetni(bekleyenler), '-b',
+    `⏸ ${bekleyenler.length} set kabuk eki bekliyor`, '-p', 'normal', '-e', 'pause_button'];
+  try {
+    if (gonder) gonder(args);
+    else {
+      const ikili = process.env.EMPP_BILDIR_IKILI
+        || path.join(os.homedir(), '.local', 'bin', 'bildir');
+      const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
+      ps.on('error', (e) => warn('kabuk erteleme bildirimi gönderilemedi:', e.message));
+      ps.unref();
+    }
+  } catch (e) {
+    warn('kabuk erteleme bildirimi gönderilemedi:', e.message);
+  }
+  yaz({ sonGonderimMs: simdi, bekleyen: {} });
+  return true;
+}
+
+// KABUK EKİ ÖN KONTROL BELLEĞİ (birleşik inceleme Ö3): kabuk adımı eke bağlı nedenle ertelediyse
+// (ek yok/bayat/bozuk/ret/imza/kapı RED) o anki `son.json` kimliği ({uretildi, girdiSha}) yerel
+// dosyaya yazılır. Sonraki claim'de son.json DEĞİŞMEMİŞSE taban İNDİRİLMEDEN ertelenir (1–3 GB
+// boşa inmesin). Ağ/Web-Z/eşleme gibi geçici nedenler kaydedilmez. Kayıt KABUK_ON_KONTROL_OMUR_MS
+// (varsayılan 24 sa) sonra yok sayılır: günde en çok bir deneme indirmesi.
+const KABUK_ON_KONTROL_OMUR_MS = Number(process.env.EMPP_KABUK_ON_KONTROL_OMUR_MS
+  || 24 * 3600 * 1000);
+const KABUK_EKE_BAGLI = /^(ek-(yok|bayat|bozuk|ret|yol|tavan|imza|imza-anahtari-yok)|kapi-red)$/;
+
+function kabukOnKontrolOku() {
+  try {
+    const d = JSON.parse(fs.readFileSync(CONFIG.kabukOnKontrolDosyasi, 'utf8'));
+    return d && typeof d === 'object' ? d : {};
+  } catch (_) { return {}; }
+}
+
+function kabukOnKontrolYaz(bookId, kayit) {
+  const d = kabukOnKontrolOku();
+  if (kayit) d[String(bookId)] = kayit; else delete d[String(bookId)];
+  try {
+    fs.mkdirSync(path.dirname(CONFIG.kabukOnKontrolDosyasi), { recursive: true });
+    const tmp = `${CONFIG.kabukOnKontrolDosyasi}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(d));
+    fs.renameSync(tmp, CONFIG.kabukOnKontrolDosyasi);
+  } catch (e) {
+    warn('kabuk ön kontrol durum dosyası yazılamadı:', e.message);
+  }
+}
+
+/** son.json kimliği önceki ertelemedekiyle aynı mı (ömür içinde). SAF. */
+function sonDegismedi(kayit, son, simdi = Date.now()) {
+  if (!kayit || !son || simdi - (Number(kayit.zaman) || 0) > KABUK_ON_KONTROL_OMUR_MS) return false;
+  return String(kayit.uretildi ?? '') === String(son.uretildi ?? '')
+    && String(kayit.girdiSha ?? '') === String(son.girdiSha ?? '');
 }
 
 /**
@@ -2645,8 +2772,44 @@ async function processJob(auth, job) {
     }
     // r2-kur YALNIZ yüksek bantta (heartbeat `kaynak-kur` ile aynı karar): yetenek evde bildirilmez;
     // bayat bir nabızla yine de gelirse 1–3 GB yükleme başlatılmaz, kilit ve kira bırakılır.
+    // K1 değişmezi iş anında da: Mac dışında kabuğu kuramayan ajan build KURMAZ (bayat nabızla
+    // gelen claim dahil); kilit + kira bırakılır, failed YOK.
+    const kabukKarari = kaynak.tur === 'r2-kur'
+      ? setKabuk.kaynakKurKabukKarari({ platform: _platform }) : null;
+    if (kabukKarari && !kabukKarari.uygun) {
+      return r2Ertele(auth, job, `${setKabuk.ISARET} ${kabukKarari.neden} — build kurulmadı`);
+    }
     if (kaynak.tur === 'r2-kur' && !kaynakR2.kaynakKurIzinli(kaynakKurDurumu())) {
       return r2Ertele(auth, job, 'kaynak-kur bu konumda kapalı (ofis dışı, serbest bayrağı yok) — build kurulmadı');
+    }
+    // KABUK EKİ ÖN KONTROLÜ (06.10, kabuk-eki-tasarim.md §1): 'ek' kipinde (ProBook) set kabuğu
+    // Mac'in yayınladığı ekten gelir. Uygunluk (bookN / tek motor) ancak taban açılınca bilinir;
+    // tabandan önce bilinen tek işaret claim set listesidir. Liste ≥2 kitap diyorsa (set) ve CDN'de
+    // bu kitabın `son.json`'u HİÇ yoksa taban İNDİRİLMEDEN ertelenir (1–3 GB boşa inmesin). Burada
+    // yalnız "son.json var mı" sorulur; girdiSha eşleşmesi kabuk adımında. Liste yok/tek kitapsa ön
+    // kontrol yapılmaz (tek kitap kalıcı ertelemede kalmasın); set çıkarsa kabuk adımı ertele döner.
+    // Ö3: son.json önceki eke bağlı ertelemedekiyle AYNIYSA (Mac yeni ek üretmedi) yine indirilmez.
+    let onSon = null;
+    if (kaynak.tur === 'r2-kur' && setKabuk.acik() && setKabuk.kabukKaynagiSec() === 'ek') {
+      const liste = setEk.setListesiAyristir((setEk.setListesiCoz({ job }) || {}).ham || '');
+      if (liste.filter((g) => !g.link).length >= 2) {
+        const on = await kaynakAdim.kabukEkSonKontrol({ bookId: job.bookId });
+        let neden = null;
+        if (!on || !on.var) {
+          neden = `${setKabuk.ISARET} kabuk eki yok — ${(on && on.neden) || 'son.json okunamadı'}`;
+        } else if (sonDegismedi(kabukOnKontrolOku()[String(job.bookId)], on.son)) {
+          neden = `${setKabuk.ISARET} son.json önceki ertelemeden beri değişmedi `
+            + `(${String((on.son || {}).girdiSha || '-').slice(0, 12)})`;
+        }
+        if (neden) {
+          neden += '; taban İNDİRİLMEDİ';
+          kabukErteleBildir({
+            bookId: job.bookId, kod: 'on-kontrol', neden, kaynakSurumu: job.kaynakSurumu,
+          });
+          return r2Ertele(auth, job, neden, { kilitBirak: true });
+        }
+        onSon = on.son || null;
+      }
     }
     // İmza kipi (§2a): yuva erişilirse bugünkü zincir; erişilemezse (hazır kuyruk açıkken) paket yine
     // üretilir ve kabulden geçer, imzasız hâliyle hazır kuyruğa girer (yayın YOK).
@@ -2770,14 +2933,35 @@ async function processJob(auth, job) {
     // SF425 KABUK TAZELEME (Z2, 05.10, set-kabuk-tazele.js; sözleşme "sf425 kabuk tazeleme"): yalnız
     // r2-kur, set ekinden SONRA, panelden ÖNCE. Bayrak kapalıysa (`EMPP_SET_KABUK_TAZELE`) hiç
     // çağrılmaz. Her hata adımı atlatır (iş kopyası aynen), iş DÜŞMEZ; özet `job.kabukTazeleme`.
+    // 'ek' kipinde (ProBook) sonuç `ertele` olabilir → r2Ertele (kilit + kira bırakılır, failed
+    // YOK): eski kabukla kaynak çıkmaz. Dönüş: ertelenecekse r2Ertele sonucu, yoksa null.
     const kabukUygula = async () => {
-      if (kaynak.tur !== 'r2-kur' || !setKabuk.acik()) return;
+      if (kaynak.tur !== 'r2-kur' || !setKabuk.acik()) return null;
+      const ekKipi = setKabuk.kabukKaynagiSec() === 'ek';
       try {
         job.kabukTazeleme = await kaynakAdim.kabukTazele({ zip: zipPath, calisma: work, job, log, warn });
       } catch (e) {
-        job.kabukTazeleme = { durum: 'atlandi', neden: `beklenmeyen hata: ${agHatasiOzeti(e)}` };
+        job.kabukTazeleme = {
+          durum: ekKipi ? 'ertele' : 'atlandi', kod: 'hata', neden: `beklenmeyen hata: ${agHatasiOzeti(e)}`,
+        };
         warn(`${setKabuk.ISARET} beklenmeyen hata, kabuk tazelenmedi: ${agHatasiOzeti(e)}`);
       }
+      const k = job.kabukTazeleme;
+      if (!k || k.durum !== 'ertele') {
+        if (onSon) kabukOnKontrolYaz(job.bookId, null); // ek uygulandı/güncel: bellek temizlenir
+        return null;
+      }
+      if (onSon && KABUK_EKE_BAGLI.test(String(k.kod || ''))) {
+        kabukOnKontrolYaz(job.bookId, {
+          uretildi: onSon.uretildi ?? null, girdiSha: onSon.girdiSha ?? null, zaman: Date.now(),
+        });
+      }
+      kabukErteleBildir({
+        bookId: job.bookId, kod: k.kod || 'ertele', neden: k.neden, girdiSha: k.girdiSha,
+        kaynakSurumu: job.kaynakSurumu,
+      });
+      const sebep = `${setKabuk.ISARET} ${k.neden || 'kabuk eki yok'}`;
+      return r2Ertele(auth, job, sebep, { kilitBirak: true });
     };
     // Taban üreteçle yeniden kurulur; merdiven + set eki yeni build'e yeniden uygulanır.
     // Ertelenecek durumda r2Ertele sonucunu döner (çağıran aynen döndürür), yoksa null.
@@ -2824,7 +3008,8 @@ async function processJob(auth, job) {
       }
     }
 
-    await kabukUygula();
+    const kabukErtele = await kabukUygula();
+    if (kabukErtele) return kabukErtele;
 
     // PANEL MENÜ HİZALAMA (05.10, panel-menu-hizala.js): kök menülü tek-motor sette menü panelin
     // GetPackageBooks listesine (Group/Tab/üye/sıra) hizalanır, eksik üye İmpark'tan eklenir —
@@ -2872,7 +3057,8 @@ async function processJob(auth, job) {
       const d = await tabaniUretecleKur(`taban ATLANDI — set eki sonrası eksik: ${tabanIstisnasi.join(', ')}`
         + ' (panel hizalamadı)');
       if (d) return d;
-      await kabukUygula();
+      const kabukErtele2 = await kabukUygula();
+      if (kabukErtele2) return kabukErtele2;
       panelSonuc = await panelUygula();
       if (panelSonuc.ertele) return panelSonuc.ertele;
     }
@@ -3265,6 +3451,8 @@ module.exports = {
   // Kabul kuyruğu (05.10) — üretim kapısı + iş alma adımı.
   kabulKuyruguAcik, uretimKapisiDurumu, siradakiIs,
   // Exe'siz kaynak Dalga B (B4): r2-kur / r2-al — testler adımlara casus koyar, konumu enjekte eder.
-  kaynakAdim, kabukTazelemeGovdesi, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
+  kaynakAdim, kabukTazelemeGovdesi, kabukErteleBildir, parcalariYukle, r2AlHazirla, r2KurTabanHazirla, kaynakKurDurumu,
+  _platformAyarla: (p) => { _platform = p || process.platform; _sonYetenek = ''; },
+  kabukErteleOzetMetni, sonDegismedi,
   _konumAyarla: (ofiste) => { _konum = { t: Date.now(), ofiste: Boolean(ofiste) }; _sonYetenek = ''; },
 };

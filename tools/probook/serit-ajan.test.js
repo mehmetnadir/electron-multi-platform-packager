@@ -32,6 +32,8 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
       motorKanonik: e.EMPP_MOTOR_KANONIK,
       setG: e.EMPP_SET_GUNCELLEME, gAnahtar: e.EMPP_GUNCELLEME_ACIK_ANAHTAR, uyelik: e.EMPP_SET_UYELIK_EK,
       merdiven: e.EMPP_ARSIV_MERDIVEN, kabulCdp: e.KABUL_CDP, kabulSetTum: e.KABUL_SET_TUM,
+      kabukTazele: e.EMPP_SET_KABUK_TAZELE, kabukKaynagi: e.EMPP_SET_KABUK_KAYNAGI,
+      ekAnahtar: e.EMPP_KABUK_EK_ACIK_ANAHTAR,
     }));
     setTimeout(() => process.exit(0), 1500);
   `);
@@ -43,11 +45,15 @@ test('ProBook kipi ortami: pardus, yerel kabul, yerel build, docker simi, nabiz 
       AGENT_CAPS: '', PROBOOK_HOST: '', PARDUS_BUILD_SCRIPT: '', EMPP_PARDUS_KABUL: '', EMPP_LINUX_DEB: '', PACKAGER_API: '',
       NODE_OPTIONS: '', AGENT_UPLOAD_RATE: '', EMPP_DERLEME_KABUL_KILIDI: '', EMPP_KANIT_ARSIV: '', AGENT_DOWNLOAD_RATE: '',
       EMPP_MOTOR_KANONIK: '', EMPP_SET_GUNCELLEME: '', EMPP_GUNCELLEME_ACIK_ANAHTAR: '', EMPP_SET_UYELIK_EK: '',
-      EMPP_ARSIV_MERDIVEN: '', KABUL_CDP: '', KABUL_SET_TUM: '' },
+      EMPP_ARSIV_MERDIVEN: '', KABUL_CDP: '', KABUL_SET_TUM: '', EMPP_SET_KABUK_TAZELE: '',
+      EMPP_SET_KABUK_KAYNAGI: '', EMPP_KABUK_EK_ACIK_ANAHTAR: '' },
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const o = JSON.parse(fs.readFileSync(path.join(repo, 'src', 'agent', 'runner.js.ortam.json'), 'utf8'));
-  assert.equal(o.caps, 'pardus,kaynak-r2', 'kaynak-kur yalnız Mac (kabuk tazeleme Swift)');
+  assert.equal(o.caps, 'pardus,kaynak-r2,kaynak-kur', 'kaynak-kur geri (06.10): kabuk Mac ekinden');
+  assert.equal(o.kabukTazele, '1');
+  assert.equal(o.kabukKaynagi, 'ek', 'ProBook kabuğu Swift değil kabuk ekinden alır (boş da ek olur)');
+  assert.equal(o.ekAnahtar, path.join(serit, '.empp-agent', 'kabuk-ek-acik.pem'));
   // Mac paritesi (02.10): G kanalı açık anahtarı + kapsam, set eki, merdiven, CDP kabul
   assert.match(o.setG, /(^|,)linux(,|$)/);
   const { pardusBetikEnv } = require('../../src/agent/runner-helpers');
