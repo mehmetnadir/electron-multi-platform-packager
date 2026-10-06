@@ -401,7 +401,7 @@ test('İMZALI ARŞİV (Nadir 06.10): D:\\empp-imzali-son izinli kök DEĞİL, ko
   const { cfg } = kasa({ env: { EMPP_IMZALI_ARSIV_KOKU: arsiv } });
   cfg.downloads = path.dirname(arsiv);
   cfg.izinliKokler.push(cfg.downloads);
-  const exe = yaz(path.join(arsiv, '45449', 'runner-45449-K-2.1.1-Setup.exe'), { gun: 60 });
+  const exe = yaz(path.join(arsiv, 'K Seti.exe'), { gun: 60 });
   const son = yaz(path.join(arsiv, '45449', 'son.json'), { gun: 60 });
   const r = kos(cfg, { ekler: [exe, path.join(arsiv, '45449'), arsiv] });
   assert.ok(var_(exe) && var_(son), r.cikti);
