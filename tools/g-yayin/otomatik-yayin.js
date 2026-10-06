@@ -2,23 +2,37 @@
 'use strict';
 
 /**
- * G OTOMATİK YAYIN — bir set dört platformda yeni kabukla bitince kurulu paketlerin G kanalına
- * (uzaktan güncelleme) yayın PLANI kurar; `--uygula` ile planı koşturur.
+ * G OTOMATİK YAYIN — bir set GEREKLİ platformlarda (varsayılan windows+pardus) yeni kabukla
+ * bitince kurulu paketlerin G kanalına (uzaktan güncelleme) yayın PLANI kurar; `--uygula` ile
+ * planı koşturur.
+ *
+ * GEREKLİ PLATFORMLAR (06.10, ürün sahibi kararı): `G_OTO_GEREKLI` ortam değişkeni (virgüllü,
+ * HEDEF_PLATFORMLAR alt kümesi), varsayılan `windows,pardus`. Mac ve Android yalnız ofis
+ * saatinde üretildiği için kurulu Windows/Pardus paketleri günlerce bekliyordu. Süzgeç (1) ve
+ * motor denetimi (2) yalnız gerekli platformları zorunlu tutar; gerekli olmayan bir platform
+ * completed+guncel+kanonik değilse yayın ENGELLENMEZ, set kararına `bekleyen: ['mac:queued', …]`
+ * olarak eklenir, log satırına ve özete yazılır. `G_OTO_GEREKLI=windows,pardus,mac,android` eski
+ * (dört platform) davranışı birebir verir. Paket sürümü (`paketSurumu`) DEĞİŞMEZ: dört platformun
+ * en büyük sayacı kullanılır (monoton sürüm; bekleyen platformun sayacı da hesaba girer).
+ * Android ucu (aynı manifest) gerekli listede olmasa da yayınlanır — güvenli, çünkü otomatik yayın
+ * yalnız kanonik bookN motorunu taşır (motor platformdan bağımsız tek dosyadır,
+ * `motor-surumu.js` motorDegistir); index.html ve --ekle otomatik yayınlanmaz, android-shim
+ * kapısı ve bileşim kapısı aynen çalışır; yeni G sürümü dört platform sayacından kesin büyüktür.
  *
  * NEDEN (06.10, ölçüldü): pipeline paketleri yeniden üretir, R2 `softwares/<id>/`'ye koyar;
  * ama kurulu paketin G istemcisi `<taban>/set/<id>/surum.json` okur ve bütün setlerde 404
  * alır. Yani kurulu paketler yeni üretimden haberdar olmaz. Bu araç o boşluğu kapatan
  * pipeline adımıdır.
  *
- * AKIŞ:  DB (salt okuma) → süzgeç (4 platform bitti + kabuk hedefi + motor kanonik)
+ * AKIŞ:  DB (salt okuma) → süzgeç (gerekli platformlar bitti + kabuk hedefi + motor kanonik)
  *        → bileşim kapısı
  *        → canlı surum.json/manifest(.sig) → seçim → plan → (--uygula) yayinla → yukle → dogrula.
  *
  * NE YAYINLANIR — YALNIZ KANONİK MOTOR (`bookN/43e23fce2b7009474555a77.js`):
  *   - Paketleyici her pakete kanonik motoru koyar (`motor-surumu.js` motorDegistir) ve DB'ye
  *     `motor_sha12` yazar. Bu araç motoru `~/.empp-agent/motor/` kanonik dosyasından alır; dosyanın
- *     sha256 öneki DB'deki 4 platformun `motor_sha12`'siyle aynı olmalıdır. Bu "kurulu paketle
- *     birebir" kanıtıdır.
+ *     sha256 öneki DB'deki gerekli platformların `motor_sha12`'siyle aynı olmalıdır. Bu "kurulu
+ *     paketle birebir" kanıtıdır.
  *   - Kök `index.html` OTOMATİK YAYINLANMAZ. G'de `dosya/index.html` dört platformda paylaşılır
  *     (android/ ucu baytı baytına aynı). Paketleyici ise kök index'e platforma özel etiket koyar:
  *     Electron `empp-fs-shim.js`, Android `empp-android-shim.js` (+ fullscreen stili). Android
@@ -30,9 +44,10 @@
  *
  * SEÇİM ÖLÇÜTÜ (kitap-guncelleme-sozlesmesi "G istemcisi — monoton sürüm"): istemci G'yi yalnız
  * sürümü KURULU sürümden KESİN büyükse uygular; kurulu = max(paket sürümü, son uygulanan G).
- *   1. Bitmemiş: 4 platformdan biri completed değil, kabuk_surum ≠ hedef ya da kabuk_durum ≠ guncel
- *      → seçilmez (yalnız log).
- *   2. Motor: 4 platformda motor_durum='guncel' ve motor_sha12 = kanonik sha12 değilse → atla.
+ *   1. Bitmemiş: gerekli platformlardan biri completed değil, kabuk_surum ≠ hedef ya da
+ *      kabuk_durum ≠ guncel → seçilmez (yalnız log). Gerekli olmayan → `bekleyen` (engellemez).
+ *   2. Motor: gerekli platformlarda motor_durum='guncel' ve motor_sha12 = kanonik sha12 değilse
+ *      → atla. Gerekli olmayan → `bekleyen` (engellemez).
  *   3. Bileşim: geçerli build'in kitapları (n→id) bir önceki build'den farklıysa → "Nadir kararı".
  *      Ekleme G'de `--ekle` ister; o da Android kapısında RED'dir.
  *   4. Canlı surum.json 404 → SEÇ (`ilk`).
@@ -50,6 +65,7 @@
  * Kullanım:
  *   node tools/g-yayin/otomatik-yayin.js [--kuru|--uygula] (--tum-yds | <id>... | --set <id,id>)
  *        [--kabuk 1.13.14] [--cikti <dizin>] [--json] [--bildirimsiz]
+ *   Ortam: G_OTO_GEREKLI=windows,pardus (varsayılan; HEDEF_PLATFORMLAR alt kümesi).
  * Çıkış: 0 tamam · 1 en az bir set hatalı · 2 argüman hatası · 75 kilit dolu.
  */
 
@@ -65,6 +81,9 @@ const yukleMod = require('./yukle');
 
 const AJAN = path.join(os.homedir(), '.empp-agent');
 const HEDEF_PLATFORMLAR = Object.freeze(['windows', 'pardus', 'mac', 'android']);
+/** Yayını engelleyen (zorunlu) platformlar — `G_OTO_GEREKLI` yoksa bu liste. */
+const VARSAYILAN_GEREKLI = Object.freeze(['windows', 'pardus']);
+const GEREKLI_ORTAM = 'G_OTO_GEREKLI';
 const VARSAYILAN_KABUK = '1.13.14';
 const YDS_YAYINCI = 'YDS Publishing';
 const YDS_TABAN = 'https://cdn.ydspublishing.com/guncelleme';
@@ -88,7 +107,23 @@ const ANDROID_SHIM_RE = /<script\b[^>]*\bsrc\s*=\s*["']?[^"'>]*empp-android-shim
 
 /* ------------------------------------------------------------------ argümanlar */
 
-function argsAyristir(argv) {
+/**
+ * `G_OTO_GEREKLI` değeri → gerekli platform listesi (HEDEF_PLATFORMLAR sırasıyla, tekil).
+ * Tanımsız/boş → VARSAYILAN_GEREKLI. Bilinmeyen platform → hata (sessizce yok saymak, yanlış
+ * yazılmış bir değerle yayını gevşetirdi).
+ */
+function gerekliCoz(ham) {
+  if (ham === undefined || ham === null || !String(ham).trim()) return VARSAYILAN_GEREKLI.slice();
+  const istenen = String(ham).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const bilinmeyen = istenen.filter((p) => !HEDEF_PLATFORMLAR.includes(p));
+  if (bilinmeyen.length) {
+    throw new Error(`${GEREKLI_ORTAM} bilinmeyen platform: ${bilinmeyen.join(',')} ` +
+      `(geçerli: ${HEDEF_PLATFORMLAR.join(',')})`);
+  }
+  return HEDEF_PLATFORMLAR.filter((p) => istenen.includes(p));
+}
+
+function argsAyristir(argv, ortam = process.env) {
   const a = { kip: 'kuru', setler: [], tumYds: false, kabuk: VARSAYILAN_KABUK, cikti: null,
     json: false, bildirimsiz: false };
   const liste = Array.isArray(argv) ? argv.slice() : [];
@@ -118,6 +153,7 @@ function argsAyristir(argv) {
   a.setler = [...new Set(a.setler)];
   if (!a.tumYds && !a.setler.length) throw new Error('set listesi ya da --tum-yds gerekli');
   if (!/^\d+\.\d+\.\d+$/.test(a.kabuk)) throw new Error(`--kabuk x.y.z olmalı: ${a.kabuk}`);
+  a.gerekli = gerekliCoz((ortam || {})[GEREKLI_ORTAM]);
   return a;
 }
 
@@ -199,32 +235,41 @@ async function dbOku(a, sqlCalistir) {
 
 /* ------------------------------------------------------------------ saf kararlar */
 
-/** 1. süzgeç: dört platform completed + kabuk hedefi + guncel. */
-function platformSuzgeci(satirlar, hedefKabuk) {
+/**
+ * 1. süzgeç: GEREKLİ platformlar completed + kabuk hedefi + guncel. Dört platformun hepsine
+ * bakılır; gerekli olmayan platformun kusuru `bekleyen`e yazılır, yayını engellemez.
+ */
+function platformSuzgeci(satirlar, hedefKabuk, gerekli = VARSAYILAN_GEREKLI) {
   const eksik = [];
+  const bekleyen = [];
   for (const p of HEDEF_PLATFORMLAR) {
     const r = (satirlar || []).find((x) => x.platform === p);
-    if (!r) eksik.push(`${p}:satir-yok`);
-    else if (r.status !== 'completed') eksik.push(`${p}:${r.status}`);
-    else if (r.kabuk_surum !== hedefKabuk) eksik.push(`${p}:kabuk-${r.kabuk_surum}`);
-    else if (r.kabuk_durum !== 'guncel') eksik.push(`${p}:kabuk-durum-${r.kabuk_durum}`);
+    let kusur = null;
+    if (!r) kusur = `${p}:satir-yok`;
+    else if (r.status !== 'completed') kusur = `${p}:${r.status}`;
+    else if (r.kabuk_surum !== hedefKabuk) kusur = `${p}:kabuk-${r.kabuk_surum}`;
+    else if (r.kabuk_durum !== 'guncel') kusur = `${p}:kabuk-durum-${r.kabuk_durum}`;
+    if (kusur) (gerekli.includes(p) ? eksik : bekleyen).push(kusur);
   }
-  return { bitti: eksik.length === 0, eksik };
+  return { bitti: eksik.length === 0, eksik, bekleyen };
 }
 
-/** 2. motor: dört platformun motoru kanonik mi? */
-function motorDenetle(satirlar, kanonik) {
-  if (!kanonik) return { tamam: false, sebep: 'kanonik-motor-yok' };
+/** 2. motor: GEREKLİ platformların motoru kanonik mi? Gerekli olmayanın farkı → `bekleyen`. */
+function motorDenetle(satirlar, kanonik, gerekli = VARSAYILAN_GEREKLI) {
+  if (!kanonik) return { tamam: false, sebep: 'kanonik-motor-yok', bekleyen: [] };
   const farkli = [];
+  const bekleyen = [];
   for (const p of HEDEF_PLATFORMLAR) {
     const r = (satirlar || []).find((x) => x.platform === p) || {};
     if (r.motor_durum !== 'guncel' || r.motor_sha12 !== kanonik.sha12) {
-      farkli.push(`${p}:${r.motor_sha12 || 'yok'}/${r.motor_durum || 'yok'}`);
+      const kusur = `${p}:${r.motor_sha12 || 'yok'}/${r.motor_durum || 'yok'}`;
+      if (gerekli.includes(p)) farkli.push(kusur);
+      else bekleyen.push(kusur.replace(':', ':motor-'));
     }
   }
   return farkli.length
-    ? { tamam: false, sebep: `motor-kanonik-uyusmaz(${farkli.join(',')})` }
-    : { tamam: true, sebep: null };
+    ? { tamam: false, sebep: `motor-kanonik-uyusmaz(${farkli.join(',')})`, bekleyen }
+    : { tamam: true, sebep: null, bekleyen };
 }
 
 function kitaplarCoz(ham) {
@@ -288,7 +333,11 @@ function motorDizinleri(gecerli, zipGirdileri) {
   return { dizinler: [...new Set(d)].sort(dizinSirala), kaynak: 'db-kitaplar' };
 }
 
-/** Paket sürümü = 2.<panel>.<en büyük sayaç> (geçerli build sürümü, set ve 4 platform sayacı). */
+/**
+ * Paket sürümü = 2.<panel>.<en büyük sayaç> (geçerli build sürümü, set ve 4 platform sayacı).
+ * Gerekli platform listesinden BAĞIMSIZDIR: bekleyen (mac/android) satırın sayacı da girer, böylece
+ * yeni G sürümü hiçbir platformun kurulu paket sürümünün altına düşmez (monoton sürüm).
+ */
 function paketSurumu(gecerli, satirlar, kitap) {
   const c = gSurum.coz(gecerli.surum);
   const sayaclar = [c.sayac, Number(kitap && kitap.set_paket_sayaci) || 0];
@@ -568,12 +617,17 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
   const kitap = db.kitaplar.get(id) || null;
   const satirlar = db.platformlar.get(id) || [];
   const s = { set: id, ad: kitap ? kitap.book_title : null, karar: null, sebep: null,
-    uyarilar: [],
+    uyarilar: [], bekleyen: [],
     beyazListe: Object.prototype.hasOwnProperty.call(yukleMod.YUKLEME_BEYAZ_LISTE, id) };
   if (!kitap) return Object.assign(s, { karar: 'atla', sebep: 'db-kaydi-yok' });
-  const suz = platformSuzgeci(satirlar, a.kabuk);
+  const gerekli = a.gerekli || VARSAYILAN_GEREKLI;
+  const suz = platformSuzgeci(satirlar, a.kabuk, gerekli);
+  s.bekleyen.push(...suz.bekleyen);
   if (!suz.bitti) return Object.assign(s, { karar: 'bitmemis', sebep: suz.eksik.join(',') });
-  const md = motorDenetle(satirlar, kanonik);
+  const md = motorDenetle(satirlar, kanonik, gerekli);
+  // Aynı platform süzgeçte zaten bekleyense (ör. mac:queued) motor kusuru ikinci kez yazılmaz.
+  const bekleyenPlat = new Set(s.bekleyen.map((b) => b.split(':')[0]));
+  s.bekleyen.push(...md.bekleyen.filter((b) => !bekleyenPlat.has(b.split(':')[0])));
   if (!md.tamam) return Object.assign(s, { karar: 'atla', sebep: md.sebep });
   const bs = buildSec(db.buildler.get(id));
   if (!bs.gecerli) return Object.assign(s, { karar: 'atla', sebep: bs.sebep });
@@ -654,7 +708,8 @@ async function kos(a, ops = {}) {
   const bildirimAcik = !a.bildirimsiz && a.kip === 'uygula';
   const acik = ops.acik || anahtar.URETIM_ACIK_ANAHTAR;
   const cikti = path.resolve(a.cikti || yukleMod.E2E_VARSAYILAN_CIKTI);
-  const rapor = { zaman, kip: a.kip, kabuk: a.kabuk, setler: [], nadirKarari: [], cikis: 0 };
+  const rapor = { zaman, kip: a.kip, kabuk: a.kabuk, gerekli: a.gerekli || VARSAYILAN_GEREKLI,
+    setler: [], nadirKarari: [], cikis: 0 };
   try {
     const kanonik = 'kanonik' in ops ? ops.kanonik : kanonikMotorOku();
     rapor.kanonikMotor = kanonik ? kanonik.sha12 : null;
@@ -686,7 +741,8 @@ async function kos(a, ops = {}) {
         paketSurum: s.paketSurum || null,
         yeniSurum: (u && u.yeniSurum) || s.tahminiSurum || null,
         dogrula: u && u.adimlar.dogrula ? u.adimlar.dogrula.gecti : null,
-        uyarilar: s.uyarilar.length ? s.uyarilar : undefined }, logYolu);
+        uyarilar: s.uyarilar.length ? s.uyarilar : undefined,
+        bekleyen: s.bekleyen.length ? s.bekleyen : undefined }, logYolu);
       const bildirilecek = ['hata', 'nadir', 'atla', 'yayinlandi'].includes(s.karar);
       if (bildirilecek && bildirimAcik) {
         const ad = s.karar === 'yayinlandi'
@@ -720,6 +776,7 @@ function ozetMetni(r) {
   const say = {};
   for (const s of r.setler) say[s.karar] = (say[s.karar] || 0) + 1;
   const satir = [`G otomatik — kip ${r.kip}, kabuk ${r.kabuk}, kanonik motor ${r.kanonikMotor}, ` +
+    `gerekli ${(r.gerekli || []).join('+')}, ` +
     `${r.setler.length} set: ${Object.entries(say).map(([k, v]) => `${k} ${v}`).join(', ')}`];
   if (r.hata) satir.push(`HATA: ${r.hata}`);
   for (const s of r.setler) {
@@ -730,6 +787,7 @@ function ozetMetni(r) {
         ` (${s.motorDizinKaynagi}), beyaz liste ${s.beyazListe ? 'evet' : 'hayır'}]`;
     }
     satir.push(`- ${s.set} ${s.ad || ''} → ${s.karar}: ${s.sebep}${ek}`);
+    if ((s.bekleyen || []).length) satir.push(`    … bekleyen: [${s.bekleyen.join(', ')}]`);
     for (const u of s.uyarilar || []) satir.push(`    ! ${u}`);
     for (const p of s.plan || []) satir.push(`    $ ${p}`);
   }
@@ -742,7 +800,7 @@ function ozetMetni(r) {
 async function main(argv, ops = {}) {
   let a;
   try {
-    a = argsAyristir(argv);
+    a = argsAyristir(argv, ops.ortam || process.env);
   } catch (e) {
     return { cikis: 2, metin: `HATA: ${e.message}` };
   }
@@ -752,6 +810,9 @@ async function main(argv, ops = {}) {
 
 module.exports = {
   HEDEF_PLATFORMLAR,
+  VARSAYILAN_GEREKLI,
+  GEREKLI_ORTAM,
+  gerekliCoz,
   VARSAYILAN_KABUK,
   CIKIS_KILIT,
   LOG_YOLU,

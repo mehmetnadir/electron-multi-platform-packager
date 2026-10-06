@@ -19,6 +19,10 @@ const KANONIK_SHA = '03e8af70a0f3' + 'a'.repeat(52);
 const KANONIK = { sha12: '03e8af70a0f3', sha256: KANONIK_SHA, boyut: 548196,
   yol: '/x/motor/' + MOTOR };
 const TABAN = 'https://cdn.ydspublishing.com/guncelleme';
+/** Eski (dört platform zorunlu) davranış. */
+const DORT = { G_OTO_GEREKLI: 'windows,pardus,mac,android' };
+// Koşu kabuğundan gelen G_OTO_GEREKLI varsayılan-davranış testlerini bozmasın.
+delete process.env.G_OTO_GEREKLI;
 
 const { privateKey: OZEL } = crypto.generateKeyPairSync('ed25519');
 const ACIK = anahtar.acikAnahtarB64(OZEL);
@@ -41,7 +45,9 @@ const KITAPLAR5 = JSON.stringify([1, 2, 3, 4, 5].map((n) => ({ n, id: String(257
 
 function platSatirlari(id, ops = {}) {
   return ['windows', 'pardus', 'mac', 'android'].map((p) => [
-    id, p, (ops.status || {})[p] || 'completed', '7', '03e8af70a0f3', 'guncel',
+    id, p, (ops.status || {})[p] || 'completed', (ops.sayac || {})[p] || '7',
+    ((ops.motor || {})[p] || ['03e8af70a0f3', 'guncel'])[0],
+    ((ops.motor || {})[p] || ['03e8af70a0f3', 'guncel'])[1],
     (ops.kabuk || {})[p] || '1.13.14', 'guncel', '2026-10-06 11:02:16',
   ]);
 }
@@ -165,6 +171,10 @@ test('paketSurumu: 2.<build paneli>.<en büyük sayaç>', () => {
   const g = { surum: '2.25.7' };
   assert.equal(oy.paketSurumu(g, [{ paket_sayaci: '7' }, { paket_sayaci: '8' }], {}), '2.25.8');
   assert.equal(oy.paketSurumu(g, [], { set_paket_sayaci: '7' }), '2.25.7');
+  // (d) Gerekli olmayan, henüz queued android satırının sayacı da hesaba girer (monoton sürüm).
+  const satir = platSatirlari('1', { status: { android: 'queued' }, sayac: { android: '11' } })
+    .map((r) => Object.fromEntries(PLAT_B.map((b, i) => [b, r[i]])));
+  assert.equal(oy.paketSurumu(g, satir, { set_paket_sayaci: '7' }), '2.25.11');
 });
 
 test('motorDizinleri: yerel build listesi kesin (A1 → boş), yoksa DB n', () => {
@@ -187,12 +197,32 @@ test('bilesimKiyasla: ekleme/çıkarma/değişim; önceki yoksa değişmedi + no
   assert.equal(oy.bilesimKiyasla({ kitaplar: KITAPLAR4 }, { kitaplar: KITAPLAR4 }).degisti, false);
 });
 
-test('motorDenetle: DB motor_sha12 kanonikten farklıysa tamam değil', () => {
+test('motorDenetle: gerekli platformun motor_sha12 kanonikten farklıysa tamam değil', () => {
   const satir = platSatirlari('1').map((r) => Object.fromEntries(PLAT_B.map((b, i) => [b, r[i]])));
   assert.equal(oy.motorDenetle(satir, KANONIK).tamam, true);
   satir[2].motor_sha12 = 'ffffffffffff';
-  assert.match(oy.motorDenetle(satir, KANONIK).sebep, /mac:ffffffffffff/);
+  // Varsayılan (windows+pardus): mac farkı engellemez, bekleyen olarak döner.
+  const v = oy.motorDenetle(satir, KANONIK);
+  assert.equal(v.tamam, true);
+  assert.deepEqual(v.bekleyen, ['mac:motor-ffffffffffff/guncel']);
+  // Dört platform listesi: eski davranış — mac farkı engeller.
+  const gerekli4 = oy.gerekliCoz(DORT.G_OTO_GEREKLI);
+  assert.match(oy.motorDenetle(satir, KANONIK, gerekli4).sebep, /mac:ffffffffffff/);
+  satir[1].motor_durum = 'eski';
+  assert.match(oy.motorDenetle(satir, KANONIK).sebep, /^motor-kanonik-uyusmaz\(pardus:/);
   assert.equal(oy.motorDenetle(satir, null).sebep, 'kanonik-motor-yok');
+});
+
+test('gerekliCoz / G_OTO_GEREKLI: varsayılan windows+pardus; boşluk/büyük harf; bilinmeyen RED', () => {
+  assert.deepEqual(oy.VARSAYILAN_GEREKLI, ['windows', 'pardus']);
+  assert.deepEqual(oy.gerekliCoz(undefined), ['windows', 'pardus']);
+  assert.deepEqual(oy.gerekliCoz('  '), ['windows', 'pardus']);
+  assert.deepEqual(oy.gerekliCoz(' Android , windows,windows'), ['windows', 'android']);
+  assert.deepEqual(oy.gerekliCoz(DORT.G_OTO_GEREKLI), ['windows', 'pardus', 'mac', 'android']);
+  assert.throws(() => oy.gerekliCoz('windows,linux'), /bilinmeyen platform: linux/);
+  assert.deepEqual(oy.argsAyristir(['1'], {}).gerekli, ['windows', 'pardus']);
+  assert.deepEqual(oy.argsAyristir(['1'], { G_OTO_GEREKLI: 'pardus' }).gerekli, ['pardus']);
+  assert.throws(() => oy.argsAyristir(['1'], { G_OTO_GEREKLI: 'winows' }), /G_OTO_GEREKLI/);
 });
 
 test('kanonikMotorOku: sha256 öneki ve boyut tutmalı', () => {
@@ -208,19 +238,116 @@ test('kanonikMotorOku: sha256 öneki ve boyut tutmalı', () => {
   assert.equal(oy.kanonikMotorOku(json, dosya), null);
 });
 
-/* ------------------------------------------------------------------ istenen beş senaryo */
+/* ------------------------------------------------ gerekli platformlar (G_OTO_GEREKLI, 06.10) */
 
-test('4 platform bitmemiş → seçilmez (bitmemis), canlıya hiç gidilmez', async () => {
+test('(a) mac/android queued, windows+pardus güncel → seçilir; bekleyen karar/log/özette', async () => {
+  const { ops } = ortam();
+  const getir = sahteGetir({});
+  const plat = platSatirlari('45550', { status: { android: 'queued', mac: 'queued' },
+    motor: { android: ['eskieskieski', 'eski'] } });
+  const r = await oy.kos(oy.argsAyristir(['45550'], {}), { ...ops, getir, sql: sahteSql({ plat }) });
+  const s = r.setler[0];
+  assert.equal(s.karar, 'sec');
+  assert.match(s.sebep, /^ilk/);
+  // android hem queued hem motor eski: platform başına tek bekleyen girdisi.
+  assert.deepEqual(s.bekleyen, ['mac:queued', 'android:queued']);
+  assert.deepEqual(r.gerekli, ['windows', 'pardus']);
+  assert.ok(getir.istekler.length > 0, 'canlıya gidildi');
+  const log = logSatirlari(ops.logYolu)[0];
+  assert.deepEqual(log.bekleyen, ['mac:queued', 'android:queued']);
+  const m = await oy.main(['45550'], { ...ops, ortam: {}, getir: sahteGetir({}),
+    sql: sahteSql({ plat }) });
+  assert.match(m.metin, /gerekli windows\+pardus/);
+  assert.match(m.metin, /bekleyen: \[mac:queued, android:queued\]/);
+});
+
+test('(a2) gerekli olmayan android motoru eski (completed) → yayın engellenmez, bekleyen', async () => {
+  const { ops } = ortam();
+  const plat = platSatirlari('45550', { motor: { android: ['eskieskieski', 'eski'] } });
+  const r = await oy.kos(oy.argsAyristir(['45550'], {}),
+    { ...ops, getir: sahteGetir({}), sql: sahteSql({ plat }) });
+  assert.equal(r.setler[0].karar, 'sec');
+  assert.deepEqual(r.setler[0].bekleyen, ['android:motor-eskieskieski/eski']);
+});
+
+test('(b) pardus queued → seçilmez (bitmemis), canlıya gidilmez; mac bekleyen olarak yazılır', async () => {
+  const { ops } = ortam();
+  const getir = sahteGetir({});
+  const plat = platSatirlari('45550', { status: { pardus: 'queued', mac: 'queued' } });
+  const r = await oy.kos(oy.argsAyristir(['45550'], {}), { ...ops, getir, sql: sahteSql({ plat }) });
+  const s = r.setler[0];
+  assert.equal(s.karar, 'bitmemis');
+  assert.equal(s.sebep, 'pardus:queued');
+  assert.deepEqual(s.bekleyen, ['mac:queued']);
+  assert.equal(getir.istekler.length, 0);
+  // windows motoru kanonik değilse de engeller (gerekli).
+  const plat2 = platSatirlari('45550', { motor: { windows: ['ffffffffffff', 'guncel'] } });
+  const r2 = await oy.kos(oy.argsAyristir(['45550'], {}),
+    { ...ops, getir: sahteGetir({}), sql: sahteSql({ plat: plat2 }) });
+  assert.equal(r2.setler[0].karar, 'atla');
+  assert.match(r2.setler[0].sebep, /motor-kanonik-uyusmaz\(windows:ffffffffffff\/guncel\)/);
+});
+
+test('(c) G_OTO_GEREKLI dört platform → eski davranış: mac/android queued bitmemis', async () => {
   const { ops } = ortam();
   const getir = sahteGetir({});
   const plat = platSatirlari('45550', { status: { android: 'queued', mac: 'queued' } });
-  const r = await oy.kos(oy.argsAyristir(['45550']), { ...ops, getir, sql: sahteSql({ plat }) });
+  const r = await oy.kos(oy.argsAyristir(['45550'], DORT),
+    { ...ops, getir, sql: sahteSql({ plat }) });
   assert.equal(r.setler[0].karar, 'bitmemis');
-  assert.match(r.setler[0].sebep, /mac:queued/);
-  assert.match(r.setler[0].sebep, /android:queued/);
+  assert.equal(r.setler[0].sebep, 'mac:queued,android:queued');
+  assert.deepEqual(r.setler[0].bekleyen, []);
   assert.equal(getir.istekler.length, 0);
   assert.equal(r.cikis, 0);
+  assert.equal(logSatirlari(ops.logYolu)[0].bekleyen, undefined, 'eski log biçimi');
+  // mac motoru kanonik değil → atla (eski davranış).
+  const plat2 = platSatirlari('45550', { motor: { mac: ['ffffffffffff', 'guncel'] } });
+  const r2 = await oy.kos(oy.argsAyristir(['45550'], DORT),
+    { ...ops, getir: sahteGetir({}), sql: sahteSql({ plat: plat2 }) });
+  assert.equal(r2.setler[0].karar, 'atla');
+  assert.equal(r2.setler[0].sebep, 'motor-kanonik-uyusmaz(mac:ffffffffffff/guncel)');
+  // Hepsi tamam → aynı seçim ve aynı sürümler (eski davranışla birebir).
+  const r3 = await oy.kos(oy.argsAyristir(['45550'], DORT),
+    { ...ops, getir: sahteGetir({}), sql: sahteSql() });
+  assert.equal(r3.setler[0].karar, 'sec');
+  assert.equal(r3.setler[0].paketSurum, '2.25.7');
+  assert.equal(r3.setler[0].tahminiSurum, '2.25.8');
 });
+
+test('(d) sürüm hesabı dört platform sayacını kullanır (queued mac sayacı dahil)', async () => {
+  const { ops } = ortam();
+  const plat = platSatirlari('45550', { status: { mac: 'queued', android: 'queued' },
+    sayac: { mac: '9' } });
+  const r = await oy.kos(oy.argsAyristir(['45550'], {}),
+    { ...ops, getir: sahteGetir({}), sql: sahteSql({ plat }) });
+  const s = r.setler[0];
+  assert.equal(s.karar, 'sec');
+  assert.equal(s.paketSurum, '2.25.9', 'yalnız windows+pardus (7) değil, dördünün en büyüğü');
+  assert.equal(s.tahminiSurum, '2.25.10');
+  const uret = s.komutlar[0].arg;
+  assert.equal(uret[uret.indexOf('--onceki-surum') + 1], '2.25.9');
+});
+
+test('android gerekli değilken android-shim kapısı yine çalışır (shim\'siz canlı index → nadir)', async () => {
+  const { ops } = ortam();
+  const t = canliTablo('45550', { motorSha: 'e'.repeat(64),
+    index: '<html><head><script src="empp-fs-shim.js"></script>' });
+  const plat = platSatirlari('45550', { status: { android: 'queued' } });
+  const r = await oy.kos(oy.argsAyristir(['45550', '--uygula'], {}),
+    { ...ops, getir: sahteGetir(t), sql: sahteSql({ plat }),
+      adimKos: async () => assert.fail('donuk sette adım koşmamalı') });
+  assert.equal(r.setler[0].karar, 'nadir');
+  assert.match(r.setler[0].sebep, /android-donuk-index/);
+  assert.deepEqual(r.setler[0].bekleyen, ['android:queued']);
+});
+
+test('main: G_OTO_GEREKLI bilinmeyen platform → çıkış 2', async () => {
+  const m = await oy.main(['45550'], { ortam: { G_OTO_GEREKLI: 'windows,ios' } });
+  assert.equal(m.cikis, 2);
+  assert.match(m.metin, /G_OTO_GEREKLI bilinmeyen platform: ios/);
+});
+
+/* ------------------------------------------------------------------ istenen beş senaryo */
 
 test('kabuk sürümü hedef değil → bitmemis', async () => {
   const { ops } = ortam();
