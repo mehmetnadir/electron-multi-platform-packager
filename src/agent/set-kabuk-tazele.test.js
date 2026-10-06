@@ -811,18 +811,29 @@ test('ekSonKontrol: son.json yok/başka kitap/okuma hatası → var:false; bu ki
 
 const KE = require('./kabuk-ek');
 
-/** Sahte CDN (A'nın getir biçimi: {status, buffer}); `nesneler` URL yolu (sorgusuz) → Buffer. */
+/** Test anahtar çifti (ed25519, geçici): Mac özel yarıyla imzalar, ProBook açık yarıyla doğrular. */
+const ANAHTAR = crypto.generateKeyPairSync('ed25519');
+const ACIK_PEM = ANAHTAR.publicKey.export({ type: 'spki', format: 'pem' });
+const OZEL_PEM = ANAHTAR.privateKey.export({ type: 'pkcs8', format: 'pem' });
+const sorgusuz = (url) => url.split('?')[0];
+
+/** Sahte CDN (A'nın getir biçimi: {status, buffer}); `nesneler` sorgusuz URL → Buffer. */
 function sahteCdn(nesneler = new Map()) {
   const istekler = [];
   const getir = async (url) => {
     istekler.push(url);
-    const yol = url.split('?')[0];
+    const yol = sorgusuz(url);
     return nesneler.has(yol) ? { status: 200, buffer: nesneler.get(yol) } : { status: 404, buffer: Buffer.alloc(0) };
   };
-  return { getir, istekler, nesneler };
+  /** Eki (ve imzasını) yayınla; `imzala: false` → imza nesnesi konmaz. */
+  const yayinla = (sha, buf, { imzala = true, imzaBuf = buf } = {}) => {
+    nesneler.set(sorgusuz(KE.ekUrl('45550', sha)), buf);
+    if (imzala) nesneler.set(sorgusuz(KE.imzaUrl('45550', sha)), Buffer.from(KE.ekImzala(imzaBuf, OZEL_PEM)));
+  };
+  return { getir, istekler, nesneler, yayinla };
 }
 
-/** Mac tarafı: ikili + gerçek parmak izi → ekCikti → manifestKur + ekPaketle → CDN nesnesi. */
+/** Mac tarafı: ikili + gerçek parmak izi → ekCikti → manifestKur + ekPaketle + imza → CDN nesnesi. */
 async function gercekEkUret({ zip = buildZip(), ayar = WEBZ } = {}) {
   const yakalanan = [];
   const r = await kostur({ zip, ayar, ekCikti: (o) => { yakalanan.push(o); } });
@@ -833,32 +844,71 @@ async function gercekEkUret({ zip = buildZip(), ayar = WEBZ } = {}) {
     webzSettingsSha: c.webzSettingsSha, dosyalar: c.dosyalar });
   const buf = KE.ekPaketle({ manifest, dosyalar: c.dosyalar }, { klasorler });
   const cdn = sahteCdn(new Map([
-    [KE.ekUrl('45550', c.girdiSha), buf],
-    [KE.sonUrl('45550').split('?')[0], Buffer.from(JSON.stringify({ bookId: '45550', girdiSha: c.girdiSha }))],
+    [sorgusuz(KE.sonUrl('45550')), Buffer.from(JSON.stringify({ bookId: '45550', girdiSha: c.girdiSha }))],
   ]));
-  return { c, buf, cdn };
+  cdn.yayinla(c.girdiSha, buf);
+  return { c, buf, cdn, manifest, klasorler };
 }
 
-test('GERÇEK modül: Mac ek üretir → ProBook (ek kipi, ikilisiz) uygular → uygulandi, kapı koşar', async () => {
+const ekKip = (cdn, ek = {}) => kostur({
+  platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir, acikAnahtar: ACIK_PEM, ...ek,
+});
+
+test('GERÇEK modül: Mac imzalı ek üretir → ProBook (ek kipi, ikilisiz) doğrular, uygular → uygulandi', async () => {
   const { c, cdn } = await gercekEkUret();
   assert.equal(c.girdiSha, KE.girdiParmakIzi({ kip: 'bookN', girdi: c.girdi, kapaklar: c.kapaklar, a1Girdi: null }));
-  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir });
+  const r = await ekKip(cdn);
   assert.equal(r.r.durum, 'uygulandi', r.r.neden);
   assert.equal(r.r.girdiSha, c.girdiSha, 'iki makine aynı girdiden aynı parmak izi');
   assert.match(new AdmZip(r.zipYolu).getEntry('scripts/language-set.js').getData().toString(), /sonrakiSatirDugmesi/);
   assert.equal(fs.existsSync(path.join(r.d, 'cagri.log')), false, 'ikili çağrılmadı');
+  assert.ok(cdn.istekler.some((u) => sorgusuz(u).endsWith('.imza')), 'imza istendi');
   const on = await S.ekSonKontrol({ bookId: '45550', getir: cdn.getir });
   assert.deepEqual([on.var, on.neden, on.son.girdiSha], [true, null, c.girdiSha]);
 });
 
-test('GERÇEK modül: bir bayt bozuk ek → ERTELE (ek-bozuk), iş kopyası bayt-aynı', async () => {
+test('GERÇEK modül: açık anahtar dosyadan (EMPP_KABUK_EK_ACIK_ANAHTAR) → uygulandi', async () => {
+  const { cdn } = await gercekEkUret();
+  const pem = path.join(tmp('pem'), 'acik.pem');
+  fs.writeFileSync(pem, ACIK_PEM);
+  const r = await ekKip(cdn, { acikAnahtar: null, env: { EMPP_KABUK_EK_ACIK_ANAHTAR: pem } });
+  assert.equal(r.r.durum, 'uygulandi', r.r.neden);
+});
+
+test('GERÇEK modül: bir bayt bozuk ek (eski imza) → ERTELE (ek-imza), iş kopyası bayt-aynı', async () => {
   const { c, buf, cdn } = await gercekEkUret();
   const bozuk = Buffer.from(buf);
-  // Sıkıştırılmamışsa kabuk metninde, değilse ortada bir bayt çevrilir.
-  const i = bozuk.indexOf(Buffer.from('sonrakiSatirDugmesi'));
-  bozuk[i > 0 ? i : Math.floor(bozuk.length / 2)] ^= 0x01;
-  cdn.nesneler.set(KE.ekUrl('45550', c.girdiSha), bozuk);
-  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir });
+  bozuk[Math.floor(bozuk.length / 2)] ^= 0x01;
+  cdn.yayinla(c.girdiSha, bozuk, { imzaBuf: buf }); // imza bozulmadan önceki baytlara ait
+  const r = await ekKip(cdn);
+  assert.equal(r.r.durum, 'ertele', r.r.neden);
+  assert.equal(r.r.kod, 'ek-imza');
+  assert.ok(r.once.equals(r.sonra));
+});
+
+test('GERÇEK modül: imza yok → ERTELE (ek-imza); başka anahtarla imza → ERTELE (ek-imza)', async () => {
+  const { c, buf, cdn } = await gercekEkUret();
+  cdn.nesneler.delete(sorgusuz(KE.imzaUrl('45550', c.girdiSha)));
+  let r = await ekKip(cdn);
+  assert.equal(r.r.kod, 'ek-imza', r.r.neden);
+  cdn.yayinla(c.girdiSha, buf);
+  const baska = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
+  r = await ekKip(cdn, { acikAnahtar: baska });
+  assert.equal(r.r.kod, 'ek-imza', r.r.neden);
+  assert.ok(r.once.equals(r.sonra));
+});
+
+test('GERÇEK modül: imzası GEÇERLİ ama içerik bozuk (sha tutmuyor) → ERTELE (ek-bozuk)', async () => {
+  const { c, manifest, cdn } = await gercekEkUret();
+  const dosyalar = new Map(c.dosyalar);
+  dosyalar.set('index.html', Buffer.concat([dosyalar.get('index.html'), Buffer.from('<!-- x -->')]));
+  // Manifest eski sha'ları taşır; zip yeniden paketlenmez, el ile kurulur ve İMZALANIR.
+  const zip = KE.zipYaz([
+    { ad: KE.MANIFEST_ADI, veri: Buffer.from(KE.kanonikJson(manifest), 'utf8') },
+    ...[...dosyalar.keys()].sort().map((ad) => ({ ad, veri: dosyalar.get(ad) })),
+  ]);
+  cdn.yayinla(c.girdiSha, zip);
+  const r = await ekKip(cdn);
   assert.equal(r.r.durum, 'ertele', r.r.neden);
   assert.equal(r.r.kod, 'ek-bozuk');
   assert.ok(r.once.equals(r.sonra));
@@ -866,7 +916,7 @@ test('GERÇEK modül: bir bayt bozuk ek → ERTELE (ek-bozuk), iş kopyası bayt
 
 test('GERÇEK modül: Web-Z üye sırası değişti (girdiSha farklı) → ek yok → ERTELE (ek-yok)', async () => {
   const { cdn } = await gercekEkUret();
-  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir, ayar: WEBZ_SIRALI });
+  const r = await ekKip(cdn, { ayar: WEBZ_SIRALI });
   assert.equal(r.r.durum, 'ertele', r.r.neden);
   assert.equal(r.r.kod, 'ek-yok');
   assert.ok(r.once.equals(r.sonra));
