@@ -158,6 +158,8 @@ async function sahtePaket(kitaplar) {
     const dizin = ad === '' ? kok : pth.join(kok, ad);
     await fsx.ensureDir(dizin);
     await fsx.writeFile(pth.join(dizin, 'index.html'), '<html><body><p>k</p></body></html>');
+    // Motor imzası (kitap kökü = index.html + app.config.js; on-getirme-hedefi.js, kapıyla aynı).
+    await fsx.writeFile(pth.join(dizin, 'app.config.js'), 'window.cfg={};');
     if (sayfalar > 0) {
       const sayfaDizini = pth.join(dizin, 'assets', '45516', 'pages');
       await fsx.ensureDir(sayfaDizini);

@@ -30,7 +30,8 @@
 
 const path = require('path');
 const fs = require('fs-extra');
-const { a1DuzeniMi, A1_MOTOR_SAYFASI } = require('./a1-duzen');
+const { A1_MOTOR_SAYFASI } = require('./a1-duzen');
+const hedef = require('./on-getirme-hedefi');
 
 const ISARET = 'EMPP_ON_GETIRME';
 const VARSAYILAN_ARA_MS = 120;
@@ -170,33 +171,67 @@ async function sayfalariTopla(kitapDizini) {
 }
 
 /**
- * Pakete uygular: her kitap dizininin index.html'ine ön-getirme betiğini enjekte eder.
- * SET paketinde her alt-kitap ayrı kitaptır ve kendi sayfa listesini alır.
+ * Paket kökünün ilk iki katmanındaki hedef tanımına giren dosyaları kök-göreli listeler:
+ * kök ve 1. seviye dizinlerin `index.html` / `app.config.js`'i + A1 kararının istediği kök
+ * dosyaları. Kitap kökü ve hedef sayfa kararı `on-getirme-hedefi.js`'ten (kapıyla AYNI) gelir.
+ */
+async function hedefYollari(paketKoku) {
+  const yollar = [];
+  const dizinler = [''];
+  for (const ad of await fs.readdir(paketKoku)) {
+    if ((await fs.stat(path.join(paketKoku, ad))).isDirectory()) dizinler.push(ad);
+  }
+  for (const d of dizinler) {
+    for (const dosya of ['index.html', 'app.config.js']) {
+      const rel = d ? `${d}/${dosya}` : dosya;
+      if (await fs.pathExists(path.join(paketKoku, ...rel.split('/')))) yollar.push(rel);
+    }
+  }
+  for (const rel of hedef.A1_KOK_DOSYALARI) {
+    if (!yollar.includes(rel) && await fs.pathExists(path.join(paketKoku, ...rel.split('/')))) {
+      yollar.push(rel);
+    }
+  }
+  return yollar;
+}
+
+/**
+ * Pakete uygular: her KİTAP KÖKÜNÜN (index.html + app.config.js) hedef sayfasına ön-getirme
+ * betiğini enjekte eder. SET paketinde her alt-kitap ayrı kitaptır ve kendi sayfa listesini alır.
+ *
+ * Kök ve hedef tanımı `on-getirme-hedefi.js` — Windows statik kapısı madde 10 ile AYNI kaynak
+ * (2026-10-06, 45478/45480: enjeksiyon `kapak/index.html`e yazıyor, kapı kök kabuğa bakıyordu).
+ * A1 (tek motorlu set, inceleme Ö4): kök index.html sf425 KABUĞUDUR (kitap açmaz); hedef motor
+ * sayfası `kapak/index.html` (`<base href="../">` → yollar kök-göreli, Electron'da `__dirname`
+ * köke çekilir). Kök sayfa listesi motor sayfasına kapak süzgeciyle girer.
  * @returns {Promise<{kitap:string, sayfa:number, sebep:string}[]>}
  */
 async function paketeUygula(paketKoku, { log = () => {}, araMs, baslangicMs } = {}) {
   const sonuc = [];
-  const adaylar = [paketKoku];
-  for (const ad of await fs.readdir(paketKoku)) {
-    const tam = path.join(paketKoku, ad);
-    if ((await fs.stat(tam)).isDirectory()) adaylar.push(tam);
+  const yollar = await hedefYollari(paketKoku);
+  let kapakHtml = null;
+  try {
+    kapakHtml = await fs.readFile(path.join(paketKoku, ...A1_MOTOR_SAYFASI.split('/')), 'utf8');
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') log(`   ön-getirme: ${A1_MOTOR_SAYFASI} okunamadı (${e.code || e.message})`);
   }
-  // A1 (tek motorlu set, inceleme Ö4): kök index.html sf425 KABUĞUDUR (kitap açmaz); sayfaları
-  // ısıtacak sayfa motorun kendisi, `kapak/index.html` (`<base href="../">` → yollar kök-göreli,
-  // Electron'da `__dirname` köke çekilir). Kök sayfa listesi motor sayfasına, kapak süzgeciyle girer.
-  const a1 = a1DuzeniMi(paketKoku);
-  for (const dizin of adaylar) {
-    if (a1 && dizin === path.join(paketKoku, A1_MOTOR_SAYFASI.split('/')[0])) continue;
-    const html = a1 && dizin === paketKoku
-      ? path.join(paketKoku, ...A1_MOTOR_SAYFASI.split('/')) : path.join(dizin, 'index.html');
-    if (!(await fs.pathExists(html))) continue;
-    const sayfalar = await sayfalariTopla(dizin);
-    if (!sayfalar.length) continue;
+  for (const { kok, sayfa: hedefSayfa, a1 } of hedef.onGetirmeHedefleri(yollar, kapakHtml)) {
+    const kitapDizini = kok ? path.join(paketKoku, ...kok.split('/')) : paketKoku;
+    const html = path.join(paketKoku, ...hedefSayfa.split('/'));
+    const kitap = path.posix.dirname(hedefSayfa) === '.' ? '(kök)' : path.posix.dirname(hedefSayfa);
+    if (!(await fs.pathExists(html))) {
+      log(`   ön-getirme: ${kitap} — ${hedefSayfa} yok (enjekte EDİLMEDİ)`);
+      continue;
+    }
+    const sayfalar = await sayfalariTopla(kitapDizini);
+    if (!sayfalar.length) {
+      log(`   ön-getirme: ${kitap} — sayfa görseli yok (enjekte EDİLMEDİ)`);
+      continue;
+    }
     const mevcut = await fs.readFile(html, 'utf8');
     const { icerik, uygulandi, sebep } = icerigeEnjekteEt(
-      mevcut, betikUret(sayfalar, { araMs, baslangicMs, kapakSuz: a1 && dizin === paketKoku }));
+      mevcut, betikUret(sayfalar, { araMs, baslangicMs, kapakSuz: a1 && !kok }));
     if (uygulandi) await fs.writeFile(html, icerik, 'utf8');
-    const kitap = path.relative(paketKoku, a1 && dizin === paketKoku ? path.dirname(html) : dizin) || '(kök)';
     sonuc.push({ kitap, sayfa: sayfalar.length, sebep });
     log(`   ön-getirme: ${kitap} — ${sayfalar.length} sayfa (${sebep})`);
   }

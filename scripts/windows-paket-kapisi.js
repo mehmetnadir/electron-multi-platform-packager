@@ -69,6 +69,8 @@ const { spawnSync } = require('child_process');
  * sözü korunur.
  */
 const SET_KABUK = require('../src/packaging/set-kabuk');
+// Kitap kökü + ön-getirme hedef sayfası: enjeksiyonla TEK KAYNAK (madde 10, 2026-10-06).
+const ON_GETIRME_HEDEFI = require('../src/packaging/on-getirme-hedefi');
 // Kanal Ş işaretinin/tehlike ölçütünün TEK kaynağı — kapı kendi kopyasını tutmaz.
 const ICERIK = require('../src/packaging/icerik-guncelleme');
 // Kök menü (ImWin32.dll) çözümü — çalışma anı modülü, yalnız stdlib (tembel require).
@@ -1015,21 +1017,30 @@ function maddeGuncellemeOteleme(anaJs) {
 
 /**
  * Kitap kökleri = `index.html` VE `app.config.js` birlikte duran dizinler. Saf.
- *
- * Motor imzasıyla bulunur, AD DESENİYLE DEĞİL (proje kanonu K17). SET'te bu
- * book1..bookN'i verir; SET menü kökünü ve `htmletk/` alt sayfalarını dışarıda
- * bırakır — SM4'te ölçüldü: 5 kitap kökü, 22 htmletk sayfası elendi.
+ * TANIM BURADA YAŞAMAZ — `src/packaging/on-getirme-hedefi.js` TEK KAYNAKTIR (enjeksiyon da
+ * onu kullanır). SM4'te ölçüldü: 5 kitap kökü, 22 htmletk sayfası elendi.
  */
-function kitapKokleri(yollar) {
-  const kume = new Set(Array.isArray(yollar) ? yollar : []);
-  const dizin = (y) => (y.includes('/') ? y.slice(0, y.lastIndexOf('/')) : '');
-  const kokler = [];
-  for (const y of kume) {
-    if (!/(^|\/)index\.html$/i.test(y)) continue;
-    const d = dizin(y);
-    if (kume.has(d ? `${d}/app.config.js` : 'app.config.js')) kokler.push(d);
+const kitapKokleri = ON_GETIRME_HEDEFI.kitapKokleri;
+
+/**
+ * Madde 10 ölçümü: her kitap kökünün HEDEF sayfasında (`onGetirmeHedefleri`) işaret var mı.
+ * `metinOku(yol)` → içerik ya da null (okunamadı = işaretsiz; tahmin yok). Saf (okuyucu dışında).
+ * @returns {{kokler:string[], isaretli:string[], hedefler:{kok:string, sayfa:string}[], a1:boolean}}
+ */
+function onGetirmeOlc(yollar, metinOku) {
+  const kapakAdi = ON_GETIRME_HEDEFI.A1_MOTOR_SAYFASI;
+  const kapakHtml = (yollar || []).includes(kapakAdi) ? metinOku(kapakAdi) : null;
+  const hedefler = ON_GETIRME_HEDEFI.onGetirmeHedefleri(yollar, kapakHtml);
+  const isaretli = [];
+  for (const h of hedefler) {
+    const metin = metinOku(h.sayfa);
+    if (typeof metin === 'string' && metin.includes(ISARET_ON_GETIRME)) isaretli.push(h.kok);
   }
-  return kokler.sort();
+  return {
+    kokler: hedefler.map((h) => h.kok), isaretli,
+    hedefler: hedefler.map(({ kok, sayfa }) => ({ kok, sayfa })),
+    a1: hedefler.some((h) => h.a1),
+  };
 }
 
 /**
@@ -1040,6 +1051,10 @@ function kitapKokleri(yollar) {
  * (`src/packaging/sayfa-on-getirme.js` → `icerigeEnjekteEt`). Eski sürüm main.js'te
  * arıyordu ve yaması DOĞRU UYGULANMIŞ pakete FAIL veriyordu: kapının sağlam paketi
  * suçlaması, ölçememekten daha tehlikelidir — operatör olmayan bir arızayı kovalar.
+ *
+ * A1 DÜZENİ (2026-10-06, 45478/45480 kasada düştü): kök `index.html` sf425 kabuğudur; betik
+ * motor sayfasına (`kapak/index.html`) girer. Hedef sayfa `onGetirmeHedefleri`nden gelir —
+ * enjeksiyonla aynı tanım. Kabukta aramak sağlam A1 paketine FAIL veriyordu (aynı ders).
  *
  * @param {{kokler:string[], isaretli:string[]}|null} p
  */
@@ -1055,18 +1070,25 @@ function maddeOnIsitma(p) {
   }
   const eksik = p.kokler.filter((k) => p.isaretli.indexOf(k) === -1);
   const adlar = (l) => l.map((k) => k || '<kök>').join(', ');
+  // Aranan sayfa (A1'de kök → kapak/index.html) teşhis için iletiye yazılır.
+  const hedefSayfa = (k) => {
+    const h = Array.isArray(p.hedefler) ? p.hedefler.find((x) => x.kok === k) : null;
+    return h ? h.sayfa : (k ? `${k}/index.html` : 'index.html');
+  };
+  const aranan = (l) => l.map(hedefSayfa).join(', ');
   if (!eksik.length) {
     return madde(10, ad, PASS,
-      `${p.kokler.length}/${p.kokler.length} kitap kökünde işaret var (${adlar(p.kokler)})`);
+      `${p.kokler.length}/${p.kokler.length} kitap kökünde işaret var (${adlar(p.kokler)})` +
+      (p.a1 ? ` · A1: ${aranan(p.kokler)}` : ''));
   }
   if (eksik.length === p.kokler.length) {
     return madde(10, ad, FAIL,
       `${p.kokler.length} kitap kökünün HİÇBİRİNDE "${ISARET_ON_GETIRME}" yok — ` +
-      'ön-ısıtma uygulanmamış');
+      `ön-ısıtma uygulanmamış (aranan: ${aranan(eksik)})`);
   }
   return madde(10, ad, FAIL,
     `KARDEŞ KÖR NOKTASI: ${p.kokler.length} kitap kökünün ${eksik.length} tanesinde ` +
-    `işaret YOK (${adlar(eksik)}) — SET'te alt kitap atlanmış`);
+    `işaret YOK (${adlar(eksik)}; aranan: ${aranan(eksik)}) — SET'te alt kitap atlanmış`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1992,15 +2014,15 @@ function agactanTopla(kok, secenek = {}) {
             isaretMetin: ib ? ib.toString('utf8') : null,
           });
         }
-        const kokler = kitapKokleri(girdiler.map((g) => g.yol));
-        const isaretli = [];
-        for (const k of kokler) {
-          const hedef = k ? `${k}/index.html` : 'index.html';
-          const g = girdiler.find((x) => x.yol === hedef);
-          const b = g ? asarGirdiOku(fd, coz.veriOfseti, g, 4 * 1024 * 1024) : null;
-          if (b && b.toString('utf8').includes(ISARET_ON_GETIRME)) isaretli.push(k);
+        {
+          const asarYollar = girdiler.map((g) => g.yol);
+          const metinOku = (yol) => {
+            const g = girdiler.find((x) => x.yol === yol);
+            const b = g ? asarGirdiOku(fd, coz.veriOfseti, g, 4 * 1024 * 1024) : null;
+            return b ? b.toString('utf8') : null;
+          };
+          sonuc.onGetirme = onGetirmeOlc(asarYollar, metinOku);
         }
-        sonuc.onGetirme = { kokler, isaretli };
 
         const sayfalar = girdiler.filter((g) => /(^|\/)pages\/[^/]+\.(png|webp|jpg)$/i.test(g.yol));
         const adim = Math.max(1, Math.floor(sayfalar.length / ornekAdet));
@@ -2105,15 +2127,11 @@ function agactanTopla(kok, secenek = {}) {
         isaretMetin: ib ? ib.toString('utf8') : null,
       });
     }
-    const kokler = kitapKokleri(yollar);
-    const isaretli = [];
-    for (const k of kokler) {
-      const hedef = path.join(acikApp, ...(k ? k.split('/') : []), 'index.html');
-      try {
-        if (fs.readFileSync(hedef, 'utf8').includes(ISARET_ON_GETIRME)) isaretli.push(k);
-      } catch (e) { /* okunamayan index.html işaretsiz sayılır, tahmin üretilmez */ }
-    }
-    sonuc.onGetirme = { kokler, isaretli };
+    sonuc.onGetirme = onGetirmeOlc(yollar, (yol) => {
+      try { return fs.readFileSync(path.join(acikApp, ...yol.split('/')), 'utf8'); } catch (e) {
+        return null; // okunamayan sayfa işaretsiz sayılır, tahmin üretilmez
+      }
+    });
   } else {
     sonuc.notlar.push('resources/app.asar da resources/app da yok');
   }
@@ -2450,7 +2468,7 @@ module.exports = {
   BEKLENEN_DILLER, maddeDiller,
   maddeAcilisYamasi, maddeGuncellemeOteleme, maddeOnIsitma,
   GIRIS_ADAYLARI_VARSAYILAN, girisDosyasiCoz,
-  mod1, sayfaSinifi, maddeWebp, kitapKokleri, agacYollari, agacOlcusu,
+  mod1, sayfaSinifi, maddeWebp, kitapKokleri, onGetirmeOlc, agacYollari, agacOlcusu,
   SET_DOSYA_ADI, SET_MODUL_ADI, ISARET_SET_GUNCELLEME,
   SET_KABUK, SET_KABUK_DIZINLERI, SET_KABUK_IMZASI,
   yolDizini, setHaritasiCoz, kabukSizintilari, setHaritasiKusurlari, maddeSetGuncelleme,
