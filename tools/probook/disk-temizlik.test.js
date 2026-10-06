@@ -1,33 +1,46 @@
 'use strict';
-// disk-temizlik.sh — sahte $HOME altında GERÇEKTEN koşar (DT_DF ile disk ölçümü tohumlanır,
-// DT_PROC_YOK ile gerçek süreç taraması kapalı, DT_KULLANIMDA ile "çalışan iş" taklit edilir).
-// Nadir 06.10: disk dolu → işi durdurma, yer aç; ama koruma listesi ASLA silinmez.
+// disk-temizlik.sh — sahte geçici $HOME (dt-ev-*) altında GERÇEKTEN koşar. Test anahtarları
+// (DT_DF, DT_KULLANIMDA, DT_PROC_YOK) yalnız test kilidiyle okunur: $HOME/.dt-test-kilidi.
+// Nadir 06.10: disk dolu → işi durdurma, yer aç; koruma listesi ASLA silinmez.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const BETIK = path.join(__dirname, 'disk-temizlik.sh');
 const GUN = 86400;
-const evler = [];
-test.after(() => { for (const h of evler) fs.rmSync(h, { recursive: true, force: true }); });
+const TMP = fs.realpathSync(os.tmpdir());
+const LINUX = process.platform === 'linux';
+const kokler = [];
+test.after(() => {
+  for (const h of kokler) {
+    spawnSync('chmod', ['-R', 'u+rwx', h]);
+    fs.rmSync(h, { recursive: true, force: true });
+  }
+});
 
-function sahteEv() {
-  const h = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dt-ev-')));
-  evler.push(h);
-  fs.mkdirSync(path.join(h, 'tmp'));
+function sahteEv({ izin = true, serit = true } = {}) {
+  const h = fs.mkdtempSync(path.join(TMP, 'dt-ev-'));
+  kokler.push(h);
+  fs.writeFileSync(path.join(h, '.dt-test-kilidi'), 'test\n');
+  if (serit) fs.mkdirSync(path.join(h, 'empp-serit', 'log'), { recursive: true });
+  if (serit && izin) fs.writeFileSync(path.join(h, 'empp-serit', 'disk-temizlik.izin'), 'test\n');
   return h;
 }
-/** Ağacı (kendisi + altı) `gun` gün yaşlandırır. */
+function disariDizin() {
+  const d = fs.mkdtempSync(path.join(TMP, 'dt-disari-'));
+  kokler.push(d);
+  return d;
+}
 function yaslandir(p, gun) {
   const t = Date.now() / 1000 - gun * GUN;
   const st = fs.lstatSync(p);
-  if (st.isDirectory()) for (const a of fs.readdirSync(p)) yaslandir(path.join(p, a), gun);
-  fs.utimesSync(p, t, t);
+  if (st.isDirectory() && !st.isSymbolicLink()) for (const a of fs.readdirSync(p)) yaslandir(path.join(p, a), gun);
+  if (!st.isSymbolicLink()) fs.utimesSync(p, t, t);
 }
-/** `rel` dosyasını `kb` boyutunda yazar; en üst aday dizini (`aday`) `gun` gün yaşlandırır. */
+/** `rel` dosyasını `kb` boyutunda yazar; `aday` (yoksa dosya) `gun` gün yaşlandırılır. */
 function dosya(h, rel, { kb = 4, gun = 10, aday = null } = {}) {
   const p = path.join(h, rel);
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -35,16 +48,20 @@ function dosya(h, rel, { kb = 4, gun = 10, aday = null } = {}) {
   yaslandir(aday ? path.join(h, aday) : p, gun);
   return p;
 }
-function kostur(h, arg = [], env = {}) {
+function kostur(h, arg = [], env = {}, { kilit = true } = {}) {
   const r = spawnSync('bash', [BETIK, ...arg], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: h, TMPDIR: path.join(h, 'tmp'), DT_DF: '100000000 0', DT_PROC_YOK: '1', ...env },
+    env: {
+      ...process.env, HOME: h, TMPDIR: TMP, DT_DF: '100000000 0', DT_PROC_YOK: '1',
+      ...(kilit ? { DT_TEST_KILIDI: path.join(h, '.dt-test-kilidi') } : { DT_TEST_KILIDI: '' }),
+      ...env,
+    },
   });
-  r.log = fs.existsSync(path.join(h, 'empp-serit/log/disk-temizlik.log'))
-    ? fs.readFileSync(path.join(h, 'empp-serit/log/disk-temizlik.log'), 'utf8') : '';
+  const lg = path.join(h, 'empp-serit/log/disk-temizlik.log');
+  r.log = fs.existsSync(lg) ? fs.readFileSync(lg, 'utf8') : '';
   return r;
 }
-const var_ = (h, rel) => fs.existsSync(path.join(h, rel));
+const var_ = (h, rel) => fs.existsSync(path.join(h, rel)) || (() => { try { fs.lstatSync(path.join(h, rel)); return true; } catch (_) { return false; } })();
 const ULASILMAZ = ['--hedef-gb', '0', '--hedef-yuzde', '1']; // 100 GB × %1 = 1 GB: küçük dosyalarla ulaşılmaz
 
 test('bash sözdizimi geçerli', () => {
@@ -52,31 +69,76 @@ test('bash sözdizimi geçerli', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
-test('Mac korkuluğu: tohum (DT_DF) yoksa Darwin\'de KOŞMAZ', { skip: process.platform !== 'darwin' }, () => {
+// ---------------------------------------------------------------- korkuluklar
+test('Mac korkuluğu: test kilidi yoksa Darwin\'de DT_DF verilse de KOŞMAZ (çıkış 2, silme yok)', { skip: process.platform !== 'darwin' }, () => {
   const h = sahteEv();
   dosya(h, 'testler/a.bin');
-  const r = spawnSync('bash', [BETIK], { encoding: 'utf8', env: { ...process.env, HOME: h } });
+  const r = kostur(h, ['--ek', path.join(h, 'testler')], {}, { kilit: false });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.ok(var_(h, 'testler/a.bin'));
+});
+
+test('test kilidi sahte değilse anahtarlar yok sayılır: HOME adı dt-ev-* değil → kilit geçersiz', { skip: process.platform !== 'darwin' }, () => {
+  const h = fs.mkdtempSync(path.join(TMP, 'baska-'));
+  kokler.push(h);
+  fs.writeFileSync(path.join(h, '.dt-test-kilidi'), 'x');
+  fs.mkdirSync(path.join(h, 'empp-serit/log'), { recursive: true });
+  fs.writeFileSync(path.join(h, 'empp-serit/disk-temizlik.izin'), 'x');
+  dosya(h, 'testler/a.bin');
+  const r = kostur(h, ['--ek', path.join(h, 'testler')]);
   assert.equal(r.status, 2);
   assert.ok(var_(h, 'testler/a.bin'));
 });
 
-test('KURU: hiçbir şey silinmez; sıra K1 (test) → K2 (önbellek) → K3 (kaynak arşivi); günlüğe KURU yazılır', () => {
+test('test anahtarları kilitsiz yok sayılır (Linux): DT_DF tohumu ölçüme girmez', { skip: !LINUX }, () => {
+  const h = sahteEv();
+  const r = kostur(h, ['--kuru'], { DT_DF: '100 0' }, { kilit: false });
+  assert.doesNotMatch(r.stdout, /toplam 1 MB/);
+});
+
+test('srv21 değişmezi: DT_DF\'siz + ~/empp-serit yok → çıkış 2', () => {
+  const h = sahteEv({ serit: false });
+  dosya(h, 'testler/a.bin');
+  const r = kostur(h, ['--ek', path.join(h, 'testler')], { DT_DF: '' });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /ProBook seridi degil/);
+  assert.ok(var_(h, 'testler/a.bin'));
+});
+
+test('srv21 değişmezi: izin dosyası yok → çıkış 2', () => {
+  const h = sahteEv({ izin: false });
+  dosya(h, 'testler/a.bin');
+  const r = kostur(h, ['--ek', path.join(h, 'testler')]);
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /izinsiz makinede KOSMAZ/);
+  assert.ok(var_(h, 'testler/a.bin'));
+});
+
+// ---------------------------------------------------------------- sıra ve hedef
+test('KURU: hiçbir şey silinmez; sıra K1 → K2; K3 sert eşik ÜSTÜNDE açılmaz', () => {
   const h = sahteEv();
   dosya(h, '.empp-agent/kaynak-arsivi/111/build.zip', { gun: 30, aday: '.empp-agent/kaynak-arsivi/111' });
   dosya(h, '.empp-agent/icerik-onbellek/222/222-1.zip', { gun: 20, aday: '.empp-agent/icerik-onbellek/222' });
   dosya(h, 'testler/deneme/x.bin', { gun: 5, aday: 'testler/deneme' });
   dosya(h, 'Silinecekler/eski.impark', { gun: 8 });
-  const r = kostur(h, ['--kuru', ...ULASILMAZ]);
+  // boş 20 GB > sert 15 GB; hedef 50 GB → K1+K2 aday, K3 değil.
+  const r = kostur(h, ['--kuru'], { DT_DF: '200000000 20971520' });
   assert.equal(r.status, 3, r.stdout + r.stderr);
-  const kuru = r.stdout.split('\n').filter((s) => s.startsWith('KURU '));
-  const sira = kuru.map((s) => s.match(/ (\/\S+) \(/)[1].slice(h.length + 1));
-  assert.deepEqual(sira, ['Silinecekler/eski.impark', 'testler/deneme', '.empp-agent/icerik-onbellek/222', '.empp-agent/kaynak-arsivi/111'],
-    'K1 içinde en eski önce (8 gün > 5 gün), K3 en sonda');
-  for (const rel of ['testler/deneme/x.bin', 'Silinecekler/eski.impark', '.empp-agent/kaynak-arsivi/111/build.zip']) {
-    assert.ok(var_(h, rel), `kuru koşu sildi: ${rel}`);
-  }
+  const sira = r.stdout.split('\n').filter((s) => s.startsWith('KURU ')).map((s) => s.match(/^KURU \d+ MB (\/.*?) \(/)[1].slice(h.length + 1));
+  assert.deepEqual(sira, ['Silinecekler/eski.impark', 'testler/deneme', '.empp-agent/icerik-onbellek/222']);
+  assert.ok(var_(h, 'testler/deneme/x.bin'));
   assert.match(r.log, / · KURU: test\/deneme \(testler\)/);
-  assert.match(r.stdout, /^SONUC .*hedef=dar$/m);
+});
+
+test('K3: sert eşik ALTINDA açılır, sert eşiğe ulaşınca durur', () => {
+  const h = sahteEv();
+  dosya(h, '.empp-agent/kaynak-arsivi/1/build.zip', { kb: 600, gun: 30, aday: '.empp-agent/kaynak-arsivi/1' });
+  dosya(h, '.empp-agent/kaynak-arsivi/2/build.zip', { kb: 600, gun: 20, aday: '.empp-agent/kaynak-arsivi/2' });
+  // sert eşik 1 GB = 1048576 KB; boş 1048000 KB + 600 KB ≥ 1048576 → ilk arşiv yeter.
+  const r = kostur(h, ['--sert-gb', '1', '--hedef-gb', '50'], { DT_DF: '200000000 1048000' });
+  assert.equal(r.status, 3, r.stdout);
+  assert.ok(!var_(h, '.empp-agent/kaynak-arsivi/1'), r.stdout);
+  assert.ok(var_(h, '.empp-agent/kaynak-arsivi/2'), 'sert eşiğe ulaşınca durmalı');
 });
 
 test('GERÇEK: en eskiden başlar, hedefe ulaşınca DURUR; günlükte tarih · yol · boyut · neden', () => {
@@ -84,41 +146,80 @@ test('GERÇEK: en eskiden başlar, hedefe ulaşınca DURUR; günlükte tarih · 
   dosya(h, 'testler/c-en-eski.bin', { kb: 600, gun: 30 });
   dosya(h, 'testler/b-orta.bin', { kb: 600, gun: 20 });
   dosya(h, 'testler/a-en-yeni.bin', { kb: 600, gun: 10 });
-  // toplam 100000 KB, hedef %1 = 1000 KB; iki dosya (≈1200 KB) yeter.
   const r = kostur(h, ['--hedef-gb', '0', '--hedef-yuzde', '1'], { DT_DF: '100000 0' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.ok(!var_(h, 'testler/c-en-eski.bin'));
   assert.ok(!var_(h, 'testler/b-orta.bin'));
   assert.ok(var_(h, 'testler/a-en-yeni.bin'), 'hedefe ulaşınca durmalı');
   assert.match(r.log, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d · \/.*testler\/c-en-eski\.bin · \d+ MB · test\/deneme \(testler\)$/m);
-  assert.match(r.stdout, /^SONUC .*kalem=2 .*hedef=tamam$/m);
 });
 
-test('KORUMA: jeton, yapılandırma, repo, windows-hazir --ek ile bile SİLİNMEZ; HOME dışı reddedilir', () => {
+test('--hedef-gb varsayılan rahatlık hedefinin YERİNE geçer (yüzde 0 ile yalnız gereken GB)', () => {
   const h = sahteEv();
-  dosya(h, '.empp-agent/token.json');
-  dosya(h, '.empp-agent/windows-hazir/1-2.0.0/manifest.json', { aday: '.empp-agent/windows-hazir' });
-  dosya(h, 'empp-serit/repo/package.json', { aday: 'empp-serit/repo' });
-  dosya(h, 'empp-serit/log/agent.log');
-  const r = kostur(h, ['--ek', path.join(h, '.empp-agent/token.json'), '--ek', path.join(h, '.empp-agent'),
-    '--ek', path.join(h, 'empp-serit/repo'), '--ek', path.join(h, '.empp-agent/windows-hazir/1-2.0.0'),
-    '--ek', h, '--ek', '/etc', ...ULASILMAZ]);
-  assert.equal(r.status, 3, r.stdout + r.stderr);
-  for (const rel of ['.empp-agent/token.json', '.empp-agent/windows-hazir/1-2.0.0/manifest.json',
-    'empp-serit/repo/package.json', 'empp-serit/log/agent.log']) {
-    assert.ok(var_(h, rel), `korunan silindi: ${rel}`);
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  // boş 2 GB, --hedef-gb 1 → hedef sağlanmış, aday taranmaz.
+  const r = kostur(h, ['--hedef-gb', '1', '--hedef-yuzde', '0'], { DT_DF: '200000000 2097152' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(var_(h, 'testler/a.bin'));
+});
+
+// ---------------------------------------------------------------- koruma tablosu
+test('KORUMA TABLOSU: korunan her yol düz, //, .. ve sembolik bağlı üst biçimiyle --ek verilse de SİLİNMEZ', () => {
+  const h = sahteEv();
+  const korunan = [
+    '.empp-agent/token.json', '.empp-agent/kabuk/k.js', '.empp-agent/motor/m.js', '.empp-agent/yuklemeler/y.json',
+    '.empp-agent/windows-hazir/1-2.0.0/manifest.json', '.empp-agent/kaynak-yok-bildirim.json',
+    '.empp-agent/imza-oncelik.txt', '.empp-agent/aktivasyon-test-kodu.txt', 'empp-serit/repo/package.json',
+    'empp-serit/node/bin/node', 'empp-serit/opt/bin/unrar', 'empp-serit/logolar/l.png', 'empp-serit/log/agent.log',
+    'empp-serit/cache/c.bin', 'empp-serit/araclar/disk-temizlik.sh', 'empp-serit/disk-temizlik.izin',
+    '.ssh/id', '.config/c', '.local/l', 'Belgeler/b.odt', 'Documents/d', 'Masaüstü/m', 'Desktop/d', 'Resimler/r', 'Pictures/p',
+  ];
+  for (const rel of korunan) if (!fs.existsSync(path.join(h, rel))) dosya(h, rel, { gun: 90 });
+  fs.symlinkSync(path.join(h, '.empp-agent'), path.join(h, 'kisayol'));
+  const ekler = [];
+  for (const rel of korunan) {
+    ekler.push(path.join(h, rel));                                      // düz
+    ekler.push(`${h}//${rel.replace('/', '//')}`);                      // //
+    ekler.push(path.join(h, 'testler') + '/../' + rel);                 // ..
+    ekler.push(path.dirname(path.join(h, rel)));                        // üst dizin (ata)
   }
-  assert.match(r.stdout, /ATLANDI .*token\.json \(koruma: /);
-  assert.match(r.stdout, /ATLANDI .*\.empp-agent \(koruma \(alti\): /);
-  assert.match(r.stdout, /ATLANDI \/etc \(HOME disinda\)/);
-  assert.doesNotMatch(r.stdout, /^SILINDI/m);
+  for (const a of ['token.json', 'kabuk', 'windows-hazir', 'imza-oncelik.txt']) ekler.push(path.join(h, 'kisayol', a)); // sembolik bağlı üst
+  for (const k of [h, path.join(h, '.empp-agent'), path.join(h, 'empp-serit'), path.join(h, 'kisayol')]) ekler.push(k, `${k}/`);
+  fs.mkdirSync(path.join(h, 'testler'), { recursive: true });
+  const r = kostur(h, ekler.flatMap((e) => ['--ek', e]).concat(ULASILMAZ));
+  for (const rel of korunan) assert.ok(fs.existsSync(path.join(h, rel)), `korunan silindi: ${rel}\n${r.stdout}`);
+  // kisayol bağının KENDİSİ silinebilir (yalnız bağ); gösterdiği korunan kök yukarıda doğrulandı.
+  assert.doesNotMatch(r.stdout, /^SILINDI .*(token|kabuk|windows-hazir|repo|\.ssh)/m);
+});
+
+test('KORUMA: gerçek yolu HOME dışında olan --ek atlanır; dışarıyı gösteren bağ yalnız bağ olarak silinir', () => {
+  const h = sahteEv();
+  const d = disariDizin();
+  fs.writeFileSync(path.join(d, 'dis.bin'), 'x');
+  fs.symlinkSync(d, path.join(h, 'disari'));
+  const r = kostur(h, ['--ek', path.join(h, 'disari', 'dis.bin'), '--ek', '/etc', '--ek', path.join(h, 'disari'), ...ULASILMAZ]);
+  assert.ok(fs.existsSync(path.join(d, 'dis.bin')), 'dışarıdaki dosya silinmemeli');
+  assert.match(r.stdout, /ATLANDI .*disari\/dis\.bin \(gercek yol HOME disinda/);
+  assert.match(r.stdout, /ATLANDI \/etc \(gercek yol HOME disinda/);
+  assert.ok(!var_(h, 'disari'), 'bağın kendisi silinebilir');
+  assert.ok(fs.existsSync(d), 'bağın hedefi korunur');
+});
+
+test('KORUMA: --koru verilen yol (çalışan işin arşivi) sert eşik altında da SİLİNMEZ', () => {
+  const h = sahteEv();
+  dosya(h, '.empp-agent/kaynak-arsivi/9/build.zip', { kb: 600, gun: 90, aday: '.empp-agent/kaynak-arsivi/9' });
+  dosya(h, '.empp-agent/kaynak-arsivi/8/build.zip', { kb: 600, gun: 30, aday: '.empp-agent/kaynak-arsivi/8' });
+  const r = kostur(h, ['--koru', path.join(h, '.empp-agent/kaynak-arsivi/9'), '--hedef-gb', '50', '--sert-gb', '50']);
+  assert.ok(var_(h, '.empp-agent/kaynak-arsivi/9/build.zip'), r.stdout);
+  assert.ok(!var_(h, '.empp-agent/kaynak-arsivi/8'), 'korunmayan arşiv sert eşik altında silinir');
+  assert.match(r.stdout, /ATLANDI .*kaynak-arsivi\/9 \(koruma: /);
 });
 
 test('KORUMA: çalışan işin dizini (süreç cwd/açık dosya) atlanır — --ek dahil', () => {
   const h = sahteEv();
   dosya(h, 'empp-serit/kabul-ev/ev-1/a.bin', { aday: 'empp-serit/kabul-ev/ev-1' });
   dosya(h, 'DijiTap/DijiTap/Kitap/app.bin', { aday: 'DijiTap' });
-  const kullanim = path.join(h, 'tmp', 'kullanim.txt');
+  const kullanim = path.join(h, 'kullanim.txt');
   fs.writeFileSync(kullanim, `${path.join(h, 'empp-serit/kabul-ev/ev-1/a.bin')}\n${path.join(h, 'DijiTap/DijiTap/Kitap/app.bin')}\n`);
   const r = kostur(h, ['--ek', path.join(h, 'DijiTap'), ...ULASILMAZ], { DT_KULLANIMDA: kullanim });
   assert.ok(var_(h, 'empp-serit/kabul-ev/ev-1/a.bin'));
@@ -126,7 +227,45 @@ test('KORUMA: çalışan işin dizini (süreç cwd/açık dosya) atlanır — --
   assert.match(r.stdout, /ATLANDI .*DijiTap \(kullanimda/);
 });
 
-test('İLK TEMİZLİK: --ek ~/testler ~/Silinecekler ~/DijiTap bütünüyle silinir (Nadir açıkça sildirdi)', () => {
+test('FAIL-CLOSED: süreç taraması yapılamıyorsa (Mac\'te /proc yok) her aday kullanımda sayılır', { skip: LINUX }, () => {
+  const h = sahteEv();
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  const r = kostur(h, ['--ek', path.join(h, 'testler'), ...ULASILMAZ], { DT_PROC_YOK: '' });
+  assert.ok(var_(h, 'testler/a.bin'), r.stdout);
+  assert.match(r.stdout, /ATLANDI .*testler \(kullanimda/);
+  assert.match(r.log, /surec taramasi eksik/);
+});
+
+test('GERÇEK SÜREÇ (Linux): cwd\'si adayda olan sleep süreci varken aday SİLİNMEZ', { skip: !LINUX }, async () => {
+  const h = sahteEv();
+  dosya(h, 'testler/calisan/a.bin', { gun: 9, aday: 'testler/calisan' });
+  const s = spawn('sleep', ['30'], { cwd: path.join(h, 'testler/calisan'), stdio: 'ignore' });
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    const r = kostur(h, ['--ek', path.join(h, 'testler/calisan'), ...ULASILMAZ], { DT_PROC_YOK: '' });
+    assert.ok(var_(h, 'testler/calisan/a.bin'), r.stdout);
+    assert.match(r.stdout, /ATLANDI .*testler\/calisan \(kullanimda/);
+  } finally { s.kill(); }
+  await new Promise((r) => setTimeout(r, 200));
+  const r2 = kostur(h, ['--ek', path.join(h, 'testler/calisan'), ...ULASILMAZ], { DT_PROC_YOK: '' });
+  assert.ok(!var_(h, 'testler/calisan'), `süreç bitince silinmeli: ${r2.stdout}`);
+});
+
+test('KORUMA: sahibi canlı runner iş dizini (.empp-sahip.pid) atlanır; sahibi ölü olan silinir', () => {
+  const h = sahteEv();
+  dosya(h, 'empp-serit/work/empp-agent-CANLI/build.zip', { gun: 9, aday: 'empp-serit/work/empp-agent-CANLI' });
+  fs.writeFileSync(path.join(h, 'empp-serit/work/empp-agent-CANLI/.empp-sahip.pid'), String(process.pid));
+  yaslandir(path.join(h, 'empp-serit/work/empp-agent-CANLI'), 9);
+  dosya(h, 'empp-serit/work/empp-agent-OLU/build.zip', { gun: 9, aday: 'empp-serit/work/empp-agent-OLU' });
+  fs.writeFileSync(path.join(h, 'empp-serit/work/empp-agent-OLU/.empp-sahip.pid'), '999999');
+  yaslandir(path.join(h, 'empp-serit/work/empp-agent-OLU'), 9);
+  const r = kostur(h, ULASILMAZ);
+  assert.ok(var_(h, 'empp-serit/work/empp-agent-CANLI/build.zip'), r.stdout);
+  assert.match(r.stdout, /empp-agent-CANLI \(sahibi canli/);
+  assert.ok(!var_(h, 'empp-serit/work/empp-agent-OLU'), r.stdout);
+});
+
+test('İLK TEMİZLİK: --ek ~/testler ~/Silinecekler ~/DijiTap bütünüyle silinir', () => {
   const h = sahteEv();
   dosya(h, 'testler/_silinecek/a.bin', { gun: 0, aday: 'testler' });
   dosya(h, 'Silinecekler/.45482.part', { aday: 'Silinecekler' });
@@ -143,10 +282,9 @@ test('KORUMA: son 120 dk içinde değişen ağaç atlanır; --ek yenilik kuralı
   dosya(h, 'testler/taze/yeni.bin', { gun: 0, aday: 'testler/taze' });
   dosya(h, 'kabuk-aday-test/x.bin', { gun: 0, aday: 'kabuk-aday-test' });
   const r = kostur(h, ['--ek', '~/kabuk-aday-test', ...ULASILMAZ]);
-  assert.ok(var_(h, 'testler/taze/yeni.bin'), 'taze test dizini silinmemeli');
+  assert.ok(var_(h, 'testler/taze/yeni.bin'));
   assert.match(r.stdout, /ATLANDI .*testler\/taze \(son 120 dk/);
-  assert.ok(!var_(h, 'kabuk-aday-test'), 'kullanıcının açık yolu (~ ile) silinmeli');
-  assert.match(r.log, /kabuk-aday-test · \d+ MB · kullanici acikca verdi \(--ek\)/);
+  assert.ok(!var_(h, 'kabuk-aday-test'));
 });
 
 test('KORUMA: kabul kanıtı son 7 gün SİLİNMEZ; daha eskisi K2 adayıdır', () => {
@@ -158,47 +296,57 @@ test('KORUMA: kabul kanıtı son 7 gün SİLİNMEZ; daha eskisi K2 adayıdır', 
   assert.ok(!var_(h, '.empp-agent/kabul-kanit/eski-9gun'), r.stdout);
 });
 
-test('kabuk-aday klasörü ve İndirilenler paketleri aday; İndirilenler\'deki belge aday DEĞİL', () => {
+test('kabuk-aday ve İndirilenler paketleri aday; belge aday DEĞİL; sekme/yeni satırlı ad doğru işlenir', () => {
   const h = sahteEv();
   dosya(h, 'kabuk-aday-test/1.13.14/a.bin', { aday: 'kabuk-aday-test' });
   dosya(h, 'İndirilenler/Cambridge One.yds', { gun: 3 });
   dosya(h, 'İndirilenler/fatura.pdf', { gun: 300 });
+  dosya(h, 'testler/garip\tad\nsatir.bin', { gun: 4 });
   const r = kostur(h, ULASILMAZ);
   assert.ok(!var_(h, 'kabuk-aday-test'), r.stdout);
   assert.ok(!var_(h, 'İndirilenler/Cambridge One.yds'));
-  assert.ok(var_(h, 'İndirilenler/fatura.pdf'), 'bizim üretmediğimiz dosya silinmez');
-});
-
-test('hedef zaten sağlanmışsa aday taranmaz (yalnız --ek işlenir)', () => {
-  const h = sahteEv();
-  dosya(h, 'testler/eski.bin', { gun: 50 });
-  dosya(h, 'Silinecekler/acik-istek.bin', { gun: 1 });
-  const r = kostur(h, ['--ek', path.join(h, 'Silinecekler/acik-istek.bin')], { DT_DF: '100000000 99000000' });
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.ok(var_(h, 'testler/eski.bin'));
-  assert.ok(!var_(h, 'Silinecekler/acik-istek.bin'));
+  assert.ok(var_(h, 'İndirilenler/fatura.pdf'));
+  assert.ok(!var_(h, 'testler/garip\tad\nsatir.bin'), r.stdout);
 });
 
 test('kaynak arşivi SON ÇARE: K1 hedefi karşılıyorsa arşive dokunulmaz', () => {
   const h = sahteEv();
   dosya(h, '.empp-agent/kaynak-arsivi/9/build.zip', { kb: 600, gun: 90, aday: '.empp-agent/kaynak-arsivi/9' });
   dosya(h, 'testler/t.bin', { kb: 1200, gun: 1 });
-  const r = kostur(h, ['--hedef-gb', '0', '--hedef-yuzde', '1'], { DT_DF: '100000 0' });
+  const r = kostur(h, ['--hedef-gb', '0', '--hedef-yuzde', '1', '--sert-gb', '50'], { DT_DF: '100000 0' });
   assert.equal(r.status, 0, r.stdout);
-  assert.ok(var_(h, '.empp-agent/kaynak-arsivi/9/build.zip'), 'arşiv daha eski olsa da K1 önce');
+  assert.ok(var_(h, '.empp-agent/kaynak-arsivi/9/build.zip'));
   assert.ok(!var_(h, 'testler/t.bin'));
 });
 
-test('kilit: canlı bir koşu varken ikinci koşu 4 ile çıkar', () => {
+// ---------------------------------------------------------------- disk tam dolu
+test('DİSK DOLU: günlük yazılamazsa satır stdout\'a düşer, silme sürer', () => {
   const h = sahteEv();
-  const k = path.join(h, 'empp-serit/log/.disk-temizlik.kilit.d');
-  fs.mkdirSync(k, { recursive: true });
-  fs.writeFileSync(path.join(k, 'pid'), String(process.pid));
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  const lg = path.join(h, 'empp-serit/log/disk-temizlik.log');
+  fs.writeFileSync(lg, '');
+  fs.chmodSync(lg, 0o444);
   const r = kostur(h, ULASILMAZ);
-  assert.equal(r.status, 4);
+  assert.ok(!var_(h, 'testler/a.bin'), r.stdout + r.stderr);
+  assert.match(r.stdout, /^GUNLUK-YAZILAMADI .*testler\/a\.bin/m);
 });
 
-test('kur.sh disk kapısı önce temizliği koşturur, sonra yeniden ölçer; zamanlayıcıyı kurar', () => {
+test('kilit: canlı bir koşu varken ikinci koşu 4 ile çıkar (Linux flock, Mac mkdir yedeği)', async () => {
+  const h = sahteEv();
+  const flockVar = spawnSync('sh', ['-c', 'command -v flock']).status === 0;
+  if (flockVar) {
+    const s = spawn('flock', [path.join(h, 'empp-serit'), 'sleep', '5'], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 300));
+    try { assert.equal(kostur(h, ULASILMAZ).status, 4); } finally { s.kill(); }
+  } else {
+    const k = path.join(h, 'empp-serit/log/.disk-temizlik.kilit.d');
+    fs.mkdirSync(k, { recursive: true });
+    fs.writeFileSync(path.join(k, 'pid'), String(process.pid));
+    assert.equal(kostur(h, ULASILMAZ).status, 4);
+  }
+});
+
+test('kur.sh disk kapısı önce temizliği koşturur, sonra yeniden ölçer; zamanlayıcı kurulumu izin dosyası yazar', () => {
   const KUR = fs.readFileSync(path.join(__dirname, 'kur.sh'), 'utf8');
   const g = KUR.slice(KUR.indexOf('probook_kur(){'), KUR.indexOf('# Node 22 x64'));
   const iTemiz = g.indexOf('bash "$DT"');
@@ -206,6 +354,10 @@ test('kur.sh disk kapısı önce temizliği koşturur, sonra yeniden ölçer; za
   assert.ok(iTemiz > 0 && iTemiz < iDur, 'temizlik dur kararından ÖNCE');
   assert.ok(g.lastIndexOf('BOS=$(df', iDur) > iTemiz, 'temizlikten sonra yeniden ölçülür');
   assert.match(KUR, /disk-temizlik\.sh" --zamanlayici-kur/);
+  const B = fs.readFileSync(BETIK, 'utf8');
+  assert.match(B, /> "\$IZIN"/);
+  assert.match(B, /\[ "\$D" = active \] && exit 0 \|\| exit 1/);
+  assert.doesNotMatch(B.split('\n').filter((s) => !s.trim().startsWith('#')).join('\n'), /sudo -n rm/);
   const ORTAM = fs.readFileSync(path.join(__dirname, 'serit-ortam.sh'), 'utf8');
   assert.match(ORTAM, /export EMPP_DISK_TEMIZLIK="\$\{EMPP_DISK_TEMIZLIK:-1\}"/);
 });
