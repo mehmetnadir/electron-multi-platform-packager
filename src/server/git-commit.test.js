@@ -29,6 +29,42 @@ test('getGitCommit: git repo OLMAYAN bir dizinde çökmez, "bilinmiyor" döner',
   }
 });
 
+function tmpSurum(icerik) {
+  const d = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'git-commit-surum-'));
+  if (icerik !== null) fs.writeFileSync(path.join(d, '.surum'), icerik);
+  return d;
+}
+
+test('.surum var + git yok: dosyadaki hash döner', () => {
+  const d = tmpSurum('c637a21\n');
+  try {
+    assert.strictEqual(getGitCommit(d), 'c637a21');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('.surum calisma-agaci biçimi kabul edilir', () => {
+  const d = tmpSurum('c637a21+calisma-agaci-ab12\r\n');
+  try {
+    assert.strictEqual(getGitCommit(d), 'c637a21+calisma-agaci-ab12');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('.surum yok + git yok: "bilinmiyor"', () => {
+  const d = tmpSurum(null);
+  try {
+    assert.strictEqual(getGitCommit(d), 'bilinmiyor');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('.surum boş ya da bozuk: "bilinmiyor"', () => {
+  for (const icerik of ['', '\n', 'zzz', 'abc']) {
+    const d = tmpSurum(icerik);
+    try {
+      assert.strictEqual(getGitCommit(d), 'bilinmiyor', JSON.stringify(icerik));
+    } finally { fs.rmSync(d, { recursive: true, force: true }); }
+  }
+});
+
 test('GERİLEME: getGitCommit var olmayan bir cwd ile fırlatmaz (health endpoint çökmemeli)', () => {
   assert.doesNotThrow(() => {
     const got = getGitCommit(path.join(REPO_ROOT, 'bu-dizin-hic-yok-12345'));
