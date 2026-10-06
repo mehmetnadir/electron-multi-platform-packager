@@ -71,6 +71,13 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
   - `--set` kayıtlara bakmadan her zaman üretir.
 - **Tavan:** A modülünün `tavanAl()` değeri (`EMPP_KABUK_EK_TAVAN`, varsayılan 2 MiB). **DİKKAT:**
   değer Mac ve ProBook'ta EŞİT olmalı. Mac'te büyük tavanla üretilen ek ProBook'ta reddedilir.
+  Tavan aşılırsa SONUÇ satırı gerçek baytı ve zip'e giren en büyük 3 dosyayı yazar.
+- **Kapak referansı (sözleşme 2, 06.10):** Swift `images/<klasör>.png`'yi girdi kapağından
+  (`kapak-<klasör>.png`) bayt-aynı yazar. Sha'sı bir girdi kapağına eşit dosya zip'e GİRMEZ;
+  manifest `kapakDosyalari` listesine girer. ProBook o kapağı zaten indirir (sha'sı girdiSha'da),
+  `ekAc({kapaklar})` dosyayı ondan doldurur ve sha/boyut denetler. Ölçüm: 73768 ek 4,13 MB'ın
+  3,87 MB'ı kapak PNG'siydi. Eski (sözleşme 1) ProBook kodu v2 eki `bayat` reddeder → ertele;
+  ProBook bu sürümü almadan v2 ek uygulanmaz. R2'deki v1 ekler geçerli kalır. girdiSha değişmez.
 
 ## Üreteç tabanı (girdiSha eşliği)
 

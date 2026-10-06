@@ -16,7 +16,16 @@
 const crypto = require('crypto');
 const zlib = require('zlib');
 
+/** Girdi parmak izi ve tam (v1) manifest sözleşmesi. DEĞİŞMEZ: girdiSha bununla hesaplanır. */
 const SOZLESME = 1;
+/**
+ * v2 (06.10): manifest `kapakDosyalari` taşır. Bu dosyalar zip'e GİRMEZ; baytları alıcının
+ * girdi olarak indirdiği kapaktır (`kapak-<klasör>.png`, sha'sı girdiSha'nın içinde). Swift
+ * `images/<klasör>.png`'yi girdi kapağından bayt-aynı yazar. v1 okuyucu v2'yi 'bayat' reddeder
+ * (eksik kapakla kabuk kurulmaz).
+ */
+const SOZLESME_KAPAK_REF = 2;
+const GECERLI_SOZLESMELER = new Set([SOZLESME, SOZLESME_KAPAK_REF]);
 const MANIFEST_ADI = 'kabuk-ek.json';
 const VARSAYILAN_TAVAN = 2 * 1024 * 1024;
 /**
@@ -140,12 +149,14 @@ function beyazListeSec(o = {}) {
 
 /**
  * Manifest kurar. SAF (yalnız `uretildi` saatten gelir; test için verilebilir).
+ * `kapaklar` (ad → sha256 hex | Buffer; girdi kapakları) verilirse, sha'sı bir girdi kapağına
+ * eşit dosya `kapakDosyalari`na (zip dışı) girer ve sözleşme 2 olur; yoksa sözleşme 1.
  * @returns {object} {sozlesme, bookId, kisaKod, kip, girdiSha, webzSettingsSha, tabanSurum,
  *   tabanSha256, arac, uretildi, dosyalar: [{yol, sha256, boyut}] yol sıralı, toplamBayt}
  */
 function manifestKur({
   bookId, kisaKod = null, kip, girdiSha, webzSettingsSha = null, tabanSurum = null,
-  tabanSha256 = null, arac = null, dosyalar, uretildi = null,
+  tabanSha256 = null, arac = null, dosyalar, uretildi = null, kapaklar = null,
 }) {
   if (bookId == null || String(bookId) === '') throw new TypeError('bookId gerekli');
   if (typeof kip !== 'string' || !kip) throw new TypeError('kip gerekli');
@@ -153,12 +164,28 @@ function manifestKur({
     throw new TypeError('girdiSha sha256 hex olmalı');
   }
   if (!(dosyalar instanceof Map)) throw new TypeError('dosyalar Map<yol,Buffer> olmalı');
-  const liste = [...dosyalar].map(([yol, b]) => {
+  const yolSirasi = (a, b) => (a.yol < b.yol ? -1 : a.yol > b.yol ? 1 : 0);
+  // Girdi kapağıyla bayt-aynı dosya (sha eşit) → kapak referansı (zip'e girmez).
+  const kapakAdi = new Map();
+  if (kapaklar != null) {
+    for (const [ad, s] of Object.entries(shaHaritasi(kapaklar, 'kapaklar')).sort()) {
+      if (!kapakAdi.has(s)) kapakAdi.set(s, ad);
+    }
+  }
+  const liste = [];
+  const kapakListe = [];
+  for (const [yol, b] of dosyalar) {
     if (!Buffer.isBuffer(b)) throw new TypeError(`dosyalar.${yol}: Buffer bekleniyor`);
-    return { yol: String(yol), sha256: sha256(b), boyut: b.length };
-  }).sort((a, b) => (a.yol < b.yol ? -1 : a.yol > b.yol ? 1 : 0));
+    const g = { yol: String(yol), sha256: sha256(b), boyut: b.length };
+    const ad = kapakAdi.get(g.sha256);
+    if (ad) kapakListe.push({ ...g, kapak: ad });
+    else liste.push(g);
+  }
+  liste.sort(yolSirasi);
+  kapakListe.sort(yolSirasi);
   return {
-    sozlesme: SOZLESME,
+    sozlesme: kapakListe.length ? SOZLESME_KAPAK_REF : SOZLESME,
+    ...(kapakListe.length ? { kapakDosyalari: kapakListe } : {}),
     bookId: String(bookId),
     kisaKod: kisaKod == null ? null : String(kisaKod),
     kip,
@@ -349,7 +376,49 @@ function kumeDenetle(manifest, dosyalar) {
 }
 
 /**
+ * v2 kapak referans listesi biçim denetimi. v1'de liste YOK olmalı; v2'de boş olmayan dizi.
+ * Yollar beyaz listeden geçer, zip dosyalarıyla çakışmaz. SAF. @returns {object[]} liste
+ */
+function kapakRefleri(manifest, bl) {
+  const ham = manifest.kapakDosyalari;
+  if (manifest.sozlesme !== SOZLESME_KAPAK_REF) {
+    if (ham !== undefined) throw new EkHatasi('bozuk', `kapakDosyalari yalnız sözleşme ${SOZLESME_KAPAK_REF}'de`);
+    return [];
+  }
+  if (!Array.isArray(ham) || !ham.length) {
+    throw new EkHatasi('bozuk', 'sözleşme 2: kapakDosyalari boş ya da dizi değil');
+  }
+  const zipYollari = new Set((Array.isArray(manifest.dosyalar) ? manifest.dosyalar : [])
+    .map((d) => d && d.yol));
+  const gorulen = new Set();
+  for (const d of ham) {
+    if (!d || typeof d.yol !== 'string' || !HEX64.test(String(d.sha256 || ''))
+      || !Number.isInteger(d.boyut) || d.boyut < 0
+      || typeof d.kapak !== 'string' || !GUVENLI_AD.test(d.kapak) || d.kapak.includes('..')) {
+      throw new EkHatasi('bozuk', 'kapak referansı geçersiz');
+    }
+    yolDenetle(d.yol, bl);
+    if (gorulen.has(d.yol) || zipYollari.has(d.yol)) {
+      throw new EkHatasi('bozuk', `kapak referansında çift yol: ${d.yol}`);
+    }
+    gorulen.add(d.yol);
+  }
+  return ham;
+}
+
+/** Ad → Buffer kapak kümesi (Map ya da obje) → Map. Buffer olmayan değer yok sayılır. SAF. */
+function kapakVerisi(k) {
+  const c = new Map();
+  for (const [ad, v] of (k instanceof Map ? [...k] : Object.entries(k || {}))) {
+    if (Buffer.isBuffer(v)) c.set(String(ad), v);
+  }
+  return c;
+}
+
+/**
  * Ek zip'i üretir. Aynı manifest + dosyalar → bayt-aynı Buffer.
+ * v2 manifestte `kapakDosyalari` yolları `dosyalar`da varsa sha/boyutu denetlenir ve zip'e
+ * KONMAZ (alıcı kendi girdi kapağından doldurur).
  * @param {{manifest: object, dosyalar: Map<string, Buffer>}} o
  * @param {{beyazListe?: (yol: string) => boolean, klasorler?: Iterable<string>,
  *   tavan?: number}} [s]
@@ -360,11 +429,20 @@ function ekPaketle({ manifest, dosyalar }, s = {}) {
   if (!(dosyalar instanceof Map)) throw new TypeError('dosyalar Map<yol,Buffer> olmalı');
   const bl = beyazListeSec(s);
   for (const y of dosyalar.keys()) yolDenetle(y, bl);
-  kumeDenetle(manifest, dosyalar);
-  const yollar = [...dosyalar.keys()].sort();
+  const zipDosyalari = new Map(dosyalar);
+  for (const d of kapakRefleri(manifest, bl)) {
+    const v = zipDosyalari.get(d.yol);
+    if (!v) continue;
+    if (v.length !== d.boyut || sha256(v) !== String(d.sha256).toLowerCase()) {
+      throw new EkHatasi('bozuk', `kapak referansı dosyayla uyuşmuyor: ${d.yol}`);
+    }
+    zipDosyalari.delete(d.yol);
+  }
+  kumeDenetle(manifest, zipDosyalari);
+  const yollar = [...zipDosyalari.keys()].sort();
   const zip = zipYaz([
     { ad: MANIFEST_ADI, veri: Buffer.from(kanonikJson(manifest), 'utf8') },
-    ...yollar.map((ad) => ({ ad, veri: dosyalar.get(ad) })),
+    ...yollar.map((ad) => ({ ad, veri: zipDosyalari.get(ad) })),
   ]);
   const tavan = tavanAl(s);
   if (zip.length > tavan) throw new EkHatasi('tavan', `ek ${zip.length} bayt > tavan ${tavan}`);
@@ -372,9 +450,10 @@ function ekPaketle({ manifest, dosyalar }, s = {}) {
 }
 
 /**
- * Ek zip'ini açar ve doğrular (tasarım §3 madde 1-3).
+ * Ek zip'ini açar ve doğrular (tasarım §3 madde 1-3). v2'de `kapaklar` (ad → Buffer, alıcının
+ * indirdiği girdi kapakları) ZORUNLU: referanslı dosyalar ondan doldurulur, sha/boyut denetlenir.
  * @param {Buffer} buf
- * @param {{bookId: string|number, girdiSha: string, kip: string,
+ * @param {{bookId: string|number, girdiSha: string, kip: string, kapaklar?: Map|object,
  *   beyazListe?: (yol: string) => boolean, klasorler?: Iterable<string>, tavan?: number}} b
  * @returns {{manifest: object, dosyalar: Map<string, Buffer>}}
  */
@@ -392,8 +471,8 @@ function ekAc(buf, b = {}) {
   if (!manifest || typeof manifest !== 'object') {
     throw new EkHatasi('bozuk', 'manifest nesne değil');
   }
-  if (manifest.sozlesme !== SOZLESME) {
-    throw new EkHatasi('bayat', `sözleşme ${manifest.sozlesme} ≠ ${SOZLESME}`);
+  if (!GECERLI_SOZLESMELER.has(manifest.sozlesme)) {
+    throw new EkHatasi('bayat', `sözleşme ${manifest.sozlesme} desteklenmez`);
   }
   if (String(manifest.bookId) !== String(b.bookId)) {
     throw new EkHatasi('bayat', `bookId ${manifest.bookId} ≠ ${b.bookId}`);
@@ -409,6 +488,19 @@ function ekAc(buf, b = {}) {
     yolDenetle(d && d.yol, bl);
   }
   kumeDenetle(manifest, girdiler);
+  // v2: kapak referansları alıcının girdi kapaklarından (`b.kapaklar`: ad → Buffer) doldurulur.
+  const refler = kapakRefleri(manifest, bl);
+  if (refler.length) {
+    const kv = kapakVerisi(b.kapaklar);
+    for (const d of refler) {
+      const v = kv.get(d.kapak);
+      if (!v) throw new EkHatasi('bozuk', `kapak referansı için girdi kapağı yok: ${d.kapak}`);
+      if (v.length !== d.boyut || sha256(v) !== String(d.sha256).toLowerCase()) {
+        throw new EkHatasi('bayat', `girdi kapağı referansla uyuşmuyor: ${d.kapak} → ${d.yol}`);
+      }
+      girdiler.set(d.yol, Buffer.from(v));
+    }
+  }
   return { manifest, dosyalar: girdiler };
 }
 
@@ -574,7 +666,7 @@ async function sonOku({ bookId, getir = varsayilanGetir }) {
 }
 
 module.exports = {
-  EK_TAVAN_BAYT, SOZLESME, MANIFEST_ADI, CDN_TABAN, GIRDI_TAVANI, EkHatasi, tavanAl,
+  EK_TAVAN_BAYT, SOZLESME, SOZLESME_KAPAK_REF, MANIFEST_ADI, CDN_TABAN, GIRDI_TAVANI, EkHatasi, tavanAl,
   kanonikJson, girdiParmakIzi, manifestKur, ekPaketle, ekAc, yolDenetle,
   ekImzala, ekImzaDogrula,
   ekAnahtari, imzaAnahtari, retAnahtari, sonAnahtari, ekUrl, imzaUrl, retUrl, sonUrl,

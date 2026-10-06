@@ -250,9 +250,10 @@ test('bayat: girdiSha / bookId / kip / sözleşme farkı', () => {
   hataKodu(() => E.ekAc(zip, { ...AC, bookId: '45551' }), 'bayat');
   hataKodu(() => E.ekAc(zip, { ...AC, kip: 'a1' }), 'bayat');
   assert.ok(E.ekAc(zip, { ...AC, bookId: 45550, girdiSha: GIRDI_SHA.toUpperCase() }));
-  const m2 = { ...ornekManifest(d), sozlesme: 2 };
-  const zip2 = E.ekPaketle({ manifest: m2, dosyalar: d });
-  hataKodu(() => E.ekAc(zip2, AC), 'bayat');
+  // Bilinmeyen sözleşme (3) → bayat. 2 artık kapak referanslı sözleşmedir (aşağıdaki testler).
+  const m3 = { ...ornekManifest(d), sozlesme: 3 };
+  const zip3 = E.ekPaketle({ manifest: m3, dosyalar: d });
+  hataKodu(() => E.ekAc(zip3, AC), 'bayat');
 });
 
 test('anahtarlar ve URL\'ler (hepsi önbellek kırıcılı)', () => {
@@ -520,4 +521,105 @@ test('Küçük-7: content-length > tavan → gövde okunmadan ekGetir tavan', as
     if (s.closeAllConnections) s.closeAllConnections();
     await new Promise((r) => s.close(r));
   }
+});
+
+// ── v2: kapak referansı (06.10 — 2 MiB tavanı: 73768/45448/45449/45469) ─────────────────────
+
+function kapakliOrnek() {
+  const kapak1 = crypto.randomBytes(5000);
+  const kapak2 = crypto.randomBytes(4000);
+  const d = ornekDosyalar();
+  d.set('images/book1.png', kapak1);
+  d.set('images/book2.png', kapak2);
+  d.set('images/book2.jpg', crypto.randomBytes(800)); // Swift'in hafif kapağı: girdi değil
+  const kapaklar = new Map([['kapak-book1.png', kapak1], ['kapak-book2.png', kapak2]]);
+  const kapakSha = { 'kapak-book1.png': sha(kapak1), 'kapak-book2.png': sha(kapak2) };
+  return { d, kapaklar, kapakSha, kapak1, kapak2 };
+}
+
+test('v2 manifestKur: girdi kapağıyla bayt-aynı dosya referans olur, sözleşme 2', () => {
+  const { d, kapakSha } = kapakliOrnek();
+  const m = ornekManifest(d, { kapaklar: kapakSha });
+  assert.equal(m.sozlesme, E.SOZLESME_KAPAK_REF);
+  assert.deepEqual(m.kapakDosyalari.map((x) => [x.yol, x.kapak]),
+    [['images/book1.png', 'kapak-book1.png'], ['images/book2.png', 'kapak-book2.png']]);
+  assert.ok(m.dosyalar.some((x) => x.yol === 'images/book2.jpg'));
+  assert.ok(!m.dosyalar.some((x) => x.yol === 'images/book1.png'));
+  assert.equal(m.toplamBayt, m.dosyalar.reduce((t, x) => t + x.boyut, 0));
+  // Buffer verilen kapaklar da aynı sonucu verir; kapaksız → v1 (eski davranış bayt-aynı).
+  const { kapaklar } = kapakliOrnek();
+  assert.equal(ornekManifest(d, { kapaklar }).sozlesme, 1); // farklı rastgele bayt: eşleşme yok
+  const v1 = ornekManifest(d);
+  assert.equal(v1.sozlesme, 1);
+  assert.equal(v1.kapakDosyalari, undefined);
+});
+
+test('v2 ekPaketle → ekAc: kapaklar zip\'e girmez, alıcının kapağından doldurulur', () => {
+  const { d, kapaklar, kapakSha } = kapakliOrnek();
+  const m = ornekManifest(d, { kapaklar: kapakSha });
+  const zip = E.ekPaketle({ manifest: m, dosyalar: d });
+  const tam = E.ekPaketle({ manifest: ornekManifest(d), dosyalar: d });
+  assert.ok(zip.length < tam.length - 8000, `v2 ${zip.length} < v1 ${tam.length}`);
+  const ham = E.zipOku(zip);
+  assert.ok(!ham.has('images/book1.png') && !ham.has('images/book2.png'));
+  const { dosyalar } = E.ekAc(zip, { ...AC, kapaklar });
+  assert.equal(dosyalar.size, d.size);
+  for (const [y, v] of d) assert.ok(dosyalar.get(y).equals(v), y);
+  // Obje biçimli kapak kümesi de kabul edilir.
+  assert.equal(E.ekAc(zip, { ...AC, kapaklar: Object.fromEntries(kapaklar) }).dosyalar.size, d.size);
+  // Deterministik: aynı girdi → bayt-aynı zip.
+  assert.ok(E.ekPaketle({ manifest: m, dosyalar: d }).equals(zip));
+});
+
+test('v2 ekAc: kapak yok → bozuk; kapak farklı → bayat; v1 okuyucu taklidi reddeder', () => {
+  const { d, kapaklar, kapakSha } = kapakliOrnek();
+  const zip = E.ekPaketle({ manifest: ornekManifest(d, { kapaklar: kapakSha }), dosyalar: d });
+  hataKodu(() => E.ekAc(zip, AC), 'bozuk');
+  hataKodu(() => E.ekAc(zip, { ...AC, kapaklar: new Map([['kapak-book1.png', kapaklar.get('kapak-book1.png')]]) }), 'bozuk');
+  const bozuk = new Map(kapaklar);
+  bozuk.set('kapak-book2.png', crypto.randomBytes(4000));
+  hataKodu(() => E.ekAc(zip, { ...AC, kapaklar: bozuk }), 'bayat');
+  // Eski (v1) okuyucu: sözleşme ≠ 1 → bayat (eksik kapakla kabuk kurulmaz).
+  const m = JSON.parse(E.zipOku(zip).get(E.MANIFEST_ADI).toString('utf8'));
+  assert.notEqual(m.sozlesme, E.SOZLESME);
+});
+
+test('v2 biçim: referans yolu beyaz liste dışı / zip ile çakışık / v1\'de liste → red', () => {
+  const { d, kapaklar, kapakSha } = kapakliOrnek();
+  const m = ornekManifest(d, { kapaklar: kapakSha });
+  const KL = { klasorler: ['book1', 'book2'] };
+  const sahte = (mm, dd = d) => E.ekPaketle({ manifest: mm, dosyalar: dd }, KL);
+  const ref0 = m.kapakDosyalari[0];
+  // Beyaz liste dışı yol (klasör kümesinde yok).
+  const disari = { ...m, kapakDosyalari: [{ ...ref0, yol: 'images/book9.png' }] };
+  assert.throws(() => sahte(disari),
+    (e) => e instanceof E.EkHatasi && e.kod === 'yol');
+  // Zip dosyasıyla aynı yol.
+  const cakis = { ...m, kapakDosyalari: [{ ...ref0, yol: 'index.html' }] };
+  hataKodu(() => E.ekPaketle({ manifest: cakis, dosyalar: d }, { beyazListe: () => true }), 'bozuk');
+  // v1 manifestte liste olamaz; v2'de liste boş olamaz.
+  hataKodu(() => sahte({ ...m, sozlesme: 1 }), 'bozuk');
+  hataKodu(() => sahte({ ...m, kapakDosyalari: [] }), 'bozuk');
+  // Kapak adı yol enjekte edemez.
+  hataKodu(() => sahte({ ...m, kapakDosyalari: [{ ...ref0, kapak: '../x.png' }] }), 'bozuk');
+  // Referans sha'sı dosyayla uyuşmazsa paketlenmez.
+  const yanlis = { ...m, kapakDosyalari: [{ ...ref0, sha256: 'e'.repeat(64) }, m.kapakDosyalari[1]] };
+  hataKodu(() => sahte(yanlis), 'bozuk');
+  assert.ok(E.ekAc(sahte(m), { ...AC, ...KL, kapaklar }));
+});
+
+test('v1 ek (kapak gömülü) yeni okuyucuda aynen açılır (R2\'deki eski ekler geçerli kalır)', () => {
+  const { d, kapaklar } = kapakliOrnek();
+  const zip = E.ekPaketle({ manifest: ornekManifest(d), dosyalar: d });
+  assert.equal(E.ekAc(zip, AC).dosyalar.size, d.size);
+  assert.equal(E.ekAc(zip, { ...AC, kapaklar }).dosyalar.size, d.size);
+});
+
+test('girdiParmakIzi sözleşme 1\'de kalır (v2 girdiSha\'yı değiştirmez)', () => {
+  const { kapakSha } = kapakliOrnek();
+  const iz = E.girdiParmakIzi({ kip: 'bookN', girdi: ornekGirdi(), kapaklar: kapakSha });
+  const beklenen = sha(Buffer.from(E.kanonikJson({
+    sozlesme: 1, kip: 'bookN', girdi: ornekGirdi(), kapaklar: kapakSha, a1Girdi: null,
+  }), 'utf8'));
+  assert.equal(iz, beklenen);
 });

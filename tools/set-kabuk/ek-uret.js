@@ -592,6 +592,7 @@ function uretecTabaniNedeni({ U, P, zip, setListesi = null, asama, env }) {
  */
 async function r2EkGecerliMi(bag, ek, o) {
   const { bookId, girdiSha, kip, webzSettingsSha, klasorler, acikAnahtar, calisma } = o;
+  const kapaklar = o.kapaklar || null;
   const al = async (anahtar, yerel) => {
     const r = await bag.rclone(['copyto', `${R2_UZAK}:${EK_BUCKET}/${anahtar}`, yerel]);
     return r.code === 0 ? fs.readFileSync(yerel) : null;
@@ -606,7 +607,9 @@ async function r2EkGecerliMi(bag, ek, o) {
     const zip = await al(ek.ekAnahtari(bookId, girdiSha), path.join(calisma, 'r2-ek.zip'));
     const imza = await al(ek.imzaAnahtari(bookId, girdiSha), path.join(calisma, 'r2-ek.imza'));
     if (!zip || !imza) return false;
-    ek.ekAc(zip, { bookId, girdiSha, kip, ...(klasorler ? { klasorler } : {}) });
+    ek.ekAc(zip, {
+      bookId, girdiSha, kip, ...(klasorler ? { klasorler } : {}), ...(kapaklar ? { kapaklar } : {}),
+    });
     return ek.ekImzaDogrula(zip, imza.toString('utf8'), acikAnahtar);
   } catch (_) {
     return false;
@@ -830,8 +833,8 @@ async function setIsle(bag, s, o) {
   const bitir = (durum, neden, ek = {}) => {
     Object.assign(sonuc, ek, { durum, neden, sureMs: Date.now() - basla });
     if (sonuc.taban) sonuc.onbellekBayt = onbellekBoyutu(bag.ev);
-    const alanlar = ['girdiSha', 'kip', 'bayt', 'dosyaSayisi', 'anahtar', 'taban', 'indirilenBayt',
-      'onbellekBayt'].filter((k) => sonuc[k] != null).map((k) => `${k}=${sonuc[k]}`).join(' ');
+    const alanlar = ['girdiSha', 'kip', 'bayt', 'dosyaSayisi', 'kapakRef', 'anahtar', 'taban',
+      'indirilenBayt', 'onbellekBayt'].filter((k) => sonuc[k] != null).map((k) => `${k}=${sonuc[k]}`).join(' ');
     const satir = `${ISARET} SONUÇ ${s.bookId} durum=${durum} ${alanlar} sure=${sonuc.sureMs}ms`
       + `${neden ? ` — ${neden}` : ''}`;
     (['hata', 'tavan', 'ret'].includes(durum) ? bag.warn : bag.log)(satir);
@@ -894,11 +897,19 @@ async function setIsle(bag, s, o) {
     sonuc.kip = kip;
     sonuc.dosyaSayisi = dosyalar.size;
     const arac = bag.aracSurumu();
+    // Kapak referansı (sözleşme 2, 06.10): Swift `images/<klasör>.png`'yi girdi kapağından
+    // bayt-aynı yazar; ProBook o kapağı zaten indirir (sha'sı girdiSha'da). Bu dosyalar zip'e
+    // girmez — 73768'de 4,13 MB'ın 3,87 MB'ı kapak PNG'siydi (2 MiB tavanı aşılıyordu).
     const manifest = ek.manifestKur({
       bookId: String(s.bookId), kisaKod: s.kisaKod, kip, girdiSha,
       webzSettingsSha: cikti.webzSettingsSha, tabanSurum: s.surum, tabanSha256: s.sha256,
       arac: { kaynak: arac.kaynak, sha256: arac.sha256 }, dosyalar,
+      ...(cikti.kapaklar ? { kapaklar: cikti.kapaklar } : {}),
     });
+    const kapakRef = Array.isArray(manifest.kapakDosyalari) ? manifest.kapakDosyalari : [];
+    /** R2 ek denetimi (ekAc) için kapak adı → bayt (referanslı dosyanın kendisi). */
+    const kapakVeri = new Map(kapakRef.map((d) => [d.kapak, dosyalar.get(d.yol)]));
+    if (kapakRef.length) sonuc.kapakRef = kapakRef.length;
     // Beyaz liste klasörleri (images/<klasör>.png) — ProBook ekAc ile AYNI küme.
     const kitaplar = cikti.girdi && Array.isArray(cikti.girdi.kitaplar)
       ? cikti.girdi.kitaplar : null;
@@ -907,16 +918,20 @@ async function setIsle(bag, s, o) {
     const tavan = typeof ek.tavanAl === 'function' ? ek.tavanAl() : ek.EK_TAVAN_BAYT;
     let paket = null;
     try {
-      paket = ek.ekPaketle({ manifest, dosyalar }, secenek);
+      // Paketleme tavansız (bayt ölçülsün, rapor "?" demesin); tavan aşağıda denetlenir.
+      paket = ek.ekPaketle({ manifest, dosyalar }, { ...secenek, tavan: Number.MAX_SAFE_INTEGER });
     } catch (e) {
       if (!(e && e.kod === 'tavan')) throw e;
     }
     if (!paket || paket.length > tavan) {
       const bayt = paket ? paket.length : null;
       if (bayt != null) sonuc.bayt = bayt;
+      // Teşhis: zip'e giren en büyük 3 dosya (kapak referansları zaten dışarıda).
+      const enBuyuk = [...manifest.dosyalar].sort((a, b) => b.boyut - a.boyut).slice(0, 3)
+        .map((d) => `${d.yol} ${d.boyut}`).join(', ');
       await bag.bildir(`kabuk-ek ${s.bookId}: ek TAVANI aştı (${bayt ?? '?'} > ${tavan} bayt)`
         + ' — yüklenmedi');
-      return bitir('tavan', `ek ${bayt ?? '?'} bayt > tavan ${tavan}`);
+      return bitir('tavan', `ek ${bayt ?? '?'} bayt > tavan ${tavan} (en büyük: ${enBuyuk})`);
     }
     sonuc.bayt = paket.length;
     // Kuru koşuda A'nın imza arayüzü henüz yoksa ek imzasız üretilir (gerçek kipte main denetler).
@@ -938,7 +953,8 @@ async function setIsle(bag, s, o) {
     await fsp.writeFile(ekDosyasi, paket);
     if (imza) await fsp.writeFile(imzaDosyasi, imza);
     await fsp.writeFile(sonDosyasi, sonMetni);
-    bag.log(`${ISARET} ${s.bookId}: ek ${paket.length} bayt, ${dosyalar.size} dosya, `
+    bag.log(`${ISARET} ${s.bookId}: ek ${paket.length} bayt, ${dosyalar.size} dosya `
+      + `(${kapakRef.length} kapak referansı, sözleşme ${manifest.sozlesme}), `
       + `girdiSha ${girdiSha}, ek sha256 ${ekSha.slice(0, 12)}, imza ${imza ? 'VAR' : 'YOK'}, `
       + `kabuk ${ktDurum}`);
     if (o.cikti) {
@@ -960,6 +976,7 @@ async function setIsle(bag, s, o) {
     if (await r2EkGecerliMi(bag, ek, {
       bookId: String(s.bookId), girdiSha, kip, webzSettingsSha: cikti.webzSettingsSha,
       klasorler: secenek.klasorler, acikAnahtar: crypto.createPublicKey(o.ozelAnahtar), calisma,
+      kapaklar: kapakVeri,
     })) {
       return bitir('mevcut', 'R2\'de aynı girdiSha ve Web-Z settings için doğrulanmış ek var');
     }

@@ -973,3 +973,70 @@ test('token.json yoksa gerçek kipte yükleme yok + bildir', async () => {
   assert.equal(kayit.ssh.length, 0);
   assert.match(kayit.bildir[0], /ajan kimliği yok/);
 });
+
+// ─── Kapak referansı (sözleşme 2, 06.10: 73768/45448/45449/45469 2 MiB tavanı) ────────────
+test('gerçek A modülü: girdi kapağı zip\'e girmez, ek tavanın altında kalır; ikinci koşu mevcut', async (t) => {
+  const A = require('../../src/agent/kabuk-ek');
+  const onceki = process.env.EMPP_KABUK_EK_TAVAN;
+  process.env.EMPP_KABUK_EK_TAVAN = '20000';
+  t.after(() => {
+    if (onceki === undefined) delete process.env.EMPP_KABUK_EK_TAVAN;
+    else process.env.EMPP_KABUK_EK_TAVAN = onceki;
+  });
+  const kapak = crypto.randomBytes(30000); // sıkışmaz: tek başına tavanı aşar
+  const dosyalar = new Map([
+    ['index.html', Buffer.from('<html>kabuk</html>')],
+    ['scripts/language-set.js', Buffer.from('sonrakiSatirDugmesi')],
+    ['images/book1.png', kapak],
+  ]);
+  const kabuk = async (x) => {
+    await x.ekCikti({
+      girdiSha: SHA_A, kip: 'bookN', girdi: { kitaplar: [{ klasor: 'book1' }] }, dosyalar,
+      kapaklar: { 'kapak-book1.png': crypto.createHash('sha256').update(kapak).digest('hex') },
+      a1Girdi: null, webzSettingsSha: 'b'.repeat(64),
+    });
+    return { durum: 'uygulandi', neden: null, girdiSha: SHA_A };
+  };
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit, r2 } = sahteBag(ev, { ekModulu: A, kabuk });
+  const ozelPem = fs.readFileSync(path.join(ev, 'kabuk-ek-imza', 'ozel.pem'), 'utf8');
+  const r = await E.setIsle(bag, tekSatir(), { kuru: false, ozelAnahtar: ozelPem });
+  assert.equal(r.durum, 'yuklendi', r.neden);
+  assert.equal(r.kapakRef, 1);
+  assert.ok(r.bayt < 20000, `ek ${r.bayt}`);
+  const zip = r2.get(`ydsr2:ydsdigital/kabuk-ek/45550/${SHA_A}.zip`);
+  assert.ok(!A.zipOku(zip).has('images/book1.png'));
+  const acik = { bookId: '45550', girdiSha: SHA_A, kip: 'bookN', klasorler: ['book1'] };
+  // ProBook: girdi kapağıyla açılır; kapaksız açılmaz.
+  const ac = A.ekAc(zip, { ...acik, kapaklar: new Map([['kapak-book1.png', kapak]]) });
+  assert.ok(ac.dosyalar.get('images/book1.png').equals(kapak));
+  assert.throws(() => A.ekAc(zip, acik), (e) => e.kod === 'bozuk');
+  // İkinci koşu: R2'deki v2 ek kapakla doğrulanır → yeniden yüklenmez.
+  const r2nci = await E.setIsle(bag, tekSatir(), { kuru: false, ozelAnahtar: ozelPem });
+  assert.equal(r2nci.durum, 'mevcut', r2nci.neden);
+  assert.equal(kayit.yazilan.length, 3);
+});
+
+test('tavan aşımında bayt ölçülür ("?" değil) ve en büyük dosyalar nedende', async (t) => {
+  const A = require('../../src/agent/kabuk-ek');
+  const onceki = process.env.EMPP_KABUK_EK_TAVAN;
+  process.env.EMPP_KABUK_EK_TAVAN = '5000';
+  t.after(() => {
+    if (onceki === undefined) delete process.env.EMPP_KABUK_EK_TAVAN;
+    else process.env.EMPP_KABUK_EK_TAVAN = onceki;
+  });
+  const dosyalar = new Map([
+    ['index.html', Buffer.from('<html>kabuk</html>')],
+    ['scripts/language-set.js', Buffer.from('sonrakiSatirDugmesi')],
+    ['images/book1.jpg', crypto.randomBytes(9000)], // Swift çıktısı: girdi kapağı değil
+  ]);
+  const ev = geciciDizin();
+  const { bag, kayit } = sahteBag(ev, { ekModulu: A, dosyalar });
+  const r = await E.setIsle(bag, tekSatir(), { kuru: false, ozelAnahtar: 'x' });
+  assert.equal(r.durum, 'tavan');
+  assert.ok(Number.isInteger(r.bayt) && r.bayt > 5000, `bayt ${r.bayt}`);
+  assert.match(r.neden, /en büyük: images\/book1\.jpg 9000/);
+  assert.match(kayit.bildir[0], new RegExp(`TAVANI aştı \\(${r.bayt} > 5000`));
+  assert.deepEqual(kayit.yazilan, []);
+});
