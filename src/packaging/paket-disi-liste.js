@@ -44,6 +44,35 @@ const path = require('path');
 const kokYedekDizinDisla = require('./kok-yedek-dizin-disla');
 
 const PLATFORMLAR = Object.freeze(['windows', 'macos', 'linux', 'android']);
+
+/**
+ * Chrome KULLANICI VERİ DİZİNİ (user-data-dir) artıkları — yalnız `…/htmletk/<birim>/`
+ * altında, yani etkinlik birimi Chrome'da `--user-data-dir=<birim>` ile açılmış ve
+ * tarayıcı profilini birimin İÇİNE yazmış. Ölçüm (06.10, 11845 Super Monsters 3 Set):
+ * `book1/assets/11822/htmletk/u1/` altında 439 dosya / 26 MB profil (23.03.2026
+ * tarihli; Adobe Acrobat eklentisi `Default/Extensions/efaidnbm…`). Uzun yol yüzünden
+ * Windows NSIS derlemesi düştü: electron-builder `.mp4`'leri 7z'ye koymaz,
+ * `customFiles_ia32` makrosunda tek tek `File` ile ekler; makensis 3.0.4.1 MAX_PATH
+ * (259) üstündeki yolu "no files found" diye bulamaz (en uzun yol 322 karakter).
+ * Ad kümesi: 11845'te ölçülen kök girdiler + Chrome'un bilinen önbellek dizinleri.
+ */
+const CHROME_PROFIL_ADLARI = Object.freeze([
+  'Default', 'Crashpad', 'BrowserMetrics', 'component_crx_cache', 'extensions_crx_cache',
+  'GrShaderCache', 'ShaderCache', 'GraphiteDawnCache', 'Safe Browsing',
+  'segmentation_platform', 'Local State', 'First Run', 'Last Browser', 'Last Version',
+  'Variations', 'BrowserMetrics-spare.pma', 'CrashpadMetrics-active.pma',
+  'first_party_sets.db', 'first_party_sets.db-journal',
+]);
+const CHROME_PROFIL_KUMESI = new Set(CHROME_PROFIL_ADLARI);
+const CHROME_PROFIL_GLOB = `{${CHROME_PROFIL_ADLARI.join(',')}}`;
+
+/** `…/htmletk/<birim>/<profil-adı>[/…]` mi? (her derinlikte; segment birebir) */
+function chromeProfilYoluMu(p) {
+  for (let i = 0; i + 2 < p.length; i += 1) {
+    if (p[i] === 'htmletk' && CHROME_PROFIL_KUMESI.has(p[i + 2])) return true;
+  }
+  return false;
+}
 const ELEKTRON_PLATFORMLARI = Object.freeze(['windows', 'macos', 'linux']);
 
 /**
@@ -118,6 +147,19 @@ const MADDELER = Object.freeze([
     platformlar: PLATFORMLAR,
     gerekce: '`_` önekli kök yedek dizinleri (`_eski/`) — tanım `kok-yedek-dizin-disla.js`.',
   }),
+  Object.freeze({
+    ad: 'chrome-profili',
+    desenler: Object.freeze([
+      `!**/htmletk/*/${CHROME_PROFIL_GLOB}`,
+      `!**/htmletk/*/${CHROME_PROFIL_GLOB}/**`,
+    ]),
+    yolEslesir: (p) => chromeProfilYoluMu(p),
+    platformlar: PLATFORMLAR,
+    gerekce: 'Etkinlik biriminin içine yazılmış Chrome kullanıcı profili (11845, 06.10: '
+      + '439 dosya / 26 MB, Windows NSIS MAX_PATH ile düştü). Motor ve birim index.html '
+      + 'profil dosyalarını okumaz; birim içeriği (`index.html`, `etk/`, `player/`) '
+      + 'dokunulmadan kalır. Kapsam yalnız `htmletk/<birim>/` altı, ad birebir.',
+  }),
 ]);
 
 function platformDogrula(platform) {
@@ -190,6 +232,7 @@ function fsKopyaFiltresi(srcRoot, platform = 'android') {
 
 module.exports = {
   PLATFORMLAR,
+  CHROME_PROFIL_ADLARI,
   MADDELER,
   maddeler,
   elektronBuilderDesenleri,
