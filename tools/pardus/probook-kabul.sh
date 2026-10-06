@@ -95,6 +95,15 @@ kanit_al(){
   else scp -q -o BatchMode=yes -o ConnectTimeout=10 -i "$KEY" "$HOST:$1" "$2" 2>/dev/null; fi
 }
 say(){ printf '[kabul] %s\n' "$*"; }
+# LOG SELI KORUMASI (06.10: bekleme sirasinda ayni satir yuzlerce kez yazildi): ayni mesaj
+# en cok KABUL_LOG_ARALIK (60) sn'de bir yazilir; mesaj degisince hemen. printf satir basina
+# write eder (tamponsuz akis).
+SON_MESAJ=""; SON_MESAJ_SN=-1000000
+say_sinirli(){
+  if [ "$*" != "$SON_MESAJ" ] || [ $((SECONDS - SON_MESAJ_SN)) -ge "${KABUL_LOG_ARALIK:-60}" ]; then
+    SON_MESAJ="$*"; SON_MESAJ_SN=$SECONDS; say "$*"
+  fi
+}
 red(){ say "RED: $*"; temizle; exit 1; }
 olculemedi(){ say "OLCULEMEDI: $*"; temizle; exit 4; }
 # shellcheck source=kabul-karar.sh
@@ -264,6 +273,61 @@ if [ "$YEREL" = "1" ]; then
   # arasında yaşayan /tmp/kabul-onceki-<damga>.txt. Kendi süreç grubumuz sayılmaz.
   ISARET_DIZIN="${KABUL_ISARET_DIZIN:-/tmp}"
   KENDI_GRUP=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  # ARTIK UYGULAMA (06.10): elle acilmis DijiTap/AppRun/.impark/.yds sureci kabulu 45 dk
+  # bekletti. ProBook uretim+test ussudur (Nadir 06.10: tam yetki) -> KABUL_ARTIK_BEKLE (120)
+  # sn sonra kapatilir; KABUL_ARTIK_KAPAT=0 eskisi gibi yalniz bekler.
+  # KENDINI ASLA ESLESTIRME: kabulun kendi pid'i, ata zinciri ($$/$PPID, ssh oturumu), kendi
+  # surec grubu ve komut satirinda probook-kabul/ssh gecenler atlanir. Desenlerde [x] hilesi
+  # var; paket yolu ~/Indirilenler/*.impark olan kabulun kendi argumani da eslesmesin diye
+  # ayrica ata/komut suzgeci uygulanir (06.10: pgrep -f ssh kabugunu oldurdu).
+  KABUL_ARTIK_KAPAT="${KABUL_ARTIK_KAPAT:-1}"
+  KABUL_ARTIK_BEKLE="${KABUL_ARTIK_BEKLE:-120}"
+  KABUL_ARTIK_TERM_SN="${KABUL_ARTIK_TERM_SN:-5}"
+  artik_pidler(){
+    local q self=" $$ $PPID " p g cmd
+    q=$$
+    while [ "${q:-0}" -gt 1 ]; do
+      q=$(ps -o ppid= -p "$q" 2>/dev/null | tr -d ' ')
+      [ -n "$q" ] && self="$self$q "
+    done
+    {
+      pgrep -f "$HOME/[D]ijiTap/" 2>/dev/null
+      pgrep -f '[.]mount_[^/ ]+/' 2>/dev/null
+      pgrep -f "$HOME/[^/ ]*ndirilenler/.*[.](impark|yds)( |\$)" 2>/dev/null
+    } | sort -un | while read -r p; do
+      case "$self" in *" $p "*) continue ;; esac
+      g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')
+      [ -n "$g" ] && [ "$g" = "$KENDI_GRUP" ] && continue
+      cmd=$(ps -o args= -p "$p" 2>/dev/null)
+      [ -z "$cmd" ] && continue
+      case "$cmd" in *probook-kabul*|*sshd*|"ssh "*|*/ssh\ *|*"bash -s"*) continue ;; esac
+      echo "$p"
+    done
+  }
+  artik_agac(){ # $1 = pid; cikti: once cocuklar (derinden), en son kendisi
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null); do artik_agac "$c"; done
+    echo "$1"
+  }
+  artik_canli(){ # zombi (Z) olmus sayilir: ebeveyni toplamamis olabilir
+    local st
+    st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$st" ] && [ "${st#Z}" = "$st" ]
+  }
+  artik_kapat(){
+    local ana liste p cmd acilis
+    for ana in $(artik_pidler); do
+      cmd=$(ps -o args= -p "$ana" 2>/dev/null | cut -c1-200)
+      acilis=$(ps -o lstart= -p "$ana" 2>/dev/null)
+      liste=$(artik_agac "$ana")
+      say "ARTIK uygulama kapatiliyor: pid=$ana acilis=[$acilis] komut=[$cmd] (agac: $(echo $liste))"
+      for p in $liste; do kill -TERM "$p" 2>/dev/null && say "ARTIK TERM pid=$p"; done
+      sleep "$KABUL_ARTIK_TERM_SN"
+      for p in $liste; do
+        if artik_canli "$p"; then kill -KILL "$p" 2>/dev/null; say "ARTIK KILL pid=$p (TERM sonrasi hala yasiyordu)"; fi
+      done
+    done
+  }
   mesgul_sebep(){
     local f p g
     for f in "$ISARET_DIZIN"/kabul-onceki-*.txt; do
@@ -281,7 +345,7 @@ if [ "$YEREL" = "1" ]; then
       g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')
       [ -n "$g" ] && [ "$g" != "$KENDI_GRUP" ] && { echo "baska probook-kabul sureci (pid $p)"; return 0; }
     done
-    p=$(pgrep -f "$HOME/[D]ijiTap/" 2>/dev/null | head -1)
+    p=$(artik_pidler | head -1)
     [ -n "$p" ] && { echo "DijiTap uygulamasi acik (pid $p)"; return 0; }
     return 1
   }
@@ -294,9 +358,19 @@ if [ "$YEREL" = "1" ]; then
     return 1
   }
   BEKLENEN=0
+  ARTIK_BASLA=""
   while SEBEP=$(kilit_ve_bosluk); do
     [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: $SEBEP"; exit 1; }
-    [ $((BEKLENEN % 60)) -eq 0 ] && say "ProBook mesgul, bekleniyor: $SEBEP"
+    case "$SEBEP" in
+      "DijiTap uygulamasi acik"*)
+        [ -z "$ARTIK_BASLA" ] && ARTIK_BASLA=$SECONDS
+        if [ "$KABUL_ARTIK_KAPAT" != "0" ] && [ $((SECONDS - ARTIK_BASLA)) -ge "$KABUL_ARTIK_BEKLE" ]; then
+          say "ARTIK uygulama ${KABUL_ARTIK_BEKLE} sn kapanmadi, kapatiliyor: $SEBEP"
+          artik_kapat; ARTIK_BASLA=""; continue
+        fi ;;
+      *) ARTIK_BASLA="" ;;
+    esac
+    say_sinirli "ProBook mesgul, bekleniyor: $SEBEP"
     sleep "$BOSLUK_ARALIK"; BEKLENEN=$((BEKLENEN + BOSLUK_ARALIK))
   done
   KILIT=1  # donguden SEBEP'siz cikis = kilit alindi (alt kabukta set edildigi icin burada da)
@@ -359,7 +433,7 @@ else
   BEKLENEN=0
   until C=$(kilit al); do
     [ "$BEKLENEN" -ge "$BOSLUK_TAVAN" ] && { say "RED: ProBook mesgul, ${BOSLUK_TAVAN} sn bosalmadi: kabul kilidi ${C##*KILIT_MESGUL }"; exit 1; }
-    [ $((BEKLENEN % 60)) -eq 0 ] && say "ProBook mesgul (kabul kilidi: ${C##*KILIT_MESGUL }), bekleniyor"
+    say_sinirli "ProBook mesgul (kabul kilidi: ${C##*KILIT_MESGUL }), bekleniyor"
     sleep "$BOSLUK_ARALIK"; BEKLENEN=$((BEKLENEN + BOSLUK_ARALIK))
   done
   KILIT=1
