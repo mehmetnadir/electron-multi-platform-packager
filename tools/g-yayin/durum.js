@@ -132,6 +132,10 @@ function oncekiDurum(onceki) {
  *   `ekle`     {bookN: {kaynak, sha256, boyut}}
  *   `cikar`    [bookN]
  *   `menu`     {<MENU_YOLLARI'ndan yol>: {sha256, boyut}} — `--ekle`/`--cikar`'ın menüye yansıması
+ *   `dusur`    [G yolu] — önceki imzalı durumdaki kabuk girdisini ÇIKARIR (`--dusur`). Girdi
+ *              manifestten düşünce istemci o yol için paketin KENDİ kopyasını kullanır (örtü
+ *              `ortuCoz` → null). Önceki durumda olmayan yol, aynı yayında yeniden yazılan yol
+ *              (`--index`/`--motor`/menü) ve G kapsamı dışı yol RED — sessiz no-op yok.
  * @returns {{kabuk:object[], kitaplar:object[], ozet:{degisenKabuk:string[], dusenKabuk:string[],
  *   degisenKitap:string[], tasinanKabuk:string[]}}}
  */
@@ -141,6 +145,7 @@ function birlestir(onceki, d) {
   const ekle = deg.ekle || {};
   const cikar = Array.isArray(deg.cikar) ? deg.cikar : [];
   const menu = deg.menu || {};
+  const dusur = Array.isArray(deg.dusur) ? [...new Set(deg.dusur)] : [];
 
   for (const k of Object.keys(motorlar)) kitapDiziniDenetle(k, '--motor');
   for (const k of Object.keys(ekle)) kitapDiziniDenetle(k, '--ekle');
@@ -159,6 +164,14 @@ function birlestir(onceki, d) {
     if (!MENU_YOLLARI.includes(y)) throw new Error(`menü yolu G kapsamında değil: ${y}`);
     if (!ozetGecerliMi(v)) throw new Error(`${y} menü özeti bozuk`);
   }
+  for (const y of dusur) {
+    if (!gYoluMu(y)) throw new Error(`--dusur: yol G kapsamında değil: ${JSON.stringify(y)}`);
+    const yazilan =
+      (y === INDEX_YOLU && deg.index !== undefined) ||
+      Object.keys(motorlar).some((k) => motorYolu(k) === y) ||
+      Object.prototype.hasOwnProperty.call(menu, y);
+    if (yazilan) throw new Error(`--dusur ${y}: aynı yayında yeniden yazılıyor (çelişki)`);
+  }
   for (const [k, v] of Object.entries(ekle)) {
     if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak)
       throw new Error(`${k} arşiv özeti bozuk`);
@@ -170,14 +183,22 @@ function birlestir(onceki, d) {
     !Object.keys(motorlar).length &&
     !Object.keys(ekle).length &&
     !cikar.length &&
-    !Object.keys(menu).length
+    !Object.keys(menu).length &&
+    !dusur.length
   ) {
-    throw new Error('değişiklik yok: --index, --motor, --ekle ya da --cikar verin');
+    throw new Error('değişiklik yok: --index, --motor, --ekle, --cikar ya da --dusur verin');
   }
 
   const eski = oncekiDurum(onceki);
   const kabuk = new Map(eski.kabuk);
   const kitaplar = new Map(eski.kitaplar);
+
+  for (const y of dusur) {
+    if (!eski.kabuk.has(y)) {
+      throw new Error(`--dusur ${y}: önceki imzalı durumda böyle bir kabuk girdisi yok`);
+    }
+    kabuk.delete(y);
+  }
 
   for (const k of cikar) {
     kitaplar.set(k, { dizin: k, durum: 'cikar' });

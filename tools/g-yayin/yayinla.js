@@ -18,6 +18,10 @@
  *           (üretim) ya da dosya (TEST) — anahtar.js.
  *   Android `--ekle` içeren yayın varsayılan RED (Android ucu kalıcı donar); bilinçli geçiş
  *           yalnız `--android-ekleme-dondurur-kabul` ile — `androidEklemeKapisi`.
+ *   Düşür   `--dusur <yol>[,<yol>]` önceki imzalı durumdaki kabuk girdisini birikimli manifestten
+ *           çıkarır (06.10, 45550: Android shim'siz `index.html` her sürüme taşınıp Android'i
+ *           `index-android-shim-yok` ile donduruyordu). İstemci o yol için paketin KENDİ kopyasına
+ *           döner (mac/Pardus örtü: `ortuCoz` → null; Android: dosya uygulanmaz). R2'den SİLMEZ.
  *
  * Alt komutlar:
  *   yayinla  (varsayılan)  yeni sürümü üret
@@ -165,6 +169,7 @@ function argsAyristir(argv) {
     motorlar: {},
     ekle: {},
     cikar: [],
+    dusur: [],
     menuTaban: null,
     baslik: {},
     anahtarZinciri: false,
@@ -203,6 +208,13 @@ function argsAyristir(argv) {
       a.ekle[k] = v;
     } else if (b === '--cikar')
       a.cikar.push(
+        ...deger()
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    else if (b === '--dusur')
+      a.dusur.push(
         ...deger()
           .split(',')
           .map((s) => s.trim())
@@ -635,7 +647,12 @@ async function yayinla(a, ops = {}) {
   gSurum.monotonDenetle(surum, oncekiler);
 
   // 4) Girdiler.
-  const degisiklik = { motorlar: {}, ekle: {}, cikar: [...new Set(a.cikar || [])] };
+  const degisiklik = {
+    motorlar: {},
+    ekle: {},
+    cikar: [...new Set(a.cikar || [])],
+    dusur: [...new Set(a.dusur || [])],
+  };
   const yazilacakKabuk = new Map();
   if (a.index) {
     const v = dosyaOku(a.index, '--index');

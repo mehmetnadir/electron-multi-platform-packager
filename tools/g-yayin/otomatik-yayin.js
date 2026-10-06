@@ -610,13 +610,15 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
   s.canli = await canliOku(taban, id, ops.getir, acik);
   if (s.canli.androidIndexShimli === false && !s.canli.hata) {
     // Birikimli manifest shim'siz index'i her yeni sürüme taşır → Android her sürümü RED eder
-    // (gerçek empp-g-istemci ölçümü 06.10: 2.25.8 red, index'siz 2.25.9 kabul). yayinla.js
-    // index düşüremez; çözüm Nadir kararı. Yeni sürüm yayınlanmaz.
+    // (gerçek empp-g-istemci ölçümü 06.10: 2.25.8 red, index'siz 2.25.9 kabul). Çözüm:
+    // `yayinla.js --dusur index.html` ile index'i düşüren sürüm (insan kararı; otomatik değil).
+    // Kapı canlı MANIFESTE bakar: index düştükten sonra R2'de kalan eski android/dosya/index.html
+    // kapıyı tetiklemez. Yeni sürüm yayınlanmaz.
     return Object.assign(s, { karar: 'nadir',
       sebep: `android-donuk-index: canlı ${s.canli.surum} ` +
       'index.html empp-android-shim taşımıyor; birikimli manifest onu her sürüme taşır, Android ' +
-      'index-android-shim-yok ile RED eder. Önce index düşüren sürüm kararı (yayinla.js bugün ' +
-      'kabuk düşüremez)' });
+      'index-android-shim-yok ile RED eder. Önce index düşüren sürüm: yayinla.js --dusur ' +
+      'index.html (Nadir kararı)' });
   }
   const ck = canliKarari(s.canli, mdz.dizinler, kanonik.sha256);
   s.karar = ck.karar;
