@@ -226,7 +226,13 @@ test('onaylı: dosyalar → manifest+.sig → EN SON surum.json; doğrulanır; 2
   assert.equal(r.dogrula.gecti, true);
   assert.deepEqual([r.dogrula.surum, r.dogrula.arsiv], ['2.7.2', 1]);
   const kopya = c.cagri.find((a) => a[0] === 'copyto' && a[2].endsWith('/surum.json'));
-  assert.ok(kopya.includes('Cache-Control: no-cache'));
+  assert.ok(kopya.includes('Cache-Control: no-cache, no-transform'));
+  // İmzalı baytlar CDN'de değişmemeli: Cloudflare Web Analytics text/html yanıtına betik
+  // ekliyordu (45550, 06.10: 6894 → 7255 B, sha tutmadı). Her G nesnesi no-transform taşır.
+  const idx = c.cagri.find((a) => a[0] === 'copyto' && a[2].endsWith('/dosya/index.html'));
+  assert.ok(idx.includes('Cache-Control: no-cache, no-transform'));
+  const zipK = c.cagri.find((a) => a[0] === 'copyto' && /\/kitap\/[^/]+\.zip$/.test(a[2]));
+  assert.ok(zipK.includes('Cache-Control: public, max-age=31536000, immutable, no-transform'));
   const r2 = await yk.yukle(
     { setKimligi: '74390', cikti: o.cikti, onayli: true },
     { ...c, beklenenAcik: o.acik },
@@ -451,7 +457,7 @@ test('android ucu: onaylı yükleme android/ ucunu da yükler → GERÇEK Androi
   assert.ok(i('android/manifest.json.sig') < i('android/surum.json'));
   assert.deepEqual(k.slice(-2).sort(), ['android/surum.json', 'surum.json']);
   const kopya = c.cagri.find((x) => x[0] === 'copyto' && x[2].endsWith('/android/surum.json'));
-  assert.ok(kopya.includes('Cache-Control: no-cache'));
+  assert.ok(kopya.includes('Cache-Control: no-cache, no-transform'));
   // Android ucu canonical'la bayt bayt aynı (TEK imza).
   const kova = (g) => fs.readFileSync(path.join(c.kova, ...`guncelleme/set/74390/${g}`.split('/')));
   assert.ok(kova('android/manifest.json').equals(kova('manifest.json')));
