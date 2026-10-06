@@ -115,11 +115,42 @@ test('biten zip işleri kuyruğu meşgul saymaz (kasada ölçüldü: completed z
   assert.match(r.log, /TAMAM/);
 });
 
-test('çıktısı alınmamış completed paketleme işi: dokunmaz (iş kaydı kaybolur, download 404)', () => {
+test('biten paketleme işleri (completed) meşgul sayılmaz: yeniden açar', () => {
   const r = kos({ canli: 'eski000', disk: 'yeni111',
-    kuyrukJson: '{"zipJobs":[],"packagingJobs":[{"status":"completed"}],"activePackagingJobs":[]}' });
+    kuyrukJson: '{"zipJobs":[],"packagingJobs":[{"status":"completed"}],"activePackagingJobs":[{"status":"completed"}]}' });
+  assert.match(r.out, /ESKI_CANLI=hayir/);
+  assert.match(r.log, /TAMAM/);
+});
+
+test('06.10 kasa fixture: 3 completed + 1 processing (iki listede aynı iş) → mesgul=1, dokunmaz', () => {
+  const j = [{ jobId: 'a', status: 'completed' }, { jobId: 'b', status: 'completed' },
+    { jobId: 'c', status: 'completed' }, { jobId: 'd', status: 'processing' }];
+  const z = [1, 2, 3, 4].map(() => ({ status: 'completed' }));
+  const r = kos({ canli: '65db3fa', disk: 'c637a21',
+    kuyrukJson: JSON.stringify({ zipJobs: z, packagingJobs: j, activePackagingJobs: j }) });
   assert.match(r.out, /ESKI_CANLI=evet/);
-  assert.match(r.log, /kuyruk DOLU/);
+  assert.match(r.log, /mesgul=1\)/);
+});
+
+test('06.10 kasa fixture: 4 completed paketleme + 4 completed zip → mesgul=0, yeniden açar', () => {
+  const j = [1, 2, 3, 4].map((i) => ({ jobId: `j${i}`, status: 'completed' }));
+  const z = [1, 2, 3, 4].map(() => ({ status: 'completed' }));
+  const r = kos({ canli: '65db3fa', disk: 'c637a21',
+    kuyrukJson: JSON.stringify({ zipJobs: z, packagingJobs: j, activePackagingJobs: j }) });
+  assert.match(r.out, /ESKI_CANLI=hayir/);
+  assert.match(r.out, /COMMIT=c637a21/);
+  assert.match(r.log, /TAMAM/);
+});
+
+test('failed/cancelled işler meşgul sayılmaz; queued/pending/running sayılır', () => {
+  const bos = kos({ canli: 'e', disk: 'y',
+    kuyrukJson: '{"zipJobs":[{"status":"cancelled"}],"packagingJobs":[{"status":"failed"},{"status":"error"}],"activePackagingJobs":[]}' });
+  assert.match(bos.out, /ESKI_CANLI=hayir/);
+  for (const st of ['queued', 'pending', 'running', 'processing']) {
+    const r = kos({ canli: 'e', disk: 'y',
+      kuyrukJson: `{"zipJobs":[],"packagingJobs":[{"status":"${st}"}],"activePackagingJobs":[]}` });
+    assert.match(r.out, /ESKI_CANLI=evet/, st);
+  }
 });
 
 test('çalışan zip işi: dokunmaz', () => {
