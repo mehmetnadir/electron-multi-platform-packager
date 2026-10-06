@@ -31,7 +31,14 @@ const https = require('https');
 const { spawn } = require('child_process');
 
 const IZINLI_PLATFORMLAR = ['windows', 'pardus', 'mac', 'android', 'web-stream', 'web'];
-const SSH_ORTAK = ['-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes'];
+// ControlPath=none (06.10, 15 set canlı koşusu): kullanıcı ssh ayarındaki çoğullama soketi başka
+// oturumla çakıştı ("ControlSocket … already exists, disabling multiplexing" + broken pipe),
+// pipeline-sql 90 sn zaman aşımına düştü. Her çağrı kendi bağlantısını açar.
+const SSH_ORTAK = ['-o', 'ControlPath=none', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes'];
+/** Çıkış kodları: 0 tamam · 1 hata/durma · 2 kullanım · 3 yeni kaynak bekleme tavanı doldu (eylem yok). */
+const CIKIS = { TAMAM: 0, HATA: 1, KULLANIM: 2, KUR_TAVAN: 3 };
+const OLCUM_DENEME = 3;
+const OLCUM_ARA_MS = 15000;
 const ID_DESENI = /^[1-9][0-9]{0,9}$/;
 const DB_ZAMAN = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?$/;
 const TARAYICI_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
@@ -382,7 +389,7 @@ function srv21Istemci(cfg, d) {
 }
 
 function kasaIstemci(cfg, d) {
-  const hedef = ['-o', 'ControlPath=none', ...SSH_ORTAK];
+  const hedef = [...SSH_ORTAK];
   const ssh = (komut, zamanAsimiMs = 60000) => d.calistir('ssh', [...hedef, cfg.kasa, komut], { kodlama: 'latin1', zamanAsimiMs });
   return {
     async erisim() {
@@ -446,8 +453,8 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     const r = await d.calistir(cfg.bildir, ['paket', mesaj, '-b', baslik], { zamanAsimiMs: 30000 });
     if (r.kod !== 0) d.uyar(`bildirim GÖNDERİLEMEDİ (çıkış ${r.kod}): ${String(r.stderr || '').slice(-160)}`);
   };
-  const durdur = async (k, adim, neden, bildirimAt = true) => {
-    k.durdu = { adim, neden, zaman: iso() };
+  const durdur = async (k, adim, neden, bildirimAt = true, kod = CIKIS.HATA) => {
+    k.durdu = { adim, neden, zaman: iso(), kod };
     k.adimlar[adim] = { ...(k.adimlar[adim] || {}), durum: 'hata', neden, bit: iso() };
     yaz(`  ✗ ${k.id}: ${adim} — ${neden} → bu kitap DURDU (diğerleri sürer)`);
     if (bildirimAt) await bildir(`Set yenileme ${k.id} durdu (${adim}): ${String(neden).slice(0, 200)}`, 'Set yenileme durdu');
@@ -459,6 +466,32 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     if (bitmis(k.adimlar[ad])) return;
     k.adimlar[ad] = { durum: 'atlandi', neden, bit: iso() };
     yaz(`  - ${k.id}: ${ad} atlandı (${neden})`);
+  };
+  /**
+   * Bekleme/izleme ÖLÇÜMÜ: okuma hatası (zaman aşımı, ağ, ssh) ölümcül değildir. 3 deneme, 15 sn
+   * arayla; yine olmazsa "ölçüm atlandı" uyarısı ve null — döngü sürer, tavanlar işlemeye devam eder.
+   * YAZMA adımları (kur isteği, requeue, öncelik) bunu KULLANMAZ: ilk hatada kitap durur.
+   */
+  const olcum = async (etiket, fn) => {
+    for (let deneme = 1; deneme <= OLCUM_DENEME; deneme += 1) {
+      try {
+        return await fn();
+      } catch (e) {
+        d.uyar(`${etiket}: okuma hatası (${deneme}/${OLCUM_DENEME}): ${String(e.message).slice(0, 200)}`);
+        if (deneme < OLCUM_DENEME) await d.bekle(OLCUM_ARA_MS);
+      }
+    }
+    d.uyar(`${etiket}: ölçüm atlandı (${OLCUM_DENEME} deneme başarısız) — döngü sürer`);
+    return null;
+  };
+  /** Yazma adımı: hata kitabı durdurur (ilk hatada), aracı düşürmez; diğer kitaplar sürer. */
+  const yazmaAdimi = async (k, adim, fn) => {
+    try { await fn(); } catch (e) { await durdur(k, adim, `yazma adımı hatası: ${String(e.message).slice(0, 300)}`); }
+  };
+  const sonKod = () => {
+    const duran = idler.map((id) => durum.kitaplar[id]).filter((k) => k.durdu);
+    if (!duran.length) return CIKIS.TAMAM;
+    return duran.every((k) => k.durdu.kod === CIKIS.KUR_TAVAN) ? CIKIS.KUR_TAVAN : CIKIS.HATA;
   };
 
   const idler = (durum.sira || Object.keys(durum.kitaplar)).filter((id) => durum.kitaplar[id]);
@@ -564,14 +597,16 @@ async function yurut(o, cfg, d, durum, durumYolu) {
       continue;
     }
     adimBasla(k, 'kur');
-    let yedek;
-    try { yedek = await db.yedek(y); } catch (e) { await durdur(k, 'kur', e.message); continue; }
-    const satirlar = await db.yaz(sql.kurIstegi(k.id));
-    const t0 = satirlar[0];
-    if (!DB_ZAMAN.test(t0 || '')) { await durdur(k, 'kur', `t0 okunamadı: ${satirlar.join(' | ')}`); continue; }
-    if (satirlar[1] !== '1') { await durdur(k, 'kur', `kur isteği UPDATE ${satirlar[1]} satır etkiledi (manuel/eksik?)`); continue; }
-    adimBit(k, 'kur', 'tamam', { kanit: { t0, yedek } });
-    yaz(`  ✓ ${k.id}: kur isteği atıldı (t0=${t0}, yedek ${yedek})`);
+    await yazmaAdimi(k, 'kur', async () => {
+      let yedek;
+      try { yedek = await db.yedek(y); } catch (e) { await durdur(k, 'kur', e.message); return; }
+      const satirlar = await db.yaz(sql.kurIstegi(k.id));
+      const t0 = satirlar[0];
+      if (!DB_ZAMAN.test(t0 || '')) { await durdur(k, 'kur', `t0 okunamadı: ${satirlar.join(' | ')}`); return; }
+      if (satirlar[1] !== '1') { await durdur(k, 'kur', `kur isteği UPDATE ${satirlar[1]} satır etkiledi (manuel/eksik?)`); return; }
+      adimBit(k, 'kur', 'tamam', { kanit: { t0, yedek } });
+      yaz(`  ✓ ${k.id}: kur isteği atıldı (t0=${t0}, yedek ${yedek})`);
+    });
   }
 
   if (kuru) {
@@ -593,7 +628,7 @@ async function yurut(o, cfg, d, durum, durumYolu) {
       }
     }
     if (o.izle) yaz(`  (6) izle: completed/failed olana kadar 2 dk aralık, tavan ${o.izleTavanSa} sa; windows yayını ${cfg.bekciLog} 'yayinlandi' satırıyla`);
-    return { plan, kod: canli().length === idler.length ? 0 : 1 };
+    return { plan, kod: sonKod() };
   }
 
   // 3) Requeue HEMEN (kur isteği yazıldıktan sonra). 06.10 45550 dersi: sunucu r2-kur'u YALNIZ
@@ -602,11 +637,11 @@ async function yurut(o, cfg, d, durum, durumYolu) {
   // İstek önce yazıldığı için kaynak-kur yeteneği olmayan ajan (kasa) işi almaz, bekler (b);
   // yeteneği olan (ProBook) alır ve kurar.
   for (const k of canli().filter((x) => bitmis(x.adimlar.kur) && !bitmis(x.adimlar.requeue))) {
-    await requeueAdimi(k);
+    await yazmaAdimi(k, 'requeue', () => requeueAdimi(k));
   }
   // 4) Kasa imza önceliği.
   for (const k of canli().filter((x) => bitmis(x.adimlar.requeue) && !bitmis(x.adimlar.oncelik))) {
-    await oncelikAdimi(k);
+    await yazmaAdimi(k, 'oncelik', () => oncelikAdimi(k));
   }
 
   // 5-6) Yeni build satırını bekle (bilgi + ret yakalama) ve izle (paralel).
@@ -617,11 +652,20 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     const bekleyen = canli().filter((k) => bitmis(k.adimlar.kur) && !bitmis(k.adimlar.bekle));
     if (bekleyen.length) {
       const bIdler = bekleyen.map((k) => k.id);
-      const satir = new Map((await db.oku(sql.kitaplar(bIdler))).map((r) => [r.book_id, r]));
-      const surumler = await db.oku(sql.tohum(bIdler));
+      const okunan = await olcum('bekle ölçümü', async () => ({
+        kitaplar: await db.oku(sql.kitaplar(bIdler)),
+        surumler: await db.oku(sql.tohum(bIdler)),
+      }));
+      const satir = new Map(((okunan && okunan.kitaplar) || []).map((r) => [r.book_id, r]));
       for (const k of bekleyen) {
         if (!k.adimlar.bekle || k.adimlar.bekle.durum !== 'suruyor') adimBasla(k, 'bekle');
-        const ev = kurDegerlendir(satir.get(k.id), surumler.filter((s) => s.set_id === k.id), k.adimlar.kur.kanit.t0);
+        const tavanDoldu = d.simdi() - k.adimlar.bekle.basMs > kurTavanMs;
+        const tavanNedeni = (not) => `kaynak kurulumu ${o.kurTavanDk} dk içinde bitmedi (eylemsiz duruldu)${not ? ` — ${not}` : ''}`;
+        if (!okunan) {
+          if (tavanDoldu) await durdur(k, 'bekle', tavanNedeni('son ölçüm atlandı'), true, CIKIS.KUR_TAVAN);
+          continue;
+        }
+        const ev = kurDegerlendir(satir.get(k.id), okunan.surumler.filter((s) => s.set_id === k.id), k.adimlar.kur.kanit.t0);
         if (ev.not && k.adimlar.bekle.not !== ev.not) { k.adimlar.bekle.not = ev.not; d.uyar(`${k.id}: ${ev.not}`); }
         if (ev.durum === 'bitti') {
           adimBit(k, 'bekle', 'tamam', { kanit: { surum: ev.surum, kaynak: ev.kaynak, olusturma: ev.olusturma } });
@@ -635,8 +679,8 @@ async function yurut(o, cfg, d, durum, durumYolu) {
             + ' karar: düzeltip yeni kur isteği ya da requeue yedeğinden geri al');
         } else if (ev.durum === 'hata') {
           await durdur(k, 'bekle', ev.neden);
-        } else if (d.simdi() - k.adimlar.bekle.basMs > kurTavanMs) {
-          await durdur(k, 'bekle', `kaynak kurulumu ${o.kurTavanDk} dk içinde bitmedi (eylemsiz duruldu)${ev.not ? ` — ${ev.not}` : ''}`);
+        } else if (tavanDoldu) {
+          await durdur(k, 'bekle', tavanNedeni(ev.not), true, CIKIS.KUR_TAVAN);
         }
       }
       kaydet();
@@ -660,7 +704,7 @@ async function yurut(o, cfg, d, durum, durumYolu) {
   yaz(`ÖZET: ${ozet}`);
   if (o.izle) await bildir(ozet, 'Set yenileme bitti');
   kaydet();
-  return { plan, kod: canli().length === idler.length ? 0 : 1, ozet };
+  return { plan, kod: sonKod(), ozet };
 
   // ── iç adımlar ──
   async function requeueAdimi(k) {
@@ -731,8 +775,19 @@ async function yurut(o, cfg, d, durum, durumYolu) {
   async function izleTuru(izlenen) {
     const ids = izlenen.map((k) => k.id);
     const tum = [...new Set(izlenen.flatMap((k) => k.platformlar))];
-    const satirlar = await db.oku(sql.platformlar(ids, tum));
+    const satirlar = await olcum('izleme ölçümü', () => db.oku(sql.platformlar(ids, tum)));
+    if (!satirlar) {
+      // Ölçüm atlandı: durum değişmez, yalnız izleme tavanı işler.
+      for (const k of izlenen) {
+        const iz = k.adimlar.izle;
+        if (iz && iz.basMs !== undefined && d.simdi() - iz.basMs > izleTavanMs) {
+          adimBit(k, 'izle', 'atlandi', { neden: `izleme tavanı ${o.izleTavanSa} sa doldu (son ölçüm atlandı)` });
+        }
+      }
+      return;
+    }
     let yayinMetni = null;
+    let yayinOkundu = false;
     for (const k of izlenen) {
       if (!k.adimlar.izle || k.adimlar.izle.durum !== 'suruyor') adimBasla(k, 'izle');
       const iz = k.adimlar.izle;
@@ -748,8 +803,9 @@ async function yurut(o, cfg, d, durum, durumYolu) {
           if (p !== 'windows') iz.platformlar[p] = { durum: 'uretildi-bitti', zaman: r.last_run_at, sonuc: r.last_result };
           else {
             // Windows "completed" = üretildi; yayın imza bekçisinden SONRA olur (bekçi logu).
-            if (yayinMetni === null) yayinMetni = await kasa.yayinSatirlari();
-            const y = yayinBul(yayinMetni, k.id, rq[p].zamanMs);
+            if (!yayinOkundu) { yayinMetni = await olcum('bekçi logu ölçümü', () => kasa.yayinSatirlari()); yayinOkundu = true; }
+            // Log okunamadıysa (null) yayın bilinmiyor: 'uretildi' kalır, sonraki turda yeniden bakılır.
+            const y = yayinMetni === null ? null : yayinBul(yayinMetni, k.id, rq[p].zamanMs);
             iz.platformlar[p] = y ? { durum: 'yayinlandi', surum: y.surum, zaman: y.zaman } : { durum: 'uretildi', zaman: r.last_run_at };
           }
         } else iz.platformlar[p] = { durum: 'suruyor', status: st, faz: r ? r.current_phase : null, ilerleme: r ? r.progress : null };
@@ -841,7 +897,7 @@ const KULLANIM = 'kullanım: set-yenile.js <bookId...> [--platform windows,pardu
 
 async function ana(argv = process.argv.slice(2), d = varsayilanBag(), cfg = ayarlar()) {
   const o = argAyristir(argv);
-  if (o.hata) { d.uyar(o.hata); d.log(KULLANIM); return 2; }
+  if (o.hata) { d.uyar(o.hata); d.log(KULLANIM); return CIKIS.KULLANIM; }
   let durum; let durumYolu;
   if (o.devam) {
     durumYolu = path.resolve(o.devam);
@@ -865,7 +921,7 @@ async function ana(argv = process.argv.slice(2), d = varsayilanBag(), cfg = ayar
 }
 
 module.exports = {
-  IZINLI_PLATFORMLAR, ayarlar, argAyristir, sql, yedekKomutu, yedekDogrulandiMi, tsvAyristir, dbZaman,
+  CIKIS, IZINLI_PLATFORMLAR, ayarlar, argAyristir, sql, yedekKomutu, yedekDogrulandiMi, tsvAyristir, dbZaman,
   dbSonra, retNedenleri, kurDegerlendir, kilitNotu, ekSonucAyristir, ekDegerlendir, oncelikBirlestir, oncelikPs,
   yayinBul, damga, baglantiHatasiMi, srv21Istemci, kasaIstemci, yeniDurum, kitapDurumu, yurut,
   ozetMetni, varsayilanBag, ana,

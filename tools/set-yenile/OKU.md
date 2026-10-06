@@ -109,6 +109,23 @@ Ek, kur isteğinden ÖNCE yayımlanmış olmalıdır.
   Araç yayını `C:\empp-ajan\log\imza-bekcisi.log` içindeki `<id>-<sürüm> → yayinlandi` satırından okur.
 - Paket bildirimlerini bileşenler atar. Araç yalnız durma bildirimi ve sonda tek özet atar.
 
+## Dayanıklılık ve çıkış kodları
+
+| Durum | Davranış |
+|---|---|
+| Bekleme/izleme okuması hata verir (zaman aşımı, ağ, ssh) | 15 sn arayla 3 deneme. Sonra "ölçüm atlandı" uyarısı. Döngü sürer. |
+| Yazma adımı hata verir (kur isteği, requeue, öncelik) | İlk hatada o kitap durur. Yeniden deneme yok. Diğer kitaplar sürer. |
+| Ön kontrol okuması hata verir | Araç durur (henüz yazma yok). |
+
+- Her ssh çağrısı `-o ControlPath=none` taşır. 06.10'da çoğullama soketi çakıştı ve okuma 90 sn zaman aşımına düştü.
+
+| Çıkış | Anlam |
+|---|---|
+| 0 | Bütün kitaplar tamam |
+| 1 | En az bir kitap hata ile durdu |
+| 2 | Kullanım hatası |
+| 3 | Yeni kaynak bekleme tavanı doldu, eylem yok (bütün durmalar bu sebepten) |
+
 ## Durum dosyası
 
 Yol: `~/.empp-agent/set-yenile/<YYYYMMDD-HHMMSS>.json`. Dosya kitap başına adım, zaman ve kanıt tutar.
