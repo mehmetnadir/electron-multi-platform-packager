@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Kabuk eki üretici (Parça C): 15 dk'da bir kur isteği bekleyen YDS setleri için ek üretir.
+  Kurulum ve geri alma: tools/set-kabuk/OKU.md. Bu dosya kendi kendine KURULMAZ.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>tr.yds.kabuk-ek</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/nadir/01dev/electron-multi-platform-packager/tools/set-kabuk/ek-uret.js</string>
+    <string>--bekleyen</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nadir/01dev/electron-multi-platform-packager</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nadir/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>EMPP_ARSIV_MERDIVEN</key>
+    <string>1</string>
+    <key>EMPP_SET_UYELIK_EK</key>
+    <string>1</string>
+    <key>EMPP_SET_LISTESI_DIZINI</key>
+    <string>/Users/nadir/.empp-agent/set-listesi</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nadir/.empp-agent/log/kabuk-ek.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nadir/.empp-agent/log/kabuk-ek.log</string>
+</dict>
+</plist>
