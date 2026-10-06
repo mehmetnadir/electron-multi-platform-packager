@@ -47,7 +47,12 @@ const RCLONE_AYAR = ['--contimeout', '30s', '--timeout', '5m', '--retries', '3',
   '--low-level-retries', '10'];
 /** Aynı istek + taban için yeniden denenmeyen "uygun değil" nedenleri (kabukTazele uygunluk). */
 const UYGUN_DEGIL = new RegExp('bookN düzeni yok|tek kitaplı paket|dokunulmaz'
-  + '|Web-Z listesinde kitap yok|üreteç tabanı');
+  + '|Web-Z listesinde kitap yok|taban kapsaması eksik');
+/**
+ * Atlama kuralı sürümü: kesin 'atlandi' kaydı bu sürümle yazılmadıysa bir kez yeniden denenir.
+ * 2: bookN üreteç tabanı kuralı kalktı (59835 ölçümü 06.10) — eski kesin atlamalar yeniden işlenir.
+ */
+const ATLAMA_KURALI = 2;
 /** Geçici hatada geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. */
 const GERI_TABAN_MS = 15 * 60 * 1000;
 const GERI_TAVAN_MS = 6 * 60 * 60 * 1000;
@@ -206,12 +211,14 @@ function geriCekilmeMs(hataSayisi) {
  * Kesin kayıt + aynı istek + aynı taban + Web-Z settings sha'sı değişmemiş → 'islendi'.
  * Geçici kayıt + aynı istek + geri çekilme süresi dolmamış → 'geri'.
  * `webzSha` null (okunamadı) → settings değişimi bilinmez, kesin kayıt korunur.
+ * Kesin 'atlandi' kaydı eski atlama kuralıyla yazıldıysa (`ATLAMA_KURALI`) → yeniden.
  * @returns {null|'islendi'|'geri'}
  */
 function atlamaNedeni(kayit, s, { webzSha = null, simdi = Date.now() } = {}) {
   if (!kayit || kayit.istekAt !== s.istekAt) return null;
   if (kayit.kesin) {
     if (kayit.tabanSurum !== s.surum) return null;
+    if (kayit.durum === 'atlandi' && kayit.atlamaKurali !== ATLAMA_KURALI) return null;
     if (webzSha && kayit.webzSettingsSha !== webzSha) return null;
     return 'islendi';
   }
@@ -234,6 +241,7 @@ function durumKaydi(onceki, s, sonuc, { simdi = new Date() } = {}) {
   return {
     istekAt: s.istekAt, tabanSurum: s.surum, webzSettingsSha: sonuc.webzSettingsSha || null,
     durum: sonuc.durum, girdiSha: sonuc.girdiSha || null, kesin,
+    ...(sonuc.durum === 'atlandi' ? { atlamaKurali: ATLAMA_KURALI } : {}),
     hataSayisi: kesin ? 0 : (ayniIstek && !onceki.kesin ? Number(onceki.hataSayisi) || 0 : 0) + 1,
     sonDeneme: simdi.toISOString(),
   };
@@ -567,9 +575,9 @@ function tekMotorDuzeniMi(adlar, onEkBul) {
 
 /**
  * ProBook r2-kur tabanı ÜRETEÇLE yeniden kurar mı (runner `r2KurTabanHazirla` + TABAN KAPSAMA ile
- * aynı karar, aynı modül işlevleri). Kurarsa Mac'in geçerli R2 build'inden ürettiği ekin
- * girdiSha'sı
- * ProBook'unkiyle tutmaz → set atlanır. `asama`: 'taban' (merdivenden önce, `tabanUretecMi`) |
+ * aynı karar, aynı modül işlevleri). 'taban' nedeni yalnız bilgi satırıdır (girdiSha iki yolda
+ * eşit, 59835 ölçümü 06.10); 'kapsama' nedeni (eksik kitabı ProBook üreteçle ekler) seti atlatır.
+ * `asama`: 'taban' (merdivenden önce, `tabanUretecMi`) |
  * 'kapsama' (set ekinden sonra, `tabanKitapEksik` + panel içerik istisnası).
  * @returns {string|null} neden
  */
@@ -850,18 +858,22 @@ async function setIsle(bag, s, o) {
     //   · A1 (tek motor, bookN yok): girdiSha iki yolda EŞİT — motor sayfası parmak izine yalnız
     //     varlığıyla girer (B 193f071; 45485 ölçümü 06.10: 46598c79ca5a… iki yolda aynı).
     //     Kural YOK.
-    //   · bookN: eşlik ölçülmedi (klasör numarası farkı riski) → atla + bildir (kesin).
+    //   · bookN, tam kapsama: girdiSha iki yolda EŞİT (59835 ölçümü 06.10: e49d25fb4217… R2
+    //     tabanı ile üreteç tabanında aynı; klasörler/kapaklar aynı, Mac eki üreteç tabanına
+    //     uygulandı). Kural YOK — yalnız bilgi satırı. Kalan sapma ProBook'ta ek-sapma → ertele.
+    //   · bookN, set eki sonrası EKSİK kitap: ProBook eksiği üreteçle ekler, Mac ekinde yok —
+    //     ölçülmedi → atla + bildir (kesin).
     const uretecAtla = async (neden) => {
-      await bag.bildir(`kabuk-ek ${s.bookId}: bookN üreteç tabanı: eşlik ölçülmedi — ek üretilmedi`
+      await bag.bildir(`kabuk-ek ${s.bookId}: bookN taban kapsaması eksik — ek üretilmedi`
         + ` (${neden})`);
-      return bitir('atlandi', `bookN üreteç tabanı: eşlik ölçülmedi — ${neden}`);
+      return bitir('atlandi', `bookN taban kapsaması eksik — ${neden}`);
     };
     const tekMotor = bag.tabanTekMotor(taban.zip);
     const U = bag.uretec();
     const P = bag.panelMenu();
     const n1 = tekMotor ? null
       : uretecTabaniNedeni({ U, P, zip: taban.zip, asama: 'taban', env: bag.env });
-    if (n1) return uretecAtla(n1);
+    if (n1) bag.log(`  bilgi ${s.bookId}: bookN ${n1} — girdiSha eşit (59835 ölçümü), ek üretilir`);
     const job = await kaynakAdimlari(bag, s, taban.zip, calisma);
     const liste = bag.setEki().setListesiCoz({ job, env: bag.env });
     const n2 = tekMotor ? null : uretecTabaniNedeni({
@@ -1130,7 +1142,7 @@ if (require.main === module) {
 module.exports = {
   ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
   kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, tekMotorDuzeniMi,
-  onbellekBoyutu, kenaraAl, geriCekilmeMs, atlamaNedeni, kesinSonucMu,
+  onbellekBoyutu, kenaraAl, geriCekilmeMs, atlamaNedeni, kesinSonucMu, ATLAMA_KURALI,
   durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
   varsayilanBag, httpIstemci, ekYukle, s3Kodu, NESNE_SIRASI,
 };

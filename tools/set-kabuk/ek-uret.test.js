@@ -254,6 +254,21 @@ test('atlamaNedeni: kesin/aynı → islendi; webz sha değişti → yeniden; ge�
   assert.equal(E.atlamaNedeni(gecici(3, 61), s, { simdi }), null);
 });
 
+test('atlamaNedeni: eski kuralla yazılmış kesin atlandi bir kez yeniden denenir', () => {
+  const s = tekSatir();
+  const eski = { istekAt: s.istekAt, tabanSurum: s.surum, kesin: true, durum: 'atlandi' };
+  assert.equal(E.atlamaNedeni(eski, s, { webzSha: null }), null);
+  const yeni = E.durumKaydi(eski, s, {
+    durum: 'atlandi', neden: 'bookN taban kapsaması eksik — set eki sonrası eksik: 333',
+  });
+  assert.equal(yeni.kesin, true);
+  assert.equal(yeni.atlamaKurali, E.ATLAMA_KURALI);
+  assert.equal(E.atlamaNedeni(yeni, s, { webzSha: null }), 'islendi');
+  // Yüklenmiş kesin kayıt kural sürümünden etkilenmez.
+  assert.equal(E.atlamaNedeni({ ...eski, durum: 'yuklendi' }, s, { webzSha: null }), 'islendi');
+  assert.equal(E.durumKaydi(null, s, { durum: 'yuklendi' }).atlamaKurali, undefined);
+});
+
 test('durumKaydi: ret işareti yazılmadıysa kesin değil, hata sayacı artar', () => {
   const s = tekSatir();
   const r1 = E.durumKaydi(null, s, { durum: 'ret', retYazildi: false });
@@ -676,18 +691,17 @@ test('kullanım hatası → çıkış 1', async () => {
 
 // ─── Yeniden inceleme (birleşik2) ────────────────────────────────────────────────────────
 
-test('üreteç tabanı (R2 tabanı üreteç build\'i): ek üretilmez, bildir, kayıt kesin', async () => {
+test('bookN üreteç tabanı (tam kapsama): ek üretilir, bildirim yok, bilgi satırı', async () => {
+  // 59835 ölçümü 06.10: R2 tabanı ile üreteç tabanında girdiSha aynı (e49d25fb4217…).
   const ev = geciciDizin();
   anahtarKur(ev);
   const { bag, kayit } = sahteBag(ev, { uretecTabani: true, merdiven: true });
   assert.equal(await E.main(['--bekleyen'], bag), 0);
-  assert.equal(kayit.kabuk.length, 0);
-  assert.equal(kayit.merdiven, 0); // karar merdivenden ÖNCE (runner sırası)
-  assert.deepEqual(yazmalar(kayit), []);
-  assert.match(kayit.bildir[0], /bookN üreteç tabanı: eşlik ölçülmedi/);
-  const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
-  assert.equal(d['45550'].kesin, true);
-  assert.match(d['45550'].durum, /atlandi/);
+  assert.equal(kayit.kabuk.length, 1);
+  assert.equal(kayit.merdiven, 1);
+  assert.equal(yazmalar(kayit).length, 3);
+  assert.equal(kayit.bildir.length, 0);
+  assert.ok(kayit.log.some((l) => /bilgi 45550: bookN .*girdiSha eşit \(59835/.test(l)));
 });
 
 test('üreteç kapalıysa (EMPP_INDEX_URETECI=0 eşdeğeri) aynı taban işlenir', async () => {
@@ -703,7 +717,7 @@ test('taban kapsama: set eki sonrası eksik kitap → üreteç tabanı; içerik 
     const a = sahteBag(geciciDizin(), { kitapEksik: ['333'] });
     const r1 = await E.setIsle(a.bag, tekSatir(), { kuru: true });
     assert.equal(r1.durum, 'atlandi');
-    assert.match(r1.neden, /bookN üreteç tabanı: eşlik ölçülmedi — set eki sonrası eksik: 333/);
+    assert.match(r1.neden, /bookN taban kapsaması eksik — set eki sonrası eksik: 333/);
     assert.equal(a.kayit.kabuk.length, 0);
     const b = sahteBag(geciciDizin(), { kitapEksik: ['333'], kokteDuran: ['333'] });
     const r2 = await E.setIsle(b.bag, tekSatir(), { kuru: true });
@@ -780,10 +794,10 @@ test('kilit yarışı: kenara alınan dizindeki pid bayat pid değilse geri taş
 
 test('--kuru: bildirim gönderilmez, loga düşer', async () => {
   const ev = geciciDizin();
-  const { bag, kayit } = sahteBag(ev, { uretecTabani: true });
+  const { bag, kayit } = sahteBag(ev, { kitapEksik: ['333'] });
   assert.equal(await E.main(['--set', '45550', '--kuru'], bag), 0);
   assert.equal(kayit.bildir.length, 0);
-  assert.ok(kayit.log.some((l) => /bildirim gönderilmedi.*üreteç tabanı/.test(l)));
+  assert.ok(kayit.log.some((l) => /bildirim gönderilmedi.*taban kapsaması eksik/.test(l)));
 });
 
 test('A1 (tek motor) üreteç tabanı: kural yok, ek üretilir', async () => {
