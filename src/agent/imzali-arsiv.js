@@ -93,15 +93,20 @@ async function sonOku(klasor) {
 /**
  * Klasördeki ESKİ sürümleri siler: yalnız düz dosya, yalnız `.exe`, `tut` hariç; ayrıca bu modülün
  * kendi yarım geçici dosyaları (`.<ad>.yaziliyor-<pid>`). Bağ/junction ve alt dizin atlanır.
+ * Ş8 (inceleme 06.10): win32'de (NTFS harf duyarsız) `tut` kıyası harf duyarsızdır ve yalın ada
+ * indirgenir — yalnız harfleri farklı eski ad YENİ dosyayı gösterir; silinirse yeni arşiv gider.
  * @returns {Promise<{silinen:string[], atlanan:string[]}>}
  */
-async function eskileriSil(klasor, tut, log = () => {}) {
+async function eskileriSil(klasor, tut, log = () => {}, platform = process.platform) {
   const silinen = [];
   const atlanan = [];
+  const win = platform === 'win32';
+  const yalin = win ? path.win32.basename(String(tut)) : path.basename(String(tut));
+  const ayniMi = (ad) => (win ? ad.toLowerCase() === yalin.toLowerCase() : ad === yalin);
   const girdiler = await fsp.readdir(klasor, { withFileTypes: true });
   for (const g of girdiler) {
     const ad = g.name;
-    if (ad === tut) continue;
+    if (ayniMi(ad)) continue;
     const exe = ad.toLowerCase().endsWith('.exe');
     const gecici = ad.startsWith('.') && ad.includes(GECICI_EKI);
     if (!exe && !gecici) continue;

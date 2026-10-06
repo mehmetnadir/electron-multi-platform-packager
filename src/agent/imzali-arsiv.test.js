@@ -239,3 +239,21 @@ test('beklenen sha verilmezse kaynaktan hesaplanır; yarım geçici dosya (önce
   assert.equal(r.durum, 'arsivlendi');
   assert.deepEqual(fs.readdirSync(k).sort(), ['runner-45449-Kitap-2.1.2-Setup.exe', 'son.json']);
 });
+
+// Ş8 (inceleme 06.10): NTFS harf duyarsız. Diskte eski ad `setup.exe` kalmış, yeni sürüm `Setup.exe`
+// adıyla yazılmış (aynı dosya). Harf duyarlı kıyas onu "eski" sayıp YENİ arşivi siliyordu.
+test('Ş8 win32: tut ile yalnız harfleri farklı ad SİLİNMEZ (Setup.exe vs setup.exe)', async () => {
+  const o = ortam();
+  const k = path.join(o.kok, '45496');
+  fs.mkdirSync(k, { recursive: true });
+  fs.writeFileSync(path.join(k, 'setup.exe'), 'YENI');
+  fs.writeFileSync(path.join(k, 'eski-1.0.0.exe'), 'eski');
+  const r = await A.eskileriSil(k, 'Setup.exe', () => {}, 'win32');
+  assert.deepEqual(r.silinen, ['eski-1.0.0.exe']);
+  assert.equal(fs.readFileSync(path.join(k, 'setup.exe'), 'utf8'), 'YENI', 'yeni arşiv silindi');
+  // yol biçiminde tut da aynı dosyayı korur (basename normalizasyonu)
+  fs.writeFileSync(path.join(k, 'eski-0.9.exe'), 'eski');
+  const r2 = await A.eskileriSil(k, 'D:\\empp-imzali-son\\45496\\SETUP.EXE', () => {}, 'win32');
+  assert.deepEqual(r2.silinen, ['eski-0.9.exe']);
+  assert.equal(fs.existsSync(path.join(k, 'setup.exe')), true);
+});
