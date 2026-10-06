@@ -1048,3 +1048,11 @@ test('D9 uçtan uca: Mac ekini üretir; ProBook tabanında BookContent gövdesi 
   assert.equal(ek.r.durum, 'uygulandi', ek.r.neden);
   assert.equal(ek.r.girdiSha, c.girdiSha, 'aynı ilk ünite (yok) → aynı parmak izi');
 });
+
+test('a1GirdiOzeti: motor sayfası içeriği girmez (yalnız varlığı) — üreteç/R2 tabanı aynı özet', () => {
+  const sayfa = (bundle, dil) => Buffer.from(`<!doctype html><html lang="${dil}"><head><base href="../">`
+    + `<script defer="defer" src="./${bundle}.main.js"></script></head><body></body></html>`);
+  const oz = (b) => S.a1GirdiOzeti(new Map([['kapak/index.html', b]]))['kapak/index.html'];
+  assert.equal(oz(sayfa('bd0c1a4f650802c98ebf', 'en')), oz(sayfa('ab436b32417cc81a886a', 'tr')));
+  assert.equal(Object.keys(S.a1GirdiOzeti(new Map())).length, 0, 'sayfa yoksa anahtar da yok');
+});
