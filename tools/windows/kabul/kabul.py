@@ -686,15 +686,17 @@ JS_SAYFA_KUTUSU = r"""
  if(!k) return null;
  const r=k.getBoundingClientRect(); if(!r.width||!r.height) return null;
  const cx=r.x+r.width/2, cy=r.y+r.height/2;
- let geri=null,en=1e9;
+ let geri=null,en=1e9,ileri=null,ei=1e9;
  for(const e of document.querySelectorAll('button,a,div,span,svg,img')){
    const q=e.getBoundingClientRect();
    if(q.width<16||q.height<16||q.width>90||q.height>90) continue;
    const qx=q.x+q.width/2, qy=q.y+q.height/2, dx=cx-qx;
-   if(dx<r.width/2+4||dx>r.width/2+110||Math.abs(qy-cy)>20) continue;
-   if(dx<en){en=dx;geri={x:Math.round(qx),y:Math.round(qy)};}}
+   if(Math.abs(qy-cy)>20) continue;
+   if(dx>=r.width/2+4&&dx<=r.width/2+110&&dx<en){en=dx;geri={x:Math.round(qx),y:Math.round(qy)};}
+   // ileri: kutunun SAGINDAKI en yakin dugme (45100 bos 1. sayfa, 07.10)
+   if(-dx>=r.width/2+4&&-dx<=r.width/2+110&&-dx<ei){ei=-dx;ileri={x:Math.round(qx),y:Math.round(qy)};}}
  return JSON.stringify({x:Math.round(cx),y:Math.round(cy),tag:k.tagName,
-   input:k.tagName==='INPUT',metin:(k.value||k.innerText||'').trim(),geri});})()"""
+   input:k.tagName==='INPUT',metin:(k.value||k.innerText||'').trim(),geri,ileri});})()"""
 
 JS_KITAPTA = "document.querySelectorAll('canvas.lower-canvas').length>0"
 
@@ -906,10 +908,14 @@ def kitap_kanit(c, kimlik, sira):
     if bos_ilk_sayfa_adayi(kanit):
         e2 = ikinci_sayfa_etiketi(kanit.get("thumbEtiket"))
         # Etiket yoksa (45100 Worksheets, 06.10: serit etiketsiz) klavye ile sonraki sayfa.
+        sk = None if e2 else (c.jsj(JS_SAYFA_KUTUSU) or {})
         if e2: c.tikla(e2["x"], e2["y"]); yol2 = "etiket-%s" % e2.get("n")
+        elif sk.get("ileri"): c.tikla(sk["ileri"]["x"], sk["ileri"]["y"]); yol2 = "ileri-dugmesi"
         else: c.tus("ArrowRight", "ArrowRight", 39); yol2 = "ok-tusu"
         time.sleep(5)
         y = olc()
+        if ilk_sayfada_mi(y.get("sayfa")) and yol2 != "ok-tusu":
+            c.tus("ArrowRight", "ArrowRight", 39); yol2 += "+ok-tusu"; time.sleep(5); y = olc()
         kanit["ikinciSayfa"] = {"canvasDolu": y.get("canvasDolu"), "canvasRenk": y.get("canvasRenk"),
                                 "sayfa": y.get("sayfa"), "yol": yol2}
         if ikinci_sayfa_gecer(y):
