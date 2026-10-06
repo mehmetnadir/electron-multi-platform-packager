@@ -889,9 +889,33 @@ def kitap_kanit(c, kimlik, sira):
         kanit.get("toplamSayfa"), kanit["ilkSayfada"])
     if muafiyet:
         kanit["muafiyet"] = muafiyet
+    # BOS ILK SAYFA (45100, 06.10): yayinci icerigindeki 1. sayfa bembeyaz (canvasRenk=1, yayinci thumb'i da
+    # beyaz) -> kitap acik ve cizili oldugu halde KALDI. Etiketi 2 olan thumb'a tiklanir; 2. sayfa dolu ve
+    # renkliyse GECTI (muafiyet ACIK). 2. sayfa da tek renkse KALDI kalir (gercek bos tuval).
+    if bos_ilk_sayfa_adayi(kanit):
+        e2 = next((e for e in (kanit.get("thumbEtiket") or []) if e.get("n") == 2), None)
+        if e2:
+            c.tikla(e2["x"], e2["y"]); time.sleep(5)
+            y = olc()
+            kanit["ikinciSayfa"] = {"canvasDolu": y.get("canvasDolu"), "canvasRenk": y.get("canvasRenk"),
+                                    "sayfa": y.get("sayfa")}
+            if ikinci_sayfa_gecer(y):
+                kanit["sonuc"] = "GECTI"; kanit["muafiyet"] = "BOS_ILK_SAYFA"
+                png2 = c.ekran(); gonder(f"{ssad}-s2", png2); kanit["ekran2"] = f"{ssad}-s2"
     kanit.pop("thumbIlk", None)
     kanit.pop("thumbEtiket", None)
     return kanit
+
+def bos_ilk_sayfa_adayi(kanit):
+    """SAF KARAR: KALDI sebebi YALNIZ tek renkli (bos beyaz) 1. sayfa mi? Kitap acik (ilkSayfada), serit
+    dolu (thumbOK>=3), tuval opak (canvasDolu>50), renk<=1, en az 2 sayfa."""
+    return (kanit.get("sonuc") == "KALDI" and bool(kanit.get("ilkSayfada"))
+            and (kanit.get("thumbOK") or 0) >= 3 and (kanit.get("canvasDolu") or 0) > 50
+            and (kanit.get("canvasRenk") or 0) <= 1 and (kanit.get("toplamSayfa") or 0) >= 2)
+
+def ikinci_sayfa_gecer(y):
+    """SAF KARAR: 2. sayfa olcumu ilk sayfa esigini (dolu>50 VE renk>1) gecer mi?"""
+    return bool((y.get("canvasDolu") or 0) > 50 and (y.get("canvasRenk") or 0) > 1)
 
 # ─────────────────────────── aktivasyon senaryosu ───────────────────────────
 # Nadir 03.10: "Windows'ta aktivasyonun nasil calistigini gormek istiyorum." Kapi aktivasyonlu
