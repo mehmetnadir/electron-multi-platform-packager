@@ -15,8 +15,10 @@ function PaketleyiciBaslat {
 function BayatLog($m) { "$(Damga) paketleyici-bayat: $m" | Out-File -Append -Encoding utf8 "$L\baslat.log" }
 function SaglikGetir { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:3001/api/health | Select-Object -ExpandProperty Content | ConvertFrom-Json } catch { $null } }
 # 06.10: paketleyici koddan bayat kaldıysa (health commit != $R\.surum ya da bayatMi) ve kuyruk boşsa runner'dan ÖNCE yeniden aç.
-# Kapatma: EMPP_PAKETLEYICI_BAYAT_YENIDEN=0 (ortam.ps1 ya da makine ortamı). Meşgul = bitmemiş zip işi + başarısız
-# olmayan her paketleme işi (completed dahil: çıktısı alınmamış olabilir, yeniden başlatma iş kaydını siler).
+# Kapatma: EMPP_PAKETLEYICI_BAYAT_YENIDEN=0 (ortam.ps1 ya da makine ortamı). Meşgul = YALNIZ bitmemiş iş:
+# completed/failed/error/cancelled/canceled sayılmaz (biten kayıtlar süresiz kalıp yeniden açmayı engelliyordu; Mac
+# paketleyici-bayat.sh c00c7d5 ile aynı kural). Bilinmeyen/boş durum = meşgul. packagingJobs ile activePackagingJobs
+# aynı işleri taşır: jobId/id ile tekilleştirilir (id'siz iş tek tek sayılır). zipJobs ayrı sayılır.
 function PaketleyiciBayatYeniden {
   if ($env:EMPP_PAKETLEYICI_BAYAT_YENIDEN -eq '0') { BayatLog 'kapalı (EMPP_PAKETLEYICI_BAYAT_YENIDEN=0)'; return }
   $h = SaglikGetir
@@ -31,10 +33,16 @@ function PaketleyiciBayatYeniden {
   try {
     $q = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:3001/api/queue-status | Select-Object -ExpandProperty Content | ConvertFrom-Json
   } catch { BayatLog 'kuyruk okunamadı; dokunulmadı'; return }
-  $bit = @('failed', 'error', 'cancelled')
-  $mesgul = @($q.zipJobs | Where-Object { $_ -and $_.status -ne 'completed' }).Count +
-    @($q.packagingJobs | Where-Object { $_ -and $bit -notcontains $_.status }).Count +
-    @($q.activePackagingJobs | Where-Object { $_ -and $bit -notcontains $_.status }).Count
+  $bit = @('completed', 'failed', 'error', 'cancelled', 'canceled')
+  $zip = @($q.zipJobs | Where-Object { $_ -and $bit -notcontains $_.status }).Count
+  $anahtar = @{}
+  $idsiz = 0
+  foreach ($j in @($q.packagingJobs) + @($q.activePackagingJobs)) {
+    if (-not $j -or $bit -contains $j.status) { continue }
+    $id = if ($j.jobId) { "$($j.jobId)" } elseif ($j.id) { "$($j.id)" } else { '' }
+    if ($id) { $anahtar[$id] = 1 } else { $idsiz++ }
+  }
+  $mesgul = $zip + $idsiz + $anahtar.Count
   if ($mesgul -ne 0) { BayatLog "kuyruk DOLU (mesgul=$mesgul); dokunulmadı (sonraki runner çıkışında yeniden denenir)"; return }
   $pk = [int]$h.pid
   if ($pk -le 0) {   # eski sürüm health'inde pid yok → komut satırından bul, tek eşleşme şart
