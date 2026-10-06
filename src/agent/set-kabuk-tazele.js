@@ -66,6 +66,7 @@ const uretecKaynak = require('./uretec-kaynak');
 const { webZKabukIndexiMi } = require('../packaging/set-menu-bicim');
 const { motorKopyasiMi } = require('../packaging/set-menu');
 const A1 = require('../packaging/a1-duzen');
+const ig = require('../runtime/icerik-guncelleme');
 
 const ISARET = '[set-kabuk]';
 /** İkili sözleşmesi: tek motorlu sette `--kip tek-motor` (a1-arayuz.md). */
@@ -117,9 +118,71 @@ function ekYoluGuvenli(yol) {
   return !parca.some((p) => p === '' || p === '.' || p === '..') && !parca[0].startsWith('_');
 }
 
+/** Kabuk eki imza açık anahtarının (PEM) yolu. */
+function ekAcikAnahtarYolu(env = process.env) {
+  return env.EMPP_KABUK_EK_ACIK_ANAHTAR
+    || path.join(os.homedir(), '.empp-agent', 'kabuk-ek-acik.pem');
+}
+
+/**
+ * `kaynak-kur` DEĞİŞMEZİ (06.10, birleşik inceleme K1): Mac (darwin) Swift ikilisiyle kabuğu kurar.
+ * Başka platform build'i ancak kabuk tazeleme AÇIK + kabuk kaynağı 'ek' + imza açık anahtarı
+ * VAR iken kurar; yoksa kabuk ESKİ kalıp yeni build.zip geçerli olur (45551 2.51.3 arızası).
+ * Heartbeat (yetenek ilanı) ve r2-kur iş anı aynı karardan geçer. SAF (varMi enjekte).
+ * @returns {{uygun: boolean, neden: string|null}}
+ */
+function kaynakKurKabukKarari({
+  platform = process.platform, env = process.env, varMi = fs.existsSync,
+} = {}) {
+  if (platform === 'darwin') return { uygun: true, neden: null };
+  const red = (neden) => ({ uygun: false, neden: `${platform}: ${neden}` });
+  if (!acik(env)) return red('kabuk tazeleme kapalı (EMPP_SET_KABUK_TAZELE)');
+  const k = kabukKaynagiSec({ env, platform });
+  if (k !== 'ek') return red(`kabuk kaynağı '${k}' (yalnız 'ek' kurabilir)`);
+  const anahtar = ekAcikAnahtarYolu(env);
+  let var_ = false;
+  try { var_ = Boolean(varMi(anahtar)); } catch (_) { var_ = false; }
+  if (!var_) return red(`kabuk eki açık anahtarı yok (${anahtar})`);
+  return { uygun: true, neden: null };
+}
+
+/**
+ * A1 girdi ÖZETİ (girdi parmak izi için; birleşik inceleme D9). Swift yalnız şu alanları okur:
+ * menüde kapak kimliği + `actName`, `BookContent.xml`'de İLK `<Unit name>`, motor sayfasının
+ * varlığı. Dosyanın tamamı yerine bu alanların sha'sı girer: merdiven iki makinede farklı içerik
+ * (sürüm özniteliği, ünite gövdesi) üretse de aynı kabuk girdisi aynı parmak izini verir. SAF.
+ * @param {Map<string, Buffer>} a1Girdi
+ * @returns {Object<string, string>} yol → sha256 hex
+ */
+function a1GirdiOzeti(a1Girdi) {
+  const out = {};
+  for (const [y, v] of a1Girdi) {
+    if (/^assets\/[^/]+\/data\/BookContent\.xml$/.test(y)) {
+      const m = /<Unit\b[^>]*?\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(v.toString('utf8'));
+      const ad = m ? String(m[1] ?? m[2] ?? '').trim() : '';
+      out[y] = sha256(`ilk-unite:${ad}`);
+    } else if (y === A1_MENU) {
+      let liste = null;
+      try {
+        const xml = ig.menuCoz(v);
+        if (xml) {
+          liste = ig.kapaklar(xml).map((c) => {
+            const a = /\bactName\s*=\s*"([^"]*)"/.exec(c.etiket || '');
+            return [String(c.ID || ''), a ? a[1].trim() : ''];
+          });
+        }
+      } catch (_) { liste = null; }
+      out[y] = liste ? sha256(`menu-kapaklar:${JSON.stringify(liste)}`) : sha256(v);
+    } else {
+      out[y] = sha256(v);
+    }
+  }
+  return out;
+}
+
 /**
  * r2-kur ön kontrolü (runner, taban indirilmeden): Mac bu kitap için ek yayınlamış mı. Fırlatmaz.
- * @returns {Promise<{var: boolean, neden: string|null}>}
+ * @returns {Promise<{var: boolean, neden: string|null, son?: object}>}
  */
 async function ekSonKontrol({ bookId, getir = null, kabukEk = null } = {}) {
   let son;
@@ -137,7 +200,7 @@ async function ekSonKontrol({ bookId, getir = null, kabukEk = null } = {}) {
   if (son.bookId != null && String(son.bookId) !== String(bookId)) {
     return { var: false, neden: `son.json başka kitabın (${son.bookId})` };
   }
-  return { var: true, neden: null };
+  return { var: true, neden: null, son };
 }
 
 function ikiliYolu(env = process.env) {
@@ -623,7 +686,7 @@ async function kabukTazele(o) {
     // Girdi parmak izi (kabuk eki anahtarı): Swift'e giden girdi + kapak sha'ları + A1 girdi
     // sha'ları. Mac ('ikili') ve ProBook ('ek') AYNI JS ile hesaplar; ikili kipte modül yoksa null.
     const ekKipAdi = a1 ? 'a1' : 'bookN';
-    const a1Sha = a1 ? Object.fromEntries([...a1Girdi].map(([y, v]) => [y, sha256(v)])) : null;
+    const a1Sha = a1 ? a1GirdiOzeti(a1Girdi) : null;
     const izGirdisi = { kip: ekKipAdi, girdi, kapaklar: kapakSha, a1Girdi: a1Sha };
     if (ekKipi) {
       let EK;
@@ -636,11 +699,23 @@ async function kabukTazele(o) {
       }
       // Kapak yolları (`images/<klasör>.png|jpg`) yalnız bu setin klasörleriyle sınırlanır.
       const klasorler = new Set(girdi.kitaplar.map((k) => k.klasor));
+      // İmza açık anahtarı (PEM metni): `o.acikAnahtar` ya da EMPP_KABUK_EK_ACIK_ANAHTAR dosyası.
+      // Okunamazsa eke HİÇ gidilmez (imzasız ek uygulanmaz).
+      let acikAnahtar = o.acikAnahtar != null ? String(o.acikAnahtar) : null;
+      if (acikAnahtar == null) {
+        try {
+          acikAnahtar = fs.readFileSync(ekAcikAnahtarYolu(env), 'utf8');
+        } catch (_) { acikAnahtar = null; }
+      }
+      if (!acikAnahtar || !acikAnahtar.trim()) {
+        return ertele('ek-imza-anahtari-yok', `açık anahtar okunamadı (${ekAcikAnahtarYolu(env)})`);
+      }
       let g;
       try {
         // CDN getiricisi modülündür ({status, buffer}); Web-Z `getir`'i ({status, govde}) VERİLMEZ.
+        // A: imza yok/geçersiz → {durum:'hata', kod:'imza'} → ertele 'ek-imza'.
         g = await EK.ekGetir({
-          bookId, girdiSha: rapor.girdiSha, kip: ekKipAdi, klasorler,
+          bookId, girdiSha: rapor.girdiSha, kip: ekKipAdi, klasorler, acikAnahtar,
           ...(o.cdnGetir ? { getir: o.cdnGetir } : {}),
         });
       } catch (e) {
@@ -829,5 +904,6 @@ async function kabukTazele(o) {
 module.exports = {
   ISARET, WEBZ_KOKU, IMZA, acik, ikiliYolu, onEkBul, uygunluk, webzListesi, eslemeKur, kapakGecerli,
   kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele, KIP_TEK_MOTOR, A1_KART_IMZASI,
-  kabukKaynagiSec, kabukEkModulu, ekYoluGuvenli, ekSonKontrol,
+  kabukKaynagiSec, kabukEkModulu, ekYoluGuvenli, ekSonKontrol, ekAcikAnahtarYolu,
+  kaynakKurKabukKarari, a1GirdiOzeti,
 };
