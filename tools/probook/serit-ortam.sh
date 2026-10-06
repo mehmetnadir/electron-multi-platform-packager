@@ -19,11 +19,15 @@ export PATH="$REPO/tools/probook/bin:$SERIT/opt/bin:$SERIT/node/bin:/usr/local/b
 # kabuğunu üreten Swift ikilisi Linux'ta yok; ProBook r2-kur alınca kabuk ESKİ kalıp yeni build.zip
 # geçerli oluyordu (45551 2.51.3). Artık Mac kabuğu üretip CDN'e "kabuk eki" olarak koyar
 # (tools/set-kabuk/ek-uret.js). ProBook aynı JS ile girdi parmak izini hesaplar, eki uygular; bütün
-# kapılar aynen koşar. Ek yok/bayat/bozuk ya da kapı RED → iş ERTELENİR (eski kabukla kaynak çıkmaz).
-# Acil geri dönüş: EMPP_SET_KABUK_KAYNAGI= (boş) ya da EMPP_KAYNAK_KUR=0.
+# kapılar aynen koşar. Ek yok/bayat/bozuk/imzasız ya da kapı RED → iş ERTELENİR (eski kabukla kaynak
+# çıkmaz). runner Linux'ta kaynak-kur'u YALNIZ tazeleme açık + kaynak 'ek' + açık anahtar dosyası
+# varken ilan eder (K1 değişmezi). Acil geri dönüş YALNIZ: EMPP_KAYNAK_KUR=0.
 export AGENT_CAPS="${AGENT_CAPS:-pardus,kaynak-r2,kaynak-kur}"
 export EMPP_SET_KABUK_TAZELE="${EMPP_SET_KABUK_TAZELE:-1}"
-export EMPP_SET_KABUK_KAYNAGI="${EMPP_SET_KABUK_KAYNAGI-ek}"
+export EMPP_SET_KABUK_KAYNAGI="${EMPP_SET_KABUK_KAYNAGI:-ek}"
+# Kabuk eki imza doğrulaması: Mac'in imza anahtarının AÇIK yarısı (PEM). Dosya yoksa kaynak-kur yok.
+_EK_PEM="$HOME/.empp-agent/kabuk-ek-acik.pem"
+export EMPP_KABUK_EK_ACIK_ANAHTAR="${EMPP_KABUK_EK_ACIK_ANAHTAR:-$_EK_PEM}"
 export AGENT_NAME="${AGENT_NAME:-probook-serit}"
 export PARDUS_BUILD_SCRIPT="${PARDUS_BUILD_SCRIPT:-$REPO/tools/pardus/pardus-yerel-build.sh}"
 export PARDUS_KABUL_SCRIPT="${PARDUS_KABUL_SCRIPT:-$REPO/tools/pardus/probook-kabul.sh}"
