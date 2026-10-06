@@ -64,6 +64,8 @@ const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
 const windowsKasaKabul = require('./windows-kasa-kabul');
 const windowsHazir = require('./windows-hazir');
+// Disk kapısı → önce yer aç (Nadir 06.10). Modül nesnesi üzerinden çağrılır (testler yerAc'ı değiştirir).
+const diskTemizlik = require('./disk-temizlik');
 const {
   kaynakKarari, manuelZipBicimi, exeYoluMu, arsivOkunurMu,
 } = require('./kaynak-karari');
@@ -584,7 +586,13 @@ function kabulKuyruguAcik() {
 async function uretimKapisiDurumu() {
   if (!kabulKuyruguAcik()) return { acik: true };
   const liste = await windowsHazir.kabulListesi(CONFIG);
-  const bosGb = diskBosGb(os.tmpdir());
+  let bosGb = diskBosGb(os.tmpdir());
+  // DİSK DOLU → İŞİ DURDURMA, YER AÇ (Nadir 06.10): kapı kapanmadan önce temizlik bekçisi koşar
+  // (en eski bizim dosyamızdan; yalnız kasa/ProBook, EMPP_DISK_TEMIZLIK=1). Sonra yeniden ölçülür.
+  if (bosGb !== null && CONFIG.winUretMinBosGb > 0 && bosGb < CONFIG.winUretMinBosGb) {
+    await diskTemizlik.yerAc({ gerekliGb: CONFIG.winUretMinBosGb, log });
+    bosGb = diskBosGb(os.tmpdir());
+  }
   if (bosGb === null && !uretimKapisiDurumu._bosGbUyarisi) {
     warn(`üretim kapısı: ${os.tmpdir()} boş alanı ölçülemedi — disk ölçütü atlandı (yalnız kuyruk derinliği)`);
     uretimKapisiDurumu._bosGbUyarisi = true;
@@ -2675,8 +2683,14 @@ async function processJob(auth, job) {
         tabanGb: Number(process.env.PARDUS_DISK_TABAN_GB || 15),
         elleGb: process.env.PARDUS_MIN_FREE_GB ? Number(process.env.PARDUS_MIN_FREE_GB) : null,
       });
-      const bosGb = diskBosGb(os.tmpdir());
+      let bosGb = diskBosGb(os.tmpdir());
       const kaynakMb = kaynakBayt ? `${(kaynakBayt / 1e6).toFixed(0)} MB` : 'bilinmiyor';
+      // DİSK DOLU → İŞİ DURDURMA, YER AÇ (Nadir 06.10): ProBook'ta önce temizlik bekçisi (en eski
+      // bizim dosyamızdan), sonra yeniden ölç; kapı ancak temizlikten sonra hâlâ darsa erteler.
+      if (bosGb !== null && bosGb < gerekliGb) {
+        await diskTemizlik.yerAc({ gerekliGb, log });
+        bosGb = diskBosGb(os.tmpdir());
+      }
       if (bosGb !== null && bosGb < gerekliGb) {
         throw new Error(
           `${DISK_KAPISI_ISARETI} pardus disk kapısı — ${bosGb} GB boş < ${gerekliGb} GB gerekli `

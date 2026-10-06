@@ -68,9 +68,17 @@ probook_kur(){
   local S="$HOME/$SERIT_ADI"
   mkdir -p "$S"/{repo,cache,work,out,log,kanit,opt,logolar}
   # Disk kapısı (plan B.3 tabanı): kurulum + ilk iş için ≥ 30 GB boş ve doluluk ≤ %85.
-  local BOS DOL
+  # DİSK DOLU → DURMA, YER AÇ (Nadir 06.10): eşik aşılırsa önce disk-temizlik.sh (en eski bizim
+  # dosyamızdan; hedef ≥ %25 ve ≥ 50 GB boş), sonra yeniden ölç; ancak hâlâ darsa dur.
+  local BOS DOL DT="$S/repo/tools/probook/disk-temizlik.sh"
   BOS=$(df -Pk "$S" | awk 'NR==2{print int($4/1048576)}')
   DOL=$(df -Pk "$S" | awk 'NR==2{gsub("%","",$5); print $5}')
+  if { [ "$BOS" -lt 30 ] || [ "$DOL" -gt 85 ]; } && [ -f "$DT" ]; then
+    log "disk dar (${BOS} GB bos, doluluk %${DOL}) — once disk temizlik"
+    bash "$DT" | tail -5 || true
+    BOS=$(df -Pk "$S" | awk 'NR==2{print int($4/1048576)}')
+    DOL=$(df -Pk "$S" | awk 'NR==2{gsub("%","",$5); print $5}')
+  fi
   [ "$BOS" -ge 30 ] || die "disk kapisi: ${BOS} GB bos < 30 GB"
   [ "$DOL" -le 85 ] || die "disk kapisi: doluluk %${DOL} > %85"
   log "disk: ${BOS} GB bos, doluluk %${DOL}"
@@ -125,6 +133,9 @@ exec $S/opt/appimagetool/AppRun \"\$@\""
     command -v "$arac" >/dev/null || die "arac yok: $arac"
   done
   unrar_kur "$S"
+  # Disk temizlik bekçisi (Nadir 06.10): ~/empp-serit/araclar kopyası + saatlik systemd --user zamanlayıcı.
+  bash "$S/repo/tools/probook/disk-temizlik.sh" --zamanlayici-kur | sed 's/^/  /' \
+    || log "UYARI: disk temizlik zamanlayicisi kurulamadi"
   log "araclar tamam (zenity/mksquashfs/7z/xdotool/imagemagick/flock)"
 
   # systemd kullanıcı birimi + linger (X oturumu kapansa da ajan ayakta).

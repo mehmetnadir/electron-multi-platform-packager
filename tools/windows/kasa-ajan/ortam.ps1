@@ -33,6 +33,7 @@ $env:AGENT_UPLOAD_RATE = '25M'
 $env:EMPP_KAYNAK_KUR = '0'  # kaynak-kur (r2-kur, 1-3 GB) Windows'ta ÖLÇÜLMEDİ: imkeys srv21 ssh ister, merdiven/üreteç denenmedi
 $env:AGENT_OFISTE = '1'   # windows-kasa ofiste sabit (runner Windows'ta route ile konum ölçmez)
 $env:AGENT_PACKAGE_TIMEOUT_MS = '3600000'
+$env:EMPP_DISK_TEMIZLIK = '1'   # 06.10 Nadir: disk dar → üretim kapısı önce disk-temizlik.js ile yer açar (yalnız kasa/ProBook)
 $env:NODE_OPTIONS = '--dns-result-order=ipv4first --no-network-family-autoselection'
 Set-Location $R
 $env:EMPP_IMZA_YUVA_KOKU = '\\172.17.2.23\Storage7\vhosts\akillitahta.ydspublishing.com\httpdocs\Uploads\KitapTekExe'   # 04.10 imza kapısı AÇIK: kasa tek imzacı (şef: AÇ)
