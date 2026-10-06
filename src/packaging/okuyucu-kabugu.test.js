@@ -419,6 +419,21 @@ test('A1 eski kabuk (1.13.3 < 1.13.14) → kökte değişir, kapak/index.html ye
   } finally { await fs.remove(tmp); }
 });
 
+// Ş1 (inceleme 06.10): A1'de birim kökü = PAKET KÖKÜ. Kök version.txt yayıncı güncelleme
+// KANAL DAMGASIdır (publisher-update currentVersion, kapı m.11) — kabuk sürümüyle ezilmemeli.
+test('Ş1 A1 kabuk değişimi kök version.txt kanal damgasını EZMEZ (bayt-eşit)', async () => {
+  const { tmp, kok, kYol } = await a1AlanKur();
+  try {
+    const once = await fs.readFile(path.join(kok, 'version.txt'));
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.kitaplar[0].karar, 'degisti');
+    const sonra = await fs.readFile(path.join(kok, 'version.txt'));
+    assert.ok(once.equals(sonra), `kök version.txt değişti: ${once} → ${sonra}`);
+    assert.equal(await fs.pathExists(path.join(kok, 'kapak', 'version.txt')), false,
+      'kapak/ altına version.txt yazılmaz');
+  } finally { await fs.remove(tmp); }
+});
+
 test('A1 kabuk zaten kanonik → ölçüm guncel, hiçbir dosya değişmez', async () => {
   const { tmp, kok, kYol } = await a1AlanKur({ paketSurum: '1.13.14' });
   try {

@@ -16,7 +16,8 @@
  *     içerikli dosya varsa eskisi `.empp-eski/`'ye taşınır — silme yok),
  *   - index.html: paketteki ŞABLON korunur, yalnız `*.main.js` / `*.main.css` referansları
  *     yeniden yazılır (Web-Z index'i base href/polyfill/PWA taşıdığı için alınmaz),
- *   - version.txt: kanonik sürüm (yalnız 3 parçalıysa — memory: surum-formatini-biz-bozduk).
+ *   - version.txt: kanonik sürüm (yalnız 3 parçalıysa — memory: surum-formatini-biz-bozduk);
+ *     A1 düzeninde YAZILMAZ (birim kökü = paket kökü, kök version.txt kanal damgasıdır — Ş1).
  *   - çekirdek varlıklar (`manifest.cekirdek`, core/…): YALNIZ EKSİKSE eklenir (büyük/küçük
  *     harf DUYARLI yoklanır — Pardus ext4); var olan core dosyası asla ezilmez.
  * DOKUNULMAZ: assets/ data/ pages/ thumbs/ htmletk/ core/ app.config.js motor.
@@ -259,8 +260,10 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
         const eskiRef = indexMainReferanslari(html);
         await yedekle(idx);
         await fs.writeFile(idx, yeniHtml, 'utf8');
+        // Ş1 (inceleme 06.10): A1'de dir = PAKET KÖKÜ; kök version.txt yayıncı güncelleme KANAL
+        // damgasıdır (publisher-update currentVersion, kapı m.11) — kabuk sürümüyle EZİLMEZ.
         const vt = path.join(dir, 'version.txt');
-        if (/^\d+\.\d+\.\d+$/.test(kanonik.surum) && await fs.pathExists(vt)) {
+        if (birim.duzen !== 'a1' && /^\d+\.\d+\.\d+$/.test(kanonik.surum) && await fs.pathExists(vt)) {
           await yedekle(vt);
           await fs.writeFile(vt, kanonik.surum, 'utf8');
         }
