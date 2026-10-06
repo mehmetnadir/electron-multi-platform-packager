@@ -31,21 +31,22 @@ test('komutSec: bayrak yoksa linux\'ta da koşmaz (srv21 linux\'tur, orada silme
   assert.match(DT.komutSec({ platform: 'win32', env: { EMPP_DISK_TEMIZLIK: '0' }, varMi: () => true }).atla, /EMPP_DISK_TEMIZLIK/);
 });
 
-test('komutSec: linux → bash disk-temizlik.sh --hedef-gb (yukarı yuvarlar); repo kopyası yoksa araclar', () => {
-  const k = DT.komutSec({ platform: 'linux', env: ACIK, hedefGb: 14.2, varMi: () => true });
+test('komutSec: linux → bash disk-temizlik.sh; yalnız gereken GB (yüzde 0), sert eşik aynı, --koru; repo kopyası yoksa araclar', () => {
+  const k = DT.komutSec({ platform: 'linux', env: ACIK, hedefGb: 14.2, koru: ['/w/empp-agent-1', '/a/kaynak-arsivi/9'], varMi: () => true });
   assert.equal(k.komut, 'bash');
   assert.match(k.arg[0], /tools\/probook\/disk-temizlik\.sh$/);
-  assert.deepEqual(k.arg.slice(1), ['--hedef-gb', '15']);
+  assert.deepEqual(k.arg.slice(1), ['--hedef-gb', '15', '--sert-gb', '15', '--hedef-yuzde', '0',
+    '--koru', '/w/empp-agent-1', '--koru', '/a/kaynak-arsivi/9']);
   const yedek = DT.komutSec({ platform: 'linux', env: ACIK, home: '/home/x', varMi: (p) => p.startsWith('/home/x') });
   assert.equal(yedek.arg[0], path.join('/home/x', 'empp-serit', 'araclar', 'disk-temizlik.sh'));
   assert.match(DT.komutSec({ platform: 'linux', env: ACIK, varMi: () => false }).atla, /bulunamadi/);
 });
 
-test('komutSec: win32 → node disk-temizlik.js', () => {
-  const k = DT.komutSec({ platform: 'win32', env: ACIK, hedefGb: 15, varMi: () => true, node: 'C:\\node.exe' });
+test('komutSec: win32 → node disk-temizlik.js (aynı --hedef-gb/--sert-gb/--koru sözleşmesi)', () => {
+  const k = DT.komutSec({ platform: 'win32', env: ACIK, hedefGb: 15, koru: ['C:\\w'], varMi: () => true, node: 'C:\\node.exe' });
   assert.equal(k.komut, 'C:\\node.exe');
   assert.match(k.arg[0], /kasa-ajan[\\/]disk-temizlik\.js$/);
-  assert.deepEqual(k.arg.slice(1), ['--hedef-gb', '15']);
+  assert.deepEqual(k.arg.slice(1), ['--hedef-gb', '15', '--sert-gb', '15', '--koru', 'C:\\w']);
 });
 
 test('sonucCoz: son SONUC satırı', () => {
@@ -54,37 +55,50 @@ test('sonucCoz: son SONUC satırı', () => {
   assert.equal(DT.sonucCoz('SONUC yok'), null);
 });
 
-test('yerAc: koşturur, loglar; 15 dk içinde ikinci çağrı yeniden koşturmaz (zorla hariç); fırlatmaz', async () => {
+test('yerAc: koru betiğe geçer; YALNIZ "hâlâ dar" (rc 3) önbelleğe alınır; hata ve tamam alınmaz; fırlatmaz', async () => {
   DT._sifirla();
   const cagri = [];
-  const kostur = async (k, a) => { cagri.push([k, a]); return { kod: 0, cikti: 'SILINDI 5 MB /x (t)\nSONUC bos_gb=60 hedef=tamam\n', hata: '' }; };
+  let cevap = { kod: 3, cikti: 'SILINDI 5 MB /x (t)\nSONUC bos_gb=6 hedef=dar\n', hata: '' };
+  const kostur = async (k, a) => { cagri.push([k, a]); return cevap; };
   const loglar = [];
   const ortak = { platform: 'linux', env: ACIK, varMi: () => true, kostur, log: (s) => loglar.push(s) };
-  const r = await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 1000 });
+  const r = await DT.yerAc({ ...ortak, gerekliGb: 20, koru: ['/arsiv/9'], simdi: 1000 });
   assert.equal(r.calisti, true);
-  assert.equal(r.sonuc.hedef, 'tamam');
-  assert.match(loglar.join('\n'), /silinen kalem=1 bos=60 GB hedef=tamam/);
+  assert.deepEqual(cagri[0][1].slice(-2), ['--koru', '/arsiv/9']);
+  assert.match(loglar.join('\n'), /silinen kalem=1 bos=6 GB hedef=dar/);
   const r2 = await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 1000 + 60000 });
-  assert.equal(r2.tekrar, true);
+  assert.equal(r2.tekrar, true, 'dar sonucu 15 dk tekrar koşturulmaz');
   assert.equal(cagri.length, 1);
-  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 1000 + DT.BEKLEME_MS + 1 });
+  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 1000 + 60000, zorla: true });
   assert.equal(cagri.length, 2);
-  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 1000 + DT.BEKLEME_MS + 2, zorla: true });
-  assert.equal(cagri.length, 3);
   DT._sifirla();
-  const hata = await DT.yerAc({ ...ortak, kostur: async () => { throw new Error('ENOENT bash'); } });
-  assert.equal(hata.calisti, true);
+  cevap = { kod: 0, cikti: 'SONUC bos_gb=60 hedef=tamam\n', hata: '' };
+  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 5000 });
+  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 5001 });
+  assert.equal(cagri.length, 4, 'tamam sonucu önbelleğe alınmaz');
+  cevap = { kod: 1, cikti: 'beklenmeyen', hata: 'patladı' };
+  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 6000 });
+  await DT.yerAc({ ...ortak, gerekliGb: 20, simdi: 6001 });
+  assert.equal(cagri.length, 6, 'hata kodu önbelleğe alınmaz');
+  const hata = await DT.yerAc({ ...ortak, kostur: async () => { throw new Error('ENOENT bash'); }, simdi: 7000 });
   assert.equal(hata.kod, -1);
+  const sonra = await DT.yerAc({ ...ortak, simdi: 7001 });
+  assert.notEqual(sonra.tekrar, true, 'fırlatan koşu önbelleğe alınmaz');
   DT._sifirla();
 });
 
-test('RUNNER pardus erken disk kapısı: temizlik ertelemeden (throw) ÖNCE, sonra yeniden ölçüm', () => {
+test('RUNNER pardus erken disk kapısı: temizlik çalışan işin arşivini ve iş dizinini --koru ile geçer; arşiv kaybolursa ertele', () => {
   const g = SRC.slice(SRC.indexOf('ERKEN DİSK KAPISI'), SRC.indexOf('pardus disk kapısı geçildi'));
-  const iTemiz = g.indexOf('await diskTemizlik.yerAc({ gerekliGb, log })');
+  const iTemiz = g.indexOf('await diskTemizlik.yerAc({ gerekliGb, log, koru: [work, ...(arsiv && arsiv.zip ? [path.dirname(arsiv.zip)] : [])] })');
   const iOlc = g.indexOf('bosGb = diskBosGb(os.tmpdir());', iTemiz);
-  const iAt = g.indexOf('throw new Error(');
-  assert.ok(iTemiz > 0, 'temizlik çağrısı yok');
+  const iKayip = g.indexOf('if (arsiv && arsiv.zip && !fs.existsSync(arsiv.zip))', iTemiz);
+  const iAt = g.indexOf('pardus disk kapısı —');
+  assert.ok(iTemiz > 0, 'koru\'lu temizlik çağrısı yok');
   assert.ok(iTemiz < iOlc && iOlc < iAt, 'sıra: temizlik → yeniden ölç → (hâlâ darsa) ertele');
+  assert.ok(iKayip > iTemiz, 'temizlik sonrası arşiv varlığı denetlenir');
+  assert.match(g.slice(iKayip, iKayip + 300), /throw new Error\(`\$\{DISK_KAPISI_ISARETI\} disk temizliği sonrası kaynak arşivi yok/);
+  const isDizini = SRC.slice(SRC.indexOf("const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));"));
+  assert.match(isDizini.slice(0, 400), /\.empp-sahip\.pid/);
 });
 
 test('RUNNER windows üretim kapısı: disk dar → kapı kapanmadan önce yerAc(minGb) çağrılır; temizlik yetmezse kapalı', async () => {

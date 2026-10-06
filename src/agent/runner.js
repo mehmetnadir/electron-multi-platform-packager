@@ -2590,6 +2590,10 @@ async function processJob(auth, job) {
   currentJob = { bookId: job.bookId, platform: job.platform };
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));
+  // Sahip işareti (inceleme Ö6, 06.10): disk temizlik bekçisi sahibi canlı iş dizinini atlar.
+  try { fs.writeFileSync(path.join(work, '.empp-sahip.pid'), String(process.pid)); } catch (e) {
+    warn(`iş dizini sahip işareti yazılamadı (${e.code || e.message}) — temizlik bekçisi yalnız yenilik kuralıyla korur`);
+  }
   try {
     // WINDOWS ŞERİDİ ön koşulu (SAF) — kaynak İNDİRİLMEDEN (windows-serit.js): claim sürümü
     // 2.<panel kodu>.<paket sayacı> (sözleşme madde 1), kimlik = book_id, G tabanı https. Düşerse iş
@@ -2687,9 +2691,14 @@ async function processJob(auth, job) {
       const kaynakMb = kaynakBayt ? `${(kaynakBayt / 1e6).toFixed(0)} MB` : 'bilinmiyor';
       // DİSK DOLU → İŞİ DURDURMA, YER AÇ (Nadir 06.10): ProBook'ta önce temizlik bekçisi (en eski
       // bizim dosyamızdan), sonra yeniden ölç; kapı ancak temizlikten sonra hâlâ darsa erteler.
+      // ÇALIŞAN İŞİN KAYNAĞI KORUNUR (inceleme K1, 06.10): bu işin arşiv dizini ve iş dizini --koru ile
+      // verilir; temizlik sonrası arşiv zip'i yine de yoksa iş ERTELENİR (failed yazılmaz).
       if (bosGb !== null && bosGb < gerekliGb) {
-        await diskTemizlik.yerAc({ gerekliGb, log });
+        await diskTemizlik.yerAc({ gerekliGb, log, koru: [work, ...(arsiv && arsiv.zip ? [path.dirname(arsiv.zip)] : [])] });
         bosGb = diskBosGb(os.tmpdir());
+        if (arsiv && arsiv.zip && !fs.existsSync(arsiv.zip)) {
+          throw new Error(`${DISK_KAPISI_ISARETI} disk temizliği sonrası kaynak arşivi yok (${arsiv.zip}); iş ertelendi`);
+        }
       }
       if (bosGb !== null && bosGb < gerekliGb) {
         throw new Error(
