@@ -6,13 +6,13 @@
  * sürümleri sil." Kural: C'de üretilir, arşiv D'de durur.
  *
  * Yerleşim (kök `EMPP_IMZALI_ARSIV_KOKU`, win32 varsayılanı `D:\empp-imzali-son`):
- *   <kök>\<bookId>\<özgün Setup adı>.exe   yayınlanan imzalı kopya (yalnız en son sürüm)
- *   <kök>\<bookId>\son.json                bookId, baslik, surum, exe, sha256, boyut, imzaZamani,
- *                                          yayinZamani, r2Anahtari, arsivZamani
+ *   <kök>\<Set adı>.exe                    yayınlanan imzalı kopya (yalnız en son sürüm)
+ *   <kök>\<bookId>\son.json                bookId, baslik, surum, exe, exeYolu, sha256, boyut...
  *
- * Akış: geçici ada kopyala → sha256 doğrula → özgün ada `rename` → son.json → AYNI <bookId>
- * klasöründeki DİĞER *.exe dosyalarını sil (yalnız düz dosya; sembolik bağ/junction izlenmez,
- * klasör dışına çıkılmaz). Sha uyuşmazsa ya da kopya düşerse eski sürüm SİLİNMEZ (fail-safe).
+ * Akış: geçici ada kopyala → sha256 doğrula → hedef ada `rename` → son.json → ESKİ SÜRÜM TEMİZLİĞİ:
+ * aynı bookId'nin önceki son.json'undaki exe adı (yeni addan farklıysa) kökte düz dosya ise silinir;
+ * ayrıca <kök>\<bookId>\ içinde kalmış eski *.exe'ler silinir (geçiş dönemi). Başka setlere dokunulmaz.
+ * Sha uyuşmazsa ya da kopya düşerse eski sürüm SİLİNMEZ (fail-safe).
  *
  * Bu adım yayını ASLA başarısız saymaz: `arsivle` fırlatmaz, sonucu döner; hata uyarı logu +
  * `bildir bekci` tek satır. Birim (D:) yoksa atlanır — C:'ye yedek yazılmaz.
@@ -45,7 +45,11 @@ function bookIdGecerli(id) {
 /** Özgün Setup adı: yalın dosya adı, .exe uzantılı, ayırıcı/üst dizin/sürücü yok. Saf. */
 function exeAdiGecerli(ad) {
   const s = String(ad == null ? '' : ad);
-  return /^[A-Za-z0-9][A-Za-z0-9._() -]{0,200}\.exe$/i.test(s) && !s.includes('..');
+  if (!s.toLowerCase().endsWith('.exe')) return false;
+  if (s.includes('..') || s.includes('/') || s.includes('\\') || s.includes(':')) return false;
+  if (s.startsWith('.') || /^\s/.test(s) || /[ .]\.exe$/i.test(s)) return false;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(s)) return false;
+  return s.length > 4 && /^[^/\\:*?"<>|\x00-\x1F]{1,250}$/.test(s);
 }
 
 /** `p` gerçekten `kok`'un altında mı (eşit değil)? Saf. */
@@ -90,36 +94,78 @@ async function sonOku(klasor) {
   try { return JSON.parse(await fsp.readFile(path.join(klasor, SON_JSON), 'utf8')); } catch (_) { return null; }
 }
 
+/** Kökteki BAŞKA bookId klasörlerinin son.json'unda kayıtlı exe adları (win32'de küçük harf). */
+async function baskaSetExeleri(kok, bookId) {
+  const kume = new Set();
+  const win = process.platform === 'win32';
+  try {
+    for (const g of await fsp.readdir(kok, { withFileTypes: true })) {
+      if (!g.isDirectory() || g.name === bookId) continue;
+      const s = await sonOku(path.join(kok, g.name));
+      if (!s) continue;
+      for (const a of [s.exeYolu, s.exe]) {
+        if (typeof a !== 'string' || !a) continue;
+        const y = win ? path.win32.basename(a) : path.basename(a);
+        kume.add(win ? y.toLowerCase() : y);
+      }
+    }
+  } catch (_) { /* kök yok: çakışma yok */ }
+  return kume;
+}
+
 /**
- * Klasördeki ESKİ sürümleri siler: yalnız düz dosya, yalnız `.exe`, `tut` hariç; ayrıca bu modülün
- * kendi yarım geçici dosyaları (`.<ad>.yaziliyor-<pid>`). Bağ/junction ve alt dizin atlanır.
- * Ş8 (inceleme 06.10): win32'de (NTFS harf duyarsız) `tut` kıyası harf duyarsızdır ve yalın ada
- * indirgenir — yalnız harfleri farklı eski ad YENİ dosyayı gösterir; silinirse yeni arşiv gider.
+ * Klasördeki ESKİ sürümleri siler:
+ * 1. `klasor` (<kök>\\<bookId>) içindeki tüm `.exe` ve yarım kopyaları temizler (geçiş).
+ * 2. `kok` içindeki `eskiExeAd`'ı (yeniExeAd'dan farklıysa) siler.
  * @returns {Promise<{silinen:string[], atlanan:string[]}>}
  */
-async function eskileriSil(klasor, tut, log = () => {}, platform = process.platform) {
+async function eskileriSil(kok, klasor, eskiExeAd, yeniExeAd, log = () => {}, platform = process.platform) {
   const silinen = [];
   const atlanan = [];
   const win = platform === 'win32';
-  const yalin = win ? path.win32.basename(String(tut)) : path.basename(String(tut));
-  const ayniMi = (ad) => (win ? ad.toLowerCase() === yalin.toLowerCase() : ad === yalin);
-  const girdiler = await fsp.readdir(klasor, { withFileTypes: true });
-  for (const g of girdiler) {
-    const ad = g.name;
-    if (ayniMi(ad)) continue;
-    const exe = ad.toLowerCase().endsWith('.exe');
-    const gecici = ad.startsWith('.') && ad.includes(GECICI_EKI);
-    if (!exe && !gecici) continue;
-    const p = path.join(klasor, ad);
-    if (path.dirname(p) !== klasor || !altindaMi(klasor, p)) { atlanan.push(ad); continue; }
-    const st = await lstatVeyaNull(p);
-    if (!st || st.isSymbolicLink() || !st.isFile()) { atlanan.push(ad); continue; }
-    try {
-      await fsp.unlink(p);
-      silinen.push(ad);
-    } catch (e) {
-      atlanan.push(ad);
-      log(`imzalı-arşiv: UYARI eski sürüm silinemedi (${ad}): ${e.message}`);
+  
+  try {
+    const girdiler = await fsp.readdir(klasor, { withFileTypes: true });
+    for (const g of girdiler) {
+      const ad = g.name;
+      const exe = ad.toLowerCase().endsWith('.exe');
+      const gecici = ad.startsWith('.') && ad.includes(GECICI_EKI);
+      if (!exe && !gecici) continue;
+      const p = path.join(klasor, ad);
+      if (path.dirname(p) !== klasor || !altindaMi(klasor, p)) { atlanan.push(ad); continue; }
+      const st = await lstatVeyaNull(p);
+      if (!st || st.isSymbolicLink() || !st.isFile()) { atlanan.push(ad); continue; }
+      try { await fsp.unlink(p); silinen.push(ad); } catch (e) { atlanan.push(ad); log(`imzalı-arşiv: UYARI eski sürüm silinemedi (${ad}): ${e.message}`); }
+    }
+  } catch (e) { /* atla */ }
+
+  const yalinYeni = win ? path.win32.basename(yeniExeAd) : path.basename(yeniExeAd);
+  const yalinEski = eskiExeAd ? (win ? path.win32.basename(eskiExeAd) : path.basename(eskiExeAd)) : null;
+
+  try {
+    const kokGirdiler = await fsp.readdir(kok, { withFileTypes: true });
+    for (const g of kokGirdiler) {
+      if (!g.isFile()) continue;
+      const ad = g.name;
+      const gecici = ad.startsWith('.') && ad.includes(GECICI_EKI);
+      if (!gecici) continue;
+      if (ad.startsWith(`.${yalinYeni}${GECICI_EKI}`) || (yalinEski && ad.startsWith(`.${yalinEski}${GECICI_EKI}`))) {
+        const p = path.join(kok, ad);
+        try { await fsp.unlink(p); silinen.push(ad); } catch (e) { atlanan.push(ad); }
+      }
+    }
+  } catch (e) { /* atla */ }
+
+  if (eskiExeAd) {
+    const ayniMi = win ? yalinYeni.toLowerCase() === yalinEski.toLowerCase() : yalinYeni === yalinEski;
+    if (!ayniMi) {
+      const p = path.join(kok, yalinEski);
+      if (path.dirname(p) === kok && altindaMi(kok, p)) {
+        const st = await lstatVeyaNull(p);
+        if (st && !st.isSymbolicLink() && st.isFile()) {
+          try { await fsp.unlink(p); silinen.push(yalinEski); } catch (e) { atlanan.push(yalinEski); log(`imzalı-arşiv: UYARI eski sürüm silinemedi (${yalinEski}): ${e.message}`); }
+        }
+      }
     }
   }
   return { silinen, atlanan };
@@ -182,13 +228,38 @@ async function arsivle(o) {
     }
     const kaynakSt = await fsp.stat(o.kaynak);
     const klasor = path.join(kokTam, String(o.bookId));
-    const hedef = path.join(klasor, o.exeAdi);
-    if (!altindaMi(klasor, hedef) || path.dirname(hedef) !== klasor) return await hata(`hedef klasör dışında: ${hedef}`);
+
+    const m = o.meta || {};
+    const temizle = (t) => String(t == null ? '' : t)
+      .replace(/[\\/:*?"<>|\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').replace(/\.exe$/i, '')
+      .replace(/^[\s.]+/, '').replace(/[\s.]+$/, '').slice(0, 150).trim();
+    let govde = temizle(m.baslik);
+    if (!govde) {
+      govde = temizle(String(o.exeAdi).replace(/\.exe$/i, '').replace(/^runner-\d+-/i, '')
+        .replace(/-\d+(?:\.\d+)*-Setup$/i, '').replace(/-/g, ' '));
+    }
+    if (!govde) govde = `Set ${o.bookId}`;
+    let yeniAd = `${govde}.exe`;
+    if (!exeAdiGecerli(yeniAd)) { govde = `Set ${o.bookId}`; yeniAd = `${govde}.exe`; }
+
+    const win32 = process.platform === 'win32';
+    const kiyas = (a) => (win32 ? String(a).toLowerCase() : String(a));
+    const baskaSetler = await baskaSetExeleri(kokTam, String(o.bookId));
+    if (baskaSetler.has(kiyas(yeniAd))) yeniAd = `${govde} (${o.bookId}).exe`;
+
+    const hedef = path.join(kokTam, yeniAd);
+    if (!altindaMi(kokTam, hedef) || path.dirname(hedef) !== kokTam) return await hata(`hedef kök dışında: ${hedef}`);
+
+    const eskiSon = await sonOku(klasor);
+    let eskiExeAd = eskiSon ? (eskiSon.exeYolu || eskiSon.exe) : null;
+    // Eski ad başka bir setin güncel adıysa (kayıt bozuk/çakışma) ASLA silinmez.
+    if (typeof eskiExeAd !== 'string') eskiExeAd = null;
+    if (eskiExeAd && baskaSetler.has(kiyas(win32 ? path.win32.basename(eskiExeAd) : path.basename(eskiExeAd)))) eskiExeAd = null;
+
     if (o.eskiyseAtla && o.meta && o.meta.yayinZamani) {
-      const s = await sonOku(klasor);
-      const mevcut = s && Date.parse(s.yayinZamani);
+      const mevcut = eskiSon && Date.parse(eskiSon.yayinZamani);
       if (mevcut && mevcut >= Date.parse(o.meta.yayinZamani)) {
-        return { durum: 'atlandi', sebep: `arşivde aynı/yeni sürüm var (${s.surum || '-'}, ${s.yayinZamani})` };
+        return { durum: 'atlandi', sebep: `arşivde aynı/yeni sürüm var (${eskiSon.surum || '-'}, ${eskiSon.yayinZamani})` };
       }
     }
     if (o.kuru) return { durum: 'kuru', hedef, sebep: `${kaynakSt.size} B kopyalanacak` };
@@ -202,7 +273,7 @@ async function arsivle(o) {
     const gercekKlasor = await fsp.realpath(klasor);
     if (!altindaMi(gercekKok, gercekKlasor)) return await hata(`klasör gerçek yolu kök dışında: ${gercekKlasor}`);
 
-    const gecici = path.join(klasor, `.${o.exeAdi}${GECICI_EKI}${process.pid}`);
+    const gecici = path.join(kokTam, `.${yeniAd}${GECICI_EKI}${process.pid}`);
     try {
       await fsp.copyFile(o.kaynak, gecici);
       const beklenen = String(o.beklenenSha256 || (await sha256Hesapla(o.kaynak)).sha256).toLowerCase();
@@ -214,17 +285,17 @@ async function arsivle(o) {
       await fsp.rename(gecici, hedef);
       const son = await fsp.lstat(hedef);
       if (!son.isFile() || son.size !== kopya.boyut) throw new Error(`yerleşen dosya boyutu ${son.size} ≠ ${kopya.boyut}`);
-      const m = o.meta || {};
       await jsonYaz(path.join(klasor, SON_JSON), {
-        bookId: String(o.bookId), baslik: m.baslik || null, surum: m.surum || null, exe: o.exeAdi,
+        bookId: String(o.bookId), baslik: m.baslik || null, surum: m.surum || null, 
+        exe: yeniAd, exeYolu: yeniAd,
         sha256: kopya.sha256, boyut: kopya.boyut, imzaZamani: m.imzaZamani || null,
         yayinZamani: m.yayinZamani || null, r2Anahtari: m.r2Anahtari || null, arsivZamani: new Date().toISOString(),
       });
     } catch (e) {
-      await fsp.unlink(gecici).catch(() => {}); // yalnız bu koşunun kendi yarım kopyası
+      await fsp.unlink(gecici).catch(() => {});
       return await hata(`kopya: ${e.message}`);
     }
-    const { silinen } = await eskileriSil(klasor, o.exeAdi, log);
+    const { silinen } = await eskileriSil(kokTam, klasor, eskiExeAd, yeniAd, log);
     log(`imzalı-arşiv: ${etiket} → ${hedef}${silinen.length ? ` (eski silindi: ${silinen.join(', ')})` : ''}`);
     return { durum: 'arsivlendi', hedef, silinen };
   } catch (e) {

@@ -20,8 +20,8 @@
  *        c. windows-serit `imzaliYayinZinciri` — runner'ın AYNI imza + Authenticode + imzalı kabul
  *           fonksiyonu, AYNI imza kilidi (`winImzaKilit`); ikinci bir imza yolu YOK;
  *        d. runner `postResultSuccess` (R2 + /result completed), kanıt, `yayinlandi/`'ye TAŞI.
- *        e. imzalı kopya `D:\empp-imzali-son\<bookId>\` (src/agent/imzali-arsiv.js; Nadir 06.10): sha
- *           doğrulanınca aynı klasördeki eski *.exe silinir. Hata yayını düşürmez (uyarı + bildir bekci).
+ *        e. imzalı kopya `D:\empp-imzali-son\<Set adı>.exe` (src/agent/imzali-arsiv.js; Nadir 06.10): sha
+ *           doğrulanınca eski *.exe silinir. Hata yayını düşürmez (uyarı + bildir bekci).
  *        İmzalı kopya kabulden KALDI → `reddedildi/`'ye taşı + bildir (paket kusuru). İmza/doğrulama/
  *        yükleme hatası → kayıt yerinde kalır, `sonHata` yazılır, tur DURUR (kuyruk tek yuvalı).
  *      BORU HATTI (06.10, Nadir: "imzayı da paralel yapalım"): bir kaydın `_hazir` kopyası bitince
@@ -308,7 +308,7 @@ async function kaydiIsle(giris, d, boru = {}) {
 }
 
 /**
- * Yayın SONRASI imzalı son sürüm arşivi (`<arşiv kökü>\<bookId>\<özgün Setup adı>.exe` + son.json;
+ * Yayın SONRASI imzalı son sürüm arşivi (`<arşiv kökü>\<Set adı>.exe` + `<bookId>\\son.json`;
  * eski *.exe yalnız sha doğrulandıktan sonra silinir). ASLA fırlatmaz; hata → uyarı + `bildir bekci`.
  */
 async function imzaliArsivle(d, { kaynak, m, job, imzali, yayin, yayinZamani }) {

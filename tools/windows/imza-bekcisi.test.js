@@ -465,19 +465,20 @@ test('bekçi imzalı kabul zincirine kasa kilit beklemesini 120 dk geçirir (env
   assert.deepEqual(gorulen, [120 * 60 * 1000]);
 });
 
-test('İMZALI ARŞİV (Nadir 06.10): yayın sonrası imzalı kopya <kök>/<bookId>/<özgün Setup adı> + son.json; eski sürüm silinir', async () => {
+test('İMZALI ARŞİV (Nadir 06.10): yayın sonrası imzalı kopya <kök>/<Set adı>.exe + <kök>/<bookId>/son.json; eski sürüm silinir', async () => {
   const o = ortam({ yuva: true });
   const birim = fs.mkdtempSync(path.join(os.tmpdir(), 'bekci-D-'));
   o.cfg.imzaliArsivKoku = path.join(birim, 'empp-imzali-son');
-  const k = path.join(o.cfg.imzaliArsivKoku, '301');
+  const kok = o.cfg.imzaliArsivKoku;
+  const k = path.join(kok, '301');
   fs.mkdirSync(k, { recursive: true });
   fs.writeFileSync(path.join(k, 'runner-301-T-2.1.0-Setup.exe'), 'eski');
   const h = await o.ekle('301');
   const z = await B.tur(o.bagimlilik());
   assert.equal(z.yayinlanan, 1);
-  const exe = path.join(k, 'runner-301-T-2.1.1-Setup.exe');
+  const exe = path.join(kok, 'Kitap 301.exe');
   assert.deepEqual(fs.readFileSync(exe), Buffer.concat([h.govde, Buffer.from('IMZA')]), 'arşivdeki kopya İMZALI olan');
-  assert.deepEqual(fs.readdirSync(k).sort(), ['runner-301-T-2.1.1-Setup.exe', 'son.json']);
+  assert.deepEqual(fs.readdirSync(k).sort(), ['son.json']);
   const son = JSON.parse(fs.readFileSync(path.join(k, 'son.json'), 'utf8'));
   assert.equal(son.bookId, '301');
   assert.equal(son.baslik, 'Kitap 301');
@@ -492,7 +493,8 @@ test('İMZALI ARŞİV: sha uyuşmazlığı yayını DÜŞÜRMEZ — kayıt yayin
   const o = ortam({ yuva: true });
   const birim = fs.mkdtempSync(path.join(os.tmpdir(), 'bekci-D-'));
   o.cfg.imzaliArsivKoku = path.join(birim, 'empp-imzali-son');
-  const k = path.join(o.cfg.imzaliArsivKoku, '302');
+  const kok = o.cfg.imzaliArsivKoku;
+  const k = path.join(kok, '302');
   fs.mkdirSync(k, { recursive: true });
   fs.writeFileSync(path.join(k, 'runner-302-T-2.1.0-Setup.exe'), 'eski');
   await o.ekle('302');
@@ -503,6 +505,7 @@ test('İMZALI ARŞİV: sha uyuşmazlığı yayını DÜŞÜRMEZ — kayıt yayin
   assert.equal(z.yayinlanan, 1, 'yayın başarılı sayıldı');
   assert.equal(o.cagri.yayin.length, 1);
   assert.deepEqual(fs.readdirSync(k), ['runner-302-T-2.1.0-Setup.exe'], 'eski kaldı, yeni yerleşmedi');
+  assert.equal(fs.existsSync(path.join(kok, 'Kitap 302.exe')), false, 'yeni kök exe yazılmadı');
   const satirlar = o.oku().split('\n').filter((s) => s.startsWith('bildir bekci'));
   assert.equal(satirlar.length, 1, o.oku());
   assert.match(satirlar[0], /İmzalı arşiv 302: kopya: sha256 uyuşmadı/);

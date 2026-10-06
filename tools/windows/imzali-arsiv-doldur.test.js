@@ -75,10 +75,8 @@ test('gerçek: kitap başına EN SON yayın; imzalı kopya sha ile bulunur (yuva
   assert.match(r.satirlar.find((s) => s.bookId === '402').sebep, /imzalı kopya bulunamadı/);
   assert.match(r.satirlar.find((s) => s.bookId === '403').sebep, /imzali\.sha256 yok/);
   assert.equal(r.eskiKayit, 1, '401 eski yayın atlandı');
-  assert.deepEqual(listele(o.kok), [
-    '401/runner-401-T-2.1.1-Setup.exe', '401/son.json', '404/runner-404-T-2.0.5-Setup.exe', '404/son.json',
-  ]);
-  assert.deepEqual(fs.readFileSync(path.join(o.kok, '401', 'runner-401-T-2.1.1-Setup.exe')), o.govdeler['401-2.1.1']);
+  assert.deepEqual(listele(o.kok), ['401/son.json', '404/son.json', 'Kitap 401.exe', 'Kitap 404.exe']);
+  assert.deepEqual(fs.readFileSync(path.join(o.kok, 'Kitap 401.exe')), o.govdeler['401-2.1.1']);
   const son = JSON.parse(fs.readFileSync(path.join(o.kok, '401', 'son.json'), 'utf8'));
   assert.equal(son.surum, '2.1.1');
   assert.equal(son.r2Anahtari, 'softwares/401/2.1.1.exe');

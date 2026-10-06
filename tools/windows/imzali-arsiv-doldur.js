@@ -3,7 +3,7 @@
 /**
  * İMZALI ARŞİV GERİ DOLDURMA (Nadir 06.10) — imza bekçisinin yeni "imzalı son sürüm arşivi" adımından
  * ÖNCE yayınlanmış kitaplar için tek seferlik doldurma. Kural bekçiyle AYNI (src/agent/imzali-arsiv.js):
- * `<arşiv kökü>\<bookId>\<özgün Setup adı>.exe` + son.json; sha doğrulanınca eski *.exe silinir.
+ * `<arşiv kökü>\<Set adı>.exe` + `<bookId>\\son.json`; sha doğrulanınca eski *.exe silinir.
  *
  * Kaynak: `<hazır kök>\yayinlandi\*\manifest.json` (durum yayinlandi, imzali.sha256 dolu). Her kitap
  * için YALNIZ en son yayın alınır. İmzalı kopya şu sırayla aranır ve sha256'sı manifest'teki

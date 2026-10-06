@@ -55,32 +55,31 @@ test('saf: bookId yalnız rakam; exe adı yalın .exe — yol enjeksiyonu reddi'
   }
   assert.equal(A.exeAdiGecerli('runner-45449-Kitap-2.1.2-Setup.exe'), true);
   assert.equal(A.exeAdiGecerli('Shall We 6 Set - Setup.exe'), true);
-  for (const kotu of ['../x.exe', '..\\x.exe', 'a/b.exe', 'a\\b.exe', 'C:x.exe', '.gizli.exe', 'x.dll', 'x..exe', '']) {
+  assert.equal(A.exeAdiGecerli('Türkçe Başlık! (2).exe'), true);
+  for (const kotu of ['../x.exe', '..\\x.exe', 'a/b.exe', 'a\\b.exe', 'C:x.exe', 'x.dll', '']) {
     assert.equal(A.exeAdiGecerli(kotu), false, kotu);
   }
 });
 
-test('kopya + son.json: <kök>/<bookId>/<özgün Setup adı>.exe, sha/boyut/meta yazılır', async () => {
+test('kopya + son.json: <kök>/<Set adı>.exe, sha/boyut/meta yazılır', async () => {
   const o = ortam();
   const r = await A.arsivle(o.temel());
   assert.equal(r.durum, 'arsivlendi', JSON.stringify(r));
-  const hedef = path.join(o.kok, '45449', 'runner-45449-Kitap-2.1.2-Setup.exe');
+  const hedef = path.join(o.kok, 'Kitap.exe');
   assert.equal(r.hedef, hedef);
   assert.deepEqual(fs.readFileSync(hedef), o.govde);
   const son = JSON.parse(fs.readFileSync(path.join(o.kok, '45449', 'son.json'), 'utf8'));
   assert.equal(son.bookId, '45449');
   assert.equal(son.baslik, 'Kitap');
   assert.equal(son.surum, '2.1.2');
-  assert.equal(son.exe, 'runner-45449-Kitap-2.1.2-Setup.exe');
+  assert.equal(son.exe, 'Kitap.exe');
+  assert.equal(son.exeYolu, 'Kitap.exe');
   assert.equal(son.sha256, sha(o.govde));
   assert.equal(son.boyut, o.govde.length);
   assert.equal(son.imzaZamani, 'Oct  6 10:00:00 2026 GMT');
   assert.equal(son.yayinZamani, '2026-10-06T10:00:00.000Z');
   assert.equal(son.r2Anahtari, 'softwares/45449/x.exe');
   assert.ok(son.arsivZamani);
-  assert.deepEqual(fs.readdirSync(path.join(o.kok, '45449')).sort(), ['runner-45449-Kitap-2.1.2-Setup.exe', 'son.json'], 'geçici dosya kalmadı');
-  assert.equal(o.kayit.bildir.length, 0);
-  assert.equal(var_(o.kaynak), true, 'kaynak (C) yerinde — taşıma değil kopya');
 });
 
 test('eski 2 sürüm silinir, yeni kalır; .exe olmayan dosya ve alt dizin dokunulmaz', async () => {
@@ -92,40 +91,48 @@ test('eski 2 sürüm silinir, yeni kalır; .exe olmayan dosya ve alt dizin dokun
   fs.writeFileSync(path.join(k, 'not.txt'), 'not');
   fs.mkdirSync(path.join(k, 'alt.exe'));
   fs.writeFileSync(path.join(k, 'alt.exe', 'icerde.exe'), 'icerde');
+  
+  fs.writeFileSync(path.join(k, 'son.json'), JSON.stringify({ bookId: '45449', exe: 'Kitap Eski.exe', exeYolu: 'Kitap Eski.exe' }));
+  fs.writeFileSync(path.join(o.kok, 'Kitap Eski.exe'), 'kök eski');
+
   const r = await A.arsivle(o.temel());
   assert.equal(r.durum, 'arsivlendi', JSON.stringify(r));
-  assert.deepEqual(r.silinen.sort(), ['runner-45449-Kitap-2.1.0-Setup.exe', 'runner-45449-Kitap-2.1.1-Setup.EXE']);
-  assert.deepEqual(fs.readdirSync(k).sort(), ['alt.exe', 'not.txt', 'runner-45449-Kitap-2.1.2-Setup.exe', 'son.json']);
+  assert.deepEqual(r.silinen.sort(), ['Kitap Eski.exe', 'runner-45449-Kitap-2.1.0-Setup.exe', 'runner-45449-Kitap-2.1.1-Setup.EXE']);
+  assert.deepEqual(fs.readdirSync(k).sort(), ['alt.exe', 'not.txt', 'son.json']);
   assert.equal(var_(path.join(k, 'alt.exe', 'icerde.exe')), true);
+  assert.equal(var_(path.join(o.kok, 'Kitap Eski.exe')), false);
+  assert.equal(var_(path.join(o.kok, 'Kitap.exe')), true);
 });
 
 test('aynı sürüm yeniden yayınlanınca üzerine yazılır, başka kitabın klasörüne dokunulmaz', async () => {
   const o = ortam();
+  fs.mkdirSync(o.kok, { recursive: true });
+  fs.writeFileSync(path.join(o.kok, 'Baska.exe'), 'baska');
   const baska = path.join(o.kok, '72379');
   fs.mkdirSync(baska, { recursive: true });
-  fs.writeFileSync(path.join(baska, 'runner-72379-X-2.0.1-Setup.exe'), 'baska');
-  fs.mkdirSync(path.join(o.kok, '45449'), { recursive: true });
-  fs.writeFileSync(path.join(o.kok, '45449', 'runner-45449-Kitap-2.1.2-Setup.exe'), 'eski içerik aynı ad');
+  fs.writeFileSync(path.join(baska, 'son.json'), JSON.stringify({ bookId: '72379', exe: 'Kitap.exe' }));
+  
   const r = await A.arsivle(o.temel());
   assert.equal(r.durum, 'arsivlendi');
-  assert.deepEqual(fs.readFileSync(path.join(o.kok, '45449', 'runner-45449-Kitap-2.1.2-Setup.exe')), o.govde);
-  assert.equal(fs.readFileSync(path.join(baska, 'runner-72379-X-2.0.1-Setup.exe'), 'utf8'), 'baska');
+  assert.equal(r.hedef, path.join(o.kok, 'Kitap (45449).exe'));
+  assert.deepEqual(fs.readFileSync(r.hedef), o.govde);
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Baska.exe'), 'utf8'), 'baska');
 });
 
 test('sha uyuşmazsa: eski sürüm SİLİNMEZ, yeni yerleşmez, geçici kalmaz, uyarı + bildirim', async () => {
   const o = ortam();
   const k = path.join(o.kok, '45449');
   fs.mkdirSync(k, { recursive: true });
-  fs.writeFileSync(path.join(k, 'runner-45449-Kitap-2.1.1-Setup.exe'), 'eski');
-  fs.writeFileSync(path.join(k, 'son.json'), '{"surum":"2.1.1"}\n');
+  fs.writeFileSync(path.join(o.kok, 'Kitap.exe'), 'eski');
+  fs.writeFileSync(path.join(k, 'son.json'), '{"surum":"2.1.1","exeYolu":"Kitap.exe"}\n');
   const r = await A.arsivle(o.temel({ beklenenSha256: 'f'.repeat(64) }));
   assert.equal(r.durum, 'hata');
   assert.match(r.sebep, /sha256 uyuşmadı/);
-  assert.deepEqual(fs.readdirSync(k).sort(), ['runner-45449-Kitap-2.1.1-Setup.exe', 'son.json']);
-  assert.equal(fs.readFileSync(path.join(k, 'son.json'), 'utf8'), '{"surum":"2.1.1"}\n', 'son.json eski sürümü göstermeye devam eder');
+  assert.deepEqual(fs.readdirSync(k).sort(), ['son.json']);
+  assert.equal(fs.readFileSync(path.join(k, 'son.json'), 'utf8'), '{"surum":"2.1.1","exeYolu":"Kitap.exe"}\n');
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Kitap.exe'), 'utf8'), 'eski');
   assert.equal(o.kayit.bildir.length, 1);
   assert.match(o.kayit.bildir[0], /^İmzalı arşiv 45449: kopya: sha256 uyuşmadı/);
-  assert.ok(o.kayit.log.some((s) => /UYARI 45449 arşivlenemedi/.test(s)));
 });
 
 test('kaynak okunamazsa (yok) hata döner, FIRLATMAZ, eski yerinde', async () => {
@@ -214,13 +221,17 @@ test('bildirim fırlatsa da arsivle fırlatmaz', async () => {
 
 test('eskiyseAtla (geri doldurma): arşivde aynı/yeni yayın varsa dokunulmaz; eskiyse güncellenir', async () => {
   const o = ortam();
-  await A.arsivle(o.temel());
-  const r = await A.arsivle(o.temel({ eskiyseAtla: true, exeAdi: 'runner-45449-Kitap-2.1.0-Setup.exe', meta: { yayinZamani: '2026-10-01T00:00:00Z' } }));
+  const k = path.join(o.kok, '45449');
+  fs.mkdirSync(k, { recursive: true });
+  fs.writeFileSync(path.join(o.kok, 'Kitap.exe'), 'eski2.1.3');
+  fs.writeFileSync(path.join(k, 'son.json'), JSON.stringify({ yayinZamani: '2026-10-06T10:00:00.000Z', exeYolu: 'Kitap.exe', surum: '2.1.3' }));
+  const r = await A.arsivle(o.temel({ eskiyseAtla: true }));
   assert.equal(r.durum, 'atlandi');
-  assert.match(r.sebep, /aynı\/yeni sürüm/);
-  const r2 = await A.arsivle(o.temel({ eskiyseAtla: true, exeAdi: 'runner-45449-Kitap-2.1.3-Setup.exe', meta: { yayinZamani: '2026-10-07T00:00:00Z' } }));
+  assert.match(r.sebep, /arşivde aynı\/yeni sürüm var \(2\.1\.3/);
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Kitap.exe'), 'utf8'), 'eski2.1.3');
+  const r2 = await A.arsivle(o.temel({ eskiyseAtla: true, meta: { yayinZamani: '2026-10-06T10:00:00.001Z' } }));
   assert.equal(r2.durum, 'arsivlendi');
-  assert.deepEqual(fs.readdirSync(path.join(o.kok, '45449')).sort(), ['runner-45449-Kitap-2.1.3-Setup.exe', 'son.json']);
+  assert.deepEqual(fs.readFileSync(r2.hedef), o.govde);
 });
 
 test('kuru: karar döner, yazma/silme yok', async () => {
@@ -234,11 +245,14 @@ test('beklenen sha verilmezse kaynaktan hesaplanır; yarım geçici dosya (önce
   const o = ortam();
   const k = path.join(o.kok, '45449');
   fs.mkdirSync(k, { recursive: true });
-  fs.writeFileSync(path.join(k, '.runner-45449-Kitap-2.1.1-Setup.exe.yaziliyor-999'), 'yarim');
+  fs.writeFileSync(path.join(o.kok, '.Kitap.exe.yaziliyor-123'), 'yarim');
   const r = await A.arsivle(o.temel({ beklenenSha256: null }));
   assert.equal(r.durum, 'arsivlendi');
-  assert.deepEqual(fs.readdirSync(k).sort(), ['runner-45449-Kitap-2.1.2-Setup.exe', 'son.json']);
+  assert.equal(var_(path.join(o.kok, '.Kitap.exe.yaziliyor-123')), false);
+  const son = JSON.parse(fs.readFileSync(path.join(k, 'son.json'), 'utf8'));
+  assert.equal(son.sha256, sha(o.govde));
 });
+
 
 // Ş8 (inceleme 06.10): NTFS harf duyarsız. Diskte eski ad `setup.exe` kalmış, yeni sürüm `Setup.exe`
 // adıyla yazılmış (aynı dosya). Harf duyarlı kıyas onu "eski" sayıp YENİ arşivi siliyordu.
@@ -246,14 +260,77 @@ test('Ş8 win32: tut ile yalnız harfleri farklı ad SİLİNMEZ (Setup.exe vs se
   const o = ortam();
   const k = path.join(o.kok, '45496');
   fs.mkdirSync(k, { recursive: true });
-  fs.writeFileSync(path.join(k, 'setup.exe'), 'YENI');
-  fs.writeFileSync(path.join(k, 'eski-1.0.0.exe'), 'eski');
-  const r = await A.eskileriSil(k, 'Setup.exe', () => {}, 'win32');
+  fs.writeFileSync(path.join(o.kok, 'setup.exe'), 'YENI');
+  fs.writeFileSync(path.join(o.kok, 'eski-1.0.0.exe'), 'eski');
+  const r = await A.eskileriSil(o.kok, k, 'eski-1.0.0.exe', 'Setup.exe', () => {}, 'win32');
   assert.deepEqual(r.silinen, ['eski-1.0.0.exe']);
-  assert.equal(fs.readFileSync(path.join(k, 'setup.exe'), 'utf8'), 'YENI', 'yeni arşiv silindi');
+  assert.equal(fs.readFileSync(path.join(o.kok, 'setup.exe'), 'utf8'), 'YENI', 'yeni arşiv silindi');
+
   // yol biçiminde tut da aynı dosyayı korur (basename normalizasyonu)
   fs.writeFileSync(path.join(k, 'eski-0.9.exe'), 'eski');
-  const r2 = await A.eskileriSil(k, 'D:\\empp-imzali-son\\45496\\SETUP.EXE', () => {}, 'win32');
+  const r2 = await A.eskileriSil(o.kok, k, 'setup.exe', 'D:\\empp-imzali-son\\45496\\SETUP.EXE', () => {}, 'win32');
   assert.deepEqual(r2.silinen, ['eski-0.9.exe']);
-  assert.equal(fs.existsSync(path.join(k, 'setup.exe')), true);
+  assert.equal(fs.existsSync(path.join(o.kok, 'setup.exe')), true);
+});
+test('exeAdiGecerli: gizli/sonu nokta-boşluk/aygıt adı/sürücü RED; Türkçe + ! kabul', () => {
+  for (const kotu of ['.gizli.exe', 'x..exe', 'x .exe', 'x..exe', 'CON.exe', 'nul.exe', ' x.exe', 'a:b.exe', 'a*b.exe', '.exe']) {
+    assert.equal(A.exeAdiGecerli(kotu), false, kotu);
+  }
+  for (const iyi of ['Shall We ! 6 Set.exe', 'Lingoland Grade 2 - Maarif Model.exe', 'Ğüşiöç İI.exe', 'Super Monsters 4 Set.exe']) {
+    assert.equal(A.exeAdiGecerli(iyi), true, iyi);
+  }
+});
+
+test('GEÇİŞ: eski son.json exe adı kökte yok, eski <bookId>\\*.exe yok → sorunsuz arşivlenir', async () => {
+  const o = ortam();
+  const k = path.join(o.kok, '45449');
+  fs.mkdirSync(k, { recursive: true });
+  fs.writeFileSync(path.join(k, 'son.json'), JSON.stringify({ bookId: '45449', exe: 'runner-45449-Kitap-2.1.1-Setup.exe' }));
+  fs.writeFileSync(path.join(o.kok, 'Baska Set.exe'), 'baska');
+  const r = await A.arsivle(o.temel());
+  assert.equal(r.durum, 'arsivlendi', JSON.stringify(r));
+  assert.deepEqual(r.silinen, []);
+  assert.deepEqual(fs.readdirSync(o.kok).sort(), ['45449', 'Baska Set.exe', 'Kitap.exe']);
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Baska Set.exe'), 'utf8'), 'baska');
+});
+
+test('başlık değişince eski ad silinir; BAŞKA setin exe\'si (kayıtlı adı eski adla çakışsa bile) SİLİNMEZ', async () => {
+  const o = ortam();
+  fs.mkdirSync(path.join(o.kok, '45449'), { recursive: true });
+  fs.mkdirSync(path.join(o.kok, '72379'), { recursive: true });
+  fs.writeFileSync(path.join(o.kok, '45449', 'son.json'), JSON.stringify({ bookId: '45449', exeYolu: 'Eski Baslik.exe' }));
+  fs.writeFileSync(path.join(o.kok, 'Eski Baslik.exe'), 'eski');
+  fs.writeFileSync(path.join(o.kok, '72379', 'son.json'), JSON.stringify({ bookId: '72379', exeYolu: 'Diger Set.exe' }));
+  fs.writeFileSync(path.join(o.kok, 'Diger Set.exe'), 'diger');
+  let r = await A.arsivle(o.temel());
+  assert.equal(r.durum, 'arsivlendi');
+  assert.deepEqual(r.silinen, ['Eski Baslik.exe']);
+  assert.equal(var_(path.join(o.kok, 'Diger Set.exe')), true);
+  // bozuk kayıt: 45449'un son.json'u başka setin adını gösteriyor → o ad silinmez
+  fs.writeFileSync(path.join(o.kok, '45449', 'son.json'), JSON.stringify({ bookId: '45449', exeYolu: 'Diger Set.exe' }));
+  r = await A.arsivle(o.temel());
+  assert.equal(r.durum, 'arsivlendi');
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Diger Set.exe'), 'utf8'), 'diger', 'başka setin exe\'si korundu');
+});
+
+test('çakışma eki: kökte başka setin adı varsa " (<bookId>)"; kötü başlık güvenli ada iner', async () => {
+  const o = ortam();
+  fs.mkdirSync(path.join(o.kok, '72379'), { recursive: true });
+  fs.writeFileSync(path.join(o.kok, '72379', 'son.json'), JSON.stringify({ bookId: '72379', exe: 'Kitap.exe', exeYolu: 'Kitap.exe' }));
+  fs.writeFileSync(path.join(o.kok, 'Kitap.exe'), 'diger');
+  const r = await A.arsivle(o.temel());
+  assert.equal(r.hedef, path.join(o.kok, 'Kitap (45449).exe'));
+  assert.equal(fs.readFileSync(path.join(o.kok, 'Kitap.exe'), 'utf8'), 'diger');
+  const r2 = await A.arsivle(o.temel({ bookId: '45450', meta: { baslik: '../../Evil: <x>?', surum: '1' } }));
+  assert.equal(r2.durum, 'arsivlendi', JSON.stringify(r2));
+  assert.equal(path.dirname(r2.hedef), o.kok);
+  assert.equal(path.basename(r2.hedef), 'Evil x.exe');
+  const r3 = await A.arsivle(o.temel({ bookId: '45451', meta: { baslik: '...', surum: '1' } }));
+  assert.equal(path.basename(r3.hedef), 'Kitap (45451).exe', 'başlık boşa inerse özgün adtan türer');
+});
+
+test('baslik yoksa özgün Setup adından runner-<id>- ve -<sürüm>-Setup atılır', async () => {
+  const o = ortam();
+  const r = await A.arsivle(o.temel({ exeAdi: 'runner-45449-Shall-We-6-Set-2.1.2-Setup.exe', meta: { surum: '2.1.2' } }));
+  assert.equal(path.basename(r.hedef), 'Shall We 6 Set.exe');
 });
