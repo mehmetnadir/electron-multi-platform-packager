@@ -104,13 +104,14 @@ async function sahteSunucu({ dosyalar = {}, tamamla = () => [200, { ok: true }] 
 
 /** processJob'u yalıtılmış ortamda koşturur; merdiven/set eki/indirme casusları takılır. */
 async function isKostur({ job, arsivKoku = tmp('bos-arsiv'), env = {}, sunucu: sunucuSec = {},
-  merdivenDonus = { satirlar: [], s1: [] }, kaynakKurSerbest = true }) {
+  merdivenDonus = { satirlar: [], s1: [] }, kaynakKurSerbest = true, adim = {} }) {
   const sunucu = await sahteSunucu(sunucuSec);
   const casus = { merdiven: 0, setEki: 0, r2Indir: [], manuelZipIndir: 0 };
   const orjAdim = { ...kaynakAdim };
   const orjIndirme = { ...kaynakIndirme };
   kaynakAdim.merdiven = async () => { casus.merdiven += 1; return merdivenDonus; };
   kaynakAdim.setEki = async () => { casus.setEki += 1; return { eklenen: [] }; };
+  Object.assign(kaynakAdim, adim);
   kaynakIndirme.r2Indir = async (...a) => { casus.r2Indir.push(a[0]); return orjIndirme.r2Indir(...a); };
   kaynakIndirme.manuelZipIndir = async (...a) => { casus.manuelZipIndir += 1; return orjIndirme.manuelZipIndir(...a); };
   const bayrakDizin = tmp('bayrak');
@@ -124,12 +125,14 @@ async function isKostur({ job, arsivKoku = tmp('bos-arsiv'), env = {}, sunucu: s
   const eskiEnv = {};
   for (const k of Object.keys(ENV)) { eskiEnv[k] = process.env[k]; process.env[k] = ENV[k]; }
   const eski = { apiBase: CONFIG.apiBase, packagerApi: CONFIG.packagerApi, kaynakKur: CONFIG.kaynakKur,
-    kaynakKurSerbestFlag: CONFIG.kaynakKurSerbestFlag, kaynakYokDurumDosyasi: CONFIG.kaynakYokDurumDosyasi };
+    kaynakKurSerbestFlag: CONFIG.kaynakKurSerbestFlag, kaynakYokDurumDosyasi: CONFIG.kaynakYokDurumDosyasi,
+    kabukErteleDurumDosyasi: CONFIG.kabukErteleDurumDosyasi };
   CONFIG.apiBase = sunucu.url;
   CONFIG.packagerApi = sunucu.url;
   CONFIG.kaynakKur = true;
   CONFIG.kaynakKurSerbestFlag = path.join(bayrakDizin, 'kaynak-kur-serbest.istek');
   CONFIG.kaynakYokDurumDosyasi = ENV.EMPP_KAYNAK_YOK_DURUM;
+  CONFIG.kabukErteleDurumDosyasi = path.join(tmp('kabuk-ertele'), 'kabuk-ertele-bildirim.json');
   if (kaynakKurSerbest) fs.writeFileSync(CONFIG.kaynakKurSerbestFlag, '');
   runner._konumAyarla(false);
   const loglar = [];
@@ -426,4 +429,127 @@ test('manuel yol: ağ tükenmesi bugünkü gibi KALICI kalır (yalnız R2 yolu g
     job: (u) => ({ bookId: '45549', platform: 'android', kaynakTuru: 'manuel', downloadUrl: `${u}/sources/45549/k.zip` }) });
   assert.match(r.hata.message, /manuel build indirilemedi/);
   assert.equal(r.kayit.govdeler.release, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Kabuk eki (06.10, kabuk-eki-tasarim.md §1): 'ek' kipinde ön kontrol + kabuk adımı ertelemesi
+// ---------------------------------------------------------------------------
+
+const EK_ENV = { EMPP_SET_KABUK_TAZELE: '1', EMPP_SET_KABUK_KAYNAGI: 'ek' };
+const IKI_KITAP = '111 | Kitap Bir\n222 | Kitap İki';
+const ikiKitapZip = () => setBuildZip([['111', 'v1'], ['222', 'v2']]);
+
+/** Ön kontrol + kabuk adımı casusları. */
+function kabukCasus({ sonVar = true, kabuk = { durum: 'uygulandi', neden: null } } = {}) {
+  const c = { on: [], kabuk: 0 };
+  return {
+    c,
+    adim: {
+      kabukEkSonKontrol: async (o) => { c.on.push(o); return sonVar ? { var: true, neden: null } : { var: false, neden: 'son.json yok' }; },
+      kabukTazele: async () => { c.kabuk += 1; return { ...kabuk }; },
+    },
+  };
+}
+
+test('kabuk eki ön kontrolü: set (2 kitap) + son.json YOK → taban İNDİRİLMEDEN ertele, failed yok', async () => {
+  const k = kabukCasus({ sonVar: false });
+  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), env: EK_ENV, adim: k.adim,
+    job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.donus.ertelendi, true);
+  assert.match(r.donus.sebep, /\[set-kabuk\] kabuk eki yok — son\.json yok; taban İNDİRİLMEDİ/);
+  assert.deepEqual(k.c.on, [{ bookId: '45549' }]);
+  assert.equal(k.c.kabuk, 0);
+  assert.equal(r.casus.merdiven, 0, 'taban kurulmadı');
+  assert.equal(r.casus.r2Indir.length, 0);
+  assert.doesNotMatch(r.loglar, /kaynak ARŞİVDEN/);
+  assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1, 'kurma kilidi bırakıldı');
+  assert.equal(r.kayit.govdeler.release.length, 1, 'kira bırakıldı');
+  assert.equal(r.kayit.govdeler.result, undefined, 'failed yazılmaz');
+  assert.equal(r.kayit.uploadGovde, null);
+});
+
+test('kabuk eki: son.json var, kabuk adımı ERTELE → r2Ertele (kilit + kira), R2/paketleyiciye bir şey gitmez', async () => {
+  const k = kabukCasus({ kabuk: { durum: 'ertele', kod: 'ek-yok', neden: 'kabuk eki (ek-yok): ek yok', girdiSha: 'ab'.repeat(32) } });
+  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), env: EK_ENV, adim: k.adim,
+    job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.donus.ertelendi, true);
+  assert.match(r.donus.sebep, /\[set-kabuk\] kabuk eki \(ek-yok\): ek yok/);
+  assert.equal(k.c.on.length, 1);
+  assert.equal(k.c.kabuk, 1);
+  assert.equal(r.casus.merdiven, 1, 'taban kuruldu, kabuk adımına gelindi');
+  assert.equal(r.kayit.govdeler['kaynak/presign-multipart'], undefined);
+  assert.equal(r.kayit.parcalar.length, 0);
+  assert.equal(r.kayit.uploadGovde, null);
+  assert.equal(r.kayit.govdeler['kaynak/birak'].length, 1);
+  assert.equal(r.kayit.govdeler.release.length, 1);
+  assert.equal(r.kayit.govdeler.result, undefined, 'failed yazılmaz');
+});
+
+test('kabuk eki: kabuk adımı fırlatırsa ek kipinde de ERTELE (eski kabukla kaynak çıkmaz)', async () => {
+  const k = kabukCasus();
+  k.adim.kabukTazele = async () => { throw new Error('beklenmedik'); };
+  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), env: EK_ENV, adim: k.adim,
+    job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
+  assert.equal(r.hata, null, r.hata && r.hata.stack);
+  assert.equal(r.donus.ertelendi, true);
+  assert.equal(r.kayit.parcalar.length, 0);
+  assert.equal(r.kayit.govdeler.release.length, 1);
+});
+
+test('kabuk eki: son.json var + kabuk UYGULANDI → zincir sürer (R2 yazılır, paketleyiciye gider)', async () => {
+  const k = kabukCasus();
+  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), env: EK_ENV, adim: k.adim,
+    job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.equal(k.c.kabuk, 1);
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'].length, 1);
+  assert.equal(r.kayit.govdeler.release, undefined);
+});
+
+test('kabuk eki: tek kitaplı liste → ön kontrol YOK; kabuk ATLANDI → zincir sürer', async () => {
+  const k = kabukCasus({ sonVar: false, kabuk: { durum: 'atlandi', neden: 'bookN düzeni yok' } });
+  const r = await isKostur({ arsivKoku: arsivKur('45549', setBuildZip()), env: EK_ENV, adim: k.adim,
+    job: r2Kur(), merdivenDonus: MERDIVEN });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.equal(k.c.on.length, 0);
+  assert.equal(k.c.kabuk, 1);
+  assert.equal(r.kayit.govdeler['kaynak/tamamla'].length, 1);
+});
+
+test('ikili kip (kaynak env yok): ön kontrol yapılmaz, bugünkü zincir', async () => {
+  const k = kabukCasus({ sonVar: false, kabuk: { durum: 'atlandi', neden: 'test' } });
+  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), adim: k.adim,
+    env: { EMPP_SET_KABUK_TAZELE: '1', EMPP_SET_KABUK_KAYNAGI: 'ikili' },
+    job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
+  assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
+  assert.equal(k.c.on.length, 0);
+  assert.equal(k.c.kabuk, 1);
+});
+
+test('kabukErteleBildir: aynı bookId+kod saatte en çok 1; farklı kod ya da süre dolunca yeniden', () => {
+  const eskiDosya = CONFIG.kabukErteleDurumDosyasi;
+  const eskiBildirim = process.env.EMPP_BILDIRIM;
+  CONFIG.kabukErteleDurumDosyasi = path.join(tmp('kabuk-bildirim'), 'durum.json');
+  delete process.env.EMPP_BILDIRIM;
+  const giden = [];
+  const gonder = (a) => giden.push(a);
+  try {
+    const t0 = 1_000_000_000;
+    const b = (kod, simdi) => runner.kabukErteleBildir({ bookId: '45550', kod, neden: 'ek yok', girdiSha: 'cd'.repeat(32),
+      kaynakSurumu: '2.51.4', simdi, gonder });
+    assert.equal(b('ek-yok', t0), true);
+    assert.equal(b('ek-yok', t0 + 10 * 60 * 1000), false, 'saat dolmadan aynı neden susar');
+    assert.equal(b('kapi-red', t0 + 10 * 60 * 1000), true, 'farklı neden ayrı sayılır');
+    assert.equal(b('ek-yok', t0 + 61 * 60 * 1000), true, 'saat dolunca yeniden');
+    assert.equal(giden.length, 3);
+    assert.equal(giden[0][0], 'kosucu');
+    assert.match(giden[0][1], /45550 kabuk eki bekliyor \(ek-yok\).*girdiSha cdcdcdcdcdcd.*kaynak 2\.51\.4.*ek-uret --set 45550/);
+    process.env.EMPP_BILDIRIM = '0';
+    assert.equal(b('yeni', t0 + 200 * 60 * 1000), false, 'EMPP_BILDIRIM=0 → hiç gönderilmez');
+  } finally {
+    CONFIG.kabukErteleDurumDosyasi = eskiDosya;
+    if (eskiBildirim === undefined) delete process.env.EMPP_BILDIRIM; else process.env.EMPP_BILDIRIM = eskiBildirim;
+  }
 });
