@@ -43,6 +43,20 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
 | `duraklat.istek` var | Hiç çalışmaz (çıkış 0). |
 | Kilit dolu (canlı pid) | Çıkış 0, iş yapılmaz. |
 
+### Çıkış kodu
+
+| Kod | Anlam |
+|---|---|
+| 0 | Tamam. İşlenen setlerde hata yok. Ya da iş yok (`--bekleyen` 0 satır), kilit dolu, duraklatıldı. |
+| 1 | Hata. En az bir set hata verdi, DB/ssh hatası, araç ya da imza anahtarı yok, kullanım hatası. |
+| 2 | Eylem yok. `--set` ile istenen setlerin hiçbirinde geçerli kaynak build'i yok. |
+
+- srv21 `pipeline-sql` sıfır satırda çıkış 1 verir, stdout ve stderr boş kalır. `ek-uret.js` bunu
+  "0 satır" sayar, hata saymaz. Gerçek ssh hatası (255, stderr dolu) yine hatadır.
+- `--set` ile istenen bir sette geçerli build yoksa (`kaynak_build_surumleri`) uyarı + `bildir`.
+  Diğer setler işlenir.
+- Çıkış kodunu boruyla (`| tail`) çağırırken kaybetme: `set -o pipefail` ya da `${PIPESTATUS[0]}`.
+
 - Yalnız `ydsdigital` bucket'ındaki (YDS) build'ler işlenir. ProBook eki `cdn.ydspublishing.com`
   adresinden okur.
 - `--bekleyen` koşulu `kaynakRoluKarar` 'kur' koşuludur: istek > geçerli build oluşturma, mod manuel

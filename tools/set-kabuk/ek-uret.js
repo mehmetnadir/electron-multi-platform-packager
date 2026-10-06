@@ -702,20 +702,36 @@ async function setIsle(bag, s, o) {
   }
 }
 
+/**
+ * `ssh … pipeline-sql` sonucu. SAF. srv21 `pipeline-sql` SIFIR satırda çıkış 1 verir ve stdout +
+ * stderr boş kalır (ölçüm 06.10, 11845): bu "0 satır"dır, hata DEĞİL. Diğer sıfır dışı çıkış
+ * (ssh 255, SQL hatası: stderr dolu) hatadır.
+ * @returns {{durum: 'satir', stdout: string} | {durum: 'bos'} | {durum: 'hata', kod, hata}}
+ */
+function sqlSonucu(r) {
+  const out = String((r && r.stdout) || '');
+  const err = String((r && r.stderr) || '').trim();
+  if (r && r.code === 0) return { durum: 'satir', stdout: out };
+  if (r && r.code === 1 && !out.trim() && !err) return { durum: 'bos' };
+  return { durum: 'hata', kod: r ? r.code : null, hata: err.slice(-200) || 'stderr boş' };
+}
+
 function durumOku(dosya) {
   try { return JSON.parse(fs.readFileSync(dosya, 'utf8')) || {}; } catch (_) { return {}; }
 }
 
 /**
- * Giriş. Çıkış kodu: 0 (iş yok / meşgul / duraklatıldı / hepsi tamam), 1 (en az bir set hata,
- * DB okunamadı, araç ya da imza anahtarı yok), 2 (kullanım).
+ * Giriş. Çıkış kodu (OKU.md "Çıkış kodu"):
+ *   0 — tamam: işlenen setlerde hata yok; ya da iş yok (--bekleyen 0 satır), meşgul, duraklatıldı.
+ *   1 — hata: en az bir set hata, DB/ssh hatası, araç ya da imza anahtarı yok, kullanım hatası.
+ *   2 — eylem yok: --set ile istenen setlerin HİÇBİRİNDE geçerli kaynak build'i yok.
  */
 async function main(argv, bag = varsayilanBag()) {
   const o = argAyristir(argv);
   if (o.hata) {
     bag.warn(`${ISARET} kullanım: ek-uret.js (--set <id>[,<id>…] | --bekleyen | --anahtar-uret)`
       + ` [--kuru] [--cikti <dizin>] — ${o.hata}`);
-    return 2;
+    return 1;
   }
   const imzaDizini = path.join(bag.ev, 'kabuk-ek-imza');
   if (o.kip === 'anahtar') {
@@ -758,18 +774,24 @@ async function main(argv, bag = varsayilanBag()) {
     } else if (!ozelAnahtar) {
       bag.log(`${ISARET} --kuru: özel anahtar yok, ek imzasız üretilecek`);
     }
-    const r = await bag.ssh(sqlKur(o));
-    if (r.code !== 0) {
-      bag.warn(`${ISARET} DB sorgusu başarısız (ssh ${r.code}): `
-        + `${String(r.stderr).trim().slice(-200)}`);
+    const sorgu = sqlSonucu(await bag.ssh(sqlKur(o)));
+    if (sorgu.durum === 'hata') {
+      bag.warn(`${ISARET} DB sorgusu başarısız (ssh ${sorgu.kod}): ${sorgu.hata}`);
       return 1;
     }
-    let satirlar = satirlariAyristir(r.stdout);
+    let satirlar = sorgu.durum === 'bos' ? [] : satirlariAyristir(sorgu.stdout);
+    if (o.kip === 'bekleyen' && !satirlar.length) {
+      bag.log(`${ISARET} bekleyen set yok (0 satır)`);
+      return 0;
+    }
     if (o.kip === 'set') {
       const bulunan = new Set(satirlar.map((s) => s.bookId));
       for (const id of o.setler.filter((x) => !bulunan.has(x))) {
-        bag.warn(`${ISARET} ${id}: geçerli build kaydı yok — atlandı`);
+        const metin = `${id}: geçerli kaynak build'i yok (kaynak_build_surumleri) — ek üretilemez`;
+        bag.warn(`${ISARET} ${metin}`);
+        await bag.bildir(`kabuk-ek ${metin}`);
       }
+      if (!satirlar.length) return 2;
     }
     const durumDosyasi = path.join(bag.ev, 'kabuk-ek-durum.json');
     const durum = durumOku(durumDosyasi);
@@ -821,6 +843,7 @@ if (require.main === module) {
 
 module.exports = {
   ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
-  kaliciRetMi, aracSurumuAyristir, geriCekilmeMs, atlamaNedeni, kesinSonucMu, durumKaydi,
-  parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main, varsayilanBag,
+  kaliciRetMi, aracSurumuAyristir, sqlSonucu, geriCekilmeMs, atlamaNedeni, kesinSonucMu,
+  durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
+  varsayilanBag,
 };

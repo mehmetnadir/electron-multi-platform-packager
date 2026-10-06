@@ -65,6 +65,7 @@ function sahteBag(ev, o = {}) {
     log: (...a) => kayit.log.push(a.join(' ')), warn: (...a) => kayit.log.push(a.join(' ')),
     ssh: async (sql) => {
       kayit.ssh.push(sql);
+      if (o.sshSonuc) return o.sshSonuc;
       return { code: 0, stdout: o.tsv || tsv([satir(45550)]), stderr: '' };
     },
     rclone: async (args) => {
@@ -566,4 +567,57 @@ test('gerçek kip: A modülünde ekImzala yoksa yükleme yok + bildir', async ()
   assert.equal(await E.main(['--set', '45550'], bag), 1);
   assert.equal(kayit.ssh.length, 0);
   assert.match(kayit.bildir[0], /ekImzala/);
+});
+
+test('sqlSonucu: rc=1 + boş çıktı = 0 satır; ssh 255 ya da stderr dolu = hata', () => {
+  assert.equal(E.sqlSonucu({ code: 1, stdout: '', stderr: '' }).durum, 'bos');
+  assert.equal(E.sqlSonucu({ code: 1, stdout: '\n', stderr: ' ' }).durum, 'bos');
+  assert.equal(E.sqlSonucu({ code: 0, stdout: 'a\tb', stderr: '' }).durum, 'satir');
+  const h = E.sqlSonucu({ code: 255, stdout: '', stderr: 'ssh: connect timed out' });
+  assert.equal(h.durum, 'hata');
+  assert.match(h.hata, /timed out/);
+  assert.equal(E.sqlSonucu({ code: 1, stdout: '', stderr: 'ERROR 1054' }).durum, 'hata');
+  assert.equal(E.sqlSonucu({ code: 255, stdout: '', stderr: '' }).durum, 'hata');
+});
+
+test('--set: hiçbir sette geçerli build yok (0 satır) → uyarı + bildir, çıkış 2', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit } = sahteBag(ev, { sshSonuc: { code: 1, stdout: '', stderr: '' } });
+  assert.equal(await E.main(['--set', '11845,11846'], bag), 2);
+  assert.equal(kayit.bildir.length, 2);
+  assert.match(kayit.bildir[0], /11845: geçerli kaynak build'i yok \(kaynak_build_surumleri\)/);
+  assert.ok(kayit.log.every((l) => !/DB sorgusu başarısız/.test(l)));
+  assert.equal(kayit.kabuk.length, 0);
+});
+
+test('--set: bir set eksik, diğeri işlenir → eksik için bildir, çıkış 0', async () => {
+  const ev = geciciDizin();
+  const { bag, kayit } = sahteBag(ev);
+  assert.equal(await E.main(['--set', '45550,11845', '--kuru'], bag), 0);
+  assert.equal(kayit.kabuk.length, 1);
+  assert.match(kayit.bildir[0], /11845/);
+});
+
+test('--bekleyen: 0 satır → iş yok, çıkış 0, bildirim yok', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit } = sahteBag(ev, { sshSonuc: { code: 1, stdout: '', stderr: '' } });
+  assert.equal(await E.main(['--bekleyen'], bag), 0);
+  assert.equal(kayit.bildir.length, 0);
+});
+
+test('gerçek ssh hatası (255, stderr dolu) → çıkış 1', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit } = sahteBag(ev, {
+    sshSonuc: { code: 255, stdout: '', stderr: 'ssh: connect to host port 2222: timed out' },
+  });
+  assert.equal(await E.main(['--set', '45550'], bag), 1);
+  assert.ok(kayit.log.some((l) => /DB sorgusu başarısız \(ssh 255\)/.test(l)));
+});
+
+test('kullanım hatası → çıkış 1', async () => {
+  const { bag } = sahteBag(geciciDizin());
+  assert.equal(await E.main(['--sil'], bag), 1);
 });
