@@ -15,6 +15,8 @@
  *            damga değil (`okuyucu-surumu-kapisi.js`; A1'de kapak/index.html, bookN'de her kitap).
  *            Fail-closed: ölçülemezse RED; `KABUL_OKUYUCU_SURUM=uyar` yalnız uyarı. Kanonik:
  *            `--okuyucu-kanonik X.Y.Z` ya da ~/.empp-agent/kabuk/kanonik.json (EMPP_KABUK_KANONIK).
+ *   menuIcerik (06.10, 45479 kitap 14835) menüdeki her kitap kartının içerik dosyası (xmlSource) pakette mı;
+ *     kip KABUL_MENU_ICERIK=uyar|reddet|kapali (varsayılan uyar)
  *   menuKapak (06.10, 59835) set menüsündeki her kartın kapak dosyası pakette ve > 1 KB mı
  *            (`menu-kapak.js`, kabuğun kendi yedek kuralıyla). Kapaksız kart → RED. Set değil → yok.
  *   imza     (mac) codesign + stapler + spctl — noter/zımba yoksa RED
@@ -53,6 +55,7 @@ const ST = require('./set-guncellik');
 const { anaSurecDenetle } = require('./ana-surec-denetimi');
 const OSK = require('./okuyucu-surumu-kapisi');
 const MK = require('./menu-kapak');
+const MI = require('./menu-icerik');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
@@ -358,6 +361,23 @@ async function calis(argv, yazici) {
       if (mk.durum !== MK.DURUM.ATLANDI) rapor.katmanlar.menuKapak = { durum: mk.durum, sebepler: mk.sebepler };
       for (const u of mk.uyarilar) rapor.uyarilar.push(u);
       say(MK.ozetSatiri(mk));
+    }
+
+    // 1a''. Menü içerik (06.10, 45479 kitap 14835): menüdeki her kitap kartının xmlSource dosyası
+    // pakette var mı (menu-icerik.js). Kip KABUL_MENU_ICERIK = uyar (varsayılan: yalnız uyarı) |
+    // reddet (katman: RED/ÖLÇÜLEMEDİ kapıyı kapatır) | kapali.
+    if (acilis && MI.kip() !== 'kapali') {
+      let mi;
+      try {
+        mi = MI.menuIcerikOlcKok(acilis.kok, { asar: acilis.asar });
+      } catch (e) {
+        mi = { durum: MI.DURUM.OLCULEMEDI, kartlar: [], sebepler: [`ölçüm hatası: ${e.message}`], uyarilar: [] };
+      }
+      rapor.menuIcerik = mi;
+      const mk2 = MI.kipliKarar(mi, MI.kip());
+      if (mk2.katman) rapor.katmanlar.menuIcerik = mk2.katman;
+      if (mk2.uyari) rapor.uyarilar.push(mk2.uyari);
+      say(MI.ozetSatiri(mi));
     }
 
     // 1b. Paketin KENDİ ana süreci (main.js): koşum kosum/main.js ile açıldığı için yürütülmez;

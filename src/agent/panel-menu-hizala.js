@@ -842,7 +842,7 @@ async function panelMenuHizala(o) {
         const t = M.teklifYorumla({ id: b.id, surum: 0 }, cevap);
         if (t.durum === M.DURUM.GUNCEL) {
           throw new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} (${sebep}) İmpark'ta içeriksiz `
-            + '(Data boş) — eksik içerikle paket üretilmedi');
+            + '(Data boş) — yayınevi yüklemeli; eksik içerikle paket üretilmedi');
         }
         if (t.durum !== M.DURUM.GERIDE) {
           throw new PanelMenuHatasi(`${HATA}: panel üyesi ${b.id} (${sebep}) İmpark ölçülemedi: `

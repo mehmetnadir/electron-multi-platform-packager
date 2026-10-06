@@ -578,7 +578,7 @@ async function imparkIcerigi({ k, sablon, getir, indir, onbellek, log }) {
   const cevap = await getir(M.teklifUrl(sablon, k.id, 0), {});
   const c = imparkCevabi(cevap);
   const t = M.teklifYorumla({ id: k.id, surum: 0 }, cevap);
-  if (t.durum === M.DURUM.GUNCEL) throw new ImparkZipYok("İmpark'ta içerik yok (Data boş)", c && c.vs);
+  if (t.durum === M.DURUM.GUNCEL) throw new ImparkZipYok("İmpark'ta içerik yok (Data boş), yayınevi yüklemeli", c && c.vs);
   if (t.durum !== M.DURUM.GERIDE) {
     if (c) throw new ImparkZipYok(`İmpark ölçülemedi: ${t.not}`, c.vs);
     throw new Error(`İmpark ölçülemedi: ${t.not}`);
