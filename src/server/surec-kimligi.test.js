@@ -206,8 +206,8 @@ test('modulDurumu: bir modül bayatsa diğer sağlam modüller ölçülmeye deva
 //                       aynıyken "bayat" der (canlıda yaşandı).
 //   - surum-kiyas.js  : "bu zip daha yeni mi?" kararı; yanlışı ~1 GB gereksiz indirme.
 // Sayı çivisi KORUNUYOR — sessizce modül düşürülmesi hâlâ bu testi kırar.
-test('modulDurumu: varsayılan liste yedi kritik modülü kapsar ve dosyalar gerçekten var', () => {
-  assert.strictEqual(KRITIK_MODULLER.length, 7);
+test('modulDurumu: varsayılan liste dokuz kritik modülü kapsar ve dosyalar gerçekten var', () => {
+  assert.strictEqual(KRITIK_MODULLER.length, 9);
   for (const rel of [
     'src/packaging/set-kimligi.js',
     'src/packaging/set-kabuk.js',
@@ -216,6 +216,8 @@ test('modulDurumu: varsayılan liste yedi kritik modülü kapsar ve dosyalar ger
     'src/agent/surum-normallestir.js',
     'src/agent/surum-kiyas.js',
     'src/packaging/sayfa-webp.js',
+    'src/packaging/okuyucu-kabugu.js',
+    'src/packaging/a1-duzen.js',
   ]) {
     assert.ok(KRITIK_MODULLER.includes(rel), `${rel} listede olmalı`);
     assert.ok(fs.existsSync(path.join(__dirname, '..', '..', rel)), `${rel} diskte olmalı`);

@@ -62,6 +62,9 @@ const KRITIK_MODULLER = [
   // kıyası ~1 GB gereksiz indirme üretir; parmak izi izlenmeli.
   'src/agent/surum-kiyas.js',
   'src/packaging/sayfa-webp.js',
+  // A1 okuyucu kabuğu: paketleyici 65db3fa'da bayat kalıp Ş1 düzeltmesini taşımadı (06.10).
+  'src/packaging/okuyucu-kabugu.js',
+  'src/packaging/a1-duzen.js',
 ];
 
 /** sha256'nın ilk 12 hane'si; string olmayan girdi için `null` (asla fırlatmaz). */

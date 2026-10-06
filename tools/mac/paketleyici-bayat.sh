@@ -47,13 +47,17 @@ paketleyici_bayat_yeniden() {
   _pb_log "BAYAT: canlı=$canli disk=$yerel bayatMi=$bayat pid=$pid"
   local kuyruk
   kuyruk=$(curl -sf -m 5 "$url/api/queue-status" 2>/dev/null) || { _pb_log "kuyruk okunamadı; dokunulmadı"; return 0; }
-  # Meşgul sayılan: bitmemiş zip işi + başarısız OLMAYAN her paketleme işi (completed dahil: çıktısı henüz
-  # alınmamış olabilir, yeniden başlatma iş kaydını siler → /api/download 404). Okunamazsa -1 → dokunma.
+  # Meşgul sayılan: yalnız BİTMEMİŞ işler. Biten (completed/failed/error/cancelled) iş meşgul DEĞİL:
+  # kasada 3 completed kayıt süresiz kalıp yeniden açmayı engelledi (06.10, paketleyici 65db3fa'da takıldı).
+  # Bilinmeyen durum adı = meşgul (temkinli). packagingJobs ile activePackagingJobs aynı işleri taşır:
+  # id/jobId ile tekilleştirilir. zipJobs ayrı sayılır. Okunamazsa -1 → dokunma.
   local mesgul
   mesgul=$(printf '%s' "$kuyruk" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const q=JSON.parse(s);
-const bit=new Set(["failed","error","cancelled"]);const z=(q.zipJobs||[]).filter(j=>j.status!=="completed").length;
-const p=(q.packagingJobs||[]).filter(j=>!bit.has(j.status)).length;const a=(q.activePackagingJobs||[]).filter(j=>!bit.has(j.status)).length;
-console.log(z+p+a)}catch(e){console.log(-1)}})' 2>/dev/null)
+const bit=new Set(["completed","failed","error","cancelled","canceled"]);const L=(l)=>Array.isArray(l)?l:[];
+const acik=(j)=>!bit.has(j&&j.status);const z=L(q.zipJobs).filter(acik).length;
+const k=new Set();let n=0;for(const j of L(q.packagingJobs).concat(L(q.activePackagingJobs))){if(!acik(j))continue;
+const id=j&&(j.jobId||j.id);if(id===undefined||id===null){n++;continue}k.add(String(id))}
+console.log(z+n+k.size)}catch(e){console.log(-1)}})' 2>/dev/null)
   if [ "$mesgul" != "0" ]; then
     _pb_log "kuyruk DOLU/okunamadı (mesgul=$mesgul); dokunulmadı (sonraki runner çıkışında yeniden denenir)"; return 0
   fi
