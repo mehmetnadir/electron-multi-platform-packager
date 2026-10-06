@@ -47,7 +47,9 @@ const WEBZ = {
 };
 
 /** Eski sf425 kökü + bookN: book2=333, book3=222 (anahtar ≠ klasör), book4 Games (dizin ad, menü 666). */
-function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false, motorEk = {}, idler = TEK_IDLER } = {}) {
+function buildZip({
+  kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = false, motorEk = {}, idler = TEK_IDLER, uniteler = {},
+} = {}) {
   const z = new AdmZip();
   const ekle = (ad, veri) => z.addFile(`${sarma}${ad}`, Buffer.from(veri));
   ekle('electron.js', 'require("electron");');
@@ -79,7 +81,9 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
   ekle('config/settings.json', JSON.stringify(eskiMenu));
   const kitap = (d, id) => {
     ekle(`${d}/index.html`, `<html>${d}</html>`);
-    ekle(`${d}/assets/${id}/data/BookContent.xml`, `<Book kitapId="${id}"/>`);
+    ekle(`${d}/assets/${id}/data/BookContent.xml`, uniteler[id] != null
+      ? `<Book kitapId="${id}"><Unit name="${uniteler[id]}"/><Unit name="ikinci"/></Book>`
+      : `<Book kitapId="${id}"/>`);
     ekle(`${d}/assets/${id}/pages/1.png`, `sayfa-${id}`);
     ekle(`${d}/assets/${id}/thumbs/1.jpg`, `kapak-${id}`);
   };
@@ -250,6 +254,47 @@ test('UYGULANDI: kabuk yazılır, sıra Web-Z, klasörler aynı, bookN/** merkez
   assert.equal(cagri.g.kitaplar[1].anahtar, undefined);
   // Sahne temizlenir, aday kalmaz.
   assert.deepEqual(fs.readdirSync(d).filter((a) => a.startsWith('set-kabuk-') || a.endsWith('.kabuk-aday')), []);
+});
+
+test('genelBaslikMi / ilkUniteAdi: sf425 isGenericTitle kuralı + XML varlıkları', () => {
+  for (const t of ['', '  ', 'Kitap 1', 'Kitap 12 ', null]) assert.equal(S.genelBaslikMi(t), true, String(t));
+  for (const t of ['Kitap', 'Kitap A', 'Kitaplar 2', 'Workbook', 'Kitap 2 Ek']) {
+    assert.equal(S.genelBaslikMi(t), false, t);
+  }
+  assert.equal(S.ilkUniteAdi(Buffer.from('<Book><Unit name=" UNIT 1 SPORTS &amp; GAMES "/><Unit name="b"/></Book>')),
+    'UNIT 1 SPORTS & GAMES');
+  assert.equal(S.ilkUniteAdi(Buffer.from("<Book><Unit id='1' name='Exam &#246;n'/></Book>")), 'Exam ön');
+  assert.equal(S.ilkUniteAdi(Buffer.from('<Book kitapId="1"/>')), null);
+  assert.equal(S.ilkUniteAdi(Buffer.from('<Book><Unit name=""/></Book>')), null);
+});
+
+// 06.10 (45482 Shall We 8 book2 "Kitap 2"; 45541/45481 English Up 7/8 üç kitap "Kitap N"): Swift
+// "başlık Kitap N gibi genel … Gerçek adı yazın" ile durdu. Web-Z'de tema kartı ilk ünite adıyla
+// gösterir; bookN girdisi de aynı adı taşımalı (klasör = build klasörü, anahtar değil).
+test('bookN: genel Web-Z başlığı ilk ünite adına çevrilir; XML yoksa başlık aynen kalır', async () => {
+  const ayar = JSON.parse(JSON.stringify(WEBZ));
+  ayar.books.book1.title = 'Kitap 1'; // 111 → book1, XML'de ünite YOK → aynen
+  ayar.books.book2.title = 'Kitap 2'; // 222 → book3 (takaslı), ünite VAR
+  ayar.books.book3.title = 'Kitap 3'; // 333 → book2, ünite adı da genel → aynen
+  const { r, d } = await kostur({
+    ayar, zip: buildZip({ uniteler: { 222: 'UNIT 1 SPORTS &amp; GAMES', 333: 'Kitap 9' } }),
+  });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  const cagri = JSON.parse(fs.readFileSync(path.join(d, 'cagri.log'), 'utf8').trim());
+  const baslik = Object.fromEntries(cagri.g.kitaplar.map((k) => [k.klasor, k.title]));
+  assert.equal(baslik.book3, 'UNIT 1 SPORTS & GAMES');
+  assert.equal(baslik.book1, 'Kitap 1');
+  assert.equal(baslik.book2, 'Kitap 3');
+  assert.equal(baslik.book4, 'Games');
+  assert.ok(r.notlar.some((n) => n.includes('book3: başlık "Kitap 2" → "UNIT 1 SPORTS & GAMES"')), r.notlar.join('|'));
+});
+
+test('bookN: anlamlı başlık XML ünitesi olsa da değişmez (girdi, dolayısıyla girdiSha aynı)', async () => {
+  const { r, d } = await kostur({ zip: buildZip({ uniteler: { 111: 'UNIT 1', 222: 'UNIT 2', 333: 'UNIT 3' } }) });
+  assert.equal(r.durum, 'uygulandi', r.neden);
+  const cagri = JSON.parse(fs.readFileSync(path.join(d, 'cagri.log'), 'utf8').trim());
+  assert.deepEqual(cagri.g.kitaplar.map((k) => k.title),
+    ['Reference Book', 'Workbook', 'Test Book', 'Games', 'Worksheet']);
 });
 
 test('ikinci koşu: kabuk zaten güncel → GÜNCEL, zip bayt-aynı (yeni R2 sürümü açtırmaz)', async () => {

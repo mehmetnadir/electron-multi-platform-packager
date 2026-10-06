@@ -355,6 +355,28 @@ function eslemeKur({ liste, kapi, setAdi, kip = null }) {
   return { girdi: { setTitle: setAdi, kitaplar }, eksik, notlar };
 }
 
+/** sf425 `isGenericTitle` (language-set.js) ve Swift `genelBaslikMi` ile aynı kural. SAF. */
+function genelBaslikMi(t) {
+  const s = String(t == null ? '' : t).trim();
+  if (!s) return true;
+  if (!s.startsWith('Kitap ')) return false;
+  const kalan = s.slice(6).trim();
+  return kalan.length > 0 && /^[+-]?\d+$/.test(kalan);
+}
+
+/** `BookContent.xml` İLK `<Unit name>` değeri (XML varlıkları çözülür); yoksa null. SAF. */
+function ilkUniteAdi(veri) {
+  const m = /<Unit\b[^>]*?\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(Buffer.from(veri || '').toString('utf8'));
+  if (!m) return null;
+  const ad = String(m[1] ?? m[2] ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .trim();
+  return ad || null;
+}
+
 /**
  * Görsel imzası + piksel boyutu (PNG IHDR, JPEG SOFn, WebP VP8/VP8L/VP8X). Tanınmayan ya da
  * başlığı okunamayan gövde → null. SAF.
@@ -744,6 +766,25 @@ async function kabukTazele(o) {
         await fsp.writeFile(path.join(kok, y), v);
       }
     }
+    // 4d. bookN genel başlık (06.10, 45482/45541/45481): Web-Z başlığı "Kitap N" ise sf425 teması
+    //     Web-Z'de kartı `bookN/assets/<id>/data/BookContent.xml` İLK ünite adıyla gösterir;
+    //     Swift doğrulaması (WebZTemaUretici.dogrula) çevrimdışı bu okumayı varsaymaz ve üretimi
+    //     DURDURUR. Aynı değişimi burada yapıyoruz (A1'de Swift `cozTekMotor` yapar). Başlık
+    //     girdinin parçasıdır → girdiSha'ya girer; ProBook 'ek' kipi aynı JS ile aynı sonucu bulur.
+    //     XML yoksa / ünite adı da genelse başlık aynen kalır (Swift yine durdurur: kart gizlenir).
+    if (!a1) {
+      for (const k of es.girdi.kitaplar) {
+        if (k.contentType === 'link' || !genelBaslikMi(k.title)) continue;
+        const g = once.get(`${onEk}${k.klasor}/assets/${k.assetId}/data/BookContent.xml`);
+        let ad = null;
+        try { ad = g && !g.dizin ? ilkUniteAdi(M.zipGirdiOku(o.zip, g)) : null; } catch (_) { ad = null; }
+        if (!ad || genelBaslikMi(ad)) continue;
+        const not = `${k.klasor}: başlık "${k.title}" → "${ad}" (ilk ünite adı, Web-Z teması gibi)`;
+        k.title = ad;
+        rapor.notlar.push(not);
+        log(`${ISARET} eşleme: ${not}`);
+      }
+    }
     const girdiYolu = path.join(sahne, 'girdi.json');
     const girdi = {
       ...(a1 ? { kip: KIP_TEK_MOTOR, motorSayfasi: A1.A1_MOTOR_SAYFASI } : {}),
@@ -986,7 +1027,7 @@ async function kabukTazele(o) {
 
 module.exports = {
   ISARET, WEBZ_KOKU, IMZA, acik, ikiliYolu, onEkBul, uygunluk, webzListesi, eslemeKur, kapakGecerli,
-  gorselBilgisi,
+  gorselBilgisi, genelBaslikMi, ilkUniteAdi,
   kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele, KIP_TEK_MOTOR, A1_KART_IMZASI,
   kabukKaynagiSec, kabukEkModulu, ekYoluGuvenli, ekSonKontrol, ekAcikAnahtarYolu,
   kaynakKurKabukKarari, a1GirdiOzeti,
