@@ -141,18 +141,20 @@ function kokEnvanteri(kok, asarMi) {
   let setMenu = null;
   const sm = oku('set-menu.json');
   if (sm) { try { setMenu = JSON.parse(sm); } catch (_) { setMenu = null; } }
-  // Menüde çizilen LİNK kartları (Web-Z `type:'link'`, set-listesi `linkN`) set-menu.json
-  // `kitaplar`ında YOKTUR (webz-tema-kabuk tanımdan süzer) ama menüde kart olarak görünür.
-  let linkKartSayisi = 0;
+  // Menüde çizilen LİNK kartları (Web-Z `type:'link'`, set-listesi `linkN`). Runner üreticisi
+  // bunları set-menu.json `kitaplar`ından süzer; Üretim Masası Swift kabuğu (Z2) ise orada DA
+  // yazar (11845, 06.10). Anahtarlar döner ki beklenen kart aynı linki iki kez saymasın.
+  let linkKartlari = [];
   const st = oku('config/settings.json');
   if (st) {
     try {
       const b = (JSON.parse(st) || {}).books;
       if (b && typeof b === 'object') {
-        linkKartSayisi = Object.values(b).filter((k) => k && k.type === 'link').length;
+        linkKartlari = Object.entries(b).filter(([, k]) => k && k.type === 'link').map(([a]) => a);
       }
-    } catch (_) { linkKartSayisi = 0; }
+    } catch (_) { linkKartlari = []; }
   }
+  const linkKartSayisi = linkKartlari.length;
   const indexHtml = oku('index.html') || '';
   const kokAppConfig = liste.includes('app.config.js');
   return {
@@ -160,6 +162,7 @@ function kokEnvanteri(kok, asarMi) {
     setMi: kitapDizinleri.length > 0,
     setMenu,
     linkKartSayisi,
+    linkKartlari,
     indexHtml,
     kokAppConfig,
     setBookIsareti: liste.includes('SET_BOOK.txt'),

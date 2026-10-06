@@ -138,13 +138,27 @@ function okuyucuBasligiMi(baslik) {
  * bekleyip 4'ü RED saydı. Menü dışı dizin RED değil, `menudeOlmayanKitapDizinleri` notudur.
  *
  * LİNK kartları (`config/settings.json` books[].type='link', 45504/45551 'Worksheets' kısayolu,
- * 03.10) tanımda yoktur ama menüde çizilir → `linkKart` beklentiye eklenir.
- * @param {{kitapDizinleri?: string[], setMenu?: object|null, elle?: number|null, linkKart?: number}} p
+ * 03.10) menüde çizilir. İki menü üreticisi var ve link kartını FARKLI yazarlar:
+ *   - runner (`index-ureteci` / `set-uyelik-ek`): link `kitaplar`'a GİRMEZ → settings linki EKLENİR.
+ *   - Üretim Masası Swift kabuğu (`set-kabuk-tazele`, Z2 05.10): link `kitaplar`'da DA durur
+ *     (`icerikTuru:'link'`, `klasor:'linkN'`, `baglanti:<url>`).
+ * 11845 (06.10): tanım 8 girdi (5 kitap + 3 link) + settings 3 link = "beklenen 11"; menü 8 kart
+ * çizdi (doğru: Web-Z listesi 5 kitap + 3 link). Link kartı İKİ KEZ sayılmaz: settings linki,
+ * tanımda aynı `klasor` ile duran link girdisiyle eşleşirse eklenmez (`linkKartlari` = settings
+ * anahtarları). Yalnız sayı verilirse (`linkKart`) tanımdaki link girdisi kadar düşülür.
+ * Fail-closed: anahtarı eşleşmeyen link (tanımda link6, settings'te link9) iki kart sayılır →
+ * menü eksik çizerse RED sürer.
+ * @param {{kitapDizinleri?: string[], setMenu?: object|null, elle?: number|null, linkKart?: number,
+ *   linkKartlari?: string[]|null}} p
  * @returns {number}
  */
-function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null, linkKart = 0 } = {}) {
+function beklenenKartSayisi({
+  kitapDizinleri = [], setMenu = null, elle = null, linkKart = 0, linkKartlari = null,
+} = {}) {
   if (Number.isInteger(elle) && elle >= 0) return elle;
-  const lk = Number.isInteger(linkKart) && linkKart > 0 ? linkKart : 0;
+  const anahtarlar = Array.isArray(linkKartlari)
+    ? [...new Set(linkKartlari.map((x) => klasorNormal(x)).filter(Boolean))] : null;
+  const lk = anahtarlar ? anahtarlar.length : (Number.isInteger(linkKart) && linkKart > 0 ? linkKart : 0);
   const kitaplar = setMenu && Array.isArray(setMenu.kitaplar) ? setMenu.kitaplar : null;
   if (kitaplar && kitaplar.length) {
     const gruplar = new Set();
@@ -153,9 +167,32 @@ function beklenenKartSayisi({ kitapDizinleri = [], setMenu = null, elle = null, 
       const g = String((k && k.grup) || '').trim();
       if (g) gruplar.add(g); else grupsuz += 1;
     }
-    return gruplar.size + grupsuz + lk;
+    const tanimLinkleri = kitaplar.filter(menuLinkGirdisiMi);
+    const tanimKlasor = new Set(tanimLinkleri.map((k) => klasorNormal(k.klasor)).filter(Boolean));
+    const klasorsuz = tanimLinkleri.filter((k) => !klasorNormal(k.klasor)).length;
+    const ek = anahtarlar
+      ? Math.max(0, anahtarlar.filter((a) => !tanimKlasor.has(a)).length - klasorsuz)
+      : Math.max(0, lk - tanimLinkleri.length);
+    return gruplar.size + grupsuz + ek;
   }
   return kitapDizinleri.length + lk;
+}
+
+/** `klasor`/anahtar karşılaştırma biçimi: baş/son eğik çizgi ve boşluk atılır. SAF. */
+function klasorNormal(x) {
+  return String(x == null ? '' : x).trim().replace(/^\/+|\/+$/g, '');
+}
+
+/**
+ * `set-menu.json` → `kitaplar[]` girdisi bir LİNK kartı mı? (Swift kabuğu: `icerikTuru:'link'`,
+ * `baglanti:<url>`, `assetId:''`; settings biçimi `type`/`contentType` 'link'.) SAF.
+ */
+function menuLinkGirdisiMi(k) {
+  if (!k || typeof k !== 'object') return false;
+  if ([k.icerikTuru, k.contentType, k.type].some((t) => String(t || '').trim().toLowerCase() === 'link')) {
+    return true;
+  }
+  return Boolean(String(k.baglanti || '').trim()) && !String(k.assetId || '').trim();
 }
 
 /**
@@ -382,6 +419,7 @@ module.exports = {
   pikselKarari,
   okuyucuBasligiMi,
   beklenenKartSayisi,
+  menuLinkGirdisiMi,
   menudeOlmayanKitapDizinleri,
   konsolSiniflandir,
   menuTaninmadiKusuru,

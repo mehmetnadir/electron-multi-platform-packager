@@ -96,6 +96,46 @@ test('kokEnvanteri → beklenen kart (45549): menü tanımında olmayan motorlu 
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
 
+test('kokEnvanteri → beklenen kart (11845): Swift kabuğu linki tanımda DA taşır, asar ağacında 8 (11 değil)', async () => {
+  const d = gecici('link-cift');
+  try {
+    fs.writeFileSync(path.join(d, 'index.html'), '<title>Super Monsters 3 Set - 2025</title>');
+    const dizinler = ['book1', 'book2', 'book3', 'book4', 'book5'];
+    const ids = ['11822', '11826', '25357', '11840', '11842'];
+    const linkler = [['link6', 'Worksheets'], ['link7', "Teacher's Pack"], ['link8', 'Örnek Sayfalar']];
+    const kitaplar = [
+      ...dizinler.map((k, i) => ({ ad: `K${i + 1}`, assetId: ids[i], baglanti: '', grup: '', icerikTuru: 'book', klasor: k })),
+      ...linkler.map(([k, ad]) => ({ ad, assetId: '', baglanti: `https://ornek.test/${k}`, grup: '', icerikTuru: 'link', klasor: k })),
+    ];
+    // Swift JSONSerialization biçimi (" : ", kaçışlı eğik çizgi) — ayrıştırma aynı
+    fs.writeFileSync(path.join(d, 'set-menu.json'),
+      JSON.stringify({ setAdi: 'Super Monsters 3 Set - 2025', kitaplar }, null, 2).replace(/": /g, '" : ').replace(/\//g, '\\/'));
+    const books = {};
+    dizinler.forEach((k, i) => { books[k] = { assetId: ids[i], contentType: 'book', displayOrder: i, title: `K${i + 1}` }; });
+    linkler.forEach(([k, ad], i) => { books[k] = { contentType: 'link', displayOrder: 5 + i, title: ad, type: 'link', url: `https://ornek.test/${k}` }; });
+    fs.mkdirSync(path.join(d, 'config'));
+    fs.writeFileSync(path.join(d, 'config', 'settings.json'), JSON.stringify({ books, bookCount: 8 }));
+    for (const b of dizinler) {
+      fs.mkdirSync(path.join(d, b));
+      fs.writeFileSync(path.join(d, b, 'index.html'), '<html></html>');
+      fs.writeFileSync(path.join(d, b, 'app.config.js'), '');
+    }
+    // eslint-disable-next-line global-require
+    const asar = require('@electron/asar');
+    const hedef = path.join(gecici('link-cift-asar'), 'app.asar');
+    await asar.createPackage(d, hedef);
+    for (const e of [P.kokEnvanteri(d, false), P.kokEnvanteri(hedef, true)]) {
+      assert.deepEqual(e.linkKartlari, ['link6', 'link7', 'link8']);
+      assert.equal(e.linkKartSayisi, 3);
+      assert.equal(e.setMenu.kitaplar.length, 8);
+      assert.equal(O.beklenenKartSayisi({ kitapDizinleri: e.kitapDizinleri, setMenu: e.setMenu,
+        linkKart: e.linkKartSayisi, linkKartlari: e.linkKartlari }), 8);
+      assert.deepEqual(O.menudeOlmayanKitapDizinleri({ kitapDizinleri: e.kitapDizinleri, setMenu: e.setMenu }), []);
+    }
+    fs.rmSync(path.dirname(hedef), { recursive: true, force: true });
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
 test('kokEnvanteri K8 (1/2): ad deseni TUTMAYAN alt-kitap dizinleri (Tudem tarzı) SET olarak tanınır', () => {
   const d = gecici('env-tudem');
   try {

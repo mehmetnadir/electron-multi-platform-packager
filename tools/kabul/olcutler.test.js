@@ -399,3 +399,76 @@ test('menuTaninmadiKusuru: 59480 gerçek konsolu → paket kusuru; yavaş/boş k
   assert.equal(O.menuTaninmadiKusuru([]), null);
   assert.equal(O.menuTaninmadiKusuru([{ seviye: 'info', mesaj: 'Electron Security Warning' }]), null);
 });
+
+// 11845 Super Monsters 3 Set (06.10): Üretim Masası Swift kabuğu (set-kabuk Z2) link kartlarını
+// set-menu.json `kitaplar`ına DA yazar (icerikTuru:'link', klasor:'linkN', baglanti:<url>);
+// settings.json books'ta aynı link6..8 type:'link'. Eski hesap 8 + 3 = "beklenen 11" diyordu,
+// menü doğru 8 kart çizdi (Web-Z listesi 5 kitap + 3 link) → sahte RED.
+const SM3 = (() => {
+  const kitap = (ad, assetId, klasor, icerikTuru = 'book') => ({
+    ad, assetId, baglanti: '', grup: '', icerikTuru, kapakVarMi: true, klasor, klasorElleYazildi: true,
+  });
+  const link = (ad, klasor, baglanti) => ({
+    ad, assetId: '', baglanti, grup: '', icerikTuru: 'link', kapakVarMi: false, klasor, klasorElleYazildi: true,
+  });
+  return {
+    dizinler: ['book1', 'book2', 'book3', 'book4', 'book5'],
+    setMenu: {
+      setAdi: 'Super Monsters 3 Set - 2025',
+      kitaplar: [
+        kitap("Student's Book", '11822', 'book1'), kitap('Activity Book', '11826', 'book2'),
+        kitap('Test Book', '25357', 'book3'), kitap('Games', '11840', 'book4', 'games'),
+        kitap('Videos', '11842', 'book5', 'videos'),
+        link('Worksheets', 'link6', 'https://download.ydspublishing.com/worksheets/grade-3-worksheets/'),
+        link("Teacher's Pack", 'link7', 'https://download.ydspublishing.com/download/1251/x.pdf'),
+        link('Örnek Sayfalar', 'link8', 'https://akillitahta.ydspublishing.com/WebZKitap/?bookId=11822'),
+      ],
+    },
+    linkKartlari: ['link6', 'link7', 'link8'],
+  };
+})();
+
+test('beklenenKartSayisi 11845: tanımdaki link girdisi settings linkiyle İKİ KEZ sayılmaz (8, 11 değil)', () => {
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu, linkKart: 3,
+    linkKartlari: SM3.linkKartlari }), 8);
+  // yalnız sayı verilse de (eski çağıran) tanımdaki link kadar düşülür
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu, linkKart: 3 }), 8);
+  // ölçülen 8 kart → GEÇTİ; eski "beklenen 11" kararı artık çıkmaz
+  const b = { asama: 'menu', setMi: true,
+    beklenenKart: O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu,
+      linkKartlari: SM3.linkKartlari }) };
+  const olcum = { baslik: 'Super Monsters 3 Set - 2025', kartSayisi: 8, yukleniyor: [],
+    piksel: { sapma: 0.307439, koyu: 0.912292, renk: 125442 } };
+  const k = O.asamaKarari(olcum, b);
+  assert.equal(k.durum, 'GECTI', k.sebepler.join(' | '));
+});
+
+test('beklenenKartSayisi 11845 fail-closed: menü eksik çizerse RED sürer; eşleşmeyen link iki kart sayılır', () => {
+  const beklenen = O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu,
+    linkKartlari: SM3.linkKartlari });
+  const k = O.asamaKarari({ baslik: 'Super Monsters 3 Set - 2025', kartSayisi: 5, yukleniyor: [],
+    piksel: { sapma: 0.3, koyu: 0.9, renk: 125442 } }, { asama: 'menu', setMi: true, beklenenKart: beklenen });
+  assert.equal(k.durum, 'RED');
+  assert.match(k.sebepler.join(' '), /menü kartı 5 ≠ beklenen 8/);
+  // settings'te tanımda OLMAYAN bir link daha (link9) → o da kart beklenir (9)
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu,
+    linkKartlari: [...SM3.linkKartlari, 'link9'] }), 9);
+  // tanımda link var ama settings'te hiç link yok → tanım ne diyorsa o (8): menü 5 çizerse RED
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: SM3.setMenu, linkKartlari: [] }), 8);
+  // runner üreticisi biçimi (link tanımda yok, 45504/45551) DEĞİŞMEDİ: 5 kitap + 3 link = 8
+  const runnerMenu = { kitaplar: SM3.setMenu.kitaplar.filter((x) => x.icerikTuru !== 'link') };
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: runnerMenu,
+    linkKartlari: SM3.linkKartlari }), 8);
+  assert.equal(O.beklenenKartSayisi({ kitapDizinleri: SM3.dizinler, setMenu: runnerMenu, linkKart: 3 }), 8);
+});
+
+test('menuLinkGirdisiMi: icerikTuru/type/contentType link ya da assetId’siz bağlantı', () => {
+  assert.equal(O.menuLinkGirdisiMi({ icerikTuru: 'link' }), true);
+  assert.equal(O.menuLinkGirdisiMi({ type: 'LINK' }), true);
+  assert.equal(O.menuLinkGirdisiMi({ contentType: 'link' }), true);
+  assert.equal(O.menuLinkGirdisiMi({ baglanti: 'https://x', assetId: '' }), true);
+  assert.equal(O.menuLinkGirdisiMi({ baglanti: 'https://x', assetId: '11822' }), false);
+  assert.equal(O.menuLinkGirdisiMi({ icerikTuru: 'games', assetId: '11840' }), false);
+  assert.equal(O.menuLinkGirdisiMi({ icerikTuru: 'book', assetId: '11822', baglanti: '' }), false);
+  assert.equal(O.menuLinkGirdisiMi(null), false);
+});

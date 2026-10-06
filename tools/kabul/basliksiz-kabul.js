@@ -339,7 +339,7 @@ async function calis(argv, yazici) {
       const envanter = kokEnvanteri(acilis.kok, acilis.asar);
       const beklenenKart = O.beklenenKartSayisi({
         kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu, elle: s.kitapSayisi,
-        linkKart: envanter.linkKartSayisi,
+        linkKart: envanter.linkKartSayisi, linkKartlari: envanter.linkKartlari,
       });
       const menuDisi = O.menudeOlmayanKitapDizinleri({
         kitapDizinleri: envanter.kitapDizinleri, setMenu: envanter.setMenu,
@@ -348,6 +348,7 @@ async function calis(argv, yazici) {
         setMi: envanter.setMi, kitapDizinleri: envanter.kitapDizinleri, beklenenKart, menuDisi,
         kokAppConfig: envanter.kokAppConfig, kokMotorKopyasi: motorKopyasiMi(envanter.indexHtml),
         kitapAdlari: ((envanter.setMenu && envanter.setMenu.kitaplar) || []).map((k) => k && k.ad).filter(Boolean),
+        linkKartlari: envanter.linkKartlari || [],
         kokBaslik: (/<title>([^<]*)<\/title>/i.exec(envanter.indexHtml) || [])[1] || null,
       };
       say(`envanter: ${envanter.setMi ? `SET, app.config.js taşıyan ${envanter.kitapDizinleri.join(',')}` : 'tek kitap'}`
