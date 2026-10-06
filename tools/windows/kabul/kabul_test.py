@@ -1203,5 +1203,31 @@ class AktBLatchTest(unittest.TestCase):
         self.assertNotIn("KABULGECERSIZ", kabul.JS_AKT_LATCH_KUR)
 
 
+class KurTaniTest(unittest.TestCase):
+    D = "C:\\Users\\x\\AppData\\Local\\Programs\\uyg"
+
+    def test_exe_degisti(self):
+        f = self.D + "\\uyg.exe"
+        on = {f: (100.0, 5000)}
+        self.assertFalse(kabul.exe_degisti_mi(on, {f: (100.5, 5000)}, self.D))  # esik ici
+        self.assertTrue(kabul.exe_degisti_mi(on, {f: (200.0, 5000)}, self.D))   # mtime
+        self.assertTrue(kabul.exe_degisti_mi(on, {f: (100.0, 6000)}, self.D))   # boyut
+        self.assertTrue(kabul.exe_degisti_mi({}, {f: (100.0, 5000)}, self.D))   # yeni
+        self.assertFalse(kabul.exe_degisti_mi(on, {f: (999.0, 1)}, self.D + "2"))  # baska dizin
+
+    def test_kurucu_durum(self):
+        self.assertEqual(kabul.kurucu_durum(0, 104.4), {"bitti": True, "cikis": 0, "sure_sn": 104})
+        d = kabul.kurucu_durum(None, 1200.2, "durduruldu")
+        self.assertFalse(d["bitti"]); self.assertEqual(d["durum"], "surüyor")
+        self.assertEqual(d["sure_sn"], 1200); self.assertEqual(d["durduruldu"], "durduruldu")
+        self.assertNotIn("durduruldu", kabul.kurucu_durum(3, 5))
+
+    def test_kurulu_say(self):
+        self.assertTrue(kabul.kurulu_say(0, self.D, True))
+        self.assertFalse(kabul.kurulu_say(0, self.D, False))
+        self.assertFalse(kabul.kurulu_say(1, self.D, True))
+        self.assertFalse(kabul.kurulu_say(0, None, True))
+
+
 if __name__ == "__main__":
     unittest.main()

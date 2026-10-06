@@ -219,22 +219,75 @@ def oldur(dizin):
                    capture_output=True)
     time.sleep(4)
 
+def exe_ozet(kok, derin=1):
+    """kok altindaki <derin> seviye dizinlerin icindeki *.exe'lerin (mtime, boyut) ozeti.
+    Ust dizin mtime'i yeniden kurulumda degismeyebilir; exe/uninstaller degisimi daha guvenilir."""
+    o = {}
+    kalip = os.path.join(kok, *(["*"] * derin), "*.exe")
+    for f in glob.glob(kalip):
+        try: st = os.stat(f); o[f] = (st.st_mtime, st.st_size)
+        except Exception: pass
+    return o
+
+def exe_degisti_mi(onceki, simdi, dizin):
+    """SAF KARAR: dizin icindeki bir exe baslangictan sonra yeni mi / mtime'i (>1 sn) ya da boyutu
+    degisti mi. onceki/simdi: {yol: (mtime, boyut)}."""
+    on = dizin.rstrip("\\/").replace("/", "\\").lower() + "\\"
+    for f, (m, b) in simdi.items():
+        if not f.replace("/", "\\").lower().startswith(on): continue
+        if f not in onceki: return True
+        om, ob = onceki[f]
+        if m > om + 1 or b != ob: return True
+    return False
+
+def kurucu_durum(cikis, gecen_sn, durduruldu=None):
+    """SAF KARAR: kurucu surecinin durumu. cikis=p.poll() (None = hala suruyor)."""
+    if cikis is None:
+        d = {"bitti": False, "durum": "surüyor", "sure_sn": round(gecen_sn)}
+    else:
+        d = {"bitti": True, "cikis": cikis, "sure_sn": round(gecen_sn)}
+    if durduruldu is not None: d["durduruldu"] = durduruldu
+    return d
+
+def kurulu_say(kurucu_cikis, hedef, exe_var):
+    """SAF KARAR: kurucu 0 ile bittiyse ve hedefte beklenen exe varsa KURULDU; hedef yoksa KURULMADI."""
+    if not hedef: return False
+    return bool(exe_var) and kurucu_cikis in (0, None)
+
+def kurucu_durdur(p):
+    """Zaman asiminda kurucuyu ve cocuklarini durdurur (Windows'ta agac birlikte olmez: taskkill /T /F).
+    Donen: durdurma notu (kaynak/deger icermez)."""
+    if p.poll() is not None: return "zaten-bitmis"
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, timeout=30)
+        try: p.wait(timeout=10)
+        except Exception: pass
+        return "durduruldu" if p.poll() is not None else "durdurulamadi"
+    except Exception as e:
+        return "durdurma-hata:" + type(e).__name__
+
 def kur(exe, tavan=1200):
+    # NOT: kabul oncesi eski kurulumun kaldirilmasi burada YOK; main() her kabul sonunda kaldir()
+    # cagirir (kaldirici ya da D:\\kabul\\.empp-yedek altina TASI, silme yok). Artik dizin varsa
+    # exe_degisti_mi() ile yeniden kurulum yine algilanir.
     a = aile(exe)
+    t0 = time.time()
     if a == "sfx":
-        onceki = dizinler(DIJITAP, 2)
+        onceki = dizinler(DIJITAP, 2); onceki_exe = exe_ozet(DIJITAP, 2)
         p = subprocess.Popen([exe])
         kok, derin, sart = DIJITAP, 2, lambda d: os.path.exists(os.path.join(d, "ZKitap.exe"))
     else:
-        onceki = dizinler(PROGRAMS, 1)
+        onceki = dizinler(PROGRAMS, 1); onceki_exe = exe_ozet(PROGRAMS, 1)
         p = subprocess.Popen([exe, "/S"])
         kok, derin, sart = PROGRAMS, 1, lambda d: os.path.basename(d).lower() not in KORUNAN
-    son = time.time() + tavan
+    son = t0 + tavan
     hedef = None
     while time.time() < son:
         time.sleep(5)
-        simdi = dizinler(kok, derin)
-        aday = [d for d, m in simdi.items() if (d not in onceki or m > onceki[d] + 1) and sart(d)]
+        simdi = dizinler(kok, derin); simdi_exe = exe_ozet(kok, derin)
+        aday = [d for d, m in simdi.items()
+                if (d not in onceki or m > onceki[d] + 1 or exe_degisti_mi(onceki_exe, simdi_exe, d))
+                and sart(d)]
         if aday:
             d = sorted(aday, key=lambda x: simdi[x])[-1]
             x = klasor_boyut(d); time.sleep(15); y = klasor_boyut(d)
@@ -242,16 +295,22 @@ def kur(exe, tavan=1200):
                 hedef = d; break
     try: p.wait(timeout=10)
     except Exception: pass
+    cikis = p.poll()
+    durduruldu = None
+    if not hedef and cikis is None:
+        durduruldu = kurucu_durdur(p)
+        cikis = p.poll()
+    kd = kurucu_durum(cikis, time.time() - t0, durduruldu)
     if not hedef:
-        return {"durum": "KURULMADI", "aile": a}
+        return {"durum": "KURULMADI", "aile": a, "kurucu": kd}
     if a == "sfx":
         ana = os.path.join(hedef, "ZKitap.exe")
     else:
         ex = [f for f in glob.glob(os.path.join(hedef, "*.exe"))
               if not os.path.basename(f).lower().startswith("uninstall")]
-        if not ex: return {"durum": "EXE_YOK", "aile": a, "dizin": hedef}
+        if not ex: return {"durum": "EXE_YOK", "aile": a, "dizin": hedef, "kurucu": kd}
         ana = ex[0]
-    return {"durum": "KURULDU", "aile": a, "dizin": hedef, "exe": ana,
+    return {"durum": "KURULDU", "aile": a, "dizin": hedef, "exe": ana, "kurucu": kd,
             "MB": round(klasor_boyut(hedef) / 1e6, 1)}
 
 def kaldirma_yontemi(uninstall_var):
