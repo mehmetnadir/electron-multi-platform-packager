@@ -284,7 +284,9 @@ test('r2-kur: R2\'ye yazılan build ve paketleyiciye giden zip HİZALI menü + y
   assert.match(r.casus.panel[0], /^https:\/\/icerik\.ornek\.net\/MobilService\/GetPackageBooks\?id=45480$/);
 });
 
-test('r2-kur: claim listesi BAYAT (eski üye 999), panel yeni üye 222 → kapı GEÇER, liste panelden, fark loglanır', async () => {
+// Nadir 06.10 (1a): setin kitaplarını Platform Ayarları (claim) tanımlar; İmpark'ta olmayan claim üyesi
+// menüden ve motordan DÜŞMEZ (45487: 61633/61635 düşmüş, kitaplar açılmıyordu). Eskiden panel kazanırdı.
+test('r2-kur: claim üyesi 999 İmpark panelinde yok, panel yeni üye 222 → 999 KORUNUR, 222 eklenir, fark loglanır', async () => {
   const r = await isKostur({
     arsivKoku: arsivKur('45480', kokBuild({ idler: ['111', '999'] })),
     job: () => ({ ...r2Kur(), setListesi: '111 | Kitap Bir\n999 | Eski Kitap' }),
@@ -293,9 +295,9 @@ test('r2-kur: claim listesi BAYAT (eski üye 999), panel yeni üye 222 → kapı
   const r2Zip = new AdmZip(Buffer.concat(r.kayit.parcalar));
   hizaliMi(r2Zip);
   assert.ok(r2Zip.getEntry('assets/999/data/BookContent.xml'), 'çıkarılan üyenin içeriği silinmez');
-  assert.match(r.loglar, /kapı set listesi PANELDEN \(2 üye\); claim fazla \[999\], panel yeni \[222\]/);
-  // Menüden çıkan 999 içerik üyesi sayılmaz (paketin menüsünde yok).
-  assert.match(r.loglar, /\[uyeler\] 2 kitap/);
+  assert.match(r.loglar, /panel-farki: Impark'ta yok ama Platform Ayarlari'nda var: 999/);
+  assert.match(r.loglar, /kapı set listesi PANELDEN \(3 üye\); claim fazla \[-\], panel yeni \[222\]/);
+  assert.match(r.loglar, /\[uyeler\] 3 kitap/);
 });
 
 test('r2-kur: claim listesi YOK + panel 3 üye + menü zaten hizalı → kapı panel listesiyle GEÇER', async () => {

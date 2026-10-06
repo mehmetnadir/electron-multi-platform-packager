@@ -341,13 +341,13 @@ JS_MENU = r"""
 (()=>{ // IKI VARYANT: A) img.button[data-url]  B) .book-item (React, onclick yok)
  const kutu=e=>{const r=e.getBoundingClientRect();
    return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),w:Math.round(r.width),h:Math.round(r.height)};};
- let l=[...document.querySelectorAll('img.button[data-url]')].map(e=>
-   Object.assign({varyant:'A',id:e.id||null,url:e.dataset.url,ad:e.id||''},kutu(e)));
- if(!l.length) l=[...document.querySelectorAll('.book-item')].map((e,i)=>
-   Object.assign({varyant:'B',id:'book'+(i+1),url:null,ad:(e.innerText||'').trim().slice(0,40)},kutu(e)));
+ let l=[...document.querySelectorAll('img.button[data-url]')].map((e,i)=>
+   Object.assign({varyant:'A',indis:i,id:e.id||null,url:e.dataset.url,ad:e.id||'',seri:false},kutu(e)));
+ if(!l.length) l=[...document.querySelectorAll('.book-item')].filter(e=>!e.classList.contains('book-group-back')).map((e,i)=>
+   Object.assign({varyant:'B',indis:i,id:'book'+(i+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:e.classList.contains('book-group')},kutu(e)));
  if(!l.length) l=[...document.images].filter(i=>/images\/book\d+\.(png|jpe?g)/i.test(i.currentSrc||i.src||''))
    .map((i,n)=>{const e=i.closest('div')||i;
-     return Object.assign({varyant:'C',id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40)},kutu(e));});
+     return Object.assign({varyant:'C',indis:n,id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:false},kutu(e));});
  return JSON.stringify(l.filter(o=>o.w>40&&o.h>40));})()"""
 
 # Menude kitap OLMAYAN ogeler: config/settings.json'da contentType/type "link" (45551 "Worksheets" ->
@@ -375,7 +375,7 @@ def baglanti_ayir(kitaplar, ayar):
         if ad and ad not in kitap_ad: bag[ad] = b.get("url") or ""
     kalan, ayrilan = [], []
     for k in kitaplar:
-        ad = str(k.get("ad") or "").split("\n")[0].strip().casefold()
+        ad = str(k.get("ad") or "").split("\n\n")[0].strip().casefold()
         if ad in bag: ayrilan.append({"ad": k.get("ad"), "url": bag[ad], "id": k.get("id")})
         else: kalan.append(k)
     return kalan, ayrilan
@@ -389,6 +389,52 @@ def menu_varyant_sec(a_var, b_var, c_var):
     if b_var: return "B"
     if c_var: return "C"
     return None
+
+def js_kutu_guncelle(varyant, ad, indis):
+    """SAF KARAR: scrollIntoView cagrili kordinat guncelleme JS'ini (CDP icin) uretir.
+    Ekran disi (3. satir vb) kartlara tiklamadan once cagirilir."""
+    ad_json = json.dumps(ad)
+    return f"""
+    (()=>{{
+      let v="{varyant}", ad={ad_json}, indis={indis}, e=null;
+      if(v==='A') {{
+         let els=[...document.querySelectorAll('img.button[data-url]')];
+         e = els.find(x=>(x.id||'')===ad) || els[indis];
+      }} else if(v==='B') {{
+         let els=[...document.querySelectorAll('.book-item')].filter(x=>!x.classList.contains('book-group-back'));
+         e = els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) || els[indis];
+      }} else {{
+         let imgs=[...document.images].filter(i=>/images\\/book\\d+\\.(png|jpe?g)/i.test(i.currentSrc||i.src||''));
+         let els=imgs.map(i=>i.closest('div')||i);
+         e = els.find(x=>(x.innerText||'').trim().slice(0,40)===ad) || els[indis];
+      }}
+      if(!e) return null;
+      e.scrollIntoView({{block: 'center', inline: 'center'}});
+      const r=e.getBoundingClientRect();
+      return JSON.stringify({{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),w:Math.round(r.width),h:Math.round(r.height)}});
+    }})()"""
+
+def kitaplari_genislet(kitaplar, js_cagirici):
+    """SAF KARAR: Ana menudeki kitaplarin icindeki serileri acar ve duz listeye genisletir.
+    js_cagirici(islem, arg) -> e.g. js_cagirici('kutu_guncelle', kit) -> scroll+measure"""
+    genisletilmis = []
+    for kit in kitaplar:
+        if kit.get("seri"):
+            js_cagirici("kutu_guncelle", kit)
+            js_cagirici("tikla", kit)
+            js_cagirici("bekle", 2)
+            ic_kitaplar = js_cagirici("menu_al", None) or []
+            for ic in ic_kitaplar:
+                ic_kopya = dict(ic)
+                ic_kopya["seri_ana"] = kit
+                ic_kopya["ad"] = f"{kit.get('ad')} / {ic_kopya.get('ad')}"
+                genisletilmis.append(ic_kopya)
+            js_cagirici("ana_menu", None)
+            js_cagirici("bekle", 1)
+        else:
+            genisletilmis.append(kit)
+    return genisletilmis
+
 
 JS_ATLA = r"""
 (()=>{ // 42 adimlik tanitim balonu hem sayfayi ortuyor hem TIKLAMALARI YUTUYOR (olculdu:
@@ -1422,6 +1468,24 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
     if baglantilar:
         r["menuBaglantilar"] = baglantilar
         for b in baglantilar: log("BAGLANTI", bookId, str(b.get("ad")).split("\n")[0], b.get("url"))
+        
+    def cagirici(islem, arg):
+        if islem == "kutu_guncelle":
+            try:
+                yeni = c.jsj(js_kutu_guncelle(arg.get("varyant"), arg.get("ad"), arg.get("indis", 0)))
+                if yeni: arg.update(yeni)
+            except: pass
+        elif islem == "tikla":
+            c.tikla(arg["x"], arg["y"])
+        elif islem == "bekle":
+            time.sleep(arg)
+        elif islem == "menu_al":
+            return c.jsj(JS_MENU)
+        elif islem == "ana_menu":
+            menuye_don(c, menuUrl)
+
+    kitaplar = kitaplari_genislet(kitaplar, cagirici)
+
     r["menuKitapSayisi"] = len(kitaplar)
     r["menuAdlar"] = [k.get("ad") or k.get("id") for k in kitaplar]
     # MENU EKRANI: "pakette var ama menude yok" sinifi ancak menuye BAKILARAK kanitlanir
@@ -1439,7 +1503,15 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
     else:
         for i, kit in enumerate(kitaplar, 1):
             t0 = time.time()
-            c.tikla(kit["x"], kit["y"])
+            if kit.get("seri_ana"):
+                ana = kit["seri_ana"]
+                cagirici("kutu_guncelle", ana)
+                cagirici("tikla", ana)
+                cagirici("bekle", 2)
+                
+            cagirici("kutu_guncelle", kit)
+            cagirici("tikla", kit)
+            
             gecis = False
             for _ in range(30):
                 time.sleep(2)

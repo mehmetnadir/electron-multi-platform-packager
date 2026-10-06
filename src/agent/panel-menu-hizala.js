@@ -484,7 +484,7 @@ function hizalamaKapisi({
   }
   const panelIdler = new Set(books.map((b) => b.id));
   for (const c of kapaklar) {
-    if (!panelIdler.has(c.id)) ihlal.push(`menüde panel dışı kapak: ${c.id}`);
+    if (!panelIdler.has(c.id)) ihlal.push(`kart-motorda-yok: ${c.id}`);
     const xs = attrOku(c.etiket, 'xmlSource');
     if (!xs || !varMi(xs.replace(/^\/+/, ''))) ihlal.push(`${c.id}: xmlSource (${xs}) zip'te yok`);
     const b = books.find((x) => x.id === c.id);
@@ -767,6 +767,45 @@ async function panelMenuHizala(o) {
   if (panel.durum === DURUM.BOZUK) return dokunma(`panel satırı bozuk: ${panel.neden}`);
   let { books } = panel;
   rapor.panel = books.length;
+
+  if (o.claimListesi) {
+    const claimFarki = setListesiFarki(o.claimListesi, books);
+    if (claimFarki.claimVar && claimFarki.listeFazla.length > 0) {
+      warn(`${ISARET} panel-farki: Impark'ta yok ama Platform Ayarlari'nda var: ${claimFarki.listeFazla.join(', ')}`);
+      let pXML = null;
+      try { pXML = menuParcala(xml); } catch (_) {}
+      if (pXML) {
+        for (const id of claimFarki.listeFazla) {
+          let cXML = null, gXML = null, tXML = null;
+          for (const g of pXML.gruplar) {
+            for (const t of g.sekmeler) {
+              for (const c of t.kapaklar) {
+                if (c.id === id) { cXML = c; tXML = t; gXML = g; break; }
+              }
+              if (cXML) break;
+            }
+            if (cXML) break;
+          }
+          if (cXML) {
+            const xs = attrOku(cXML.etiket, 'xmlSource') || '';
+            const mFx = /^assets\/([^/]+)\//.exec(xs);
+            books.push({
+              id,
+              fixName: mFx ? mFx[1] : id,
+              groupId: attrOku(gXML.etiket, 'ID') || '1',
+              groupName: attrOku(gXML.etiket, 'label') || '',
+              tabId: attrOku(tXML.etiket, 'ID') || '1',
+              tabName: attrOku(tXML.etiket, 'label') || '',
+              adi: attrOku(cXML.etiket, 'actName') || '',
+              resim: null,
+              domain: null
+            });
+          }
+        }
+      }
+    }
+  }
+
   // ÖNCEDEN ATLANAN ÜYELER (Nadir 06.10): üreteç `empp-uretec.json`'a `atlananUyeler` yazdı (ya da runner
   // `o.atlananUyeler` verdi) → o üyeler panel listesinden de düşer; eklenmeye çalışılmaz, kapıya gitmez.
   rapor.atlananUyeler = [];

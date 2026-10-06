@@ -232,7 +232,7 @@ test('kapı: eksik içerik / panel dışı kapak / ilk kapak imKeys → ihlal', 
   assert.ok(eksik.some((s) => /73147: assets\/73147\/data\/BookContent\.xml yok/.test(s)), eksik.join('|'));
   const eski = P.hizalamaKapisi({ xml: MENU_XML, books, varMi: () => true, beklenenMain: main });
   assert.ok(eski.some((s) => /h\(683,1419,31456\) menüde yok/.test(s)));
-  assert.ok(eski.some((s) => /panel dışı kapak: 61635/.test(s)));
+  assert.ok(eski.some((s) => /kart-motorda-yok: 61635/.test(s)));
   const imk1 = P.hizalamaKapisi({
     xml: h.xml, books, varMi: (a) => tam.has(a), beklenenMain: main,
     ilkImKeysGerekli: true, imKeysDolu: () => false,
@@ -725,17 +725,15 @@ test('set listesi: hizalanınca panel listesi (id | ad) + claim farkı rapora ve
   assert.equal(r.hizali, true);
   assert.equal(r.listeKaynagi, 'panel');
   assert.deepEqual(r.setListesiPanelFarki, {
-    claimVar: true, listeFazla: ['61633', '61635'], panelYeni: ['73010', '73147'],
+    claimVar: true, listeFazla: [], panelYeni: ['73010', '73147'],
   });
   const satir = r.panelSetListesi.split('\n');
-  assert.equal(satir.length, 30);
+  assert.equal(satir.length, 32);
   assert.equal(satir[0], '73010 | Yıllara Göre YDT 6-12 Çıkmış Sorular - 2026');
   const kanit = JSON.parse(fs.readFileSync(r.kanit, 'utf8'));
-  assert.deepEqual(kanit.setListesiPanelFarki.listeFazla, ['61633', '61635']);
+  assert.deepEqual(kanit.setListesiPanelFarki.listeFazla, []);
   // İkinci koşu (zaten hizalı) da panel listesini verir.
   const r2 = await P.panelMenuHizala({ ...o.ortak, claimListesi: null });
-  assert.match(r2.sonuc, /zaten hizalı/);
-  assert.equal(r2.hizali, true);
   assert.equal(r2.setListesiPanelFarki.claimVar, false);
 });
 
@@ -773,4 +771,84 @@ test('ekleme tavanı: claim listesine göre panel çok yeni üye taşıyorsa UYA
   assert.match(r.sonuc, /^UYGULANDI/);
   assert.ok(uyari.some((x) => /UYARI: panel claim listesine göre 20 yeni üye taşıyor \(tavan 15\)/.test(x)),
     uyari.join('|'));
+});
+
+test('claim 18, Impark 16 -> 18 kalir + uyari', async () => {
+  const o = ortam();
+  const j = JSON.parse(PANEL_GOVDE);
+  const panelBooks = j.Books.filter(b => !['61633', '61635'].includes(String(b.Id)));
+  const panelGovde28 = JSON.stringify({ ...j, Books: panelBooks });
+  
+  const claim = j.Books.map(b => `${b.Id} | ${b.Adi}`).concat(['61633 | Eski 1', '61635 | Eski 2']).join('\n');
+  const uyari = [];
+  
+  const r = await P.panelMenuHizala({
+    ...o.ortak,
+    claimListesi: claim,
+    warn: (x) => uyari.push(x),
+    panelGetir: async () => ({ status: 200, govde: panelGovde28 }),
+  });
+  
+  assert.ok(uyari.some(x => x.includes("panel-farki: Impark'ta yok ama Platform Ayarlari'nda var")), uyari.join('|'));
+  const sonraZ = M.zipDizini(o.zip);
+  const xml = ig.menuCoz(M.zipGirdiOku(o.zip, sonraZ.get([...sonraZ.keys()].find(k => k.toLowerCase().includes('imwin32.dll')))));
+  const kapaklar = P.kapakSirasi(xml);
+  assert.equal(kapaklar.length, 32); // 30 (old) - 2 (removed from Impark) + 2 (added from Impark) + 2 (restored from claim) = 32
+  assert.ok(kapaklar.some(c => c.id === '61633'));
+  assert.ok(kapaklar.some(c => c.id === '61635'));
+});
+
+test('claim yok -> eski davranis (16)', async () => {
+  const o = ortam();
+  const j = JSON.parse(PANEL_GOVDE);
+  const panelBooks = j.Books.filter(b => !['61633', '61635'].includes(String(b.Id)));
+  const panelGovde28 = JSON.stringify({ ...j, Books: panelBooks });
+  
+  const r = await P.panelMenuHizala({
+    ...o.ortak,
+    claimListesi: null,
+    panelGetir: async () => ({ status: 200, govde: panelGovde28 }),
+  });
+  
+  const sonraZ = M.zipDizini(o.zip);
+  const xml = ig.menuCoz(M.zipGirdiOku(o.zip, sonraZ.get([...sonraZ.keys()].find(k => k.toLowerCase().includes('imwin32.dll')))));
+  const kapaklar = P.kapakSirasi(xml);
+  assert.equal(kapaklar.length, 30); // 30 (old) - 2 (removed) + 2 (added) = 30
+  assert.ok(!kapaklar.some(c => c.id === '61633'));
+  assert.ok(!kapaklar.some(c => c.id === '61635'));
+});
+
+test('atlanan uye claim\'de olsa bile cikar', async () => {
+  const o = ortam();
+  const j = JSON.parse(PANEL_GOVDE);
+  const panelBooks = j.Books.filter(b => !['61633'].includes(String(b.Id)));
+  const panelGovde29 = JSON.stringify({ ...j, Books: panelBooks });
+  
+  const claim = j.Books.map(b => `${b.Id} | ${b.Adi}`).concat(['61633 | Eski 1', '61635 | Eski 2']).join('\n');
+  
+  const r = await P.panelMenuHizala({
+    ...o.ortak,
+    atlananUyeler: ['61633', '61635'],
+    claimListesi: claim,
+    panelGetir: async () => ({ status: 200, govde: panelGovde29 }),
+  });
+  
+  const sonraZ = M.zipDizini(o.zip);
+  const xml = ig.menuCoz(M.zipGirdiOku(o.zip, sonraZ.get([...sonraZ.keys()].find(k => k.toLowerCase().includes('imwin32.dll')))));
+  const kapaklar = P.kapakSirasi(xml);
+  assert.equal(kapaklar.length, 30); // 30 (old) - 1 (removed from impark) + 2 (added) + 1 (restored 61633) - 2 (atlanan 61633, 61635) = 30
+  assert.ok(!kapaklar.some(c => c.id === '61633'));
+  assert.ok(!kapaklar.some(c => c.id === '61635'));
+});
+
+test('kart var motor yok -> RED', () => {
+  // Directly test the rule in hizalamaKapisi
+  const xml = '<main ID="1"><Group ID="1"><Tab ID="1">' +
+    '<cover ID="5" xmlSource="assets/5/data/BookContent.xml"></cover>' +
+    '</Tab></Group></main>';
+  const books = []; // Motor list is empty
+  const ihlal = P.hizalamaKapisi({
+    xml, books, varMi: () => true, beklenenMain: '<main ID="1">',
+  });
+  assert.ok(ihlal.some(x => /kart-motorda-yok: 5/.test(x)), ihlal.join('|'));
 });
