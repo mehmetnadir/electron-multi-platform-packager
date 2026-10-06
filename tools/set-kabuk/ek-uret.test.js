@@ -61,6 +61,7 @@ function sahteEk({ tavan = 4096 } = {}) {
 function sahteBag(ev, o = {}) {
   const kayit = {
     rclone: [], ssh: [], bildir: [], kabuk: [], merdiven: 0, setEki: [], webz: 0, log: [],
+    presign: [], yazilan: [],
   };
   const r2 = o.r2 || new Map();
   const dosyalar = o.dosyalar || new Map([
@@ -87,9 +88,31 @@ function sahteBag(ev, o = {}) {
         else return { code: 3, stdout: '', stderr: 'object not found' };
         return { code: 0, stdout: '', stderr: '' };
       }
-      if (o.yaziHatasi) return { code: 1, stdout: '', stderr: 'erişim yok' };
-      r2.set(hedef, fs.readFileSync(kaynak));
-      return { code: 0, stdout: '', stderr: '' };
+      return { code: 1, stdout: '', stderr: 'yazma rclone ile YAPILMAZ (salt-okunur kimlik)' };
+    },
+    // Sunucu presign ucu + R2 imzalı PUT sahtesi (bellek deposuna yazar).
+    kimlikVar: () => o.kimlikYok !== true,
+    presign: async (govde) => {
+      kayit.presign.push(govde);
+      const anahtarOf = (n) => (n === 'zip' ? `kabuk-ek/${govde.bookId}/${govde.girdiSha}.zip`
+        : n === 'imza' ? `kabuk-ek/${govde.bookId}/${govde.girdiSha}.imza`
+          : n === 'ret' ? `kabuk-ek/${govde.bookId}/${govde.girdiSha}.ret.json`
+            : `kabuk-ek/${govde.bookId}/son.json`);
+      const tur = { zip: 'application/zip', imza: 'text/plain', son: 'application/json',
+        ret: 'application/json' };
+      const urls = Object.fromEntries(govde.nesneler.map((n) => [n, {
+        url: `https://r2.sahte/${anahtarOf(n)}?X-Amz-Signature=gizli`, key: anahtarOf(n),
+        contentType: tur[n], contentLength: govde.boyutlar[n],
+      }]));
+      const sira = govde.nesneler.includes('ret') ? ['ret', 'son'] : ['zip', 'imza', 'son'];
+      return { status: 200, govde: { urls, sira, sureSn: 600 } };
+    },
+    put: async (url, { govde }) => {
+      const key = new URL(url).pathname.slice(1);
+      kayit.yazilan.push(`ydsr2:ydsdigital/${key}`);
+      if (o.yaziHatasi) return { status: 500, metin: '<Error><Code>InternalError</Code></Error>' };
+      r2.set(`ydsr2:ydsdigital/${key}`, Buffer.from(govde));
+      return { status: 200, metin: '' };
     },
     bildir: async (m) => { kayit.bildir.push(m); return { code: 0 }; },
     ek: () => o.ekModulu || sahteEk(o),
@@ -138,9 +161,7 @@ function anahtarKur(ev) {
   return E.anahtarUret(path.join(ev, 'kabuk-ek-imza'));
 }
 
-const yazmalar = (kayit) => kayit.rclone
-  .filter((a) => a[0] === 'copyto' && String(a[2]).startsWith('ydsr2:'))
-  .map((a) => a[2]);
+const yazmalar = (kayit) => kayit.yazilan;
 
 const tekSatir = (ek) => E.satirlariAyristir(tsv([satir(45550, ek)]))[0];
 
@@ -270,21 +291,22 @@ test('--anahtar-uret: 600 izinli özel anahtar, ikinci çağrı EZMEZ, özel ana
 test('yükleme sırası: zip → imza → son.json; imza açık anahtarla doğrulanır', async () => {
   const ev = geciciDizin();
   anahtarKur(ev);
-  const { bag, kayit } = sahteBag(ev);
+  const { bag, kayit, r2 } = sahteBag(ev);
   assert.equal(await E.main(['--set', '45550'], bag), 0);
   assert.deepEqual(yazmalar(kayit), [
     `ydsr2:ydsdigital/kabuk-ek/45550/${SHA_A}.zip`,
     `ydsr2:ydsdigital/kabuk-ek/45550/${SHA_A}.imza`,
     'ydsr2:ydsdigital/kabuk-ek/45550/son.json',
   ]);
-  const yerel = (son) => kayit.rclone
-    .find((a) => String(a[2]).startsWith('ydsr2:') && String(a[2]).endsWith(son))[1];
-  const son = JSON.parse(fs.readFileSync(yerel('son.json'), 'utf8'));
+  assert.deepEqual(kayit.presign[0].nesneler, ['zip', 'imza', 'son']);
+  const nesne = (son) => [...r2].find(([k]) => k.endsWith(son))[1];
+  const son = JSON.parse(nesne('son.json').toString('utf8'));
   assert.equal(son.girdiSha, SHA_A);
   assert.equal(son.tabanSurum, '2.25.6');
   const acik = crypto.createPublicKey(fs.readFileSync(path.join(ev, 'kabuk-ek-imza', 'acik.pem')));
-  const imza = Buffer.from(fs.readFileSync(yerel('.imza'), 'utf8'), 'base64');
-  assert.ok(crypto.verify(null, fs.readFileSync(yerel('.zip')), acik, imza));
+  const imza = Buffer.from(nesne('.imza').toString('utf8'), 'base64');
+  assert.ok(crypto.verify(null, nesne('.zip'), acik, imza));
+  assert.equal(kayit.presign[0].boyutlar.zip, nesne('.zip').length);
   assert.equal(kayit.kabuk[0].job.kisaKod, 'abc12');
 });
 
@@ -382,7 +404,11 @@ test('kalıcı ret: ek yok, .ret.json yazılır, kayıt kesin', async () => {
     }),
   });
   assert.equal(await E.main(['--set', '45550'], bag), 0);
-  assert.deepEqual(yazmalar(kayit), [`ydsr2:ydsdigital/kabuk-ek/45550/${'c'.repeat(64)}.ret.json`]);
+  assert.deepEqual(yazmalar(kayit), [
+    `ydsr2:ydsdigital/kabuk-ek/45550/${'c'.repeat(64)}.ret.json`,
+    'ydsr2:ydsdigital/kabuk-ek/45550/son.json',
+  ]);
+  assert.deepEqual(kayit.presign[0].nesneler, ['ret', 'son']);
   assert.match(kayit.bildir[0], /KALICI RET/);
   const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
   assert.equal(d['45550'].kesin, true);
@@ -778,4 +804,172 @@ test('tekMotorDuzeniMi: bookN yok + ImWin32 → true; bookN varsa false; sarmala
   assert.equal(E.tekMotorDuzeniMi(['set/index.html', 'set/classlibraries/ImWin32.dll'], onEkBul),
     true);
   assert.equal(E.tekMotorDuzeniMi(['index.html', 'book2/index.html'], onEkBul), false);
+});
+
+// ─── Presign istemcisi (gerçek HTTP, sahte sunucu) ───────────────────────────────────────
+
+const http = require('http');
+const JETON = 'gizli-jeton-ZZZ123';
+const AJAN = 'ajan-kimligi-QQQ789';
+
+/** Sahte book-update + R2 sunucusu. `davranis`: { presignDurum, retryAfter, putHata: 'imza' } */
+async function sahteSunucu(davranis = {}) {
+  const kayit = { presign: [], put: [], presignSayisi: 0 };
+  const sunucu = http.createServer((req, res) => {
+    const parcalar = [];
+    req.on('data', (d) => parcalar.push(d));
+    req.on('end', () => {
+      const govde = Buffer.concat(parcalar);
+      if (req.method === 'POST') {
+        kayit.presignSayisi += 1;
+        kayit.presign.push({ yol: req.url, jeton: req.headers['x-agent-token'],
+          govde: JSON.parse(govde.toString('utf8')) });
+        const durum = typeof davranis.presignDurum === 'function'
+          ? davranis.presignDurum(kayit.presignSayisi) : davranis.presignDurum;
+        if (durum && durum !== 200) {
+          if (durum === 429) res.setHeader('Retry-After', String(davranis.retryAfter || 1));
+          res.writeHead(durum, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: durum === 403 ? 'yetenek_yok' : 'x' }));
+          return;
+        }
+        const g = JSON.parse(govde.toString('utf8'));
+        const tur = { zip: 'application/zip', imza: 'text/plain; charset=utf-8',
+          son: 'application/json', ret: 'application/json' };
+        const urls = Object.fromEntries(g.nesneler.map((n) => [n, {
+          url: `http://127.0.0.1:${sunucu.address().port}/r2/${n}?X-Amz-Signature=abc`,
+          key: `kabuk-ek/${g.bookId}/${n}`, contentType: tur[n], contentLength: g.boyutlar[n],
+        }]));
+        const sira = g.nesneler.includes('ret') ? ['ret', 'son'] : ['zip', 'imza', 'son'];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ urls, sira, sureSn: davranis.sureSn || 600 }));
+        return;
+      }
+      const n = req.url.split('/')[2].split('?')[0];
+      kayit.put.push({ n, tur: req.headers['content-type'], uzunluk: req.headers['content-length'],
+        parcali: req.headers['transfer-encoding'] || null, bayt: govde.length });
+      if (davranis.putHata === n) {
+        res.writeHead(403);
+        res.end('<Error><Code>SignatureDoesNotMatch</Code></Error>');
+        return;
+      }
+      res.writeHead(200);
+      res.end();
+    });
+  });
+  await new Promise((r) => sunucu.listen(0, '127.0.0.1', r));
+  return { sunucu, kayit, taban: `http://127.0.0.1:${sunucu.address().port}/api/v1` };
+}
+
+function istemciBag(taban, ek = {}) {
+  const ev = geciciDizin();
+  const dosya = path.join(ev, 'token.json');
+  fs.writeFileSync(dosya, JSON.stringify({ agentId: AJAN, token: JETON }));
+  const log = [];
+  const c = E.httpIstemci({ apiBase: () => taban, tokenDosyasi: () => dosya });
+  return {
+    log, bag: { ...c, log: (...a) => log.push(a.join(' ')), warn: (...a) => log.push(a.join(' ')),
+      bekle: async () => {}, ...ek },
+  };
+}
+
+const PARCALAR = () => ({
+  zip: Buffer.alloc(5000, 7), imza: Buffer.from('QUJD'.repeat(22)), son: Buffer.from('{"a":1}\n'),
+});
+
+test('presign + PUT: sıra, X-Agent-Token, Content-Type aynen, Content-Length, chunked yok',
+  async () => {
+    const { sunucu, kayit, taban } = await sahteSunucu();
+    try {
+      const { bag } = istemciBag(taban);
+      const yazilan = await E.ekYukle(bag, {
+        bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR(),
+      });
+      assert.deepEqual(yazilan,
+        ['kabuk-ek/45550/zip', 'kabuk-ek/45550/imza', 'kabuk-ek/45550/son']);
+      assert.equal(kayit.presign[0].yol, `/api/v1/agents/${AJAN}/kabuk-ek/presign`);
+      assert.equal(kayit.presign[0].jeton, JETON);
+      assert.deepEqual(kayit.presign[0].govde, {
+        bookId: '45550', girdiSha: SHA_A, nesneler: ['zip', 'imza', 'son'],
+        boyutlar: { zip: 5000, imza: 88, son: 8 },
+      });
+      assert.deepEqual(kayit.put.map((p) => p.n), ['zip', 'imza', 'son']);
+      assert.equal(kayit.put[1].tur, 'text/plain; charset=utf-8');
+      assert.equal(kayit.put[0].uzunluk, '5000');
+      assert.ok(kayit.put.every((p) => p.parcali === null && Number(p.uzunluk) === p.bayt));
+    } finally { sunucu.close(); }
+  });
+
+test('ara PUT düşerse son.json yazılmaz; SignatureDoesNotMatch ipucu', async () => {
+  const { sunucu, kayit, taban } = await sahteSunucu({ putHata: 'imza' });
+  try {
+    const { bag } = istemciBag(taban);
+    await assert.rejects(
+      E.ekYukle(bag, { bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR() }),
+      /imza PUT HTTP 403 SignatureDoesNotMatch \(boyut\/tür uyuşmazlığı\)/,
+    );
+    assert.deepEqual(kayit.put.map((p) => p.n), ['zip', 'imza']);
+  } finally { sunucu.close(); }
+});
+
+test('429 → Retry-After kadar bir kez beklenir; ikinci 429 hata', async () => {
+  const a = await sahteSunucu({ presignDurum: (n) => (n === 1 ? 429 : 200), retryAfter: 7 });
+  try {
+    const bekleme = [];
+    const { bag } = istemciBag(a.taban, { bekle: async (ms) => { bekleme.push(ms); } });
+    await E.ekYukle(bag, { bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR() });
+    assert.deepEqual(bekleme, [7000]);
+    assert.equal(a.kayit.presignSayisi, 2);
+  } finally { a.sunucu.close(); }
+  const b = await sahteSunucu({ presignDurum: 429 });
+  try {
+    const { bag } = istemciBag(b.taban);
+    await assert.rejects(E.ekYukle(bag, { bookId: '1', girdiSha: SHA_A, parcalar: PARCALAR() }),
+      /presign HTTP 429/);
+    assert.equal(b.kayit.put.length, 0);
+  } finally { b.sunucu.close(); }
+});
+
+test('401/403 kalıcı; jeton ve agentId hata metninde ve logda yok', async () => {
+  const { sunucu, kayit, taban } = await sahteSunucu({ presignDurum: 403 });
+  try {
+    const { bag, log } = istemciBag(taban);
+    const e = await E.ekYukle(bag, { bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR() })
+      .then(() => null, (x) => x);
+    assert.equal(e.kalici, true);
+    assert.match(e.message, /presign HTTP 403 yetenek_yok \(kalıcı\)/);
+    for (const metin of [e.message, ...log]) {
+      assert.ok(!metin.includes(JETON) && !metin.includes(AJAN));
+    }
+    assert.equal(kayit.put.length, 0);
+  } finally { sunucu.close(); }
+});
+
+test('ağ hatası mesajı adres/jeton taşımaz; token.json yoksa kimlikVar false', async () => {
+  const { bag } = istemciBag('http://127.0.0.1:1/api/v1');
+  const e = await E.ekYukle(bag, { bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR() })
+    .then(() => null, (x) => x);
+  assert.match(e.message, /presign isteği gitmedi/);
+  for (const gizli of [JETON, AJAN, '127.0.0.1']) assert.ok(!e.message.includes(gizli));
+  const c = E.httpIstemci({ apiBase: () => 'x', tokenDosyasi: () => '/yok/token.json' });
+  assert.equal(c.kimlikVar(), false);
+});
+
+test('imza süresi dolunca yeni adres istenir', async () => {
+  const { sunucu, kayit, taban } = await sahteSunucu({ sureSn: 40 });
+  try {
+    let t = 0;
+    const { bag } = istemciBag(taban, { simdi: () => { t += 6000; return t; } });
+    await E.ekYukle(bag, { bookId: '45550', girdiSha: SHA_A, parcalar: PARCALAR() });
+    assert.ok(kayit.presignSayisi >= 2);
+    assert.deepEqual(kayit.put.map((p) => p.n), ['zip', 'imza', 'son']);
+  } finally { sunucu.close(); }
+});
+
+test('token.json yoksa gerçek kipte yükleme yok + bildir', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const { bag, kayit } = sahteBag(ev, { kimlikYok: true });
+  assert.equal(await E.main(['--set', '45550'], bag), 1);
+  assert.equal(kayit.ssh.length, 0);
+  assert.match(kayit.bildir[0], /ajan kimliği yok/);
 });
