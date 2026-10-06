@@ -176,6 +176,54 @@ test('kapakGecerli: 9 baytlık 404 gövdesi kapak değil; PNG/JPEG ≥1 KB kapak
   assert.equal(S.kapakGecerli(Buffer.alloc(5000)), false);
 });
 
+// 06.10 (45540 `5cnam` book1, 73581 `94uek` book1): Web-Z `images/book1.png` gövdesi WebP VP8X,
+// 22064 / 28508 bayt, 400x400 / 400x492 (sips ölçtü). Eski kapı PNG/JPEG imzası istediği için
+// gerçek kapağı "geçersiz" sayıp kalıcı ret verdi. Başlık baytları canlı gövdeden alındı.
+const WEBP_45540 = Buffer.concat([Buffer.from(
+  '524946462856000057454250565038580a000000300000008f01008f0100', 'hex'), Buffer.alloc(22034, 1)]);
+const WEBP_73581 = Buffer.concat([Buffer.from(
+  '52494646546f000057454250565038580a000000300000008f0100eb0100', 'hex'), Buffer.alloc(28478, 1)]);
+
+test('gorselBilgisi: WebP VP8X / VP8 / VP8L, PNG IHDR, JPEG SOF0 piksel boyutu', () => {
+  assert.deepEqual(S.gorselBilgisi(WEBP_45540), { tur: 'webp', en: 400, boy: 400 });
+  assert.deepEqual(S.gorselBilgisi(WEBP_73581), { tur: 'webp', en: 400, boy: 492 });
+  const vp8 = Buffer.alloc(64);
+  vp8.write('RIFF', 0, 'latin1'); vp8.write('WEBPVP8 ', 8, 'latin1');
+  vp8.writeUInt16LE(640, 26); vp8.writeUInt16LE(800, 28);
+  assert.deepEqual(S.gorselBilgisi(vp8), { tur: 'webp', en: 640, boy: 800 });
+  const vp8l = Buffer.alloc(64);
+  vp8l.write('RIFF', 0, 'latin1'); vp8l.write('WEBPVP8L', 8, 'latin1'); vp8l[20] = 0x2f;
+  vp8l.writeUInt32LE((300 - 1) | ((450 - 1) << 14), 21);
+  assert.deepEqual(S.gorselBilgisi(vp8l), { tur: 'webp', en: 300, boy: 450 });
+  const png = Buffer.alloc(64);
+  Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(png, 0);
+  png.writeUInt32BE(641, 16); png.writeUInt32BE(797, 20);
+  assert.deepEqual(S.gorselBilgisi(png), { tur: 'png', en: 641, boy: 797 });
+  // JPEG: APP0 (16 bayt) sonra SOF0.
+  const jpg = Buffer.alloc(64);
+  Buffer.from('ffd8ffe00010', 'hex').copy(jpg, 0);
+  Buffer.from('ffc0001108', 'hex').copy(jpg, 20); jpg.writeUInt16BE(600, 25); jpg.writeUInt16BE(500, 27);
+  assert.deepEqual(S.gorselBilgisi(jpg), { tur: 'jpeg', en: 500, boy: 600 });
+  assert.equal(S.gorselBilgisi(Buffer.from('<!DOCTYPE html><html>hata</html>')), null);
+});
+
+test('kapakGecerli: içerik tabanlı — gerçek WebP kapak geçer, küçük piksel / HTML reddedilir', () => {
+  assert.equal(S.kapakGecerli(WEBP_45540), true);
+  assert.equal(S.kapakGecerli(WEBP_73581), true);
+  // 28 KB HTML hata sayfası: imza yok → bayttan bağımsız RED.
+  assert.equal(S.kapakGecerli(Buffer.from(`<html>${'x'.repeat(28500)}</html>`)), false);
+  // Başlığı okunan ama 199 px kenarlı görsel → RED; 200 px sınır → geçer.
+  const kucuk = Buffer.from(WEBP_45540);
+  kucuk.writeUIntLE(198, 24, 3);
+  assert.equal(S.kapakGecerli(kucuk), false);
+  const sinir = Buffer.from(WEBP_45540);
+  sinir.writeUIntLE(199, 24, 3); sinir.writeUIntLE(199, 27, 3);
+  assert.equal(S.kapakGecerli(sinir), true);
+  // Bilinmeyen RIFF alt türü (WAVE) kapak değildir.
+  const wav = Buffer.from(WEBP_45540); wav.write('WAVE', 8, 'latin1');
+  assert.equal(S.kapakGecerli(wav), false);
+});
+
 // ─── uçtan uca (sahte ikili + sahte Web-Z) ─────────────────────────────────────────────────
 
 test('UYGULANDI: kabuk yazılır, sıra Web-Z, klasörler aynı, bookN/** merkez dizinde aynı', async () => {
