@@ -417,7 +417,15 @@ function komutVarMi(ad, env) {
 function varsayilanBag(env = process.env) {
   const ev = env.EMPP_AGENT_DIZINI || path.join(os.homedir(), '.empp-agent');
   const kabuk = () => require('../../src/agent/set-kabuk-tazele');
+  // API tabanı + jeton dosyası runner CONFIG'inden (BOOKUPDATE_API / AGENT_TOKEN_FILE ile aynı).
+  const runnerConfig = () => require('../../src/agent/runner').CONFIG;
+  const http = httpIstemci({
+    apiBase: () => runnerConfig().apiBase, tokenDosyasi: () => runnerConfig().tokenFile,
+  });
   return {
+    kimlikVar: http.kimlikVar,
+    presign: http.presign,
+    put: http.put,
     env,
     ev,
     log: (...a) => console.log(new Date().toISOString(), ...a),
@@ -630,15 +638,159 @@ async function kaynakAdimlari(bag, s, zip, calisma) {
   return job;
 }
 
-async function rcloneYaz(bag, yerel, anahtar) {
-  const r = await bag.rclone(['copyto', yerel, `${R2_UZAK}:${EK_BUCKET}/${anahtar}`]);
-  if (r.code !== 0) throw new Error(`rclone ${r.code}: ${String(r.stderr).trim().slice(-200)}`);
+// ─── R2 YAZMA: sunucu imzalı PUT ucu (06.10) ─────────────────────────────────────────────
+// Mac'teki `ydsr2` kimliği salt-okunurdur (PUT 403). Yazma `POST {api}/agents/{agentId}/kabuk-ek/
+// presign` (X-Agent-Token) ile alınan kısa ömürlü adreslere yapılır. Okuma (taban, R2 ek denetimi)
+// rclone ile kalır. Jeton ve agentId HİÇBİR log/hata metnine girmez; imzalı adres de loglanmaz.
+
+/** Yüklenen nesne sırası: başarılı ek ya da kalıcı ret; son.json HEP en son. */
+const NESNE_SIRASI = { ek: ['zip', 'imza', 'son'], ret: ['ret', 'son'] };
+
+/** Ağ hatasının güvenli özeti (adres/jeton taşımaz). SAF. */
+function agHatasiKisa(e) {
+  const c = e && e.cause;
+  return String((c && (c.code || c.name)) || (e && (e.code || e.name)) || 'ağ hatası');
+}
+
+/** S3 XML hata gövdesinden `<Code>`. SAF. */
+function s3Kodu(metin) {
+  const m = /<Code>([^<]{1,80})<\/Code>/.exec(String(metin || ''));
+  return m ? m[1] : null;
+}
+
+/**
+ * Varsayılan HTTP istemcisi (global fetch). `apiBase`/`tokenDosyasi` tembel çözülür.
+ * @returns {{kimlikVar: () => boolean, presign: Function, put: Function}}
+ */
+function httpIstemci({ apiBase, tokenDosyasi, fetchFn = (...a) => fetch(...a) }) {
+  const kimlik = () => {
+    let j = null;
+    try { j = JSON.parse(fs.readFileSync(tokenDosyasi(), 'utf8')); } catch (_) { /* yok */ }
+    if (!j || !j.agentId || !j.token) {
+      throw new Error('ajan kimliği yok (token.json: agentId/token)');
+    }
+    return j;
+  };
+  return {
+    kimlikVar: () => {
+      try { kimlik(); return true; } catch (_) { return false; }
+    },
+    presign: async (govde) => {
+      const { agentId, token } = kimlik();
+      let r;
+      try {
+        r = await fetchFn(`${apiBase()}/agents/${encodeURIComponent(agentId)}/kabuk-ek/presign`, {
+          method: 'POST',
+          headers: { 'X-Agent-Token': token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(govde),
+          signal: AbortSignal.timeout(30000),
+        });
+      } catch (e) {
+        throw new Error(`presign isteği gitmedi (${agHatasiKisa(e)})`);
+      }
+      let j = null;
+      try { j = await r.json(); } catch (_) { /* gövde JSON değil */ }
+      return { status: r.status, govde: j, retryAfter: r.headers.get('retry-after') };
+    },
+    put: async (url, { contentType, govde }) => {
+      let r;
+      try {
+        // Buffer gövde: Content-Length otomatik (chunked YOK; boyut imzanın parçası).
+        r = await fetchFn(url, {
+          method: 'PUT', headers: { 'Content-Type': contentType }, body: govde,
+          signal: AbortSignal.timeout(120000),
+        });
+      } catch (e) {
+        throw new Error(`PUT gitmedi (${agHatasiKisa(e)})`);
+      }
+      const metin = await r.text().catch(() => '');
+      return { status: r.status, metin: metin.slice(0, 500) };
+    },
+  };
+}
+
+class YuklemeHatasi extends Error {
+  constructor(mesaj, { kalici = false } = {}) {
+    super(mesaj);
+    this.name = 'YuklemeHatasi';
+    this.kalici = kalici;
+  }
+}
+
+/**
+ * Nesneleri imzalı PUT ile yükler. Sıra sunucunun `sira`sıdır (son.json en son). Bir PUT düşerse
+ * sonrakiler YAZILMAZ. 429'da Retry-After kadar bir kez beklenir. 401/403 kalıcıdır. İmza süresi
+ * (`sureSn`, 30 sn pay) dolarsa yeni adres istenir.
+ * @param {{bookId: string, girdiSha: string, parcalar: Object<string, Buffer>}} o
+ *   parcalar anahtarları NESNE_SIRASI.ek ya da .ret
+ * @returns {Promise<string[]>} yazılan R2 anahtarları (sırayla)
+ */
+async function ekYukle(bag, { bookId, girdiSha, parcalar }) {
+  const nesneler = Object.keys(parcalar);
+  const govde = {
+    bookId: String(bookId), girdiSha, nesneler,
+    boyutlar: Object.fromEntries(nesneler.map((n) => [n, parcalar[n].length])),
+  };
+  const simdi = bag.simdi || Date.now;
+  const bekle = bag.bekle || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const presignAl = async () => {
+    for (let deneme = 0; ; deneme += 1) {
+      const r = await bag.presign(govde);
+      const kod = r.govde && r.govde.error ? ` ${r.govde.error}` : '';
+      if (r.status === 200 && r.govde && r.govde.urls && Array.isArray(r.govde.sira)) {
+        return { ...r.govde, alindi: simdi() };
+      }
+      if (r.status === 429 && deneme === 0) {
+        const sn = Math.min(Math.max(Number(r.retryAfter) || 5, 1), 120);
+        bag.log(`${ISARET} ${bookId}: presign 429 — ${sn} sn bekleniyor (bir kez)`);
+        await bekle(sn * 1000);
+        continue;
+      }
+      if (r.status === 401 || r.status === 403) {
+        throw new YuklemeHatasi(`presign HTTP ${r.status}${kod} (kalıcı)`, { kalici: true });
+      }
+      throw new YuklemeHatasi(`presign HTTP ${r.status}${kod}`);
+    }
+  };
+  let p = await presignAl();
+  const beklenen = [...nesneler].sort().join(',');
+  if ([...p.sira].sort().join(',') !== beklenen || p.sira[p.sira.length - 1] !== 'son') {
+    throw new YuklemeHatasi(`presign sırası beklenmedik: ${p.sira.join(',')}`);
+  }
+  const yazilan = [];
+  for (const n of p.sira) {
+    const sure = (Number(p.sureSn) || 600) - 30;
+    if (simdi() - p.alindi > sure * 1000) {
+      bag.log(`${ISARET} ${bookId}: imzalı adres süresi doldu — yeniden isteniyor`);
+      p = await presignAl();
+    }
+    const u = p.urls[n];
+    if (!u || !u.url || !u.contentType) throw new YuklemeHatasi(`presign cevabında ${n} yok`);
+    if (u.contentLength != null && Number(u.contentLength) !== parcalar[n].length) {
+      throw new YuklemeHatasi(`${n}: imzadaki boyut ${u.contentLength} ≠ ${parcalar[n].length}`);
+    }
+    const r = await bag.put(u.url, { contentType: u.contentType, govde: parcalar[n] });
+    if (r.status !== 200) {
+      const s3 = s3Kodu(r.metin);
+      const ipucu = s3 === 'SignatureDoesNotMatch' ? ' (boyut/tür uyuşmazlığı)' : '';
+      throw new YuklemeHatasi(`${n} PUT HTTP ${r.status}${s3 ? ` ${s3}` : ''}${ipucu}`
+        + ` — sonraki nesneler yazılmadı`);
+    }
+    yazilan.push(u.key || n);
+  }
+  return yazilan;
 }
 
 /** Ret işaretini yazar. @returns {Promise<boolean>} R2'ye yazıldı mı */
 async function retYaz(bag, s, ek, girdiSha, neden, o, calisma) {
+  const uretildi = new Date().toISOString();
   const govde = `${JSON.stringify({
-    neden: String(neden), bookId: String(s.bookId), girdiSha, uretildi: new Date().toISOString(),
+    neden: String(neden), bookId: String(s.bookId), girdiSha, uretildi,
+  }, null, 2)}\n`;
+  // Sunucu ret yüklemesini son.json ile birlikte imzalar (ret → son): ProBook ön kontrolü bu
+  // kitabı görür, ekGetir ret işaretini bulur.
+  const sonRet = `${JSON.stringify({
+    bookId: String(s.bookId), girdiSha, ret: true, uretildi, tabanSurum: s.surum,
   }, null, 2)}\n`;
   const anahtar = ek.retAnahtari(String(s.bookId), girdiSha);
   const dosya = path.join(calisma, 'ret.json');
@@ -652,7 +804,10 @@ async function retYaz(bag, s, ek, girdiSha, neden, o, calisma) {
     return false;
   }
   try {
-    await rcloneYaz(bag, dosya, anahtar);
+    await ekYukle(bag, {
+      bookId: String(s.bookId), girdiSha,
+      parcalar: { ret: Buffer.from(govde), son: Buffer.from(sonRet) },
+    });
     bag.log(`${ISARET} ${s.bookId}: ret işareti yazıldı ${anahtar}`);
     return true;
   } catch (e) {
@@ -771,7 +926,6 @@ async function setIsle(bag, s, o) {
     const ekSha = crypto.createHash('sha256').update(paket).digest('hex');
     const anahtar = ek.ekAnahtari(String(s.bookId), girdiSha);
     const imzaAnahtar = imza ? ek.imzaAnahtari(String(s.bookId), girdiSha) : null;
-    const sonAnahtar = ek.sonAnahtari(String(s.bookId));
     sonuc.anahtar = anahtar;
     const son = {
       bookId: String(s.bookId), girdiSha, kip, uretildi: new Date().toISOString(),
@@ -809,18 +963,17 @@ async function setIsle(bag, s, o) {
     })) {
       return bitir('mevcut', 'R2\'de aynı girdiSha ve Web-Z settings için doğrulanmış ek var');
     }
-    // SIRA: ek → imza → son.json; son.json yalnız imzalı, var olan eki gösterir.
-    const yuklemeler = [
-      [ekDosyasi, anahtar, 'ek'], [imzaDosyasi, imzaAnahtar, 'imza'],
-      [sonDosyasi, sonAnahtar, 'son.json'],
-    ];
-    for (const [yerel, uzak, ad] of yuklemeler) {
-      try {
-        await rcloneYaz(bag, yerel, uzak);
-      } catch (e) {
-        await bag.bildir(`kabuk-ek ${s.bookId}: ${ad} yüklenemedi — ${e.message.slice(0, 160)}`);
-        return bitir('hata', `${ad} yüklenemedi: ${e.message}`);
-      }
+    // SIRA (sunucu `sira`): zip → imza → son.json; son.json yalnız imzalı, var olan eki gösterir.
+    try {
+      const yazilan = await ekYukle(bag, {
+        bookId: String(s.bookId), girdiSha,
+        parcalar: { zip: paket, imza: Buffer.from(imza), son: Buffer.from(sonMetni) },
+      });
+      bag.log(`${ISARET} ${s.bookId}: yüklendi ${yazilan.join(' → ')}`);
+    } catch (e) {
+      const m = String(e && e.message || e);
+      await bag.bildir(`kabuk-ek ${s.bookId}: yükleme düştü — ${m.slice(0, 160)}`);
+      return bitir('hata', `yükleme düştü: ${m}`);
     }
     return bitir('yuklendi', null);
   } catch (e) {
@@ -891,7 +1044,8 @@ async function main(argv, bag = varsayilanBag()) {
       const ek = bag.ek();
       const eksik = !ozelAnahtar ? `özel anahtar yok (${imzaDizini}/ozel.pem; --anahtar-uret)`
         : (typeof ek.ekImzala !== 'function' || typeof ek.imzaAnahtari !== 'function')
-          ? 'kabuk-ek modülünde ekImzala/imzaAnahtari yok' : null;
+          ? 'kabuk-ek modülünde ekImzala/imzaAnahtari yok'
+          : !bag.kimlikVar() ? 'ajan kimliği yok (token.json) — presign istenemez' : null;
       if (eksik) {
         bag.warn(`${ISARET} ${eksik} — yükleme yapılmaz`);
         await bag.bildir(`kabuk-ek: ${eksik} — yükleme yapılmadı`);
@@ -978,5 +1132,5 @@ module.exports = {
   kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, tekMotorDuzeniMi,
   onbellekBoyutu, kenaraAl, geriCekilmeMs, atlamaNedeni, kesinSonucMu,
   durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
-  varsayilanBag,
+  varsayilanBag, httpIstemci, ekYukle, s3Kodu, NESNE_SIRASI,
 };

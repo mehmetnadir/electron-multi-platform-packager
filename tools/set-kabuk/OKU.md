@@ -28,7 +28,7 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
   → merdiven (EMPP_ARSIV_MERDIVEN=1) + set eki (EMPP_SET_UYELIK_EK=1) — runner kaynakAdim
   → kabukTazele({kabukKaynagi:'ikili', ekCikti}) — Swift ikilisi + mevcut kapı
   → manifestKur + ekPaketle → tavan → ed25519 imza (ekImzala)
-  → yükleme: <girdiSha>.zip → <girdiSha>.imza → son.json   (ydsr2:ydsdigital/kabuk-ek/<id>/)
+  → yükleme: POST {api}/agents/{agentId}/kabuk-ek/presign → imzalı PUT: <girdiSha>.zip → .imza → son.json
 ```
 
 | Durum | Sonuç |
@@ -106,6 +106,25 @@ uygulanmaz.
   sorguyu yok sayarsa bayat `son.json` gelir.
 - **DİKKAT:** bunu kenardan ölç (ev ya da ofis bağlantısı), srv21'den ölçme. srv21 kenar kuralını
   farklı görür.
+
+## R2 yazma (imzalı PUT, 06.10)
+
+- Mac'teki `ydsr2` rclone kimliği SALT-OKUNURDUR (PUT 403). Okuma (taban, R2'de mevcut ek denetimi)
+  rclone ile yapılır. Yazma sunucunun imzalı PUT ucuyla yapılır.
+- İstek: `POST {api}/agents/{agentId}/kabuk-ek/presign`, başlık `X-Agent-Token`.
+  - `api` = runner `CONFIG.apiBase` (`BOOKUPDATE_API`, varsayılan `https://akillitahta.ndr.ist/api/v1`).
+  - `agentId` + jeton = runner `CONFIG.tokenFile` (`~/.empp-agent/token.json`).
+  - Gövde: `{bookId, girdiSha, nesneler: ['zip','imza','son'], boyutlar}`; kalıcı ret
+    `['ret','son']`.
+- PUT'lar sunucunun `sira`sıyla yapılır. `Content-Type` cevaptaki değerin AYNISIDIR. Gövde tam
+  boyutlu Buffer'dır (chunked yok; boyut imzanın parçası).
+- Bir PUT düşerse sonrakiler (özellikle `son.json`) YAZILMAZ.
+- 429: `Retry-After` kadar bir kez beklenir. 401/403: kalıcı hata + `bildir`.
+- 403 `SignatureDoesNotMatch` = boyut ya da tür uyuşmazlığı. İmza süresi (600 sn) dolarsa yeni
+  adres istenir.
+- **UYARI:** jeton, agentId ve imzalı adres hiçbir log ya da hata metnine yazılmaz.
+- Kalıcı ret yüklemesinde `son.json` da yazılır (`ret: true`). ProBook ön kontrolü kitabı görür,
+  `ekGetir` ret işaretini bulur.
 
 ## Disk (silme yok)
 
