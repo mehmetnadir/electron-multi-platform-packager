@@ -1324,3 +1324,10 @@ def test_flashy_d_varyanti_ve_unite():
     js = kabul.js_kutu_guncelle("D", "Practice Book", 0)
     assert "article.flashy-card[data-id]" in js and ".fc-title" in js
     assert "#unitModal:not([hidden]) .unit-item" in kabul.JS_UNITE_TIKLA
+
+
+def test_ikinci_sayfa_etiketi():
+    assert kabul.ikinci_sayfa_etiketi([{"n": 1, "x": 1, "y": 1}, {"n": 2, "x": 2, "y": 2}])["n"] == 2
+    assert kabul.ikinci_sayfa_etiketi([{"n": 5, "x": 1, "y": 1}, {"n": 3, "x": 2, "y": 2}])["n"] == 3
+    assert kabul.ikinci_sayfa_etiketi([{"n": 1, "x": 1, "y": 1}]) is None
+    assert kabul.ikinci_sayfa_etiketi(None) is None

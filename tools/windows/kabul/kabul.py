@@ -904,15 +904,17 @@ def kitap_kanit(c, kimlik, sira):
     # beyaz) -> kitap acik ve cizili oldugu halde KALDI. Etiketi 2 olan thumb'a tiklanir; 2. sayfa dolu ve
     # renkliyse GECTI (muafiyet ACIK). 2. sayfa da tek renkse KALDI kalir (gercek bos tuval).
     if bos_ilk_sayfa_adayi(kanit):
-        e2 = next((e for e in (kanit.get("thumbEtiket") or []) if e.get("n") == 2), None)
-        if e2:
-            c.tikla(e2["x"], e2["y"]); time.sleep(5)
-            y = olc()
-            kanit["ikinciSayfa"] = {"canvasDolu": y.get("canvasDolu"), "canvasRenk": y.get("canvasRenk"),
-                                    "sayfa": y.get("sayfa")}
-            if ikinci_sayfa_gecer(y):
-                kanit["sonuc"] = "GECTI"; kanit["muafiyet"] = "BOS_ILK_SAYFA"
-                png2 = c.ekran(); gonder(f"{ssad}-s2", png2); kanit["ekran2"] = f"{ssad}-s2"
+        e2 = ikinci_sayfa_etiketi(kanit.get("thumbEtiket"))
+        # Etiket yoksa (45100 Worksheets, 06.10: serit etiketsiz) klavye ile sonraki sayfa.
+        if e2: c.tikla(e2["x"], e2["y"]); yol2 = "etiket-%s" % e2.get("n")
+        else: c.tus("ArrowRight", "ArrowRight", 39); yol2 = "ok-tusu"
+        time.sleep(5)
+        y = olc()
+        kanit["ikinciSayfa"] = {"canvasDolu": y.get("canvasDolu"), "canvasRenk": y.get("canvasRenk"),
+                                "sayfa": y.get("sayfa"), "yol": yol2}
+        if ikinci_sayfa_gecer(y):
+            kanit["sonuc"] = "GECTI"; kanit["muafiyet"] = "BOS_ILK_SAYFA"
+            png2 = c.ekran(); gonder(f"{ssad}-s2", png2); kanit["ekran2"] = f"{ssad}-s2"
     kanit.pop("thumbIlk", None)
     kanit.pop("thumbEtiket", None)
     return kanit
@@ -923,6 +925,12 @@ def bos_ilk_sayfa_adayi(kanit):
     return (kanit.get("sonuc") == "KALDI" and bool(kanit.get("ilkSayfada"))
             and (kanit.get("thumbOK") or 0) >= 3 and (kanit.get("canvasDolu") or 0) > 50
             and (kanit.get("canvasRenk") or 0) <= 1 and (kanit.get("toplamSayfa") or 0) >= 2)
+
+def ikinci_sayfa_etiketi(etiketler):
+    """SAF KARAR: tiklanacak thumb etiketi: n==2, yoksa 1'den buyuk en kucuk n, yoksa None."""
+    adaylar = [e for e in (etiketler or []) if isinstance(e.get("n"), int) and e["n"] > 1]
+    if not adaylar: return None
+    return next((e for e in adaylar if e["n"] == 2), min(adaylar, key=lambda e: e["n"]))
 
 def ikinci_sayfa_gecer(y):
     """SAF KARAR: 2. sayfa olcumu ilk sayfa esigini (dolu>50 VE renk>1) gecer mi?"""
