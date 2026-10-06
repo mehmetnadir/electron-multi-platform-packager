@@ -92,7 +92,7 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
 
 async function kostur({
   zip = buildZip(), ayar = WEBZ, kapakYok, mod = '', job = {}, platform = 'darwin', status, aracSuresiMs,
-  kabukKaynagi, kabukEk, ekCikti,
+  kabukKaynagi, kabukEk, ekCikti, cdnGetir,
 } = {}) {
   const d = tmp('is');
   const zipYolu = path.join(d, 'build.zip');
@@ -106,6 +106,7 @@ async function kostur({
   try {
     const r = await S.kabukTazele({
       zip: zipYolu, calisma: d, ikili, platform, getir: w.getir, aracSuresiMs, kabukKaynagi, kabukEk, ekCikti,
+      cdnGetir,
       job: { bookId: '45550', kisaKod: 'tlk2k', ...job },
       log: (s) => loglar.push(s), warn: (s) => loglar.push(s),
     });
@@ -804,4 +805,68 @@ test('ekSonKontrol: son.json yok/başka kitap/okuma hatası → var:false; bu ki
   const hata = { sonOku: async () => { throw new Error('ağ'); } };
   assert.match((await S.ekSonKontrol({ bookId: '1', kabukEk: hata })).neden, /okunamadı: ağ/);
   assert.equal((await S.ekSonKontrol({ bookId: '1', kabukEk: sk({ bookId: '1' }) })).var, true);
+});
+
+// ─── kabuk eki GERÇEK modülle (Parça A birleşti): Mac üretir → paketler → ProBook uygular ────
+
+const KE = require('./kabuk-ek');
+
+/** Sahte CDN (A'nın getir biçimi: {status, buffer}); `nesneler` URL yolu (sorgusuz) → Buffer. */
+function sahteCdn(nesneler = new Map()) {
+  const istekler = [];
+  const getir = async (url) => {
+    istekler.push(url);
+    const yol = url.split('?')[0];
+    return nesneler.has(yol) ? { status: 200, buffer: nesneler.get(yol) } : { status: 404, buffer: Buffer.alloc(0) };
+  };
+  return { getir, istekler, nesneler };
+}
+
+/** Mac tarafı: ikili + gerçek parmak izi → ekCikti → manifestKur + ekPaketle → CDN nesnesi. */
+async function gercekEkUret({ zip = buildZip(), ayar = WEBZ } = {}) {
+  const yakalanan = [];
+  const r = await kostur({ zip, ayar, ekCikti: (o) => { yakalanan.push(o); } });
+  assert.equal(r.r.durum, 'uygulandi', r.r.neden);
+  const c = yakalanan[0];
+  const klasorler = c.girdi.kitaplar.map((k) => k.klasor);
+  const manifest = KE.manifestKur({ bookId: '45550', kip: c.kip, girdiSha: c.girdiSha,
+    webzSettingsSha: c.webzSettingsSha, dosyalar: c.dosyalar });
+  const buf = KE.ekPaketle({ manifest, dosyalar: c.dosyalar }, { klasorler });
+  const cdn = sahteCdn(new Map([
+    [KE.ekUrl('45550', c.girdiSha), buf],
+    [KE.sonUrl('45550').split('?')[0], Buffer.from(JSON.stringify({ bookId: '45550', girdiSha: c.girdiSha }))],
+  ]));
+  return { c, buf, cdn };
+}
+
+test('GERÇEK modül: Mac ek üretir → ProBook (ek kipi, ikilisiz) uygular → uygulandi, kapı koşar', async () => {
+  const { c, cdn } = await gercekEkUret();
+  assert.equal(c.girdiSha, KE.girdiParmakIzi({ kip: 'bookN', girdi: c.girdi, kapaklar: c.kapaklar, a1Girdi: null }));
+  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir });
+  assert.equal(r.r.durum, 'uygulandi', r.r.neden);
+  assert.equal(r.r.girdiSha, c.girdiSha, 'iki makine aynı girdiden aynı parmak izi');
+  assert.match(new AdmZip(r.zipYolu).getEntry('scripts/language-set.js').getData().toString(), /sonrakiSatirDugmesi/);
+  assert.equal(fs.existsSync(path.join(r.d, 'cagri.log')), false, 'ikili çağrılmadı');
+  assert.deepEqual(await S.ekSonKontrol({ bookId: '45550', getir: cdn.getir }), { var: true, neden: null });
+});
+
+test('GERÇEK modül: bir bayt bozuk ek → ERTELE (ek-bozuk), iş kopyası bayt-aynı', async () => {
+  const { c, buf, cdn } = await gercekEkUret();
+  const bozuk = Buffer.from(buf);
+  // Sıkıştırılmamışsa kabuk metninde, değilse ortada bir bayt çevrilir.
+  const i = bozuk.indexOf(Buffer.from('sonrakiSatirDugmesi'));
+  bozuk[i > 0 ? i : Math.floor(bozuk.length / 2)] ^= 0x01;
+  cdn.nesneler.set(KE.ekUrl('45550', c.girdiSha), bozuk);
+  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir });
+  assert.equal(r.r.durum, 'ertele', r.r.neden);
+  assert.equal(r.r.kod, 'ek-bozuk');
+  assert.ok(r.once.equals(r.sonra));
+});
+
+test('GERÇEK modül: Web-Z üye sırası değişti (girdiSha farklı) → ek yok → ERTELE (ek-yok)', async () => {
+  const { cdn } = await gercekEkUret();
+  const r = await kostur({ platform: 'linux', kabukKaynagi: 'ek', cdnGetir: cdn.getir, ayar: WEBZ_SIRALI });
+  assert.equal(r.r.durum, 'ertele', r.r.neden);
+  assert.equal(r.r.kod, 'ek-yok');
+  assert.ok(r.once.equals(r.sonra));
 });
