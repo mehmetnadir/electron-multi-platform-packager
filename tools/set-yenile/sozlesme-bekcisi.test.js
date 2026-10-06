@@ -161,15 +161,16 @@ test('BAYAT/paket: kabuk kanonik değil (A1 karisik) → BAYAT', async () => {
   assert.match(hucre('45550', 'pardus').sebep, /kabuk 1\.13\.3\/karisik/);
 });
 
-test('BAYAT/kaynak: İmpark sürümü build\'dekinden büyük → requeue YOK, set kararı BAYAT-KAYNAK', async () => {
+test('BAYAT/kaynak: İmpark sürümü build\'dekinden büyük → set başına 1 kur isteği + 4 requeue planı', async () => {
   const f = fikstur({ impark: { 25776: 14, 25786: 2 } });
   const { hucre, set, r } = await kos(f);
   for (const p of B.PLATFORMLAR) {
     assert.equal(hucre('45550', p).karar, B.K.BAYAT);
     assert.equal(hucre('45550', p).alt, 'kaynak');
   }
-  assert.equal(r.plan.requeue.length, 0);
-  assert.ok(r.plan.atlanan.every((a) => /set-yenile/.test(a.neden)));
+  assert.equal(r.plan.requeue.length, 4);
+  assert.ok(r.plan.requeue.every((x) => x.kur));
+  assert.deepEqual(r.plan.kurIstegi.map((x) => x.set), ['45550']);
   assert.ok(set('45550').kararlar.includes(B.SK.BAYAT_KAYNAK));
 });
 
@@ -339,6 +340,86 @@ test('kaynak kur isteği açıkken requeue yapılmaz (set-yenile sürüyor)', ()
   const p = B.eylemPlani([bayatHucre('45550', 'mac', { kurIstegiAcik: true })], [], SIMDI);
   assert.equal(p.requeue.length, 0);
   assert.match(p.atlanan[0].neden, /kur isteği açık/);
+});
+
+const kaynakHucre = (set, platform, ust = {}) => bayatHucre(set, platform, { alt: 'kaynak', sebep: 'kaynak geride', ...ust });
+
+test('BAYAT-K --uygula: yedek (iki tablo) → kur isteği SQL → requeue SQL (bu sırayla)', async () => {
+  const f = fikstur({ impark: { 25776: 14, 25786: 2 } });
+  const { d, r, dosyalar, cfg } = await kos(f, ['--setler', '45550', '--uygula']);
+  assert.equal(d.kayit.dump, 1);
+  assert.equal(d.kayit.yazmalar.length, 5);
+  assert.equal(d.kayit.yazmalar[0], B.sql.kurIstegi('45550'));
+  assert.match(d.kayit.yazmalar[0], /^UPDATE pipeline_book_summaries SET kaynak_kur_istegi_at = NOW\(3\) WHERE book_id = '45550' AND \(kaynak_modu IS NULL OR kaynak_modu <> 'manuel'\);/);
+  assert.ok(d.kayit.yazmalar.slice(1).every((q) => /UPDATE pipeline_platform_summaries .*status IN \('completed','failed'\)/s.test(q)));
+  assert.equal(r.eylem.kurIstegi[0].sonuc, 'tamam');
+  assert.ok(r.eylem.requeue.every((x) => x.sonuc === 'tamam'));
+  assert.match(dosyalar.get(cfg.eylemDefteri), /"tur":"kur-istegi"/);
+  assert.match(dosyalar.get(cfg.raporMd), /Kur isteği planı: 45550/);
+  assert.match(dosyalar.get(cfg.raporMd), /kur isteği 45550: tamam/);
+  assert.match(B.yedekKomutu(cfg, '20261006-120000').komut, /pipeline_platform_summaries pipeline_book_summaries >/);
+});
+
+test('BAYAT-K: kur isteği zaten açıksa yazılmaz, yalnız requeue', () => {
+  const p = B.eylemPlani([kaynakHucre('45550', 'mac', { kurIstegiAcik: true }), kaynakHucre('45550', 'pardus', { kurIstegiAcik: true })], [], SIMDI);
+  assert.equal(p.kurIstegi.length, 0);
+  assert.deepEqual(p.requeue.map((x) => x.platform), ['mac', 'pardus']);
+});
+
+test('BAYAT-K: running/queued satıra dokunulmaz (yalnız completed hücre requeue)', () => {
+  const hucreler = [
+    kaynakHucre('45550', 'mac'),
+    { set: '45550', platform: 'windows', karar: B.K.KOSUYOR, status: 'running', kurIstegiAcik: false },
+    { set: '45550', platform: 'pardus', karar: B.K.KUYRUKTA, status: 'queued', kurIstegiAcik: false },
+    kaynakHucre('45550', 'android', { status: 'running' }),
+  ];
+  const p = B.eylemPlani(hucreler, [], SIMDI);
+  assert.deepEqual(p.requeue.map((x) => x.platform), ['mac']);
+  assert.equal(p.kurIstegi.length, 1);
+  assert.match(p.atlanan[0].neden, /status=running/);
+});
+
+test('BAYAT-K: kur isteği 24 sa tavanı (set başına 1); tavan doluysa requeue de yapılmaz', () => {
+  const defter = [{ tur: 'kur-istegi', set: '45550', sonuc: 'tamam', ms: SIMDI - 3 * SA }];
+  const p = B.eylemPlani([kaynakHucre('45550', 'mac')], defter, SIMDI);
+  assert.equal(p.requeue.length, 0);
+  assert.equal(p.kurIstegi.length, 0);
+  assert.match(p.atlanan[0].neden, /kur isteği 24 sa tavanı/);
+  const eski = [{ ...defter[0], ms: SIMDI - 25 * SA }];
+  assert.equal(B.eylemPlani([kaynakHucre('45550', 'mac')], eski, SIMDI).kurIstegi.length, 1);
+  // Aynı koşuda 4 hücre → tek kur isteği.
+  assert.equal(B.eylemPlani(B.PLATFORMLAR.map((x) => kaynakHucre('45550', x)), [], SIMDI).kurIstegi.length, 1);
+});
+
+test('BAYAT-K: günlük toplam tavanı kaynak requeue için de geçerli; tavan dolunca kur isteği yazılmaz', () => {
+  const hucreler = Array.from({ length: 20 }, (_, i) => kaynakHucre(String(50000 + i), 'pardus'));
+  const p = B.eylemPlani(hucreler, [], SIMDI);
+  assert.equal(p.requeue.length, B.TAVAN.toplam);
+  assert.equal(p.kurIstegi.length, B.TAVAN.toplam);
+  assert.ok(p.atlanan.every((a) => /günlük toplam tavan/.test(a.neden)));
+});
+
+test('BAYAT-K: manuel (M1) set kurulmaz; kaynak geride + paket eski karışık hücre kaynak sayılır', () => {
+  const m = B.eylemPlani([kaynakHucre('45550', 'mac', { kaynakModu: 'manuel' })], [], SIMDI);
+  assert.equal(m.requeue.length + m.kurIstegi.length, 0);
+  assert.match(m.atlanan[0].neden, /manuel/);
+  const k = B.eylemPlani([bayatHucre('45550', 'mac', { kaynakGeride: true })], [], SIMDI);
+  assert.equal(k.kurIstegi.length, 1);
+  assert.equal(k.requeue[0].kur, true);
+});
+
+test('BAYAT-K: kur isteği yazılamazsa (ROW_COUNT 0) o setin requeue\'su yapılmaz', async () => {
+  const f = fikstur({ impark: { 25776: 14, 25786: 2 }, yazCevap: '0' });
+  const { d, r } = await kos(f, ['--setler', '45550', '--uygula']);
+  assert.equal(d.kayit.yazmalar.length, 1);
+  assert.equal(r.eylem.kurIstegi[0].sonuc, 'kur-yok');
+  assert.ok(r.eylem.requeue.every((x) => x.sonuc === 'kur-yok'));
+});
+
+test('BAYAT-K: istisna set (Flashy 60114) için kur isteği/requeue yok', async () => {
+  const { r, d } = await kos(fikstur(), ['--setler', '60114', '--uygula']);
+  assert.equal(r.plan.requeue.length + r.plan.kurIstegi.length, 0);
+  assert.equal(d.kayit.yazmalar.length, 0);
 });
 
 test('"Dump completed" yoksa yazma YOK: requeue durur, defter yedek-yok, çıkış hata', async () => {

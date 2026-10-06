@@ -27,8 +27,11 @@
  *     Önce `mariadb-dump` yedeği ("Dump completed" + ≥1 INSERT yoksa YAZMA YOK). UPDATE yalnız
  *     `status IN ('completed','failed')`. Tavan: set×platform 24 saatte 1, toplam 24 saatte 12.
  *     Kaynak kur isteği açıksa (set-yenile sürüyor) atlanır.
- *   - BAYAT/kaynak (İmpark sürümü build'dekinden büyük) → requeue YOK (yeniden üretim eski kaynakla
- *     olurdu); bildirim "set-yenile <S> --uygula" önerir.
+ *   - BAYAT/kaynak (İmpark sürümü build'dekinden büyük) → set başına TEK adım: önce kur isteği
+ *     (`pipeline_book_summaries.kaynak_kur_istegi_at = NOW(3)`; manuel set hariç; zaten açıksa yazılmaz;
+ *     set başına 24 saatte 1), SONRA o setin completed/failed satırları requeue (book-update
+ *     `platform-ayar-kuyruk` kalıbı: üretici yeni build'i kurar). Running/queued satıra dokunulmaz.
+ *     Yedek `pipeline_platform_summaries` + `pipeline_book_summaries` dump'ını kapsar.
  *   - KANAL-G-YOK/ESKİ, LİSTE-FARKI, FAIL, YAYIN-EKSİK → yalnız bildirim (`bildir bekci`), set başına
  *     günde 1; FAIL varsa `-p yuksek`. `--bildir` yalnız bildirimi açar (DB yazmaz).
  *   - Rapor her koşuda: `~/.empp-agent/sozlesme-bekcisi/son-rapor.md` + `son-rapor.json`; `--rapor` stdout.
@@ -315,7 +318,9 @@ function hucreKarari(g) {
   }
   if (g.kurIstegiAcik) notlar.push('kaynak kur isteği açık (set-yenile sürüyor)');
   if (paketSebep.length || kaynakSebep.length) {
-    return r(K.BAYAT, [...paketSebep, ...kaynakSebep].join(' · '), { alt: paketSebep.length ? 'paket' : 'kaynak' });
+    return r(K.BAYAT, [...paketSebep, ...kaynakSebep].join(' · '), {
+      alt: paketSebep.length ? 'paket' : 'kaynak', kaynakGeride: kaynakSebep.length > 0,
+    });
   }
   // Yayın (R2).
   if (g.r2 == null) olculemez.push('R2 listesi okunamadı');
@@ -395,27 +400,44 @@ function defterOku(metin) {
 }
 
 /**
- * Requeue planı. Tavan: set×platform 24 saatte 1, toplam 24 saatte `TAVAN.toplam`.
- * Sayılan kayıtlar: `tur='requeue'` ve `sonuc` 'tamam' ya da 'hata' (yazma denendi).
- * @returns {{requeue: Array<{set, platform, sebep}>, atlanan: Array<{set, platform, neden}>}}
+ * Requeue + kur isteği planı. SAF.
+ * Kaynak geride (BAYAT-K ya da kaynakGeride) → düz requeue ESKİ build.zip ile üretir; book-update
+ * `platform-ayar-kuyruk` kalıbı: önce set başına `kaynak_kur_istegi_at = NOW(3)` (kur isteği), SONRA
+ * o setin completed/failed satırları requeue. Kur isteği zaten açıksa (kurIstegiAcik) yeniden yazılmaz,
+ * yalnız requeue yapılır. Kur isteği set başına 24 saatte 1. Manuel (M1) set kurulmaz.
+ * Tavan: set×platform 24 saatte 1, toplam 24 saatte `TAVAN.toplam` requeue (kur isteği saymaz).
+ * Sayılan kayıtlar: `tur='requeue'|'kur-istegi'` ve `sonuc` 'tamam' ya da 'hata' (yazma denendi).
+ * running/queued hücre BAYAT olmaz (hucreKarari) → plana girmez, satıra dokunulmaz.
+ * @returns {{requeue: Array<{set, platform, sebep, kur: boolean}>, kurIstegi: Array<{set, sebep}>,
+ *            atlanan: Array<{set, platform, neden}>}}
  */
 function eylemPlani(hucreler, defter, simdi, tavan = TAVAN) {
-  const denenen = (defter || []).filter((e) => e.tur === 'requeue' && (e.sonuc === 'tamam' || e.sonuc === 'hata'));
+  const denendi = (e) => e.sonuc === 'tamam' || e.sonuc === 'hata';
+  const denenen = (defter || []).filter((e) => e.tur === 'requeue' && denendi(e));
+  const kurDenenen = (defter || []).filter((e) => e.tur === 'kur-istegi' && denendi(e));
   let toplam = denenen.filter((e) => simdi - e.ms < tavan.toplamPencereMs).length;
-  const requeue = []; const atlanan = [];
+  const requeue = []; const atlanan = []; const kurIstegi = [];
+  const kurYazilacak = new Set();
   for (const h of hucreler) {
     if (h.karar !== K.BAYAT) continue;
     const k = { set: h.set, platform: h.platform };
-    if (h.alt !== 'paket') { atlanan.push({ ...k, neden: 'kaynak geride: requeue eski kaynakla üretir → set-yenile önerilir' }); continue; }
-    if (h.kurIstegiAcik) { atlanan.push({ ...k, neden: 'kaynak kur isteği açık (set-yenile sürüyor)' }); continue; }
+    const kaynakMi = h.alt === 'kaynak' || h.kaynakGeride === true;
+    if (kaynakMi && h.kaynakModu === 'manuel') { atlanan.push({ ...k, neden: 'manuel (M1) set: İmpark\'tan kurulmaz' }); continue; }
+    if (!kaynakMi && h.kurIstegiAcik) { atlanan.push({ ...k, neden: 'kaynak kur isteği açık (set-yenile sürüyor)' }); continue; }
     if (h.status !== 'completed' && h.status !== 'failed') { atlanan.push({ ...k, neden: `status=${h.status}` }); continue; }
+    const kurGerek = kaynakMi && !h.kurIstegiAcik;
+    if (kurGerek && !kurYazilacak.has(h.set)) {
+      const sonKur = kurDenenen.filter((e) => e.set === h.set && simdi - e.ms < tavan.setPlatformMs);
+      if (sonKur.length) { atlanan.push({ ...k, neden: `kur isteği 24 sa tavanı: son istek ${kisaZaman(sonKur[sonKur.length - 1].ms)}` }); continue; }
+    }
     const son = denenen.filter((e) => e.set === h.set && e.platform === h.platform && simdi - e.ms < tavan.setPlatformMs);
     if (son.length) { atlanan.push({ ...k, neden: `24 sa tavanı: son requeue ${kisaZaman(son[son.length - 1].ms)}` }); continue; }
     if (toplam >= tavan.toplam) { atlanan.push({ ...k, neden: `günlük toplam tavan (${tavan.toplam}) dolu` }); continue; }
     toplam += 1;
-    requeue.push({ ...k, sebep: h.sebep });
+    if (kurGerek && !kurYazilacak.has(h.set)) { kurYazilacak.add(h.set); kurIstegi.push({ set: h.set, sebep: h.sebep }); }
+    requeue.push({ ...k, sebep: h.sebep, kur: kaynakMi });
   }
-  return { requeue, atlanan };
+  return { requeue, kurIstegi, atlanan };
 }
 
 /**
@@ -435,7 +457,7 @@ function bildirimPlani(setler, durum, simdi) {
     const kaynak = s.hucreler.some((h) => h.karar === K.BAYAT && h.alt === 'kaynak');
     if (fail.length) konular.push(`FAIL ${fail.join('/')}`);
     if (yayin.length) konular.push(`YAYIN-EKSİK ${yayin.join('/')}`);
-    if (kaynak) konular.push(`${SK.BAYAT_KAYNAK} (set-yenile ${s.set} --uygula)`);
+    if (kaynak) konular.push(`${SK.BAYAT_KAYNAK} (bekçi kur isteği + kuyruk)`);
     if (!konular.length) continue;
     if (durum && durum[s.set] === gun) { bastirilan.push(s.set); continue; }
     const mesaj = `${s.set} ${String(s.ad || '').slice(0, 40)}: ${konular.join(' · ')}`.slice(0, 220);
@@ -492,6 +514,12 @@ const sql = {
     + `AND book_id IN (${idListe(idler)})`,
   buildler: (idler) => 'SELECT set_id, surum, durum, kaynak, olusturma, HEX(kitaplar) AS kitaplar_hex '
     + `FROM kaynak_build_surumleri WHERE set_id IN (${idListe(idler)}) AND durum = 'gecerli'`,
+  /** book-update `KUR_ISTEGI_SQL` ile birebir kural (manuel set kurulmaz); etkilenen satır = ROW_COUNT. */
+  kurIstegi: (setId) => [
+    `UPDATE pipeline_book_summaries SET kaynak_kur_istegi_at = NOW(3) WHERE book_id = ${idListe([setId])} `
+      + "AND (kaynak_modu IS NULL OR kaynak_modu <> 'manuel');",
+    'SELECT ROW_COUNT();',
+  ].join('\n'),
   requeue: (setId, platform) => {
     if (!PLATFORMLAR.includes(platform)) throw new Error(`geçersiz platform: ${platform}`);
     return [
@@ -509,7 +537,7 @@ function yedekKomutu(cfg, stamp) {
   const dizin = `${cfg.yedekKoku}/${stamp}-sozlesme-bekcisi`;
   const dosya = `${dizin}/once.sql`;
   const komut = `mkdir -p '${dizin}' && mariadb-dump --defaults-extra-file=${cfg.dbCnf} ${cfg.db} `
-    + `pipeline_platform_summaries > '${dosya}' && tail -1 '${dosya}' `
+    + `pipeline_platform_summaries pipeline_book_summaries > '${dosya}' && tail -1 '${dosya}' `
     + `&& echo "INSERT_SAYISI=$(grep -c 'INSERT INTO' '${dosya}')"`;
   return { dizin, dosya, komut };
 }
@@ -656,7 +684,9 @@ async function olc(o, cfg, d, istisnaListe) {
         satir, build, buildSayisi: bl.length, kanonik, kiyas, r2: r2.get(s), setId: s, platform: p,
         istisna: ist, kurIstegiAcik, simdi,
       });
-      return { set: s, platform: p, status: satir && satir.status, kurIstegiAcik, ...h };
+      return {
+        set: s, platform: p, status: satir && satir.status, kurIstegiAcik, kaynakModu: kitap ? kitap.kaynak_modu : null, ...h,
+      };
     });
     const gg = g.get(s);
     const gk = gKarari({ ...gg, paket: paketSurumu(build, satirlar, kitap), buildMs: build ? yerelMs(build.olusturma) : null });
@@ -684,30 +714,53 @@ function defterEkle(cfg, d, kayit) {
 }
 
 async function eylemUygula(plan, bildirim, o, cfg, d) {
-  const sonuc = { requeue: [], bildirim: [], yedek: null, durdu: null };
+  const sonuc = { requeue: [], kurIstegi: [], bildirim: [], yedek: null, durdu: null };
   const srv = SY.srv21Istemci(cfg, d);
-  if (o.uygula && plan.requeue.length) {
+  const kurIstegi = plan.kurIstegi || [];
+  const kayitTemel = () => ({ zaman: new Date(d.simdi()).toISOString(), ms: d.simdi() });
+  if (o.uygula && (plan.requeue.length || kurIstegi.length)) {
     const y = yedekKomutu(cfg, SY.damga(d.simdi()));
     try {
       await srv.yedek(y);
       sonuc.yedek = y.dosya;
     } catch (e) {
-      sonuc.durdu = `yedek doğrulanamadı → requeue YOK: ${e.message}`;
-      for (const r of plan.requeue) {
-        defterEkle(cfg, d, { zaman: new Date(d.simdi()).toISOString(), ms: d.simdi(), tur: 'requeue', set: r.set, platform: r.platform, sonuc: 'yedek-yok' });
-      }
+      sonuc.durdu = `yedek doğrulanamadı → requeue/kur isteği YOK: ${e.message}`;
+      for (const r of kurIstegi) defterEkle(cfg, d, { ...kayitTemel(), tur: 'kur-istegi', set: r.set, sonuc: 'yedek-yok' });
+      for (const r of plan.requeue) defterEkle(cfg, d, { ...kayitTemel(), tur: 'requeue', set: r.set, platform: r.platform, sonuc: 'yedek-yok' });
     }
     if (sonuc.yedek) {
-      for (const r of plan.requeue) {
-        const kayit = { zaman: new Date(d.simdi()).toISOString(), ms: d.simdi(), tur: 'requeue', set: r.set, platform: r.platform, sebep: r.sebep, yedek: y.dosya };
+      // Kur isteği requeue'dan ÖNCE (ajan satırı kiralarken istek görünür olsun). Başarısızsa o setin
+      // kaynak requeue'su yapılmaz: istek yoksa ajan ESKİ build.zip'ten üretir.
+      const kurOlmadi = new Set();
+      for (const r of kurIstegi) {
+        const kayit = { ...kayitTemel(), tur: 'kur-istegi', set: r.set, sebep: r.sebep, yedek: y.dosya };
         try {
-          const satirlar = await srv.yaz(sql.requeue(r.set, r.platform));
+          const satirlar = await srv.yaz(sql.kurIstegi(r.set));
           const rc = Number(satirlar[satirlar.length - 1]);
-          kayit.sonuc = rc === 1 ? 'tamam' : 'satir-yok';
+          kayit.sonuc = rc >= 1 ? 'tamam' : 'kur-yok';
           kayit.rowCount = rc;
         } catch (e) {
           kayit.sonuc = 'hata';
           kayit.hata = String(e.message).slice(0, 200);
+        }
+        if (kayit.sonuc !== 'tamam') kurOlmadi.add(r.set);
+        defterEkle(cfg, d, kayit);
+        sonuc.kurIstegi.push(kayit);
+      }
+      for (const r of plan.requeue) {
+        const kayit = { ...kayitTemel(), tur: 'requeue', set: r.set, platform: r.platform, sebep: r.sebep, yedek: y.dosya };
+        if (r.kur && kurOlmadi.has(r.set)) {
+          kayit.sonuc = 'kur-yok';
+        } else {
+          try {
+            const satirlar = await srv.yaz(sql.requeue(r.set, r.platform));
+            const rc = Number(satirlar[satirlar.length - 1]);
+            kayit.sonuc = rc === 1 ? 'tamam' : 'satir-yok';
+            kayit.rowCount = rc;
+          } catch (e) {
+            kayit.sonuc = 'hata';
+            kayit.hata = String(e.message).slice(0, 200);
+          }
         }
         defterEkle(cfg, d, kayit);
         sonuc.requeue.push(kayit);
@@ -799,13 +852,15 @@ function raporMd(olcum, plan, bildirim, eylem, o) {
   }
   for (const x of olcum.genel) L.push(`- genel: ${x}`);
   L.push('', '## Eylem', '');
-  L.push(`- Requeue planı: ${plan.requeue.map((r) => `${r.set}/${r.platform}`).join(', ') || 'yok'}`);
+  L.push(`- Kur isteği planı: ${(plan.kurIstegi || []).map((r) => r.set).join(', ') || 'yok'}`);
+  L.push(`- Requeue planı: ${plan.requeue.map((r) => `${r.set}/${r.platform}${r.kur ? ' (kur isteğiyle)' : ''}`).join(', ') || 'yok'}`);
   for (const a of plan.atlanan) L.push(`- atlandı ${a.set}/${a.platform}: ${a.neden}`);
   L.push(`- Bildirim planı: ${bildirim.bildirimler.length} (bugün bastırılan ${bildirim.bastirilan.length})`);
   if (!o.uygula && !o.bildir) L.push('- KURU koşu: DB yazması ve bildirim yapılmadı.');
   if (eylem) {
     if (eylem.yedek) L.push(`- Yedek: ${eylem.yedek}`);
     if (eylem.durdu) L.push(`- DURDU: ${eylem.durdu}`);
+    for (const r of eylem.kurIstegi || []) L.push(`- kur isteği ${r.set}: ${r.sonuc}${r.hata ? ` ${r.hata}` : ''}`);
     for (const r of eylem.requeue) L.push(`- requeue ${r.set}/${r.platform}: ${r.sonuc}${r.hata ? ` ${r.hata}` : ''}`);
     for (const b of eylem.bildirim) L.push(`- bildirim ${b.set}: çıkış ${b.kod}`);
   }
