@@ -2215,7 +2215,7 @@ function cikar(exeYolu, gecici, yaz) {
   return { ok: true, kok: d2, adlar, yuk };
 }
 
-function calis(argv, yazici) {
+function calisIc(argv, yazici, durum) {
   const yaz = yazici || ((s) => process.stdout.write(`${s}\n`));
   const s = argumanCoz(argv);
   if (!s.exe) {
@@ -2257,7 +2257,8 @@ function calis(argv, yazici) {
     if (fs.existsSync(s.cikarim)) cikarimSonuc = { ok: true, kok: s.cikarim };
     else cikarimSonuc = { ok: false, sebep: `--cikarim dizini yok: ${s.cikarim}` };
   } else {
-    gecici = fs.mkdtempSync(path.join(os.tmpdir(), 'empp-kapi-'));
+    gecici = fs.mkdtempSync(path.join(os.tmpdir(), KAPI_ONEK));
+    durum.gecici = gecici;
     yaz(`Çıkarım: ${gecici}`);
     cikarimSonuc = cikar(s.exe, gecici, yaz);
   }
@@ -2329,18 +2330,112 @@ function calis(argv, yazici) {
     yaz(ozetSatiri(maddeler, kod));
   }
 
-  if (gecici && !s.tut) {
-    try {
-      fs.rmSync(gecici, { recursive: true, force: true });
-    } catch (e) { /* geçici dizin temizliği kapıyı düşürmez */ }
-  } else if (gecici) {
-    yaz(`(geçici dizin tutuldu: ${gecici})`);
-  }
+  if (gecici && s.tut) yaz(`(geçici dizin tutuldu: ${gecici})`);
+  durum.tut = !!s.tut;
 
   return { kod, maddeler };
 }
 
+const KAPI_ONEK = 'empp-kapi-';
+const TEMIZLENEMEDI_DOSYASI = '_temizlenemedi.jsonl';
+const ESKI_DIZIN_MS = 24 * 60 * 60 * 1000;
+
+// Windows'ta salt-okunur öznitelik rm'yi EPERM ile düşürür; ağaçta yazma izni açar.
+function yazmaIzniAc(dizin, fsx) {
+  let girdiler = [];
+  try { girdiler = fsx.readdirSync(dizin, { withFileTypes: true }); } catch (e) { return; }
+  for (const g of girdiler) {
+    const yol = path.join(dizin, g.name);
+    try { fsx.chmodSync(yol, 0o666); } catch (e) { /* en iyi çaba */ }
+    if (g.isDirectory()) yazmaIzniAc(yol, fsx);
+  }
+}
+
+// Temizlenemeyen dizini bekçinin (disk-temizlik) göreceği jsonl'a yazar.
+function temizlenemediYaz(dizin, kod, mesaj, { fsx = fs, tmpKok = os.tmpdir(), yaz = () => {} } = {}) {
+  const satir = JSON.stringify({
+    zaman: new Date().toISOString(), yol: dizin, kod: kod || null, mesaj: String(mesaj || '')
+  });
+  try {
+    fsx.appendFileSync(path.join(tmpKok, TEMIZLENEMEDI_DOSYASI), `${satir}\n`);
+  } catch (e) {
+    yaz(`  UYARI: ${TEMIZLENEMEDI_DOSYASI} yazılamadı (${e && e.code}): ${dizin}`);
+  }
+}
+
+// Geçici dizini siler; HATA YUTMAZ: loglar + jsonl'a yazar. Kapıyı düşürmez.
+function geciciSil(dizin, { fsx = fs, yaz = () => {}, tmpKok = os.tmpdir(),
+  platform = process.platform } = {}) {
+  const secenek = { recursive: true, force: true, maxRetries: 5, retryDelay: 500 };
+  try {
+    fsx.rmSync(dizin, secenek);
+    return { ok: true };
+  } catch (e1) {
+    let son = e1;
+    if (platform === 'win32') {
+      yazmaIzniAc(dizin, fsx);
+      try {
+        fsx.rmSync(dizin, secenek);
+        return { ok: true };
+      } catch (e2) { son = e2; }
+    }
+    const kod = son && son.code;
+    yaz(`  UYARI: geçici dizin silinemedi (${kod || 'bilinmiyor'}): ${dizin}`);
+    temizlenemediYaz(dizin, kod, son && son.message, { fsx, tmpKok, yaz });
+    return { ok: false, kod };
+  }
+}
+
+// Başlangıç ön adımı: 24 sa+ eski, YALNIZ kapının önekli dizinleri. Yalnız Windows.
+function eskiKapiDizinleriniTemizle({ fsx = fs, tmpKok = os.tmpdir(), simdi = Date.now(),
+  platform = process.platform, yaz = () => {}, yasMs = ESKI_DIZIN_MS } = {}) {
+  const sonuc = { silinen: [], basarisiz: [], atlanan: 0 };
+  if (platform !== 'win32') return sonuc;
+  let adlar = [];
+  try {
+    adlar = fsx.readdirSync(tmpKok);
+  } catch (e) {
+    yaz(`  UYARI: eski kapı dizinleri taranamadı (${e && e.code}): ${tmpKok}`);
+    return sonuc;
+  }
+  for (const ad of adlar) {
+    if (!String(ad).startsWith(KAPI_ONEK)) continue;
+    const yol = path.join(tmpKok, ad);
+    try {
+      const st = fsx.statSync(yol);
+      if (!st.isDirectory() || simdi - st.mtimeMs < yasMs) { sonuc.atlanan++; continue; }
+    } catch (e) {
+      yaz(`  UYARI: ${yol} okunamadı (${e && e.code})`);
+      continue;
+    }
+    const r = geciciSil(yol, { fsx, yaz, tmpKok, platform });
+    (r.ok ? sonuc.silinen : sonuc.basarisiz).push(yol);
+  }
+  if (sonuc.silinen.length || sonuc.basarisiz.length) {
+    yaz(`Eski kapı dizinleri: ${sonuc.silinen.length} silindi, ` +
+      `${sonuc.basarisiz.length} silinemedi`);
+  }
+  return sonuc;
+}
+
+function calis(argv, yazici) {
+  const yaz = yazici || ((s) => process.stdout.write(`${s}\n`));
+  const durum = { gecici: null, tut: false };
+  try {
+    eskiKapiDizinleriniTemizle({ yaz });
+  } catch (e) {
+    yaz(`  UYARI: eski dizin ön adımı hata verdi: ${e && e.message}`);
+  }
+  try {
+    return calisIc(argv, yazici, durum);
+  } finally {
+    // İstisna olsa bile geçici dizin kalmaz (sızıntının asıl kaynağı: finally yoktu).
+    if (durum.gecici && !durum.tut) geciciSil(durum.gecici, { yaz });
+  }
+}
+
 module.exports = {
+  KAPI_ONEK, TEMIZLENEMEDI_DOSYASI, geciciSil, eskiKapiDizinleriniTemizle, yazmaIzniAc,
   PASS, FAIL, OLCULEMEDI, RAPOR, madde, cikisKodu, ozetSatiri,
   MAKINE_IA32, MAKINE_X64, MAKINE_ARM64,
   peMakineOku, yukAdindanMimari, mimariKarar,
