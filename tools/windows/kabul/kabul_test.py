@@ -1299,3 +1299,18 @@ def test_varyant_c_kutu_en_yakin_a_ve_bos_ad_indisle():
 def test_hedef_sec_varyant_c_puanlar():
     import inspect
     assert "img.button-book" in inspect.getsource(kabul.hedef_sec)
+
+
+# ── Bos ilk sayfa (45100, 06.10) ──
+def test_bos_ilk_sayfa_adayi():
+    k = {"sonuc": "KALDI", "ilkSayfada": True, "thumbOK": 7, "canvasDolu": 3125, "canvasRenk": 1, "toplamSayfa": 209}
+    assert kabul.bos_ilk_sayfa_adayi(k)
+    for alan, deger in (("canvasRenk", 2), ("thumbOK", 2), ("canvasDolu", 50), ("ilkSayfada", False),
+                        ("toplamSayfa", 1), ("sonuc", "GECTI")):
+        assert not kabul.bos_ilk_sayfa_adayi({**k, alan: deger}), alan
+
+
+def test_ikinci_sayfa_gecer():
+    assert kabul.ikinci_sayfa_gecer({"canvasDolu": 3000, "canvasRenk": 14})
+    assert not kabul.ikinci_sayfa_gecer({"canvasDolu": 3000, "canvasRenk": 1})
+    assert not kabul.ikinci_sayfa_gecer({"canvasDolu": 10, "canvasRenk": 9})
