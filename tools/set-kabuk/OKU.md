@@ -37,7 +37,8 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
 | Özel anahtar yok (kuru değil) | Hiçbir set işlenmez, yükleme yok. Çıkış 1, `bildir`. |
 | Araç eksik | Taban indirilmez. Çıkış 1. |
 | Tavan aşıldı | Yükleme yok. Log + `bildir kosucu`. Kesin sonuç. |
-| bookN seti, ProBook tabanı üreteçle kurar | Ek üretilmez (`atlandi: bookN üreteç tabanı: eşlik ölçülmedi`), `bildir`. Kesin sonuç. A1 setinde kural yok. Ayrıntı aşağıda. |
+| bookN seti, set eki sonrası listede eksik kitap var | Ek üretilmez (`atlandi: bookN taban kapsaması eksik`), `bildir`. Kesin sonuç. Üreteç tabanının kendisi kural değildir (A1 ve bookN). Ayrıntı aşağıda. |
+| Eski atlama kuralıyla yazılmış kesin `atlandi` kaydı | `--bekleyen` seti bir kez yeniden işler (`ATLAMA_KURALI` = 2). |
 | R2'de aynı girdiSha + Web-Z sha için doğrulanmış ek var | Yükleme yok (`mevcut`). Kesin sonuç. |
 | Kapı RED, eşleme, kapak 404 ya da küçük gövde | Ek yok. girdiSha varsa `<girdiSha>.ret.json` yazılır. `bildir`. |
 | Kapak HTTP 5xx, ağ, Web-Z hatası | Geçici. Geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. |
@@ -86,7 +87,8 @@ Karar set düzenine göre değişir:
 | Düzen | Davranış | Kanıt |
 |---|---|---|
 | A1 (tek motor: bookN yok, kökte `classlibraries/ImWin32.dll`) | Kural YOK, ek üretilir. | 45485, 06.10: girdiSha iki yolda eşit (`46598c79ca5a…`). Fark yalnız motor sayfası içeriğiydi; parmak izine artık yalnız varlığıyla girer (B 193f071). |
-| bookN | Atla + `bildir` ("bookN üreteç tabanı: eşlik ölçülmedi"). | Ölçülmedi. Klasör numarası farkı riski. |
+| bookN, tam kapsama (koşul 1) | Kural YOK, ek üretilir. Log'a bilgi satırı düşer. | 59835, 06.10: R2 tabanı ile üreteç tabanında girdiSha eşit (`e49d25fb4217…`). Klasörler (book1-3, link4-5), kapaklar ve A1 özeti aynı. Mac eki üreteç tabanına uygulandı. Kalan sapma ProBook'ta `ek-sapma` → ertele olur (güvenli). |
+| bookN, eksik kitap (koşul 2) | Atla + `bildir` ("bookN taban kapsaması eksik"). | Ölçülmedi. ProBook eksik kitabı üreteçle ekler; Mac ekinde o klasör yoktur. |
 
 `ek-uret.js` kararı runner'ın modül işlevleriyle verir. `EMPP_INDEX_URETECI=0` iken karar
 uygulanmaz.
