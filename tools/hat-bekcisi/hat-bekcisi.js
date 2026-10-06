@@ -150,8 +150,11 @@ function planKira(satirlar, defter, nowMs) {
   return out;
 }
 
-/** S1: kur isteği askıda → mac satırı öne. */
-function planKurAskida(kitaplar, satirlar, defter, nowMs, nowDb) {
+/**
+ * S1: kur isteği askıda → kur yapabilen ajanın satırı öne. `kurPlatformlari` sırayla denenir; Mac
+ * duraklatılmışsa (gece: Windows+Pardus önceliği, Nadir 06.10) yalnız pardus (ProBook kaynak-kur).
+ */
+function planKurAskida(kitaplar, satirlar, defter, nowMs, nowDb, kurPlatformlari = ['mac']) {
   const out = { requeue: [], tavan: [] };
   const gun0 = `${String(nowDb).slice(0, 10)} 00:00:00`;
   for (const k of kitaplar) {
@@ -159,15 +162,18 @@ function planKurAskida(kitaplar, satirlar, defter, nowMs, nowDb) {
     const yas = dkFark(k.istek, nowDb);
     if (yas == null || yas < KUR_YAS_DK) continue;
     if (k.baslangic && dbMs(k.baslangic) > dbMs(k.istek)) continue; // kurulum başladı
-    const mac = satirlar.find((s) => s.set === k.set && s.platform === 'mac');
-    if (!mac || !['completed', 'failed', 'idle'].includes(mac.status)) continue;
-    if (mac.status === 'failed' && hataSinifla(mac.hata).sinif === 'kalici') continue;
-    if (son24Say(defter, nowMs, TUR.kur, k.set, 'mac') >= TAVAN.kur) {
-      out.tavan.push({ tur: TUR.kur, set: k.set, platform: 'mac', etiket: 'kur-askida' });
+    // Seçilen platformlardan biri zaten kuyrukta/koşuyorsa kur oradan gelir — eylem yok.
+    const ilgili = kurPlatformlari.map((p) => satirlar.find((s) => s.set === k.set && s.platform === p)).filter(Boolean);
+    if (ilgili.some((r) => r.status === 'queued' || r.status === 'running')) continue;
+    const mac = ilgili.find((r) => ['completed', 'failed', 'idle'].includes(r.status)
+      && !(r.status === 'failed' && hataSinifla(r.hata).sinif === 'kalici'));
+    if (!mac) continue;
+    if (son24Say(defter, nowMs, TUR.kur, k.set, mac.platform) >= TAVAN.kur) {
+      out.tavan.push({ tur: TUR.kur, set: k.set, platform: mac.platform, etiket: 'kur-askida' });
       continue;
     }
     out.requeue.push({
-      tur: TUR.kur, set: k.set, platform: 'mac', kosul: 'bitmis', oneAl: gun0,
+      tur: TUR.kur, set: k.set, platform: mac.platform, kosul: 'bitmis', oneAl: gun0,
       sebep: `kur isteği ${Math.round(yas)} dk yaşlı, kurulum başlamadı`,
     });
   }
@@ -320,6 +326,7 @@ function ayarlar(env = process.env, ev = os.homedir()) {
     kasaAgentLog: 'C:\\empp-ajan\\log\\agent.log',
     kasaKabulLog: 'C:\\empp-ajan\\log\\kabul-iscisi.log',
     probookIp: env.EMPP_PROBOOK_IP || '192.168.1.70',
+    macDuraklat: path.join(ev, '.empp-agent', 'duraklat.istek'),
   };
 }
 
@@ -438,6 +445,11 @@ function jsonOku(d, yol, varsayilan) {
   try { return JSON.parse(d.dosyaOku(yol)); } catch (_) { return varsayilan; }
 }
 
+/** Mac duraklatıldıysa (`~/.empp-agent/duraklat.istek`) kur ProBook'tan (pardus) gelir. */
+function kurPlatformlari(cfg, d) {
+  return d.dosyaVar(cfg.macDuraklat) ? ['pardus'] : ['mac', 'pardus'];
+}
+
 // ─── Ana akış ─────────────────────────────────────────────────────────────────────────────
 
 async function kos(o, cfg, d) {
@@ -448,7 +460,7 @@ async function kos(o, cfg, d) {
   const db = await dbOku(cfg, d);
   const hata = planHata(db.satirlar, defter, nowMs, db.simdi);
   const kira = planKira(db.satirlar, defter, nowMs);
-  const kur = planKurAskida(db.kitaplar, db.satirlar, defter, nowMs, db.simdi);
+  const kur = planKurAskida(db.kitaplar, db.satirlar, defter, nowMs, db.simdi, kurPlatformlari(cfg, d));
   const requeue = requeueBirlestir(kur.requeue, kira.requeue, hata.requeue);
   const tavanlar = [...hata.tavan, ...kira.tavan, ...kur.tavan];
 
@@ -536,6 +548,7 @@ async function ana(argv = process.argv.slice(2), d = varsayilanBag(), cfg = ayar
 }
 
 module.exports = {
+  kurPlatformlari,
   CIKIS, TAVAN, BEKLEME_DK, TUR, KALICI_KALIPLAR, GECICI_KALIPLAR, AJANLAR,
   hataSinifla, dkFark, defterOku, son24Say, planHata, planKira, planKurAskida, requeueBirlestir,
   planAjan, planKasaSurum, planUretimKapisi, bildirimOzeti, sql, yedekKomutu, ayarlar, argAyristir,
