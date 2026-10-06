@@ -745,6 +745,8 @@ const { icerikMerdiveni, merdivenAcik } = require('./icerik-merdiven');
 const setEk = require('./set-uyelik-ek');
 // sf425 kabuk tazeleme (Z2, 05.10): r2-kur zincirinde set ekinden sonra, panelden önce.
 const setKabuk = require('./set-kabuk-tazele');
+// Menü kapak garantisi (06.10, 59835): her set kartının kapak dosyası build.zip'te.
+const menuKapak = require('./menu-kapak-garanti');
 const devamYukleme = require('./devam-yukleme');
 
 
@@ -2172,6 +2174,8 @@ const kaynakAdim = {
   // kapatma anahtarı YOK — güvenlik kapısı env ile devre dışı bırakılamaz).
   imKeys: (o) => imKeys.imKeysAdimi({ ...o, bag: imKeys.varsayilanBagimliliklar() }),
   menuBasligi: (o) => imKeys.menuBasligiAdimi(o),
+  // Menü kapak garantisi (06.10): kapaksız kart → panel listesi / Web-Z / thumbs / yer tutucu.
+  menuKapak: (o) => menuKapak.menuKapakGaranti(o),
   // Panel menü hizalama: panel GET'i exports üzerinden (test-yalitim sahtesi internete çıkarmaz).
   panelMenuHizala: (o) => panelMenu.panelMenuHizala({ ...panelMenu.varsayilanBagimliliklar(), ...o }),
   // Üreteç (r2-kur kaynak adımı): anahtarlı mı sorusu okuyucunun kendi HasZKitapKey'i (imkeys).
@@ -3198,6 +3202,22 @@ async function processJob(auth, job) {
     await kaynakAdim.menuBasligi({
       zipYolu: zipPath, yayineviAdi: job.publisherName, calisma: work, log,
     });
+
+    // MENÜ KAPAK GARANTİSİ (06.10, 59835 Super Monsters 2: Teacher's Pack + Worksheets kapaksız):
+    // üreteç link kartına coverUrl yazmaz, kabuk images/book1.png'ye düşer, dosya pakette yok.
+    // Menü yazan BÜTÜN adımlardan (üreteç, set eki, kabuk, panel) SONRA, R2/paketleyiciden ÖNCE:
+    // dört platform + R2 aynı kapakları alır. Manuel build'e dokunulmaz (sözleşme M1; kabul ölçer).
+    // Zip yazımı / aday kapısı düşerse hata görünür fırlar (iş kopyası değişmemiş olur).
+    // (Burada else dalı YAZILMAZ: runner-pardus.test.js processJob'daki ilk else'i pardus dalı sayar.)
+    if (kaynak.tur === 'manuel') {
+      log(`${menuKapak.ISARET} manuel build — kapak garantisi ATLANDI (sözleşme M1; kabul kapısı ölçer)`);
+    }
+    if (kaynak.tur !== 'manuel') {
+      job.menuKapak = await kaynakAdim.menuKapak({
+        zip: zipPath, calisma: work, kisaKod: job.kisaKod || null,
+        setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null, log, warn,
+      });
+    }
 
     // R2'YE YAZ (Dalga B, r2-kur): kurulan build yazma kapısından (B5) geçerse R2'ye yüklenir ve
     // `tamamla` ile sunucu kapısına sunulur. Kapı reddi / 409 → paket ÜRETİLMEZ (kalıcı: failed +
