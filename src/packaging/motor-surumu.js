@@ -456,11 +456,13 @@ async function motorKapisi(kokDizin, kanonik) {
  * "SAĞ ALT SÜRÜM ROZETİ" — OCR'sız, dosyadan. Rozet MOTORDAN DEĞİL okuyucu kabuğundan
  * gelir (ölçüm 2026-09-24): `index.html` → `<hash>.main.js` (eski kabukta `<hash>.js`) → parça haritası →
  * `e.exports={i8:"X"}` taşıyan parça (webpack'in package.json `version` modülü).
- * @param {string} kitapDizini index.html'in bulunduğu dizin
+ * @param {string} kitapDizini kabuk dosyalarının (main.js + parçalar) bulunduğu dizin
+ * @param {string} [indexGoreli] okuyucu sayfası, kitapDizini'ne göreli (varsayılan `index.html`;
+ *   A1 düzeninde `kapak/index.html` — sayfa <base href="../"> ile main.js'i köke çözer, 06.10 45496)
  * @returns {Promise<{surum:string|null, main:string|null, parca:string|null}>}
  */
-async function rozetSurumuOku(kitapDizini) {
-  return rozetSurumuOkuEsz(kitapDizini);
+async function rozetSurumuOku(kitapDizini, indexGoreli) {
+  return rozetSurumuOkuEsz(kitapDizini, indexGoreli);
 }
 
 /**
@@ -486,12 +488,13 @@ function tekEksizAnaAd(html, nitelik, uz) {
  * üç çağıranda senkron kullanılıyor). Algoritma burada bir kez yazılır; async sürüm
  * yalnız sarmalayıcıdır — iki ayrı kopya ayrışamaz.
  * @param {string} kitapDizini
+ * @param {string} [indexGoreli] okuyucu sayfası (varsayılan `index.html`); main.js yine kitapDizini'nde aranır
  * @returns {{surum:string|null, main:string|null, parca:string|null}}
  */
-function rozetSurumuOkuEsz(kitapDizini) {
+function rozetSurumuOkuEsz(kitapDizini, indexGoreli = 'index.html') {
   const bos = { surum: null, main: null, parca: null };
   let html;
-  try { html = fs.readFileSync(path.join(kitapDizini, 'index.html'), 'utf8'); } catch { return bos; }
+  try { html = fs.readFileSync(path.join(kitapDizini, indexGoreli), 'utf8'); } catch { return bos; }
   // Önce `<h20>.main.js`; eski kabukta (1.9.x) TEK eksiz `<h20>.js` girişi (45550 book4).
   const mainM = html.match(/src="\.?\/?([0-9a-f]{20}\.main\.js)"/);
   const eksiz = mainM ? null : tekEksizAnaAd(html, 'src', 'js');
