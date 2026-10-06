@@ -50,8 +50,9 @@ const MANIFEST_SEMASI = 1;
 const KANAL = 'G';
 /** R2 kovasında anahtar öneki: taban = `<publicUrl>/guncelleme` ↔ anahtar `guncelleme/…`. */
 const R2_ONEKI = 'guncelleme';
-const CACHE_DEGISMEZ = 'public, max-age=31536000, immutable';
-const CACHE_DEGISKEN = 'no-cache';
+/** `no-transform`: imzalı baytlar CDN'de değişmesin (Cloudflare Web Analytics text/html'e betik ekler; 45550, 06.10). */
+const CACHE_DEGISMEZ = 'public, max-age=31536000, immutable, no-transform';
+const CACHE_DEGISKEN = 'no-cache, no-transform';
 /**
  * Android G ucu (sözleşme: `platform-kanallari-sozlesmesi.md` "Android G katmanı",
  * istemci `src/platforms/android/empp-g-istemci.js`): `<taban>/set/<id>/android/{surum.json,

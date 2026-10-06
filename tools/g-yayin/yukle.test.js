@@ -146,16 +146,37 @@ async function yayinlaOrnek(o) {
 
 test('kapı 1: beyaz liste dışı kimlik 400 — yükle ve e2e', async () => {
   await assert.rejects(
-    yk.yukle({ setKimligi: '11811', cikti: '/yok', onayli: true }),
+    yk.yukle({ setKimligi: '11812', cikti: '/yok', onayli: true }),
     (e) => e.durum === 400 && /beyaz/.test(e.message),
   );
   const r = await yk.e2e({ setKimligi: '99901' });
   assert.deepEqual([r.rc, r.durum, r.gecti], [1, 400, false]);
   const cli = await y
-    .main(['yukle', '--set-kimligi', '59835', '--cikti', '/yok', '--onayli'])
+    .main(['yukle', '--set-kimligi', '69522', '--cikti', '/yok', '--onayli'])
     .catch((e) => e);
   assert.match(cli.message, /^400 — /);
-  assert.deepEqual(Object.keys(yk.YUKLEME_BEYAZ_LISTE), ['74390']);
+  // Kod/öntanım kimliği (prototip anahtarı) listeye sızmamalı.
+  for (const k of ['constructor', 'toString', '__proto__', ''])
+    assert.throws(() => yk.yuklemeHedefi(k), (e) => e.durum === 400);
+});
+
+test('kapı 1: liste = 36 YDS seti + 74390, hepsi tek YDS hedefi (06.10)', () => {
+  const beklenen = (
+    '11811 11845 11859 45100 45448 45449 45469 45472 45477 45478 45479 45480 45481 45482 ' +
+    '45485 45487 45496 45504 45538 45540 45541 45549 45550 45551 45695 45792 59834 59835 ' +
+    '60014 60015 60016 72378 72379 72380 73581 73768 74390'
+  ).split(' ');
+  assert.equal(beklenen.length, 37);
+  assert.deepEqual(Object.keys(yk.YUKLEME_BEYAZ_LISTE).sort(), [...beklenen].sort());
+  assert.ok(Object.isFrozen(yk.YUKLEME_BEYAZ_LISTE));
+  for (const id of beklenen) {
+    const h = yk.yuklemeHedefi(id);
+    assert.deepEqual({ ...h }, {
+      uzakKok: 'ydsr2:ydsdigital',
+      taban: 'https://cdn.ydspublishing.com/guncelleme',
+    });
+    assert.ok(Object.isFrozen(h));
+  }
 });
 
 test('kapı 2: --onayli yoksa kuru — plan sıralı, canlıya hiçbir şey yazılmaz', async () => {
@@ -205,7 +226,13 @@ test('onaylı: dosyalar → manifest+.sig → EN SON surum.json; doğrulanır; 2
   assert.equal(r.dogrula.gecti, true);
   assert.deepEqual([r.dogrula.surum, r.dogrula.arsiv], ['2.7.2', 1]);
   const kopya = c.cagri.find((a) => a[0] === 'copyto' && a[2].endsWith('/surum.json'));
-  assert.ok(kopya.includes('Cache-Control: no-cache'));
+  assert.ok(kopya.includes('Cache-Control: no-cache, no-transform'));
+  // İmzalı baytlar CDN'de değişmemeli: Cloudflare Web Analytics text/html yanıtına betik
+  // ekliyordu (45550, 06.10: 6894 → 7255 B, sha tutmadı). Her G nesnesi no-transform taşır.
+  const idx = c.cagri.find((a) => a[0] === 'copyto' && a[2].endsWith('/dosya/index.html'));
+  assert.ok(idx.includes('Cache-Control: no-cache, no-transform'));
+  const zipK = c.cagri.find((a) => a[0] === 'copyto' && /\/kitap\/[^/]+\.zip$/.test(a[2]));
+  assert.ok(zipK.includes('Cache-Control: public, max-age=31536000, immutable, no-transform'));
   const r2 = await yk.yukle(
     { setKimligi: '74390', cikti: o.cikti, onayli: true },
     { ...c, beklenenAcik: o.acik },
@@ -316,6 +343,16 @@ test('e2eIndexi: eski işaret atılır, yenisi </html> önüne', () => {
   assert.match(b, /<!-- empp-g-e2e T2 -->\n<\/html>$/);
 });
 
+test('e2eIndexi: "İ" içeren index — </html> bölünmez (45550 kuru koşu, 06.10)', () => {
+  // `toLowerCase()` "İ"yi iki kod birimine açar; konum kayıyordu → "<<!-- … -->\n/html>".
+  const ham = '<html><body>KAYDEDİLDİ İNDİR</body>\n</HTML>\n';
+  const c = yk.e2eIndexi(ham, 'T3');
+  assert.equal(c, '<html><body>KAYDEDİLDİ İNDİR</body>\n<!-- empp-g-e2e T3 -->\n</HTML>\n');
+  assert.equal(yk.e2eIndexi(c, 'T3'), c);
+  // `</html>` yoksa sona eklenir.
+  assert.equal(yk.e2eIndexi('<p>İ</p>', 'T4'), '<p>İ</p><!-- empp-g-e2e T4 -->\n');
+});
+
 /* ------------------------------------------------ Android G ucu yüklenir + doğrulanır (26.09) */
 /*
  * Android istemcisi (`src/platforms/android/empp-g-istemci.js` `kimlikKoku`) G tabanında
@@ -420,7 +457,7 @@ test('android ucu: onaylı yükleme android/ ucunu da yükler → GERÇEK Androi
   assert.ok(i('android/manifest.json.sig') < i('android/surum.json'));
   assert.deepEqual(k.slice(-2).sort(), ['android/surum.json', 'surum.json']);
   const kopya = c.cagri.find((x) => x[0] === 'copyto' && x[2].endsWith('/android/surum.json'));
-  assert.ok(kopya.includes('Cache-Control: no-cache'));
+  assert.ok(kopya.includes('Cache-Control: no-cache, no-transform'));
   // Android ucu canonical'la bayt bayt aynı (TEK imza).
   const kova = (g) => fs.readFileSync(path.join(c.kova, ...`guncelleme/set/74390/${g}`.split('/')));
   assert.ok(kova('android/manifest.json').equals(kova('manifest.json')));

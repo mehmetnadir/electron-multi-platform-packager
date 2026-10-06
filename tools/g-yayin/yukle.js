@@ -3,7 +3,7 @@
 /**
  * G YÜKLEME + GECE E2E — yerel imzalı durumu canlı R2'ye taşır; yalnız iki kapıdan geçerse.
  *
- *   Kapı 1 (beyaz liste): `setKimligi` YUKLEME_BEYAZ_LISTE'de olmalı (bugün yalnız 74390).
+ *   Kapı 1 (beyaz liste): `setKimligi` YUKLEME_BEYAZ_LISTE'de olmalı (06.10: 36 YDS seti + 74390).
  *          Kova ve taban komut satırından DEĞİL listeden gelir; başka kimlik → `400` (kuralı
  *          belge değil kapı korur). Kapı kuru koşuda da uygulanır.
  *   Kapı 2 (onay): `--onayli` yoksa hiçbir şey yazılmaz, yalnız plan basılır (kuru).
@@ -33,18 +33,34 @@ const anahtar = require('./anahtar');
 const gSurum = require('./g-surum');
 const kg = require('../../src/runtime/kitap-guncelleyici');
 
-/** Yüklemeye izinli setler → hedef. Yeni satır = bilinçli karar (Nadir onayı). */
-const YUKLEME_BEYAZ_LISTE = Object.freeze({
-  74390: Object.freeze({
-    uzakKok: 'ydsr2:ydsdigital',
-    taban: 'https://cdn.ydspublishing.com/guncelleme',
-  }),
+/** YDS Publishing hedefi: kova `ydsdigital`, taban = paketlerin claim `guncellemeTabani`'sı. */
+const YDS_HEDEF = Object.freeze({
+  uzakKok: 'ydsr2:ydsdigital',
+  taban: 'https://cdn.ydspublishing.com/guncelleme',
 });
+/**
+ * YDS setleri (Nadir 06.10 11:15: "kitaplar güncellenince paketler güncellensin… tam yetki").
+ * 74390 = 26.09'daki ilk izin. Liste dışı kimlik yine 400 alır; başka yayınevi = yeni hedef satırı.
+ */
+const YDS_SETLERI = Object.freeze([
+  '11811', '11845', '11859', '45100', '45448', '45449', '45469', '45472', '45477', '45478',
+  '45479', '45480', '45481', '45482', '45485', '45487', '45496', '45504', '45538', '45540',
+  '45541', '45549', '45550', '45551', '45695', '45792', '59834', '59835', '60014', '60015',
+  '60016', '72378', '72379', '72380', '73581', '73768', '74390',
+]);
+/** Yüklemeye izinli setler → hedef. Yeni satır = bilinçli karar (Nadir onayı). */
+const YUKLEME_BEYAZ_LISTE = Object.freeze(
+  Object.fromEntries(YDS_SETLERI.map((id) => [id, YDS_HEDEF])),
+);
 const E2E_VARSAYILAN_CIKTI = path.join(os.homedir(), '.empp-agent', 'g-yayin');
 const E2E_ISARET_DESENI = /<!-- empp-g-e2e [^>]*-->\n?/g;
 
 function yuklemeHedefi(setKimligi) {
-  const h = YUKLEME_BEYAZ_LISTE[String(setKimligi)];
+  // Yalnız KENDİ anahtarı: `constructor`/`toString` kimlik desenine uyar, prototipten hedef sızmasın.
+  const k = String(setKimligi);
+  const h = Object.prototype.hasOwnProperty.call(YUKLEME_BEYAZ_LISTE, k)
+    ? YUKLEME_BEYAZ_LISTE[k]
+    : null;
   if (!h) {
     const e = new Error(
       `400 — setKimligi ${JSON.stringify(String(setKimligi))} yükleme beyaz ` +
@@ -280,7 +296,10 @@ async function yukle(a, ops = {}) {
 function e2eIndexi(ham, uretim) {
   const temiz = String(ham).replace(E2E_ISARET_DESENI, '');
   const isaret = `<!-- empp-g-e2e ${uretim} -->\n`;
-  const i = temiz.toLowerCase().lastIndexOf('</html>');
+  // Konum ÖZGÜN dizgide aranır: `toLowerCase()` "İ"yi iki kod birimine açar, konum kayar
+  // ve işaret `</html>`in içine girer (45550 kuru koşusu, 06.10).
+  let i = -1;
+  for (const m of temiz.matchAll(/<\/html\s*>/gi)) i = m.index;
   return i === -1 ? temiz + isaret : temiz.slice(0, i) + isaret + temiz.slice(i);
 }
 
@@ -420,6 +439,7 @@ async function e2e(a, ops = {}) {
 }
 
 module.exports = {
+  YDS_SETLERI,
   YUKLEME_BEYAZ_LISTE,
   E2E_VARSAYILAN_CIKTI,
   yuklemeHedefi,

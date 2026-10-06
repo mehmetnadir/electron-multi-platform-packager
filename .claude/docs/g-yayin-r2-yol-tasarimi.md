@@ -14,11 +14,11 @@ bu düzenin birebir yerel aynasıdır; yerel sınama sunucusu da aynı ağacı s
 ## Anahtarlar
 | Anahtar (`guncelleme/set/<id>/` altında) | Tür | Cache-Control | Ne |
 |---|---|---|---|
-| `surum.json` | değişken | `no-cache` | `{surum, uretim, setKimligi}`. İmzasız, yalnız tetik. **EN SON** yazılır |
-| `manifest.json` | değişken | `no-cache` | Son sürümün TAM G durumu (birikimli) |
-| `manifest.json.sig` | değişken | `no-cache` | Manifestin ham baytları üzerinde ed25519 imza (base64) |
-| `dosya/<yol>` | değişken | `no-cache` | `index.html`, `bookN/43e23fce2b7009474555a77.js`: son hâl |
-| `kitap/<bookN>-<sha256[0:16]>.zip` | değişmez | `public, max-age=31536000, immutable` | Eklenen kitabın arşivi; içerik adresli |
+| `surum.json` | değişken | `no-cache, no-transform` | `{surum, uretim, setKimligi}`. İmzasız, yalnız tetik. **EN SON** yazılır |
+| `manifest.json` | değişken | `no-cache, no-transform` | Son sürümün TAM G durumu (birikimli) |
+| `manifest.json.sig` | değişken | `no-cache, no-transform` | Manifestin ham baytları üzerinde ed25519 imza (base64) |
+| `dosya/<yol>` | değişken | `no-cache, no-transform` | `index.html`, `bookN/43e23fce2b7009474555a77.js`: son hâl |
+| `kitap/<bookN>-<sha256[0:16]>.zip` | değişmez | `public, max-age=31536000, immutable, no-transform` | Eklenen kitabın arşivi; içerik adresli |
 | `surumler/<surum>/manifest.json` (+`.sig`) | değişmez | aynı | Her sürümün imzalı manifesti: denetim izi, geri dönüş kaynağı |
 
 `<surum>` = `2.<panel>.<sayaç>` (G3). Sayaç alanı paket sürümüyle ortaktır: ilk G yayını kurulu paketin
@@ -37,6 +37,10 @@ eşleşmeyen çift görür; imza tutmaz, güncelleme atlanır, bir sonraki açı
 manifestle yeni `dosya/*` yarışında sha256 tutmaz, sonuç yine "atla".
 
 ## Kurallar
+- **`no-transform` zorunlu (06.10, ölçüldü):** Cloudflare Web Analytics `text/html` yanıtına beacon
+  betiği ekler. 45550 `dosya/index.html` CDN'den 6894 B yerine 7255 B geldi; sha256 tutmadı, istemci
+  reddederdi. `Cache-Control: …, no-transform` ile CDN baytı R2 baytıyla aynıdır. Araç bu değeri her
+  G nesnesine yazar. Eski başlıklı nesne aynı baytla yeniden yazılarak onarılır.
 - **Tek yazar:** `guncelleme/set/<id>/` altına yalnız G yayın aracının çıktısı yüklenir. Paketleyicinin
   eski `guncelleme.tar.gz`'si artık ÜRETİLMEZ — üreticisi 26.09'da karantinada
   (`_graveyard/2026-09-26-g-eski-uretici/`); yüklense G durumunu silerdi (açık karar 2).
