@@ -1,0 +1,40 @@
+{
+  "aciklama": "Sözleşme bekçisi istisnaları. Her kayıt Nadir'in öğrettiği bir kuraldır. sebep + tarih zorunlu.",
+  "istisnalar": [
+    {
+      "kimlik": "flashy-elt-uretilmez",
+      "tur": "set-atla",
+      "setler": ["60114", "74404", "74427", "74428"],
+      "ad": "Flashy ELT (kova akillitahtalar)",
+      "sebep": "Bugün üretilmez; bekçi atlar ve istisna sayar.",
+      "tarih": "2026-10-06",
+      "kaynak": "Nadir 06.10 10:35"
+    },
+    {
+      "kimlik": "gold-elt-uretilmez",
+      "tur": "set-atla",
+      "setler": ["69588", "72411"],
+      "ad": "GOLD ELT",
+      "sebep": "Bugün üretilmez; bekçi atlar ve istisna sayar.",
+      "tarih": "2026-10-06",
+      "kaynak": "Nadir 06.10 10:35"
+    },
+    {
+      "kimlik": "android-g-ekleme-yok",
+      "tur": "kanal-g-ekleme-yok",
+      "platform": "android",
+      "sebep": "g-yayin kapısı Android G eklemesini bilinçli RED eder. Android KANAL-G ölçümü 'ekleme-yok' olarak işaretlenir, alarm üretmez.",
+      "tarih": "2026-10-06",
+      "kaynak": "Nadir 06.10"
+    },
+    {
+      "kimlik": "a1-kabuk-set-duzeyi",
+      "tur": "kabuk-set-duzeyi",
+      "setler": ["45477", "45478", "45480", "45485", "45496"],
+      "ad": "A1 düzenli setler",
+      "sebep": "bookN yok; kabuk tek (kök sf425 + kapak/index.html). Kitap başına kabuk ölçümü anlamsız; kabuk set düzeyinde (DB kabuk_surum/kabuk_durum) ölçülür.",
+      "tarih": "2026-10-06",
+      "kaynak": "Nadir 06.10 (memory a1-okuyucu-kabugu-kapak-index)"
+    }
+  ]
+}

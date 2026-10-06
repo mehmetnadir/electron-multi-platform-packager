@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sözleşme bekçisi (TASLAK, 06.10): 30 dk'da bir set × platform sözünü ölçer
+  (İSTEK → ÜRETİLEN → YAYINLANAN → KANAL). Kip: yalnız ölçüm + rapor (DB yazmaz, bildirim atmaz).
+  Bu dosya kendi kendine KURULMAZ. Kurmadan önce:
+    1) dal ana ağaca birleşmiş olmalı (yol ana ağacı gösterir),
+    2) elle bir kuru koşu: node tools/set-yenile/sozlesme-bekcisi.js --olc --rapor
+  Kurulum:
+    cp tools/set-yenile/tr.yds.sozlesme-bekcisi.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tr.yds.sozlesme-bekcisi.plist
+  Geri alma:
+    launchctl bootout gui/$(id -u)/tr.yds.sozlesme-bekcisi
+  Eylem açmak (Şef kararı): ProgramArguments'a önce --bildir (yalnız bildirim), sonra --uygula
+  (requeue + bildirim; tavan 24 sa'te set×platform 1, toplam 12).
+  Kanıt: ~/.empp-agent/sozlesme-bekcisi/son-rapor.md, son-rapor.json, eylem.jsonl.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>tr.yds.sozlesme-bekcisi</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/nadir/01dev/electron-multi-platform-packager/tools/set-yenile/sozlesme-bekcisi.js</string>
+    <string>--olc</string>
+    <string>--rapor</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nadir/01dev/electron-multi-platform-packager</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nadir/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nadir/.empp-agent/log/sozlesme-bekcisi.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nadir/.empp-agent/log/sozlesme-bekcisi.launchd.log</string>
+</dict>
+</plist>
