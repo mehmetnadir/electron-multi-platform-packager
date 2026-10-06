@@ -158,3 +158,20 @@ test('arsiv-gerekli: downloadUrl yok + bilgiUrl (exe) → arşiv varsa arşiv, y
   assert.equal(manuelKaynakUrl({ ...job, downloadUrl: `${R2}/sources/45472/k.zip` }), null,
     'arsiv-gerekli claim\'inde /sources/ adresi bile manuel sayılmaz');
 });
+
+test('arşiv içeriksiz + set + üreteç → üreteç', () => {
+  const arsiv = { ...ARSIV, iceriksiz: true };
+  const job = { kaynakTuru: 'r2-kur', kaynakSurumu: '2.0.0', setKimligi: '1' };
+  const r = kaynakKarari({ job, arsiv, uretec: true });
+  assert.equal(r.tur, 'r2-kur');
+  assert.equal(r.taban.tur, 'uretec');
+});
+
+test('arşiv içeriksiz + tek kitap + üreteç → arşiv (eski hata)', () => {
+  const arsiv = { zip: 'arsiv.zip', iceriksiz: true };
+  const job = { kaynakTuru: 'r2-kur', kaynakSurumu: '2.0.0' };
+  const r = kaynakKarari({ job, arsiv, uretec: true });
+  assert.equal(r.tur, 'r2-kur');
+  assert.equal(r.taban.tur, 'arsiv');
+  assert.equal(r.taban.arsiv, arsiv);
+});

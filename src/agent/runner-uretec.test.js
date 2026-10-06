@@ -429,15 +429,22 @@ test('r2-kur set eki eksiği TAMAMLIYOR (taban 4, liste 6, set eki 6 kitaplı ya
   assert.doesNotMatch(r.loglar + String(r.hata && r.hata.message), /kitap-eksik/);
 });
 
-test('r2-kur arşiv tabanı listeyi KAPSIYOR / FAZLA kitap içeriyor: taban KORUNUR, üreteç koşmaz', async () => {
-  for (const [idler, liste] of [[IDLER6, LISTE6], [IDLER6, '501 | A |  |  | Books\n502 | B |  |  | Books']]) {
-    const o = await ortam({ idler: IDLER6 });
-    const { ar } = await kitapliTaban(idler);
-    const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, job: { bookId: '45482', setListesi: liste } });
-    assert.equal(r.casus.uretec, 0, 'üreteç koşmadı');
-    assert.doesNotMatch(r.loglar, /ATLANDI/);
-    assert.match(r.loglar, /taban: ARŞİV/);
-  }
+test('r2-kur arşiv tabanı listeyi KAPSIYOR (eşit küme): taban KORUNUR, üreteç koşmaz', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { ar } = await kitapliTaban(IDLER6);
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, job: { bookId: '45482', setListesi: LISTE6 } });
+  assert.equal(r.casus.uretec, 0, 'üreteç koşmadı');
+  assert.doesNotMatch(r.loglar, /ATLANDI|liste kuculdu/);
+  assert.match(r.loglar, /taban: ARŞİV/);
+});
+
+test('r2-kur arşiv tabanı FAZLA kitap içeriyor (liste küçüldü): taban ATLANIR, üreteç koşar', async () => {
+  const o = await ortam({ idler: IDLER6 });
+  const { ar } = await kitapliTaban(IDLER6);
+  const r = await isKostur({ o, env: { EMPP_KAYNAK_ARSIVI: ar }, anahtarli: () => false,
+    job: { bookId: '45482', setListesi: '501 | A |  |  | Books\n502 | B |  |  | Books' } });
+  assert.equal(r.casus.uretec, 1, 'üreteç koştu');
+  assert.match(r.loglar, /taban kapsama: liste küçüldü \(503, 504, 505, 506 tabanda var ama claim'de yok\)/);
 });
 
 test('r2-kur üreteç KAPALI + eksik kitaplı arşiv tabanı: taban ATLANMAZ, yazma kapısı kitap-eksik RED', async () => {
