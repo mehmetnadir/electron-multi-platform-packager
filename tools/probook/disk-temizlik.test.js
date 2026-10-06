@@ -357,6 +357,11 @@ test('kur.sh disk kapısı önce temizliği koşturur, sonra yeniden ölçer; za
   const B = fs.readFileSync(BETIK, 'utf8');
   assert.match(B, /> "\$IZIN"/);
   assert.match(B, /\[ "\$D" = active \] && exit 0 \|\| exit 1/);
+  // 06.10 canlı ölçüm: OnUnitActiveSec çapası servis birimi boşaltılınca (timer durdur/başlat) kaybolur,
+  // NextElapse=infinity olur ve bekçi bir daha hiç koşmaz. Saat takvimi çapasızdır.
+  const tm = B.slice(B.indexOf('[Timer]'), B.indexOf('[Install]', B.indexOf('[Timer]')));
+  assert.match(tm, /^OnCalendar=hourly$/m);
+  assert.doesNotMatch(tm, /OnUnitActiveSec/);
   assert.doesNotMatch(B.split('\n').filter((s) => !s.trim().startsWith('#')).join('\n'), /sudo -n rm/);
   const ORTAM = fs.readFileSync(path.join(__dirname, 'serit-ortam.sh'), 'utf8');
   assert.match(ORTAM, /export EMPP_DISK_TEMIZLIK="\$\{EMPP_DISK_TEMIZLIK:-1\}"/);

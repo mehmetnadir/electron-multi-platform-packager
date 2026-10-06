@@ -162,7 +162,7 @@ Description=EMPP disk temizlik bekcisi - saatlik
 
 [Timer]
 OnBootSec=10min
-OnUnitActiveSec=1h
+OnCalendar=hourly
 Persistent=true
 
 [Install]
