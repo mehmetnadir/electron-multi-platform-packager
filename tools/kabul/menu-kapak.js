@@ -13,7 +13,8 @@
  *
  * ÖLÇÜT: menüde çizilen her kart (link ya da assetId'li kitap) için kabuğun YÜKLEYECEĞİ kapak yolu
  * çözülür (kabuğun kendi kuralıyla, aşağıda `kapakYolu`); dosya pakette VAR ve > 1 KB değilse RED.
- * `data:` kapak gömülüdür (çözülmüş bayt > 1 KB şartı aynı). `http(s)://` kapak çevrimdışı kırıktır →
+ * `data:` kapak gömülüdür (çözülmüş bayt > 1 KB, tür `image/*` ve imza baytları gerçek görsel —
+ * jpg/png/webp/gif/svg — şartı; 06.10 kapak gömme). `http(s)://` kapak çevrimdışı kırıktır →
  * RED. Menü verisi iki yerde durur: `scripts/cevrimdisi-yama.js` (`window.__setSettings`, çevrimdışı
  * kabuğun gerçekten okuduğu) ve `config/settings.json` — ikisi de ölçülür.
  * Set olmayan paket (ikisi de yok) → ATLANDI (katman eklenmez).
@@ -93,17 +94,37 @@ function cizilenKartlar(books) {
   return Object.keys(b).filter((k) => linkMi(b[k]) || !!(b[k] && b[k].assetId));
 }
 
-/** Kapak adresini sınıflar: {tur: 'data'|'uzak'|'yerel', yol?, bayt?}. SAF. */
+/**
+ * Bayttan görsel türü (imza baytları): 'jpg'|'png'|'webp'|'gif'|'svg'; görsel değilse null. SAF.
+ * Tek tanım: `src/agent/menu-kapak-garanti.js` `gorselUzantisi` bunu kullanır.
+ */
+function gorselTuru(b) {
+  if (!b || b.length < 12) return null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (b.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  if (b.slice(0, 4).toString('latin1') === 'GIF8') return 'gif';
+  const bas = b.slice(0, 512).toString('utf8').trimStart();
+  if (/^(<\?xml[^>]*>\s*)?<svg\b/i.test(bas)) return 'svg';
+  return null;
+}
+
+/**
+ * Kapak adresini sınıflar: {tur: 'data'|'uzak'|'yerel', yol?, bayt?, mime?, gorsel?, veri?}.
+ * `data:` için `bayt` = çözülmüş uzunluk, `gorsel` = imza türü (görsel değilse null). SAF.
+ */
 function adresSinifi(adres) {
   const a = String(adres || '').trim();
   if (/^data:/i.test(a)) {
     const m = /^data:([^;,]*)(;base64)?,(.*)$/is.exec(a);
-    if (!m) return { tur: 'data', bayt: 0 };
-    let bayt = 0;
+    if (!m) return { tur: 'data', bayt: 0, mime: '', gorsel: null, veri: null };
+    let veri = null;
     try {
-      bayt = m[2] ? Buffer.from(m[3], 'base64').length : Buffer.from(decodeURIComponent(m[3])).length;
-    } catch (_) { bayt = 0; }
-    return { tur: 'data', bayt };
+      veri = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]));
+    } catch (_) { veri = null; }
+    return {
+      tur: 'data', bayt: veri ? veri.length : 0, mime: m[1].trim().toLowerCase(), gorsel: gorselTuru(veri), veri,
+    };
   }
   if (/^[a-z][a-z0-9+.-]*:/i.test(a) || a.startsWith('//')) return { tur: 'uzak' };
   let yol = a.split('#')[0].split('?')[0].replace(/^\.\//, '').replace(/^\/+/, '');
@@ -129,6 +150,9 @@ function booksOlc(books, okuyucu, kaynak) {
     else if (s.tur === 'data') {
       kart.bayt = s.bayt;
       if (s.bayt <= KAPAK_ALT_SINIR) kart.sorun = `gömülü kapak ${s.bayt} bayt (≤ ${KAPAK_ALT_SINIR})`;
+      else if (!/^image\//.test(s.mime)) kart.sorun = `gömülü kapak türü görsel değil (${s.mime || 'tür yok'})`;
+      else if (!s.gorsel) kart.sorun = `gömülü kapak görsel imzası yok (${s.mime}, ${s.bayt} bayt)`;
+      else kart.yerTutucu = s.gorsel === 'svg' && s.veri.toString('utf8').includes(YER_TUTUCU_IMZASI);
     } else {
       const boyut = okuyucu.boyut(s.yol);
       kart.bayt = boyut;
@@ -294,7 +318,7 @@ async function paketMenuKapakOlc(p) {
 
 module.exports = {
   DURUM, KAPAK_ALT_SINIR, YER_TUTUCU_IMZASI, YAMA, AYAR,
-  yamaAyarlari, kapakYolu, cizilenKartlar, adresSinifi, booksOlc, menuKapakOlc, kokOkuyucu,
+  yamaAyarlari, kapakYolu, cizilenKartlar, gorselTuru, adresSinifi, booksOlc, menuKapakOlc, kokOkuyucu,
   menuKapakOlcKok, ozetSatiri, kip, kapiKarari, paketMenuKapakOlc,
 };
 
