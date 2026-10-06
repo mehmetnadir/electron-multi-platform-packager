@@ -8,6 +8,11 @@
  * Güvenlik: istek dosyası komut taşımaz; argv yalnız `imza-istek.KOMUTLAR` sabit tablosundan kurulur
  * (`istekKomutu`). Bayat (>6 sa), adı/içeriği uyuşmayan istek çalıştırılmaz. Aynı turdaki birden çok
  * aynı komut TEK çağrıya indirilir. İşlenen istek kasada `islendi\` altına taşınır (silme yok).
+ * K2 (inceleme 06.10): istek komuttan ÖNCE `isleniyor\<ad>.<konak>-<ms>` adına atomik taşınır (sahiplenme);
+ * taşınamazsa çalıştırılmaz. Böylece islendi\'ye taşınamayan istek karşı konakta yeniden koşmaz
+ * (defter konak başınadır). isleniyor\'de 30 dk'dan eski, sahibinin defterinde olmayan kayıt = YETİM:
+ * yalnız loglanır + bildirilir, köke geri alınmaz.
+ * K1: komut sürerken damga 60 sn'de bir tazelenir (komut tavanı 10 dk > damga eşiği 3 dk).
  *
  * Kullanım: node tools/windows/imza-tetik-koprusu.js [--kuru]   (tek tur; Mac'te launchd, srv21'de systemd
  *   timer 60 sn'de bir koşturur — KURULUMU ŞEF YAPAR)
@@ -25,7 +30,7 @@
  *   Devir boşluğu: saat sınırında yeni nöbetçi, eskinin damgası bayatlayana dek (≤3 dk) bekler.
  */
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -52,6 +57,16 @@ const NOBET_SAAT_DILIMI = 'Europe/Istanbul';
 const OFIS_BASLA_DK = 9 * 60 + 30; // 09:30 dahil
 const OFIS_BITIS_DK = 17 * 60 + 45; // 17:45 dahil (17:46 → srv21)
 const DAMGA_TAZE_MS = 3 * 60000;
+// K1 (inceleme 06.10): komut 10 dk'ya kadar sürebilir (90 sn kilit beklemesi + exe-create). Damga
+// yalnız komuttan ÖNCE yazılırsa 3. dakikada karşı konak bayat görüp AYNI isteği yeniden çalıştırır.
+// Komut sürerken damga bu aralıkla tazelenir (3 dk eşiğine 3 kat pay).
+const DAMGA_TAZELE_MS = 60000;
+const KOMUT_TAVAN_MS = 10 * 60000;
+// K2 (inceleme 06.10): istek komuttan ÖNCE isleniyor\ altına taşınır (sahiplenme). Bu süreden eski
+// kayıt = yetim (konak komut sırasında öldü ya da islendi\'ye taşıyamadı) → YALNIZ raporlanır.
+const YETIM_MS = 30 * 60000;
+const ISLENIYOR = 'isleniyor';
+const ETIKET_DESENI = /^(mac|srv21)-(\d{13})$/;
 const DAMGA_ADI = '.nobetci.json';
 const GUNLER = Object.freeze({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 });
 
@@ -130,6 +145,42 @@ function tasiKomutu(dizin, ad, sonuc) {
   return `mkdir "${dizin}\\islendi" 2>nul & move /y "${dizin}\\${ad}" "${dizin}\\islendi\\${ad}.${s}"`;
 }
 
+function etiketDenetle(etiket) {
+  if (!ETIKET_DESENI.test(String(etiket))) throw new Error(`güvensiz etiket: ${etiket}`);
+  return etiket;
+}
+
+/**
+ * K2: isteği komuttan ÖNCE `isleniyor\<ad>.<konak>-<ms>` adına taşıyan cmd komutu (saf). Aynı birimde
+ * move = rename (atomik): iki konaktan yalnız biri başarır; kaynak yoksa çıkış kodu 1 → sahiplenilmedi.
+ * `dir /b <dizin>\*.json` alt dizine inmediği için isleniyor\ ne köprü listesini ne kasa bekçisini etkiler.
+ */
+function sahiplenKomutu(dizin, ad, etiket) {
+  return `mkdir "${dizin}\\${ISLENIYOR}" 2>nul & move /y "${dizin}\\${ad}" "${dizin}\\${ISLENIYOR}\\${ad}.${etiketDenetle(etiket)}"`;
+}
+
+/** K2: sahiplenilmiş isteği islendi\'ye taşır (saf). */
+function bitirKomutu(dizin, isAd, ad, sonuc) {
+  const s = String(sonuc).replace(/[^0-9A-Za-z_-]/g, '');
+  return `mkdir "${dizin}\\islendi" 2>nul & move /y "${dizin}\\${ISLENIYOR}\\${isAd}" "${dizin}\\islendi\\${ad}.${s}"`;
+}
+
+/** K2: iş KOŞMADIYSA (hesap kilidi) isteği köke geri koyar (saf). */
+function geriAlKomutu(dizin, isAd, ad) {
+  return `move /y "${dizin}\\${ISLENIYOR}\\${isAd}" "${dizin}\\${ad}"`;
+}
+
+/** isleniyor\ girdisi → {isAd, ad, konak, zaman} ya da null (desen dışı). SAF. */
+function isleniyorCoz(isAd) {
+  const s = String(isAd || '');
+  const i = s.lastIndexOf('.');
+  if (i < 0) return null;
+  const ad = s.slice(0, i);
+  const m = ETIKET_DESENI.exec(s.slice(i + 1));
+  if (!m || !I.AD_DESENI.test(ad)) return null;
+  return { isAd: s, ad, konak: m[1], zaman: Number(m[2]) };
+}
+
 /** Gerçek uzak uç (ssh + cmd). Ad deseni denetlendiği için kabuk enjeksiyonu yok. */
 function sshUzak(cfg, kos = spawnSync) {
   const kimlik = cfg.anahtar ? ['-i', cfg.anahtar, '-o', 'IdentitiesOnly=yes'] : [];
@@ -146,6 +197,23 @@ function sshUzak(cfg, kos = spawnSync) {
     tasi(ad, sonuc) {
       const r = ssh(tasiKomutu(cfg.dizin, guvenli(ad), sonuc));
       return r.status === 0;
+    },
+    /** @returns {string|null} isleniyor\ altındaki ad; başarısız → null (başka konak aldı / ssh koptu) */
+    sahiplen(ad, etiket) {
+      const k = sahiplenKomutu(cfg.dizin, guvenli(ad), etiket);
+      return ssh(k).status === 0 ? `${ad}.${etiket}` : null;
+    },
+    bitir(isAd, ad, sonuc) {
+      if (!isleniyorCoz(isAd)) throw new Error(`güvensiz ad: ${isAd}`);
+      return ssh(bitirKomutu(cfg.dizin, isAd, guvenli(ad), sonuc)).status === 0;
+    },
+    geriAl(isAd, ad) {
+      if (!isleniyorCoz(isAd)) throw new Error(`güvensiz ad: ${isAd}`);
+      return ssh(geriAlKomutu(cfg.dizin, isAd, guvenli(ad))).status === 0;
+    },
+    isleniyorListele() {
+      const r = ssh(`if exist "${cfg.dizin}\\${ISLENIYOR}" dir /b "${cfg.dizin}\\${ISLENIYOR}"`);
+      return String(r.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     },
     /** @returns {{konak,zaman,zorla}|null} — dosya yok/bozuk → null */
     damgaOku() { return damgaCoz(ssh(`type "${cfg.dizin}\\${DAMGA_ADI}" 2>nul`).stdout); },
@@ -214,9 +282,33 @@ function kosOrtami(konak, env = process.env) {
   return o;
 }
 
+/**
+ * isleniyor\ taraması (K2). Bu konağın defterindeki girdi (çalıştı ama islendi\'ye taşınamadı) →
+ * taşıma yeniden denenir. Defterde olmayan ve 30 dk'dan eski girdi = YETİM → yalnız raporlanır
+ * (köke GERİ ALINMAZ: komut koşmuş olabilir; geri almak çift tetik demektir, insan bakmalı).
+ */
+function isleniyorTara({ uzak, log, konak, simdi, islenmis, ozet }) {
+  if (typeof uzak.isleniyorListele !== 'function') return;
+  for (const isAd of uzak.isleniyorListele()) {
+    const g = isleniyorCoz(isAd);
+    if (!g) continue;
+    if (g.konak === konak && islenmis && islenmis.has(g.ad)) {
+      if (uzak.bitir(g.isAd, g.ad, 'defter-tekrar') === false) ozet.tasinamayan += 1;
+      else log(`köprü: ${g.ad} isleniyor\\'den islendi\\'ye taşındı (defter-tekrar)`);
+      continue;
+    }
+    const yas = simdi() - g.zaman;
+    if (yas > YETIM_MS) {
+      ozet.yetim += 1;
+      log(`köprü: YETİM istek ${g.isAd} (${g.konak}, ${Math.round(yas / 60000)} dk) — çalışmış olabilir; `
+        + 'geri ALINMADI, insan bakmalı');
+    }
+  }
+}
+
 async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = null, isaretle = () => {}, bildir = () => {},
-  nobetTazele = () => true }) {
-  const ozet = { islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0, kilitli: 0, kesildi: false };
+  nobetTazele = () => true, konak = 'mac' }) {
+  const ozet = BOS_OZET();
   let ardisikKilit = 0;
   let bildirildi = false;
   const tasi = (ad, sonuc) => {
@@ -225,6 +317,15 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
       log(`köprü: ${ad} islendi\\'ye TAŞINAMADI (${sonuc}) — defterde, tekrar ÇALIŞTIRILMAZ; taşıma sonraki turda yeniden denenir`);
     }
   };
+  const bitir = (isAd, ad, sonuc) => {
+    if (uzak.bitir(isAd, ad, sonuc) === false) {
+      ozet.tasinamayan += 1;
+      log(`köprü: ${ad} islendi\\'ye TAŞINAMADI (${sonuc}) — isleniyor\\ altında kaldı; hiçbir konak `
+        + 'yeniden ÇALIŞTIRMAZ, taşıma sonraki turda yeniden denenir');
+    }
+  };
+  if (!kuru) isleniyorTara({ uzak, log, konak, simdi, islenmis, ozet });
+  if (ozet.yetim && !kuru) bildir(`imza köprüsü: ${ozet.yetim} yetim istek isleniyor\\ altında (30 dk+)`);
   const adlar = uzak.listele().sort();
   if (!adlar.length) return ozet;
   const yapildi = new Map(); // komut -> sonuç (aynı turda tekrar çağrılmaz)
@@ -242,13 +343,24 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
       continue;
     }
     let sonuc = yapildi.get(k.komut);
-    if (sonuc === undefined) {
-      if (!kuru && !nobetTazele()) {
-        // Karşı konak bu arada damga yazdı (devir / çift tetik freni): kalan istekler ona kalır.
-        log(`köprü: nöbet karşı konağa geçti — tur ${ad} öncesinde kesildi, istek yerinde`);
-        ozet.kesildi = true;
-        break;
+    const calisacak = sonuc === undefined;
+    if (calisacak && !kuru && !nobetTazele()) {
+      // Karşı konak bu arada damga yazdı (devir / çift tetik freni): kalan istekler ona kalır.
+      log(`köprü: nöbet karşı konağa geçti — tur ${ad} öncesinde kesildi, istek yerinde`);
+      ozet.kesildi = true;
+      break;
+    }
+    // K2: komuttan ÖNCE sahiplen. Başarısız = başka konak aldı ya da ssh koptu → bu istek ATLANIR.
+    let isAd = null;
+    if (!kuru) {
+      isAd = uzak.sahiplen(ad, `${konak}-${Math.trunc(simdi())}`);
+      if (!isAd) {
+        log(`köprü: ${ad} isleniyor\\'e TAŞINAMADI (başka konak aldı ya da ssh koptu) — çalıştırılmadı`);
+        ozet.sahiplenilemeyen += 1;
+        continue;
       }
+    }
+    if (calisacak) {
       if (kuru) { log(`köprü (kuru): çalıştırılırdı: ${k.argv.join(' ')}`); sonuc = 'kuru'; } else {
         const r = await kos(k.argv);
         sonuc = kilitMi(r) ? 'kilit' : (r.kod === 0 ? 'tamam' : `hata${r.kod}`);
@@ -260,9 +372,12 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
       sonuc = `birlesik-${sonuc}`;
     }
     if (sonuc === 'kilit') {
-      // İŞ KOŞMADI: istek yerinde kalır, defterlenmez, taşınmaz; sonraki turda yeniden denenir.
+      // İŞ KOŞMADI: istek köke geri alınır, defterlenmez; sonraki turda yeniden denenir.
       // Bayatlık eşiği (6 sa) DEĞİŞMEDİ: kilit 6 sa sürerse istek bayat sayılıp reddedilir — bu bilinçli
       // (6 sa kilit = bildirim zaten gitti, insan bakmalı; sonsuz bekleyen istek eski sürümü imzalatır).
+      if (!kuru && uzak.geriAl(isAd, ad) === false) {
+        log(`köprü: ${ad} kilitten sonra köke GERİ ALINAMADI — isleniyor\\ altında (30 dk sonra yetim raporu)`);
+      }
       log(`köprü: ${ad} hesap kilidi — sonraki turda yeniden`);
       ozet.kilitli += 1;
       ardisikKilit += 1;
@@ -275,7 +390,7 @@ async function tur({ uzak, kos, log, kuru = false, simdi = Date.now, islenmis = 
     ardisikKilit = 0;
     if (!kuru) {
       if (islenmis) { islenmis.add(ad); isaretle(ad); }
-      tasi(ad, sonuc);
+      bitir(isAd, ad, sonuc);
     }
     ozet.islenen += 1;
   }
@@ -291,7 +406,9 @@ function rolDegisti(yol, rol) {
   return true;
 }
 
-const BOS_OZET = () => ({ islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0, kilitli: 0, kesildi: false });
+const BOS_OZET = () => ({
+  islenen: 0, calisan: [], reddedilen: 0, tasinamayan: 0, kilitli: 0, kesildi: false, sahiplenilemeyen: 0, yetim: 0,
+});
 
 /**
  * Tek tur: nöbet → damga → istekler. `uzak`/`simdi` test için enjekte edilir. Pasifte `uzak`a HİÇ dokunulmaz.
@@ -320,9 +437,42 @@ async function nobetliTur({ cfg, uzak, kos, log, kuru = false, simdi = Date.now,
     if (yabanciTaze(uzak.damgaOku(), cfg.konak, simdi())) return false;
     return uzak.damgaYaz(cfg.konak, simdi(), zorla) !== false;
   };
-  const ozet = await tur({ uzak, kos, log, kuru, simdi, islenmis, isaretle, bildir, nobetTazele });
+  // K1: komut sürerken damga DAMGA_TAZELE_MS'de bir tazelenir (kos ASENKRON olmalı — spawnSync olay
+  // döngüsünü kilitler, aralık hiç tetiklenmez). unref: aralık süreci tek başına ayakta tutmaz.
+  const kosNobetli = async (argv) => {
+    const z = setInterval(() => {
+      try { uzak.damgaYaz(cfg.konak, simdi(), zorla); } catch (e) { log(`köprü: damga tazelenemedi — ${e.message}`); }
+    }, DAMGA_TAZELE_MS);
+    if (z && typeof z.unref === 'function') z.unref();
+    try { return await kos(argv); } finally { clearInterval(z); }
+  };
+  const ozet = await tur({ uzak, kos: kosNobetli, log, kuru, simdi, islenmis, isaretle, bildir, nobetTazele,
+    konak: cfg.konak });
   if (!kuru && !ozet.kesildi && ozet.calisan.length) uzak.damgaYaz(cfg.konak, simdi(), zorla);
   return { ...ozet, rol: 'nobetci' };
+}
+
+/**
+ * Komutu ASENKRON koşturur (K1): spawnSync olay döngüsünü kilitler ve damga tazeleme aralığı komut
+ * boyunca hiç tetiklenmez. Tavan aşılırsa SIGTERM; kod -1 (spawnSync timeout'uyla aynı sözleşme).
+ * @returns {Promise<{kod:number, cikti:string}>}
+ */
+function kosAsenkron(argv, env, tavanMs = KOMUT_TAVAN_MS) {
+  return new Promise((coz) => {
+    let cikti = '';
+    let bitti = false;
+    const son = (kod) => { if (bitti) return; bitti = true; clearTimeout(z); coz({ kod, cikti }); };
+    let c;
+    try { c = spawn(argv[0], argv.slice(1), { env, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+      cikti = String(e && e.message); coz({ kod: -1, cikti }); return;
+    }
+    const z = setTimeout(() => { try { c.kill('SIGTERM'); } catch (_) { /* yoksay */ } son(-1); }, tavanMs);
+    c.stdout.setEncoding('utf8'); c.stderr.setEncoding('utf8');
+    c.stdout.on('data', (x) => { cikti += x; });
+    c.stderr.on('data', (x) => { cikti += x; });
+    c.on('error', (e) => { cikti += String(e && e.message); son(-1); });
+    c.on('close', (kod) => son(kod === null ? -1 : kod));
+  });
 }
 
 async function ana(argv = process.argv.slice(2)) {
@@ -342,11 +492,8 @@ async function ana(argv = process.argv.slice(2)) {
     log('köprü: başka kopya koşuyor — tur atlandı');
     return BOS_OZET();
   }
-  const kos = async (a) => {
-    // Hesap kilidi doluysa çağrı 90 sn bekler (YAYINCILIKADM_HESAP_KILIDI=0 KULLANILMAZ: ortak freni kapatır).
-    const r = spawnSync(a[0], a.slice(1), { encoding: 'utf8', timeout: 10 * 60000, env: kosOrtami(cfg.konak) });
-    return { kod: r.status === null ? -1 : r.status, cikti: `${r.stdout || ''}${r.stderr || ''}` };
-  };
+  // Hesap kilidi doluysa çağrı 90 sn bekler (YAYINCILIKADM_HESAP_KILIDI=0 KULLANILMAZ: ortak freni kapatır).
+  const kos = (a) => kosAsenkron(a, kosOrtami(cfg.konak), KOMUT_TAVAN_MS);
   const islenmis = defterOku(cfg.defter);
   let ozet;
   try {
@@ -369,6 +516,7 @@ module.exports = {
   ayarlar, tasiKomutu, sshUzak, defterOku, defterYaz, tur, ana, kilitMi, tavanliBildir, tekKopyaAl,
   KONAKLAR, DAMGA_ADI, DAMGA_TAZE_MS, istanbulZamani, saatNobetcisi, damgaCoz, yabanciTaze, saatePasifMi,
   nobetKarari, damgaYazKomutu, kosOrtami, rolDegisti, nobetliTur,
+  DAMGA_TAZELE_MS, KOMUT_TAVAN_MS, YETIM_MS, kosAsenkron, sahiplenKomutu, bitirKomutu, geriAlKomutu, isleniyorCoz,
 };
 
 if (require.main === module) {
