@@ -306,10 +306,52 @@ okuyucu_kapisi(){ # $@ = paket [ek okuyucu-surumu-kapisi.js argumanlari]
   fi
   olculemedi "okuyucu surumu olculemedi: $sebep"
 }
+# MENU KAPAK KAPISI (06.10, 59835 Teacher's Pack/Worksheets kapaksiz): set menusundeki her kartin
+# kapagi pakette var mi — tools/kabul/menu-kapak.js (tanim tek kaynak; cikis 0 GECTI/ATLANDI, 1 RED,
+# 3 OLCULEMEDI). Okuyucu kapisinin hemen ardindan, kilitten/kopyadan ONCE kosar. Kip KABUL_MENU_KAPAK:
+#   uyar (varsayilan) → RED/OLCULEMEDI kabulu DUSURMEZ, yalniz "[kabul] menu kapak UYARI: <ilk sebep>"
+#   reddet            → RED cikis 1; OLCULEMEDI yine yalniz uyari (arac paket duzenini tanimayabilir)
+#   kapali            → olcum kosmaz
+# Node: KABUL_MENU_KAPAK_NODE > okuyucu kapisiyla ayni cozum. Hata hicbir kipte kabulu cokertmez.
+menu_kapak_kapisi(){ # $@ = paket [ek menu-kapak.js argumanlari]
+  local kip node cikti rc sebep kapi
+  kip=$(printf '%s' "${KABUL_MENU_KAPAK:-}" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+  case "$kip" in reddet|kapali) ;; *) kip=uyar ;; esac
+  [ "$kip" = "kapali" ] && return 0
+  node="${KABUL_MENU_KAPAK_NODE:-${KABUL_OKUYUCU_NODE:-${KABUL_NODE:-node}}}"
+  kapi="$BETIK_DIZIN/../kabul/menu-kapak.js"
+  if ! command -v "$node" >/dev/null 2>&1 && [ -x "$HOME/empp-serit/node/bin/node" ]; then
+    node="$HOME/empp-serit/node/bin/node"
+  fi
+  if ! command -v "$node" >/dev/null 2>&1; then
+    cikti="node yok ($node)"; rc=127
+  elif [ ! -f "$kapi" ]; then
+    cikti="kapi betigi yok ($kapi)"; rc=127
+  else
+    cikti=$("$node" "$kapi" "$@" --platform pardus 2>&1); rc=$?
+  fi
+  [ -d "$KANIT" ] && printf '%s\n' "$cikti" > "$KANIT/menu-kapak.txt"
+  sebep=$(printf '%s\n' "$cikti" | tail -1 | cut -c1-400)
+  if [ "$rc" = "0" ]; then
+    say "menu kapak GECTI"
+  elif [ "$rc" = "1" ] && [ "$kip" = "reddet" ]; then
+    red "menu kapak eksik: $sebep — paket yeniden uretilmeli"
+  else
+    say "menu kapak UYARI: $sebep"
+  fi
+  return 0
+}
+
 if [ "$YEREL" = "1" ]; then
   okuyucu_kapisi "$UZAK"
 elif [ "$KOPYALA" = "1" ]; then
   okuyucu_kapisi "$GIRDI"
+fi
+# Menu kapak kapisi okuyucu kapisinin hemen ardindan (yine kilitten/kopyadan ONCE).
+if [ "$YEREL" = "1" ]; then
+  menu_kapak_kapisi "$UZAK"
+elif [ "$KOPYALA" = "1" ]; then
+  menu_kapak_kapisi "$GIRDI"
 fi
 
 # ORTAK KILIT (uzak + yerel kapi ayni ~/.kabul.lock; bkz. probook-kilit.sh). Bekleme tavani
@@ -485,6 +527,7 @@ else
   # Uzak girdi: paket ProBook'ta → olcum orada (kilitten ONCE). Kopyalanan paket yukarida olculdu.
   if [ "$KOPYALA" = "0" ]; then
     okuyucu_kapisi "$UZAK" --uzak-konak "$HOST" --uzak-anahtar "$KEY" ${KABUL_UZAK_NODE:+--uzak-node "$KABUL_UZAK_NODE"}
+    menu_kapak_kapisi "$UZAK" --uzak-konak "$HOST" --uzak-anahtar "$KEY" ${KABUL_UZAK_NODE:+--uzak-node "$KABUL_UZAK_NODE"}
   fi
   BEKLENEN=0
   until C=$(kilit al); do

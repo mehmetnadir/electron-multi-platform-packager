@@ -56,6 +56,11 @@ function ortam() {
       cagri.okuyucu = (cagri.okuyucu || []).concat([p]);
       return { karar: 'GECTI', hamKarar: 'GECTI', olculen: '1.13.14', kanonik: '1.13.14', birimler: [], sebepler: [] };
     },
+    // Menü kapak kapısı (06.10): varsayılan GEÇTİ (gerçek exe açılmaz); kapı testleri kendi ölçümünü verir.
+    menuKapakOlc: async (p) => {
+      cagri.menuKapak = (cagri.menuKapak || []).concat([p]);
+      return { durum: 'GECTI', kartlar: [], sebepler: [], uyarilar: [] };
+    },
     ...ek,
   });
   const ekle = async (bookId, { yasMs = 60000 } = {}) => {
@@ -510,4 +515,88 @@ test('okuyucu UÇTAN UCA (gerçek paketOlc + 7z, NSIS benzeri exe): damga "gunce
     assert.equal(o2.cagri.kabul.length, 1);
     assert.match(loglar.join('\n'), /okuyucu sürümü: GEÇTİ — ölçülen 1\.12\.7, kanonik 1\.13\.14 .*KABUL_OKUYUCU_SURUM=uyar/);
   } finally { F.temizle(agac, d); }
+});
+
+// ---------------------------------------------------------------------------
+// MENÜ KAPAK KAPISI (06.10, 59835 Teacher's Pack/Worksheets kapaksız): KABUL_MENU_KAPAK = uyar (varsayılan)
+// | reddet | kapali. uyar: RED/ÖLÇÜLEMEDİ kabulü düşürmez, yalnız log · reddet: RED → bayat; ÖLÇÜLEMEDİ yine
+// yalnız uyarı · kapali: ölçüm hiç koşmaz.
+// ---------------------------------------------------------------------------
+const MK_RED = async (p) => ({ durum: 'RED', kartlar: [], uyarilar: [],
+  sebepler: ["link4 (Teacher's Pack): images/book1.png pakette yok"] });
+const MK_OLCULEMEDI = async () => ({ durum: 'OLCULEMEDI', kartlar: [], uyarilar: [], sebepler: ['yama okunamadı'] });
+
+test('menü kapak uyar (varsayılan): RED kabulü DÜŞÜRMEZ — kabul.py koşar, UYARI satırı yazılır, exe + windows + calisma verilir', async () => {
+  const o = ortam();
+  const k = await o.ekle('601');
+  const loglar = [];
+  const olc = async (p) => { o.cagri.menuKapak = (o.cagri.menuKapak || []).concat([p]); return MK_RED(p); };
+  const z = await K.tur(o.bagimlilik({ menuKapakOlc: olc, env: {}, log: (s) => loglar.push(s) }));
+  assert.equal(z.gecti, 1, JSON.stringify(z));
+  assert.equal(o.cagri.kabul.length, 1);
+  assert.equal(o.cagri.failure.length, 0);
+  assert.equal(o.cagri.menuKapak[0].paket, k.dizin + path.sep + k.manifest.exe);
+  assert.equal(o.cagri.menuKapak[0].platform, 'windows');
+  assert.match(o.cagri.menuKapak[0].calisma, /kabul-iscisi-[^/\\]+[/\\]menu-kapak$/);
+  assert.match(loglar.join('\n'), /\[kabul\] menu kapak UYARI: link4 \(Teacher's Pack\): images\/book1\.png pakette yok/);
+});
+
+test('menü kapak uyar: ÖLÇÜLEMEDİ ve ölçüm fırlatması da kabulü düşürmez; GEÇTİ satırı yazılır', async () => {
+  const o = ortam();
+  await o.ekle('602');
+  const loglar = [];
+  const z = await K.tur(o.bagimlilik({ menuKapakOlc: MK_OLCULEMEDI, env: {}, log: (s) => loglar.push(s) }));
+  assert.equal(z.gecti, 1, JSON.stringify(z));
+  assert.match(loglar.join('\n'), /menu kapak UYARI: yama okunamadı/);
+  const o2 = ortam();
+  await o2.ekle('603');
+  const l2 = [];
+  const z2 = await K.tur(o2.bagimlilik({ menuKapakOlc: async () => { throw new Error('ENOSPC'); }, env: {}, log: (s) => l2.push(s) }));
+  assert.equal(z2.gecti, 1);
+  assert.match(l2.join('\n'), /menu kapak UYARI: paket açılamadı: ENOSPC/);
+  const o3 = ortam();
+  await o3.ekle('604');
+  const l3 = [];
+  await K.tur(o3.bagimlilik({ env: {}, log: (s) => l3.push(s) }));
+  assert.match(l3.join('\n'), /\[kabul\] menu kapak GECTI/);
+});
+
+test('menü kapak reddet: RED → bayat (kabul.py KOŞMAZ, /result failed, manifest menuKapak izi); ÖLÇÜLEMEDİ yine geçer', async () => {
+  const o = ortam();
+  const k = await o.ekle('605');
+  const z = await K.tur(o.bagimlilik({ menuKapakOlc: MK_RED, env: { KABUL_MENU_KAPAK: 'reddet' } }));
+  assert.equal(z.bayat, 1, JSON.stringify(z));
+  assert.equal(o.cagri.kabul.length, 0, 'kapaksız pakete kabul harcanmaz');
+  assert.equal(o.cagri.failure.length, 1);
+  assert.match(o.cagri.failure[0].mesaj, /menü kapak eksik: link4 \(Teacher's Pack\)/);
+  const m = JSON.parse(fs.readFileSync(path.join(o.cfg.winHazirKoku, 'bayat', o.alt('bayat')[0], 'manifest.json'), 'utf8'));
+  assert.match(m.sebep, /^menu-kapak: link4/);
+  assert.equal(m.menuKapak.karar, 'RED');
+  void k;
+  const o2 = ortam();
+  await o2.ekle('606');
+  const z2 = await K.tur(o2.bagimlilik({ menuKapakOlc: MK_OLCULEMEDI, env: { KABUL_MENU_KAPAK: 'reddet' } }));
+  assert.equal(z2.gecti, 1, 'ÖLÇÜLEMEDİ reddet kipinde de kabulü düşürmez');
+});
+
+test('menü kapak kapali: ölçüm HİÇ koşmaz; tanınmayan değer = uyar', async () => {
+  const o = ortam();
+  await o.ekle('607');
+  const z = await K.tur(o.bagimlilik({ menuKapakOlc: MK_RED, env: { KABUL_MENU_KAPAK: 'kapali' },
+    ...{} }));
+  assert.equal(z.gecti, 1);
+  assert.equal(o.cagri.menuKapak, undefined, 'kapali kipte ölçüm çağrılmaz');
+  const MK = require('../kabul/menu-kapak');
+  assert.equal(MK.kip({}), 'uyar');
+  assert.equal(MK.kip({ KABUL_MENU_KAPAK: ' REDDET ' }), 'reddet');
+  assert.equal(MK.kip({ KABUL_MENU_KAPAK: 'saçma' }), 'uyar');
+});
+
+test('menü kapak okuyucu RED ise ölçülmez (okuyucu önce)', async () => {
+  const o = ortam();
+  await o.ekle('608');
+  const olc = async () => ({ karar: 'RED', hamKarar: 'RED', olculen: '1.12.7', kanonik: '1.13.14', birimler: [], sebepler: ['x'] });
+  const z = await K.tur(o.bagimlilik({ okuyucuOlc: olc, env: { KABUL_MENU_KAPAK: 'reddet' } }));
+  assert.equal(z.bayat, 1);
+  assert.equal(o.cagri.menuKapak, undefined);
 });

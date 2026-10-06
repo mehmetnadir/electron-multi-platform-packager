@@ -230,19 +230,101 @@ function ozetSatiri(s) {
     + `${s.uyarilar.length ? ` · UYARI: ${s.uyarilar.join(' | ')}` : ''}`;
 }
 
+/** KABUL_MENU_KAPAK kipi: `uyar` (varsayılan) | `reddet` | `kapali`. Tanınmayan değer → uyar. Saf. */
+function kip(env = process.env) {
+  const v = String((env && env.KABUL_MENU_KAPAK) || '').trim().toLowerCase();
+  return v === 'reddet' || v === 'kapali' ? v : 'uyar';
+}
+
+/**
+ * Kasa/ProBook kabul kapısı kararı (tanım tek kaynak; kabuk betiği aynı kuralı çıkış koduyla uygular).
+ *  - uyar (varsayılan): RED/ÖLÇÜLEMEDİ kabulü düşürmez, yalnız `[kabul] menu kapak UYARI: <ilk sebep>`.
+ *  - reddet: RED kabulü düşürür; ÖLÇÜLEMEDİ yine yalnız uyarı (aracın paket düzenini tanımaması
+ *    kabulü durdurmamalı).
+ *  - kapali: ölçüm koşmaz (kapı çağıranda atlanır).
+ * @returns {{dusur:boolean, log:string, sebep:string}}
+ */
+function kapiKarari(sonuc, kp = 'uyar') {
+  const sebep = (sonuc.sebepler && sonuc.sebepler[0]) || 'sebep yok';
+  if (sonuc.durum === DURUM.GECTI || sonuc.durum === DURUM.ATLANDI) {
+    return { dusur: false, log: '[kabul] menu kapak GECTI', sebep: '' };
+  }
+  if (sonuc.durum === DURUM.RED && kp === 'reddet') {
+    return { dusur: true, log: `[kabul] menu kapak RED: ${sebep}`, sebep };
+  }
+  return { dusur: false, log: `[kabul] menu kapak UYARI: ${sebep}`, sebep };
+}
+
+/**
+ * Paket DOSYASINI (exe/dmg/apk/impark/zip) açıp ölçer. Pardus .impark asar akışından yalnız menü
+ * dosyaları (yama, settings, images/) alınır; uzak girdide akış ProBook'ta koşar.
+ * @param {{paket:string, platform?:string, calisma?:string, uzak?:{sshArgv:string[], node?:string|null}}} p
+ */
+async function paketMenuKapakOlc(p) {
+  /* eslint-disable global-require */
+  const os = require('os');
+  const { paketiAc, platformTahmin, platformNormalize, yedizBul } = require('./paket-cikar');
+  const dizinMi = !p.uzak && fs.statSync(p.paket).isDirectory();
+  const platform = p.uzak ? 'pardus' : (platformNormalize(p.platform) || platformTahmin(p.paket, dizinMi));
+  if (!platform) throw new Error(`platform belirlenemedi (--platform ver): ${p.paket}`);
+  const kendi = !p.calisma;
+  const calisma = p.calisma || fs.mkdtempSync(path.join(os.tmpdir(), 'menu-kapak-paket-'));
+  let acilis = null;
+  try {
+    if (platform === 'pardus') {
+      const IC = require('./impark-okuyucu-cikar');
+      const hedef = path.join(calisma, 'impark-menu');
+      const ortak = {
+        paket: p.paket, hedef, gerekliMi: (rel) => rel === YAMA || rel === AYAR || rel.startsWith('images/'),
+      };
+      const c = p.uzak
+        ? await IC.uzakImparkAgaciCikar({ ...ortak, sshArgv: p.uzak.sshArgv, uzakNode: p.uzak.node })
+        : await IC.imparkAgaciCikar({ ...ortak, yediz: yedizBul() });
+      const s = menuKapakOlcKok(hedef, { asar: false });
+      if (c.eksik && c.eksik.length) s.sebepler.push(`okunamayan dosya: ${c.eksik.slice(0, 3).join(', ')}`);
+      return s;
+    }
+    acilis = paketiAc({ paket: p.paket, platform, calisma, log: p.log || (() => {}) });
+    return menuKapakOlcKok(acilis.kok, { asar: acilis.asar });
+  } finally {
+    if (acilis && acilis.kapat) { try { acilis.kapat(); } catch (_) { /* log çağıranda */ } }
+    if (kendi) { try { fs.rmSync(calisma, { recursive: true, force: true }); } catch (_) { /* kalsın */ } }
+  }
+}
+
 module.exports = {
   DURUM, KAPAK_ALT_SINIR, YER_TUTUCU_IMZASI, YAMA, AYAR,
   yamaAyarlari, kapakYolu, cizilenKartlar, adresSinifi, booksOlc, menuKapakOlc, kokOkuyucu,
-  menuKapakOlcKok, ozetSatiri,
+  menuKapakOlcKok, ozetSatiri, kip, kapiKarari, paketMenuKapakOlc,
 };
 
 if (require.main === module) {
-  const hedef = process.argv[2];
+  const a = process.argv.slice(2);
+  const al = (ad) => { const i = a.indexOf(ad); return i >= 0 ? a[i + 1] : null; };
+  const hedef = a.find((x, i) => !x.startsWith('-') && (i === 0 || !a[i - 1].startsWith('--')));
   if (!hedef) {
-    process.stderr.write('Kullanım: node tools/kabul/menu-kapak.js <paket-kökü | app.asar>\n');
+    process.stderr.write('Kullanım: node tools/kabul/menu-kapak.js <paket-kökü | app.asar | paket> '
+      + '[--platform mac|android|windows|pardus|dizin|zip] [--uzak-konak k@h [--uzak-anahtar a] [--uzak-node n]]\n');
     process.exit(2);
   }
-  const s = menuKapakOlcKok(hedef);
-  process.stdout.write(`${ozetSatiri(s)}\n`);
-  process.exit({ GECTI: 0, ATLANDI: 0, RED: 1, OLCULEMEDI: 3 }[s.durum]);
+  const bitir = (s) => {
+    process.stdout.write(`${ozetSatiri(s)}\n`);
+    process.exit({ GECTI: 0, ATLANDI: 0, RED: 1, OLCULEMEDI: 3 }[s.durum]);
+  };
+  const kokMu = !al('--platform') && !al('--uzak-konak')
+    && (/\.asar$/i.test(hedef) || (fs.existsSync(hedef) && fs.statSync(hedef).isDirectory()));
+  if (kokMu) bitir(menuKapakOlcKok(hedef));
+  else {
+    // eslint-disable-next-line global-require
+    const IC = require('./okuyucu-surumu-kapisi');
+    const konak = al('--uzak-konak');
+    const uzak = konak ? {
+      sshArgv: IC.uzakSshArgv({ konak, anahtar: al('--uzak-anahtar') }), node: al('--uzak-node'),
+    } : null;
+    paketMenuKapakOlc({ paket: uzak ? hedef : path.resolve(hedef), platform: al('--platform'), uzak })
+      .then(bitir)
+      .catch((e) => bitir({
+        durum: DURUM.OLCULEMEDI, kartlar: [], sebepler: [`paket açılamadı: ${e.message}`], uyarilar: [],
+      }));
+  }
 }
