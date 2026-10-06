@@ -713,6 +713,8 @@ async function kabukTazele(o) {
     await fsp.mkdir(kapakDizini, { recursive: true });
     /** Kapak dosyası adı → sha256 (girdi parmak izinin parçası; ek bu kapaklara bağlı). */
     const kapakSha = {};
+    /** Kapak dosyası adı → bayt (kabuk eki v2: referanslı `images/<klasör>.png` bundan dolar). */
+    const kapakVeri = new Map();
     // 4a. Kapaklar (Web-Z anahtarıyla istenir, klasör adıyla verilir). Biri eksikse adım atlanır.
     for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
       let r;
@@ -726,6 +728,7 @@ async function kabukTazele(o) {
       }
       await fsp.writeFile(path.join(kapakDizini, `kapak-${k.klasor}.png`), r.govde);
       kapakSha[`kapak-${k.klasor}.png`] = sha256(r.govde);
+      kapakVeri.set(`kapak-${k.klasor}.png`, r.govde);
     }
     // 4b. Gölge kök: yalnız bookN/index.html taslakları (ikili klasör varlığını bundan ölçer).
     //     A1 (Swift 49bf319f arayüzü): ikili kökte motor menüsünü (`classlibraries/ImWin32.dll`),
@@ -823,8 +826,11 @@ async function kabukTazele(o) {
       try {
         // CDN getiricisi modülündür ({status, buffer}); Web-Z `getir`'i ({status, govde}) VERİLMEZ.
         // A: imza yok/geçersiz → {durum:'hata', kod:'imza'} → ertele 'ek-imza'.
+        // `kapaklar`: v2 ekte zip dışı bırakılan kapaklar bu girdi baytlarından doldurulur (sha
+        // denetimli; sha'lar zaten girdiSha'nın içinde). v1 ek bunu yok sayar.
         g = await EK.ekGetir({
           bookId, girdiSha: rapor.girdiSha, kip: ekKipAdi, klasorler, acikAnahtar,
+          kapaklar: kapakVeri,
           ...(o.cdnGetir ? { getir: o.cdnGetir } : {}),
         });
       } catch (e) {

@@ -927,14 +927,15 @@ function sahteCdn(nesneler = new Map()) {
 }
 
 /** Mac tarafı: ikili + gerçek parmak izi → ekCikti → manifestKur + ekPaketle + imza → CDN nesnesi. */
-async function gercekEkUret({ zip = buildZip(), ayar = WEBZ } = {}) {
+async function gercekEkUret({ zip = buildZip(), ayar = WEBZ, kapakRef = false } = {}) {
   const yakalanan = [];
   const r = await kostur({ zip, ayar, ekCikti: (o) => { yakalanan.push(o); } });
   assert.equal(r.r.durum, 'uygulandi', r.r.neden);
   const c = yakalanan[0];
   const klasorler = c.girdi.kitaplar.map((k) => k.klasor);
   const manifest = KE.manifestKur({ bookId: '45550', kip: c.kip, girdiSha: c.girdiSha,
-    webzSettingsSha: c.webzSettingsSha, dosyalar: c.dosyalar });
+    webzSettingsSha: c.webzSettingsSha, dosyalar: c.dosyalar,
+    ...(kapakRef ? { kapaklar: c.kapaklar } : {}) });
   const buf = KE.ekPaketle({ manifest, dosyalar: c.dosyalar }, { klasorler });
   const cdn = sahteCdn(new Map([
     [sorgusuz(KE.sonUrl('45550')), Buffer.from(JSON.stringify({ bookId: '45550', girdiSha: c.girdiSha }))],
@@ -958,6 +959,26 @@ test('GERÇEK modül: Mac imzalı ek üretir → ProBook (ek kipi, ikilisiz) do�
   assert.ok(cdn.istekler.some((u) => sorgusuz(u).endsWith('.imza')), 'imza istendi');
   const on = await S.ekSonKontrol({ bookId: '45550', getir: cdn.getir });
   assert.deepEqual([on.var, on.neden, on.son.girdiSha], [true, null, c.girdiSha]);
+});
+
+test('GERÇEK modül v2 (kapak referansı): kapaklar zip dışı, ProBook kendi kapağından doldurur → uygulandi', async () => {
+  const { c, buf, cdn, manifest } = await gercekEkUret({ kapakRef: true });
+  assert.equal(manifest.sozlesme, KE.SOZLESME_KAPAK_REF);
+  const refYollar = manifest.kapakDosyalari.map((d) => d.yol);
+  assert.ok(refYollar.length >= 1 && refYollar.every((y) => /^images\/book\d+\.png$/.test(y)), refYollar.join(','));
+  const zipte = KE.zipOku(buf);
+  for (const y of refYollar) assert.ok(!zipte.has(y), `zip'te olmamalı: ${y}`);
+  const r = await ekKip(cdn);
+  assert.equal(r.r.durum, 'uygulandi', r.r.neden);
+  const z = new AdmZip(r.zipYolu);
+  for (const y of refYollar) {
+    assert.ok(z.getEntry(y).getData().equals(c.dosyalar.get(y)), `kapak bayt-aynı: ${y}`);
+  }
+  // İkili (Mac) yolunun zip'iyle aynı kabuk: kapak dosyaları dahil bütün kabuk dosyaları eşit.
+  for (const [y, v] of c.dosyalar) {
+    if (y === 'set-menu.json') continue;
+    assert.ok(z.getEntry(y) && z.getEntry(y).getData().equals(v), `eşit değil: ${y}`);
+  }
 });
 
 test('GERÇEK modül: açık anahtar dosyadan (EMPP_KABUK_EK_ACIK_ANAHTAR) → uygulandi', async () => {
