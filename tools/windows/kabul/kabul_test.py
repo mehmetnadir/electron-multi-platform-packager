@@ -1229,6 +1229,25 @@ class KurTaniTest(unittest.TestCase):
         self.assertFalse(kabul.kurulu_say(0, None, True))
 
 
+class AktYaprakSecTest(unittest.TestCase):
+    """06.10 45100/45472: seri karti tiklaninca grup gorunumu acilir; aktivasyon yaprak kitapta cikar."""
+    ONCE = ["Influence Grade 12", "Marvel", "Tum Kitaplar"]
+
+    def test_grup_acildi_ilk_yaprak(self):
+        grup = [{"ad": "Grammar Book", "seri": False, "x": 1}, {"ad": "Reading", "seri": False, "x": 2}]
+        self.assertEqual(kabul.akt_yaprak_sec(self.ONCE, grup)["x"], 1)
+
+    def test_seri_atlanir(self):
+        grup = [{"ad": "Alt Seri", "seri": True}, {"ad": "Kitap", "seri": False, "x": 3}]
+        self.assertEqual(kabul.akt_yaprak_sec(self.ONCE, grup)["x"], 3)
+
+    def test_grup_acilmadi_tiklanmaz(self):
+        ayni = [{"ad": a, "seri": False} for a in self.ONCE]
+        self.assertIsNone(kabul.akt_yaprak_sec(self.ONCE, ayni))
+        self.assertIsNone(kabul.akt_yaprak_sec(self.ONCE, []))
+        self.assertIsNone(kabul.akt_yaprak_sec(self.ONCE, [{"ad": "Alt", "seri": True}]))
+
+
 if __name__ == "__main__":
     unittest.main()
 
