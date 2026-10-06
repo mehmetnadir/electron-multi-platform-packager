@@ -43,6 +43,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { ikiliKomutu } = require('./bildir-ikili');
 const { basliksizKabulKapisi } = require('./basliksiz-kabul-kapisi');
 const kasaKabul = require('./windows-kasa-kabul');
 const hazir = require('./windows-hazir');
@@ -922,8 +923,8 @@ async function bekciBildir({ bookId, bookTitle, hata }, log) {
   const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
   const mesaj = `${bookTitle || bookId} (${bookId}) Windows şeridi düştü, R2'ye yazılmadı: `
     + `${String((hata && hata.message) || hata).slice(0, 300)}`;
-  const r = await komutKos([ikili, 'bekci', mesaj, '-b', 'Windows şeridi düştü', '-p', 'yuksek', '-e', 'warning'],
-    { zamanAsimiMs: 20000 });
+  const [bk, ba] = ikiliKomutu(ikili, ['bekci', mesaj, '-b', 'Windows şeridi düştü', '-p', 'yuksek', '-e', 'warning']);
+  const r = await komutKos([bk, ...ba], { zamanAsimiMs: 20000 });
   if (r.kod !== 0) log('windows: bekçi bildirimi gönderilemedi:', r.hata || `çıkış ${r.kod}`);
 }
 

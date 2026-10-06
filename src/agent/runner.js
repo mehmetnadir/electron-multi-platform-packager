@@ -62,6 +62,7 @@ const {
 } = require('./serit-secimi');
 const { hataOzeti } = require('./hata-ozeti');
 const windowsSerit = require('./windows-serit');
+const { ikiliKomutu } = require('./bildir-ikili');
 const windowsKasaKabul = require('./windows-kasa-kabul');
 const windowsHazir = require('./windows-hazir');
 const {
@@ -2365,17 +2366,19 @@ async function kaynakYokBekle(auth, job, sebep) {
 // üretimi ASLA düşürmez: hata yalnız log'a yazılır. Kanal: `paket`.
 // Kapatmak için EMPP_BILDIRIM=0.
 // ---------------------------------------------------------------------------
-function bildirGonder({ basarili, bookId, platform, ayrinti = '', boyutMb = null }) {
+function bildirGonder({ basarili, bookId, bookTitle = '', platform, ayrinti = '', boyutMb = null }) {
   if (process.env.EMPP_BILDIRIM === '0') return;
+  const kitap = bookTitle && bookTitle !== bookId ? `${bookId} ${bookTitle}` : String(bookId);
   const ikili = process.env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir');
   const baslik = basarili ? `✅ ${platform} üretildi` : `❌ ${platform} ÜRETİLEMEDİ`;
   const govde = basarili
-    ? `${bookId} — ${boyutMb ? boyutMb + ' MB, ' : ''}kapıdan geçti ve yüklendi`
-    : `${bookId} — ${String(ayrinti || '').slice(0, 300)}`;
+    ? `${kitap} — ${boyutMb ? boyutMb + ' MB, ' : ''}kapıdan geçti ve yüklendi`
+    : `${kitap} — ${String(ayrinti || '').slice(0, 300)}`;
   const args = ['paket', govde, '-b', baslik, '-p', basarili ? 'normal' : 'yuksek',
     '-e', basarili ? 'white_check_mark' : 'warning'];
   try {
-    const ps = spawn(ikili, args, { stdio: 'ignore', detached: true, timeout: 20000 });
+    const [komut, komutArgs] = ikiliKomutu(ikili, args);
+    const ps = spawn(komut, komutArgs, { stdio: 'ignore', detached: true, timeout: 20000, windowsHide: true });
     ps.on('error', (e) => warn('bildirim gönderilemedi:', e.message));
     ps.unref();
   } catch (e) {
@@ -2544,7 +2547,7 @@ async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
     });
     log('windows: hazır paket yayınlandı →', s.dizin);
   } catch (e) { warn('windows: UYARI hazır kayıt yayinlandi/\'ye taşınamadı:', e.message); }
-  bildirGonder({ basarili: true, bookId: job.bookTitle || job.bookId, platform: job.platform, boyutMb: Math.round(m.boyut / 1e6) });
+  bildirGonder({ basarili: true, bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, boyutMb: Math.round(m.boyut / 1e6) });
   return { yayinlandi: true };
 }
 
@@ -3059,7 +3062,7 @@ async function processJob(auth, job) {
     log('job done:', job.bookId, job.platform);
     let boyutMb = null;
     try { boyutMb = Math.round(fs.statSync(yayinYolu).size / 1e6); } catch (_) {}
-    bildirGonder({ basarili: true, bookId: job.bookTitle || job.bookId, platform: job.platform, boyutMb });
+    bildirGonder({ basarili: true, bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, boyutMb });
   } catch (e) {
     // Windows şeridi düştü: R2'ye hiçbir şey yazılmadı. Görünür hata + bekçi bildirimi; failed /
     // erteleme kararını ana döngü verir (postResultFailure ya da kira dönüşü).
@@ -3178,7 +3181,7 @@ async function main() {
       const ozet = hataOzeti(e && typeof e.message === 'string' && e.message.trim()
         ? e.message : agHatasiOzeti(e));
       errlog('job failed:', job.bookId, job.platform, '-', ozet);
-      bildirGonder({ basarili: false, bookId: job.bookTitle || job.bookId, platform: job.platform, ayrinti: ozet });
+      bildirGonder({ basarili: false, bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, ayrinti: ozet });
       await postResultFailure(auth, job, e.message);
     }
   }
@@ -3235,6 +3238,7 @@ module.exports = {
   downloadFile, zipDir,
   // Exe'siz kaynak (01.10): testler kaynakIndirme'ye casus koyar; manuel build yardımcıları.
   kaynakIndirme, manuelZipIndir, manuelBuildHazirla, zipGirisleri, kaynakYokBekle, kaynakYokOzet,
+  bildirGonder,
   kaynakYokOzetMetni, kaynakYokDurumOku, kaynakBoyutuTahmin, KAYNAK_YOK_ISARETI,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   STAPLE_KAPISI_ISARETI, agStapleCikti,

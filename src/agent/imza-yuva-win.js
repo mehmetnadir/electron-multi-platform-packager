@@ -32,6 +32,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const { ikiliKomutu } = require('./bildir-ikili');
 
 const W = require('./windows-serit');
 const A = require('./authenticode-win');
@@ -317,7 +318,8 @@ class Gozcu {
 
   bildir(mesaj) {
     if (this.o.kuru || !fs.existsSync(this.o.bildirIkili)) { this.log(`bildirim komutu yok/KURU — yalnız logla: ${mesaj}`); return; }
-    const r = spawnSync(this.o.bildirIkili, ['onay', mesaj, '-b', 'İmza kuyruğu', '-p', 'yuksek', '-e', 'warning'], { encoding: 'utf8', timeout: 20000 });
+    const [bk, ba] = ikiliKomutu(this.o.bildirIkili, ['onay', mesaj, '-b', 'İmza kuyruğu', '-p', 'yuksek', '-e', 'warning']);
+    const r = spawnSync(bk, ba, { encoding: 'utf8', timeout: 20000 });
     this.log(r.status === 0 ? `bildirim gönderildi: ${mesaj}` : `bildirim HATA (yine de çıkış 3 kalır): ${r.error ? r.error.message : r.status}`);
   }
 
