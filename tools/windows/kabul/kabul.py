@@ -340,7 +340,11 @@ def kaldir(dizin):
 JS_MENU = r"""
 (()=>{ // IKI VARYANT: A) img.button[data-url]  B) .book-item (React, onclick yok)
  const kutu=e=>{const r=e.getBoundingClientRect();
-   return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),w:Math.round(r.width),h:Math.round(r.height)};};
+   const ic=e.querySelector('.book-cover-image, .book-cover, img')||e;
+   const ri=ic.getBoundingClientRect();
+   const cx=ri.width>10?ri.x+ri.width/2:r.x+r.width/2;
+   const cy=ri.height>10?ri.y+ri.height/2:r.y+r.height/2;
+   return {x:Math.round(cx),y:Math.round(cy),w:Math.round(r.width),h:Math.round(r.height)};};
  let l=[...document.querySelectorAll('img.button[data-url]')].map((e,i)=>
    Object.assign({varyant:'A',indis:i,id:e.id||null,url:e.dataset.url,ad:e.id||'',seri:false},kutu(e)));
  if(!l.length) l=[...document.querySelectorAll('.book-item')].filter(e=>!e.classList.contains('book-group-back')).map((e,i)=>
@@ -411,7 +415,11 @@ def js_kutu_guncelle(varyant, ad, indis):
       if(!e) return null;
       e.scrollIntoView({{block: 'center', inline: 'center'}});
       const r=e.getBoundingClientRect();
-      return JSON.stringify({{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),w:Math.round(r.width),h:Math.round(r.height)}});
+      const ic=e.querySelector('.book-cover-image, .book-cover, img')||e;
+      const ri=ic.getBoundingClientRect();
+      const cx=ri.width>10?ri.x+ri.width/2:r.x+r.width/2;
+      const cy=ri.height>10?ri.y+ri.height/2:r.y+r.height/2;
+      return JSON.stringify({{x:Math.round(cx),y:Math.round(cy),w:Math.round(r.width),h:Math.round(r.height)}});
     }})()"""
 
 def kitaplari_genislet(kitaplar, js_cagirici):
@@ -1192,6 +1200,16 @@ def aktivasyon_ozeti(adimlar):
         return "KALDI", f"aktivasyon-{a} {s or 'olculmedi'}"
     return "GECTI", None
 
+def akt_yaprak_sec(onceki_adlar, simdiki):
+    """SAF KARAR: seri/grup karti tiklaninca acilan ic gorunumde ilk YAPRAK kitabi secer.
+    onceki_adlar = tiklamadan onceki menu adlari; simdiki = tiklamadan sonraki JS_MENU listesi.
+    Grup acilmadiysa (liste ayni, bos ya da hepsi seri) None doner: ikinci tiklama yapilmaz."""
+    ad = lambda k: str(k.get("ad") or "")
+    if not simdiki or [ad(k) for k in simdiki] == list(onceki_adlar or []): return None
+    for k in simdiki:
+        if not k.get("seri"): return k
+    return None
+
 def akt_durum_bekle(c, tavan=60, sakin=15, raf_yeter=False, raf_sakin=3):
     """Diyalog gorunene ya da kitap diyalogsuz `sakin` sn acik kalana kadar yoklar.
     raf_yeter=True (c adimi, tek-motor): diyalogsuz raf `raf_sakin` sn kararli kalinca da doner
@@ -1270,7 +1288,16 @@ def aktivasyon_senaryosu(r, kimlik, ana, dizin, kod, profil):
     def gir(kit, acilis=False):
         # acilis=True (a, e): diyalog acilista gorunduyse tiklamadan olc (set duzeyi)
         if (acilis and ilk.get("diyalog")) or not kit: return c.jsj(JS_AKT) or {}
-        c.tikla(kit["x"], kit["y"]); return akt_durum_bekle(c)
+        onceki = [str(k.get("ad") or "") for k in (c.jsj(JS_MENU) or [])]
+        c.tikla(kit["x"], kit["y"])
+        # SERI KARTI (45100/45472, 06.10): kart tiklaninca kitap degil "Tum Kitaplar" grup gorunumu
+        # acilir; aktivasyon kitaba girince cikar -> ic listeden ilk YAPRAK kitap da tiklanir.
+        time.sleep(2)
+        o = c.jsj(JS_AKT) or {}
+        if o.get("diyalog") or o.get("kitapta"): return akt_durum_bekle(c)
+        ic = akt_yaprak_sec(onceki, c.jsj(JS_MENU) or [])
+        if ic: c.tikla(ic["x"], ic["y"])
+        return akt_durum_bekle(c)
 
     # a) kod istenir (set duzeyinde acilista da sorulabilir — o da GECTI, yer not edilir)
     o = gir(kitaplar[0] if kitaplar else None, acilis=True)
