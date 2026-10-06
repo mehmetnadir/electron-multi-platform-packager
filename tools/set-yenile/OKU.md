@@ -156,3 +156,52 @@ node tools/set-yenile/set-yenile.js --devam ~/.empp-agent/set-yenile/20261006-09
 ```bash
 node --test tools/set-yenile/set-yenile.test.js
 ```
+
+## Sözleşme bekçisi (`sozlesme-bekcisi.js`, 06.10)
+
+Bekçi kullanıcıya görünen sözü ölçer. Öteki bekçiler iç adımları ölçer.
+
+```
+İSTEK (Platform Ayarları) → ÜRETİLEN (build) → YAYINLANAN (R2) → KANAL (kurulu paket görür mü)
+```
+
+```bash
+node tools/set-yenile/sozlesme-bekcisi.js --olc --rapor            # kuru: yalnız okur
+node tools/set-yenile/sozlesme-bekcisi.js --bildir                 # + bildirim (DB yazmaz)
+node tools/set-yenile/sozlesme-bekcisi.js --uygula --setler "45550" # + requeue + bildirim
+```
+
+| Halka | Kaynak (salt okuma) |
+|---|---|
+| İSTEK | web-stream `proxy_asset_id` → yoksa Worker KV `settings.json`; kitap sürümü İmpark `GetKitapGuncellemeBilgi` (versiyon=0); panel listesi `GetPackageBooks` |
+| ÜRETİLEN | `pipeline_platform_summaries` + `kaynak_build_surumleri` (gecerli, `kitaplar` n/id/vs) + `~/.empp-agent/kabuk/kanonik.json` |
+| YAYINLANAN | `rclone lsl --max-depth 1 ydsr2:ydsdigital/softwares/<S>/` |
+| KANAL | G `surum.json` (+ android) |
+
+| Hücre | Anlamı | Eylem (`--uygula`) |
+|---|---|---|
+| GÜNCEL | completed, kabuk kanonik, paket ≥ kaynak build, İmpark sürümü = build, R2 nesnesi paketten sonra | — |
+| BAYAT-P | paket kaynak build'den eski ya da kabuk kanonik değil | yedek → requeue |
+| BAYAT-K | İmpark sürümü build'dekinden büyük | bildirim: `set-yenile <S> --uygula` |
+| KUYRUKTA / KOŞUYOR | satır işte | — |
+| FAIL | `last_error` ilk 100 kr | bildirim (`-p yuksek`) |
+| YAYIN-EKSİK | R2'de yok, eski ya da boyutu DB'den farklı | bildirim (2 sa beklemeden sonra) |
+| ÖLÇÜLEMEZ | girdi eksik; sebep raporda | — |
+| İSTİSNA | `istisnalar.json` | — |
+
+Set kararı: KANAL-G-YOK, KANAL-G-ESKİ, LİSTE-FARKI (ayar ≠ panel), BAYAT-KAYNAK.
+
+**UYARI:** Varsayılan kip kurudur. `--uygula` olmadan DB'ye yazmaz.
+
+- Requeue öncesi yedek: `/root/yedek-deploy/<damga>-sozlesme-bekcisi/once.sql`. "Dump completed" + ≥1 INSERT yoksa yazma YOK.
+- UPDATE yalnız `status IN ('completed','failed')` satıra dokunur. queued/running satır plana girmez.
+- Tavan: set×platform 24 saatte 1, toplam 24 saatte 12. Kaynak kur isteği açıksa requeue atlanır.
+- Bildirim: set başına günde 1. 5'ten çok set varsa tek özet bildirim gider.
+- Çıktı: `~/.empp-agent/sozlesme-bekcisi/` → `son-rapor.md`, `son-rapor.json`, `eylem.jsonl`, `bildirim.json`.
+- Zaman: DB ve rclone lsl +03 yerel saattir. Araç saate ekleme yapmaz.
+- Şema her koşuda information_schema ile denetlenir. Eksik sütun varsa koşu durur.
+- launchd taslağı: `tr.yds.sozlesme-bekcisi.plist` (30 dk, `--olc --rapor`). Dosya kendi kendine kurulmaz.
+
+```bash
+node --test tools/set-yenile/sozlesme-bekcisi.test.js
+```
