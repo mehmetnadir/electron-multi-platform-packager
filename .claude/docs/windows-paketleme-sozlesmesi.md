@@ -105,6 +105,11 @@ paralel işlerle doldurulur.
 2. **Yükle (toplu):** GEÇEN paketlerin hepsi imza hazırlık dizinine (`KitapTekExe/_hazir/`) kopyalanıp
    geri okunur (`imza-yuva-smb.sh toplu`, `SMB_SHA=0`). Kopya süresi İmpark hattına bağlıdır (25.09
    0,2 MB/sn · 26.09 4,6 MB/sn); kopyalar imzadan önce biter, imza sırası kopya beklemez.
+   **06.10 (Nadir: "geri okumayı atla · imzayı paralel yapalım"):** kasa yolunda (`imza-yuva-win.js`) geri
+   okuma varsayılan KAPALI — sha256 yerelde kopyadan önce, kopya sonrası uzak BOYUT eşitliği; imzalı dönüşte
+   gövde eşitliği + Authenticode aynen. `EMPP_IMZA_GERI_OKUMA=1` eskiyi açar. İmza bekçisi boru hattı:
+   paket N imza/kabul/yayındayken paket N+1'in `_hazir` kopyası (en çok 1 ileri kopya; yuva/imza tekil);
+   kapatma `EMPP_IMZA_ON_KOPYA=0`. Mac `imza-yuva-smb.sh` geri okumayı sürdürür.
 3. **İmzala (sırayla):** paket başına tetik → takas → imza → hızlı kontrol → `_imzali/`; bekleme kuralı
    (3 sa + 1 yeniden deneme 1 sa, sonra bildirim) paket başına uygulanır; biri düşerse sıra DURUR.
 4. **İndir ve doğrula:** imzalı dosya indirilir; `osslsigncode verify` (imzacı İm Park Bilişim, zincir +

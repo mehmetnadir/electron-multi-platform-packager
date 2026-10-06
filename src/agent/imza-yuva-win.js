@@ -20,7 +20,8 @@
  *   node imza-yuva-win.js bekle-ve-tak <yerel.exe> [--tavan-dk 180] [--tavan2-dk 60] [--kuru]
  *   node imza-yuva-win.js hizli-kontrol <yuva-yolu> [<yerel-orijinal.exe>]
  * Ortam: EMPP_IMZA_YUVA_KOKU (canlı kök; win32 varsayılanı Storage7 UNC), IMZALI_DIZIN, SMB_SHA (0: takasta
- *   yalnız boyut), TETIK=1 (yeniden denemede tetik isteği), EMPP_IMZA_ISTEK_DIZINI, ARALIK_SN, TAVAN_SN,
+ *   yalnız boyut), EMPP_IMZA_GERI_OKUMA=1 (hazırlamada _hazir kopyasını SMB'den geri okuyup sha256 kıyasla —
+ *   eski davranış; varsayılan KAPALI, Nadir 06.10: kopya ~1,3 MB/s, geri okuma paket başına ~14 dk), TETIK=1 (yeniden denemede tetik isteği), EMPP_IMZA_ISTEK_DIZINI, ARALIK_SN, TAVAN_SN,
  *   TAVAN2_SN, KURU=1 + KURU_DIZIN (yerel sahte kök; istek yalnız EMPP_IMZA_ISTEK_DIZINI verilmişse),
  *   KURU_TAKAS_BOZ (test kancası), IMZA_BEKLENEN_CN, EMPP_BILDIR_IKILI.
  * Çıkış: 0 tamam · 2 kullanım/ön koşul · 3 tavan ya da imzasız · 4 takas/imza kimliği.
@@ -39,6 +40,8 @@ const A = require('./authenticode-win');
 const I = require('./imza-istek');
 
 const YUVA_ID = '66902'; // SABİT
+/** `hazirla` başarı kanıtı satır öneki (JSON: ad, boyut, sha256, geriOkuma). */
+const HAZIR_KANIT = 'HAZIR-KANIT';
 const UNC_KOK = W.WIN_YUVA_KOKU; // tek kaynak: windows-serit
 const MAC_KOK = path.join(os.homedir(), 'Impark', 'Storage7', 'vhosts', 'akillitahta.ydspublishing.com',
   'httpdocs', 'Uploads', 'KitapTekExe');
@@ -65,6 +68,9 @@ function ayarlar(env, bayrak, platform = process.platform) {
     kuru, platform,
     aralikMs: Math.max(1, Math.round(sayi(env.ARALIK_SN, 2) * 1000)),
     smbSha: env.SMB_SHA !== '0',
+    // Geri okuma (06.10, Nadir: "geri okumayı atla"): varsayılan KAPALI. Bütünlük: sha256 yerelde kopyadan
+    // ÖNCE (hedef) + kopya sonrası uzak BOYUT eşitliği + imzalı dönüşte gövde eşitliği/Authenticode.
+    geriOkuma: env.EMPP_IMZA_GERI_OKUMA === '1',
     tetik: env.TETIK === '1',
     beklenenCn: env.IMZA_BEKLENEN_CN || 'İm Park Bilişim',
     bildirIkili: env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir'),
@@ -240,14 +246,26 @@ class Gozcu {
     try { await fsp.mkdir(this.o.hazirDizin, { recursive: true }); } catch (e) { hata(2, `hazırlık dizini açılamadı: ${this.o.hazirDizin}`); }
     this.log(`hazırla: ${this.ad} (${this.yerelBoyut} B, sha256 ${this.yerelSha.slice(0, 16)}…) → ${this.hazir}`);
     const t0 = Date.now();
-    try { await fsp.copyFile(this.yerel, `${this.hazir}.kopyalaniyor`); } catch (e) { hata(4, `kopyalama başarısız: ${e.message}`); }
-    try { await fsp.rename(`${this.hazir}.kopyalaniyor`, this.hazir); } catch (e) { hata(4, `adlandırma başarısız: ${e.message}`); }
+    // Yarım kopya (çöken süreç) `.kopyalaniyor` adında kalır; copyFile üzerine yazar → yeniden başlar (idempotent).
+    const ara = `${this.hazir}.kopyalaniyor`;
+    try { await fsp.copyFile(this.yerel, ara); } catch (e) { hata(4, `kopyalama başarısız: ${e.message}`); }
+    const kb = boyut(ara);
+    if (kb !== this.yerelBoyut) hata(4, `kopya boyutu tutmadı (uzak ${kb === null ? 'yok' : kb} B, yerel ${this.yerelBoyut} B)`);
+    try { await fsp.rename(ara, this.hazir); } catch (e) { hata(4, `adlandırma başarısız: ${e.message}`); }
     const t1 = Date.now();
     const b = boyut(this.hazir);
-    const s = await sha(this.hazir);
-    this.log(`kopya: ${hiz(this.yerelBoyut, t1 - t0)} · geri okuma+sha256: ${hiz(b || 0, Date.now() - t1)}`);
-    if (b !== this.yerelBoyut || s !== this.yerelSha) hata(4, `geri okuma tutmadı (boyut ${b === null ? 'yok' : b}, sha256 ${s.slice(0, 16)}…)`);
-    this.log(`HAZIR — boyut+sha256 DOĞRULANDI: ${this.hazir}`);
+    if (b !== this.yerelBoyut) hata(4, `kopya boyutu tutmadı (uzak ${b === null ? 'yok' : b} B, yerel ${this.yerelBoyut} B)`);
+    if (this.o.geriOkuma) {
+      const s = await sha(this.hazir);
+      this.log(`kopya: ${hiz(this.yerelBoyut, t1 - t0)} · geri okuma+sha256: ${hiz(b || 0, Date.now() - t1)}`);
+      if (s !== this.yerelSha) hata(4, `geri okuma tutmadı (boyut ${b}, sha256 ${s.slice(0, 16)}…)`);
+      this.log(`HAZIR — boyut+sha256 DOĞRULANDI: ${this.hazir}`);
+    } else {
+      this.log(`kopya: ${hiz(this.yerelBoyut, t1 - t0)} · geri okuma KAPALI (EMPP_IMZA_GERI_OKUMA=1 açar)`);
+      this.log(`HAZIR — boyut DOĞRULANDI (sha256 yerelde, kopyadan önce): ${this.hazir}`);
+    }
+    // Makine okur kanıt satırı (windows-serit imzaHazirla ayrıştırır → hazır manifest `onKopya`).
+    this.log(`${HAZIR_KANIT} ${JSON.stringify({ ad: this.ad, boyut: this.yerelBoyut, sha256: this.yerelSha, geriOkuma: this.o.geriOkuma })}`);
   }
 
   async takas() {
@@ -454,7 +472,7 @@ async function ana(argv, { env = process.env, platform = process.platform, out =
 }
 
 module.exports = {
-  YUVA_ID, UNC_KOK, CikisHatasi, smbMi, ayarlar, hizliKontrol, blokImzaciIceriyor, blokZamanDamgasi, maskele,
+  YUVA_ID, UNC_KOK, HAZIR_KANIT, CikisHatasi, smbMi, ayarlar, hizliKontrol, blokImzaciIceriyor, blokZamanDamgasi, maskele,
   Gozcu, ana,
 };
 

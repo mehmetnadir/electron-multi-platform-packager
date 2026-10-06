@@ -20,7 +20,8 @@
  *
  * manifest.json: bookId, platform, surum, exe (dosya adı), sha256, md5, boyut, kabulKanit, kabulKapi,
  * r2Hedef (sunucu presign'ı belirler; runner'ın bildiği hedef bilgisi), job (claim alanları — bekçi
- * /result gövdesini bunlarla kurar), kanit (statik kapı özeti, kök index), zaman, durum, sebep.
+ * /result gövdesini bunlarla kurar), kanit (statik kapı özeti, kök index), zaman, durum, sebep,
+ * onKopya (06.10: bekçinin ön-kopya kanıtı — `_hazir` kopyası hazır; bkz. onKopyaKarari).
  *
  * KABUL KUYRUĞU (05.10, EMPP_WIN_KABUL_KUYRUK=1): runner statik kapıdan sonra kabulü çağırmaz; paket
  * `durum:'kabul-bekliyor'` ile buraya girer. Tek çıkış yolu kabul işçisidir (`tools/windows/kabul-iscisi.js`):
@@ -364,6 +365,28 @@ async function kabulGectiIsle(cfg, giris, k, log = () => {}) {
   });
 }
 
+/**
+ * Ön-kopya kararı (06.10 boru hattı): bekçi sıradaki paketin `_hazir` kopyasını önceki paket imzadayken
+ * yapar ve manifest'e `onKopya: {ad, boyut, sha256, geriOkuma, zaman}` yazar. Sıra gelince kopya ATLANIR
+ * yalnız şu hâlde: kayıt aynı exe (ad), aynı boyut, aynı sha256 (manifest'te varsa) ve uzaktaki dosyanın
+ * BOYUTU şu an eşit (takas onu yuvaya taşımışsa ya da biri silmişse eşit değildir → yeniden kopya). Saf.
+ * @returns {{gecerli:boolean, sebep:string}}
+ */
+function onKopyaKarari(manifest, { exeAdi, uzakBoyut } = {}) {
+  const k = manifest && manifest.onKopya;
+  if (!k || typeof k !== 'object') return { gecerli: false, sebep: 'ön-kopya kaydı yok' };
+  if (!exeAdi || k.ad !== exeAdi || manifest.exe !== exeAdi) return { gecerli: false, sebep: `ön-kopya başka exe (${k.ad})` };
+  if (!Number.isInteger(k.boyut) || k.boyut <= 0) return { gecerli: false, sebep: 'ön-kopya boyutu yok' };
+  if (Number.isInteger(manifest.boyut) && manifest.boyut !== k.boyut) {
+    return { gecerli: false, sebep: `ön-kopya boyutu ${k.boyut} ≠ kayıt ${manifest.boyut}` };
+  }
+  if (manifest.sha256 && k.sha256 && manifest.sha256 !== k.sha256) return { gecerli: false, sebep: 'ön-kopya sha256 kayıtla tutmadı' };
+  if (uzakBoyut !== k.boyut) {
+    return { gecerli: false, sebep: `uzak _hazir kopyası ${uzakBoyut === null || uzakBoyut === undefined ? 'yok' : `${uzakBoyut} B`} (beklenen ${k.boyut} B)` };
+  }
+  return { gecerli: true, sebep: 'ön-kopya hazır (boyut eşit)' };
+}
+
 /** Manifest'e alan ekler/günceller (ör. bekçinin sonHata'sı). Kayıt yerinde kalır. */
 async function manifestGuncelle(dizin, ek) {
   const m = await manifestOku(dizin);
@@ -401,7 +424,7 @@ async function kayitKilidiDene(dizin) {
 }
 
 module.exports = {
-  kayitKilidiDene,
+  kayitKilidiDene, onKopyaKarari,
   MANIFEST, IMZA_BEKLIYOR_FAZI, KABUL_BEKLIYOR, KABUL_KUYRUGU_ISARETI, kabulListesi, kabulGectiIsle, ALT_DIZINLER, hazirAyarlari, hazirAnahtari, jobOzeti, bildirimKarari,
   manifestOku, manifestGuncelle, hazirBul, hazirKoy, hazirListesi, oncelikOku, oncelikDosyasi, sonuclandir, kaynakSurumuBayatMi, bayatKarari, bayatKararZamani, gecerliKanonikOku, bayatKenaraAl, bildirimDurumuOku, bildirimDurumuYaz, damga,
 };
