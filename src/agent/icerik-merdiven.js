@@ -516,7 +516,7 @@ function altAgacSayilari(dizin, onek) {
  * @returns {Promise<{set: boolean, satirlar: Array<object>}>}
  */
 async function s0Kaynaktan({
-  adlar, oku, getir = varsayilanGetir, zamanAsimiMs,
+  adlar, oku, getir = varsayilanGetir, zamanAsimiMs, icerikVar,
 } = {}) {
   const { set, konumlar } = menuKonumlari(adlar || []);
   const satirlar = [];
@@ -552,6 +552,19 @@ async function s0Kaynaktan({
       }
       const soru = teklifUrl(sablon, c.ID, c.version);
       const y = teklifYorumla({ id: c.ID, surum: c.version }, await getir(soru, { zamanAsimiMs }));
+      // 06.10 (45479 kitap 14835): İmpark "Data boş" = "bu sürümden yenisi yok"; pakette içerik dosyası
+      // YOKSA bu GÜNCEL değildir (paket içeriksiz üretilmişti, merdiven GÜNCEL saydı). ÖLÇÜLEMEDİ.
+      // `icerikVar(rel)` verilmezse (kurulu uygulama ağacı yalnız menüleri taşır) denetim yapılmaz.
+      if (y.durum === DURUM.GUNCEL && typeof icerikVar === 'function') {
+        const xs = (/\sxmlSource="([^"]*)"/.exec(c.etiket) || [])[1];
+        // xmlSource yoksa motorun varsayılan yolu: assets/<ID>/data/BookContent.xml.
+        const goreli = xs ? xs.replace(/^\/+/, '') : `assets/${c.ID}/data/BookContent.xml`;
+        if (!icerikVar(`${kok}${goreli}`)) {
+          const not = `Data boş ama içerik pakette yok (${goreli}) — GÜNCEL değil`;
+          satirlar.push({ ...satir, soru, durum: DURUM.OLCULEMEDI, vs: y.vs, data: y.data, not });
+          continue;
+        }
+      }
       satirlar.push({ ...satir, soru, durum: y.durum, vs: y.vs, data: y.data, not: y.not });
     }
   }
@@ -566,6 +579,7 @@ async function s0Olc({ zip, getir = varsayilanGetir, zamanAsimiMs } = {}) {
   const dizin = zipDizini(zip);
   return s0Kaynaktan({
     adlar: dizin.keys(), oku: (rel) => zipGirdiOku(zip, dizin.get(rel)), getir, zamanAsimiMs,
+    icerikVar: (rel) => { const g = dizin.get(rel); return !!g && !g.dizin; },
   });
 }
 

@@ -71,7 +71,7 @@ function zipla(dizin, cikti, { dizinsiz = false } = {}) {
  * Sentetik set: kök kabuk + book1 (1001 v3, GERİDE) + book2 (1002 v5, güncel) + book3 (ID 0).
  * @returns {{zip: string, uc: (port) => string}}
  */
-function setKur({ port, dizinsiz = false, book1Thumbs } = {}) {
+function setKur({ port, dizinsiz = false, book1Thumbs, book2Icerik = true } = {}) {
   const d = tmp('set');
   const uc = `http://127.0.0.1:${port}/TestlerMobil/GetKitapGuncellemeBilgi`
     + '?id={bookId}&setMi={isSet}&versiyon={version}';
@@ -84,6 +84,7 @@ function setKur({ port, dizinsiz = false, book1Thumbs } = {}) {
     yaz(d, `${kitap}/app.config.js`, `var AppConfig={xml:{desktop:{updateBookEndPoint: "${uc}"}}};`);
     yaz(d, `${kitap}/${MOTOR}`, `${kitap}-ana-motor`);
     yaz(d, `${kitap}/classlibraries/ImWin32.dll`, menu([{ id, v }]));
+    if (id === 1002 && !book2Icerik) continue; // 14835 sınıfı: menüde kart var, içerik pakette yok
     kitapIcerigi(path.join(d, kitap), id, id === 1001 && book1Thumbs ? { thumbs: book1Thumbs } : {});
   }
   yaz(d, 'book3/index.html', '<html>video</html>');
@@ -583,4 +584,27 @@ test('kimlikKarari: kapak md5 farklı ama BookContent kitapId eşitse eşleşir 
   assert.equal(M.kimlikKarari(k, { arsiv: '1', impark: '1' }).eslesti, false, 'çok kısa kimlik kanıt değil');
   assert.equal(M.kitapIdOku('﻿<?xml version="1.0"?>\n<Book hashed="true" kitapId="06003150" width="1">'), '06003150');
   assert.equal(M.kitapIdOku('<Book width="1">'), null);
+});
+
+test('S0 (06.10, 45479 kitap 14835): İmpark "Data boş" ama içerik pakette YOK → GÜNCEL değil, ÖLÇÜLEMEDİ', async () => {
+  const imp = await sahteImpark({ surumler: { 1001: 3, 1002: 5 } }); // ikisi de Data boş (güncel cevabı)
+  try {
+    const tam = await M.s0Olc({ zip: setKur({ port: imp.port }).zip });
+    assert.equal(tam.satirlar.find((s) => s.kitap === 'book2').durum, 'GUNCEL', 'içerik varsa Data boş = GÜNCEL');
+    const eksik = await M.s0Olc({ zip: setKur({ port: imp.port, book2Icerik: false }).zip });
+    const b2 = eksik.satirlar.find((s) => s.kitap === 'book2');
+    assert.equal(b2.durum, 'OLCULEMEDI');
+    assert.match(b2.not, /Data boş ama içerik pakette yok \(assets\/1002\/data\/BookContent\.xml\)/);
+    assert.equal(eksik.satirlar.find((s) => s.kitap === 'book1').durum, 'GUNCEL', 'içeriği olan kardeşe dokunmaz');
+  } finally { imp.kapat(); }
+});
+
+test('S0: icerikVar verilmezse (kurulu uygulama ağacı) denetim yapılmaz — eski davranış', async () => {
+  const imp = await sahteImpark({ surumler: { 1001: 3, 1002: 5 } });
+  try {
+    const { zip } = setKur({ port: imp.port, book2Icerik: false });
+    const d = M.zipDizini(zip);
+    const r = await M.s0Kaynaktan({ adlar: d.keys(), oku: (rel) => M.zipGirdiOku(zip, d.get(rel)) });
+    assert.equal(r.satirlar.find((s) => s.kitap === 'book2').durum, 'GUNCEL');
+  } finally { imp.kapat(); }
 });

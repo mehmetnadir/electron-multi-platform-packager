@@ -676,7 +676,7 @@ test('yedek: HİÇBİR kaynakta yok (60068 sınıfı, Data boş) → ertele; seb
   await assert.rejects(uretTek(o, { yedekKaynaklar: [a, b, c], kimlikReferansi: async () => null }), (e) => {
     assert.equal(e.kod, 'kitap-eksik');
     const s = e.eksik.find((x) => x.id === '502').sebep;
-    assert.match(s, /^hiçbir kaynakta yok — İmpark: İmpark'ta içerik yok \(Data boş\); denenenler: /);
+    assert.match(s, /^hiçbir kaynakta yok — İmpark: İmpark'ta içerik yok \(Data boş\), yayınevi yüklemeli; denenenler: /);
     assert.match(s, /webz-smb: WebDijitapDosyalar\/502 yok \| onbellek: önbellekte dizin yok \| arsiv: 41 arşiv build'inde yok$/);
     assert.match(e.message, /hiçbir kaynakta yok/);
     return true;

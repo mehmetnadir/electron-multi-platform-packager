@@ -640,7 +640,7 @@ async function setUyelikEki(o) {
           const soru = M.teklifUrl(sablon, g.assetId, 0);
           const cevap = await (o.getir || M.varsayilanGetir)(soru, {});
           const t = M.teklifYorumla({ id: g.assetId, surum: 0 }, cevap);
-          if (t.durum === M.DURUM.GUNCEL) throw new Error("İmpark'ta içerik yok (Data boş)");
+          if (t.durum === M.DURUM.GUNCEL) throw new Error("İmpark'ta içerik yok (Data boş), yayınevi yüklemeli");
           if (t.durum !== M.DURUM.GERIDE) throw new Error(`İmpark ölçülemedi: ${t.not}`);
           const arsiv = await M.icerikZipiGetir({
             id: g.assetId, vs: t.vs, url: t.data, onbellek: o.onbellek || M.icerikOnbellekKoku(),
