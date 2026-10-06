@@ -65,6 +65,7 @@ const windowsSerit = require('./windows-serit');
 const { ikiliKomutu } = require('./bildir-ikili');
 const windowsKasaKabul = require('./windows-kasa-kabul');
 const windowsHazir = require('./windows-hazir');
+const imzaliArsiv = require('./imzali-arsiv');
 // Disk kapısı → önce yer aç (Nadir 06.10). Modül nesnesi üzerinden çağrılır (testler yerAc'ı değiştirir).
 const diskTemizlik = require('./disk-temizlik');
 const {
@@ -2670,6 +2671,24 @@ async function kabulSatirIciYedek(auth, job, winPlan, kayitDizini, work) {
   return hazirIsiDevral(auth, job, winPlan, guncel, work);
 }
 
+/**
+ * İmzalı son sürüm arşivi (Nadir 06.10, kasa D:) — imza bekçisiyle AYNI adım (`imzali-arsiv.js`).
+ * win32 dışında kök yok → no-op. ASLA fırlatmaz; yayını etkilemez.
+ */
+async function imzaliSonArsivle(zincir, yayin, job, surum, exeAdi) {
+  try {
+    const iz = (zincir && zincir.kanit && zincir.kanit.imzali) || {};
+    await imzaliArsiv.arsivle({
+      kaynak: zincir.imzaliYol, bookId: job.bookId, exeAdi, beklenenSha256: iz.sha256 || null,
+      meta: {
+        baslik: job.bookTitle || null, surum, imzaZamani: iz.zamanDamgasi || null,
+        yayinZamani: new Date().toISOString(), r2Anahtari: (yayin && yayin.r2ObjectKey) || null,
+      },
+      log: (s) => log(s), bildir: imzaliArsiv.varsayilanBildir({ log: (s) => warn(s) }),
+    });
+  } catch (e) { warn('windows: UYARI imzalı arşiv adımı:', e.message); }
+}
+
 async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
   await windowsSerit.araclariDenetle(CONFIG, { yuva: true });
   log(`windows: hazır kuyruktaki paket devralındı (${bekleyen.dizin}) — imzalanıp yayınlanacak, yeniden üretim YOK`);
@@ -2697,6 +2716,7 @@ async function hazirKaydiYayinla(auth, job, winPlan, bekleyen, work) {
     });
     log('windows: hazır paket yayınlandı →', s.dizin);
   } catch (e) { warn('windows: UYARI hazır kayıt yayinlandi/\'ye taşınamadı:', e.message); }
+  await imzaliSonArsivle(zincir, yayin, job, winPlan.surum, m.exe);
   bildirGonder({ basarili: true, bookId: job.bookId, bookTitle: job.bookTitle, platform: job.platform, boyutMb: Math.round(m.boyut / 1e6) });
   return { yayinlandi: true };
 }
@@ -3325,6 +3345,7 @@ async function processJob(auth, job) {
     const yayin = await postResultSuccess(auth, job, yayinYolu);
     // Windows iş kanıtına R2 anahtarı (md5 + kök index + sürüm zincirde yazıldı).
     if (winZincir) await windowsSerit.yayinKaniti(winZincir, yayin, CONFIG, log);
+    if (winZincir) await imzaliSonArsivle(winZincir, yayin, job, winPlan.surum, path.basename(artifactPath));
 
     // G set tar'ı runner'dan HİÇBİR YERE yüklenmez — tek yazar g-yayin (bkz. yukarıdaki not).
 

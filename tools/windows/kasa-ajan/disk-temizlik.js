@@ -70,6 +70,10 @@ function yapilandirma(env = process.env, home = os.homedir()) {
   const programs = path.join(localAppData, 'Programs');
   const dijitap = env.DT_DIJITAP || path.join(kokSurucu, 'DijiTap');
   const silinecekler = [path.join(kokSurucu, 'Silinecekler'), path.join(K, 'Silinecekler')];
+  // İmzalı son sürüm arşivi (Nadir 06.10, src/agent/imzali-arsiv.js): Nadir'in elle kurup kaldırdığı
+  // D: klasörü. İzinli köklere GİRMEZ ve koruma ağacındadır — disk bekçisi ona asla dokunmaz.
+  const ia = env.EMPP_IMZALI_ARSIV_KOKU;
+  const imzaliArsiv = ia && ia !== '0' ? ia : 'D:\\empp-imzali-son';
   return {
     surucu: env.DT_SURUCU || kokSurucu,
     hedefGb: Math.max(Number(env.DT_HEDEF_GB || 40), sertGb),
@@ -81,7 +85,7 @@ function yapilandirma(env = process.env, home = os.homedir()) {
     log: path.join(K, 'log', 'disk-temizlik.log'),
     izin: path.join(K, 'disk-temizlik.izin'),
     kilit: KILIT_BORUSU,
-    kok: K, ajan, veri, kabulKok, hazir, downloads, programs, dijitap, silinecekler,
+    kok: K, ajan, veri, kabulKok, hazir, downloads, programs, dijitap, silinecekler, imzaliArsiv,
     tmp: path.join(veri, 'tmp'),
     paketleyiciCikti: [path.join(veri, 'packager-tool', 'config', 'output'), path.join(veri, 'packager-tool', 'config', 'temp')],
     kaynakArsivi: env.EMPP_KAYNAK_ARSIVI || path.join(veri, 'kaynak-arsivi'),
@@ -96,6 +100,7 @@ function yapilandirma(env = process.env, home = os.homedir()) {
       path.join(K, 'ortam.ps1'), path.join(K, 'paketleyici'), path.join(K, 'araclar'), path.join(K, 'log'),
       path.join(K, 'vpn'), path.join(K, 'kabul'), path.join(K, 'disk-temizlik.izin'), path.join(K, 'disk-temizlik.js'),
       path.join(K, 'disk-temizlik.ps1'), path.join(veri, 'npm-cache'), path.join(veri, 'tmp', 'node-compile-cache'),
+      imzaliArsiv,
     ],
   };
 }

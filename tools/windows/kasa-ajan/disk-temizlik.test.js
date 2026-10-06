@@ -385,3 +385,25 @@ test('Ö-B: süreç listesi ölçülemezse SONUC tarama=bozuk; normal koşuda ta
   assert.match(kos(cfg, { surecler: null }).cikti, /^SONUC .* hedef=dar tarama=bozuk$/m);
   assert.match(kos(cfg).cikti, /^SONUC .* tarama=tamam$/m);
 });
+
+test('İMZALI ARŞİV (Nadir 06.10): D:\\empp-imzali-son izinli kök DEĞİL, koruma ağacında; Downloads altına yanlış kurulsa da exe/son.json SİLİNMEZ', () => {
+  const v = D.yapilandirma({}, '/h');
+  assert.equal(v.imzaliArsiv, 'D:\\empp-imzali-son');
+  assert.ok(v.koruAgac.includes('D:\\empp-imzali-son'));
+  assert.ok(!v.izinliKokler.some((k) => String(k).toLowerCase().startsWith('d:')), 'D: izinli köklere girmez');
+  assert.equal(D.yapilandirma({ EMPP_IMZALI_ARSIV_KOKU: 'E:\\x' }, '/h').imzaliArsiv, 'E:\\x');
+
+  // En kötü durum: arşiv kökü env ile izinli bir kökün (Downloads) altına düşmüş, dosyalar eski.
+  const r0 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dt-ia-')));
+  kokler.push(r0);
+  const home = path.join(r0, 'Users', 'Administrator');
+  const arsiv = path.join(home, 'Downloads', 'empp-imzali-son');
+  const { cfg } = kasa({ env: { EMPP_IMZALI_ARSIV_KOKU: arsiv } });
+  cfg.downloads = path.dirname(arsiv);
+  cfg.izinliKokler.push(cfg.downloads);
+  const exe = yaz(path.join(arsiv, '45449', 'runner-45449-K-2.1.1-Setup.exe'), { gun: 60 });
+  const son = yaz(path.join(arsiv, '45449', 'son.json'), { gun: 60 });
+  const r = kos(cfg, { ekler: [exe, path.join(arsiv, '45449'), arsiv] });
+  assert.ok(var_(exe) && var_(son), r.cikti);
+  assert.match(r.cikti, /koruma/);
+});
