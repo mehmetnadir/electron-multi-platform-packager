@@ -66,6 +66,9 @@ function sahteBag(f, dosyalar = new Map()) {
           if (/FROM kaynak_build_surumleri/.test(girdi)) {
             return f.buildler.length ? { kod: 0, stdout: tsv(f.buildler), stderr: '' } : { kod: 1, stdout: '', stderr: '' };
           }
+          if (/FROM impark_icerik_surumleri/.test(girdi)) {
+            return f.ics && f.ics.length ? { kod: 0, stdout: tsv(f.ics), stderr: '' } : { kod: 1, stdout: '', stderr: '' };
+          }
           throw new Error(`beklenmeyen sorgu: ${girdi}`);
         }
         if (/mariadb-dump/.test(uzak)) {
@@ -249,6 +252,33 @@ test('İSTEK: DB listesi boşsa Worker KV settings.json okunur', async () => {
   const { set, hucre } = await kos(f);
   assert.equal(set('45550').ayarKaynak, 'kv:tlk2k');
   assert.equal(hucre('45550', 'windows').karar, B.K.GUNCEL);
+});
+
+test('İmpark DB (ics) ve teklif max kıyası', async () => {
+  // Test 1: ics v5 / build v3 / teklif yok -> BAYAT-K
+  const f1 = fikstur({ impark: {}, ics: [{impark_kitap_id: '25776', vs: 5}], buildler: [{
+      set_id: '45550', surum: '2.25.7', durum: 'gecerli', kaynak: 'uretec', olusturma: '2026-10-06 08:08:16.958',
+      kitaplar_hex: hex(JSON.stringify([{ n: 1, id: '25776', vs: 3 }])),
+    }] });
+  const { r: r1 } = await kos(f1);
+  assert.ok(r1.olcum.setler[0].hucreler[0].karar === B.K.BAYAT);
+  assert.strictEqual(r1.olcum.setler[0].hucreler[0].alt, 'kaynak');
+
+  // Test 2: ics yok + teklif yok -> olculemez
+  const f2 = fikstur({ impark: {}, ics: [], buildler: [{
+      set_id: '45550', surum: '2.25.7', durum: 'gecerli', kaynak: 'uretec', olusturma: '2026-10-06 08:08:16.958',
+      kitaplar_hex: hex(JSON.stringify([{ n: 1, id: '25776', vs: 3 }])),
+    }] });
+  const { r: r2 } = await kos(f2);
+  assert.ok(r2.olcum.setler[0].hucreler[0].karar === B.K.OLCULEMEZ);
+
+  // Test 3: teklif v6 > ics v5 -> 6 kullanilir
+  const f3 = fikstur({ impark: { 25776: 6 }, ics: [{impark_kitap_id: '25776', vs: 5}], buildler: [{
+      set_id: '45550', surum: '2.25.7', durum: 'gecerli', kaynak: 'uretec', olusturma: '2026-10-06 08:08:16.958',
+      kitaplar_hex: hex(JSON.stringify([{ n: 1, id: '25776', vs: 3 }])),
+    }] });
+  const { r: r3 } = await kos(f3);
+  assert.ok(r3.olcum.setler[0].hucreler[0].karar === B.K.BAYAT);
 });
 
 // ─── İstisnalar ────────────────────────────────────────────────────────────────────────────

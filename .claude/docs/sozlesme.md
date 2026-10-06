@@ -8,12 +8,7 @@
 
 ## İş
 
-Yayıncının akıllı tahta kitap içeriğini (web build) uç kullanıcıya kurulabilir native
-pakete çevirir: Windows, macOS (.dmg, imzalı/noterli), Linux/Pardus (.impark = AppImage),
-Android (.apk) ve PWA. Kullanıcıları: YDS Publishing üretim hattı (Mac ajanı + srv21
-servisi) ve Nadir'in elle üretim yaptığı tarayıcı arayüzü (:3001). Çözdüğü problem:
-tek bir web build'den, her işletim sisteminde çift tıkla açılan, çevrimdışı çalışan,
-kurum logolu paketler üretmek.
+Yayıncının akıllı tahta kitap içeriğini (web build) uç kullanıcıya kurulabilir native pakete çevirir: Windows, macOS (.dmg, imzalı/noterli), Linux/Pardus (.impark = AppImage), Android (.apk) ve PWA. Kullanıcıları: YDS Publishing üretim hattı (Mac ajanı + srv21 servisi) ve Nadir'in elle üretim yaptığı tarayıcı arayüzü (:3001). Çözdüğü problem: tek bir web build'den, her işletim sisteminde çift tıkla açılan, çevrimdışı çalışan, kurum logolu paketler üretmek.
 
 **İlke (Nadir 06.10):** "Kitap güncellenince paket 4 platformda güncellenir; kurulu paket güncellemeyi görür."
 
@@ -86,6 +81,7 @@ kurum logolu paketler üretmek.
 
 ## Veri ve Sınırlar
 
+- Kaynak surum onceligi: Impark DB ZipVersiyon (Mac launchd 15 dk) > teklif API (srv21 cron) — Nadir 06.10
 - **Kaynaklar:** setin build.zip'i (exe'siz kaynak sözleşmesi, book-update `exesiz-kaynak-sozlesmesi.md`): R2 `kaynak/<setId>/<sürüm>/build.zip` — ajan `r2-kur` ile kurar/yazar, `r2-al` ile indirir; yerel arşiv R2'nin önbelleğidir. İmpark exe'si indirilmez (exe/SFX yolu 01.10'da karantinada). Kurum logoları `~/.electron-packager-tool/config/logos`; çıktı `config/output`. (Eski `EMPP_CACHE_CAP_GB` tavanı 02.10'da karantinaya alındı, `_graveyard/2026-10-02-exe-kaynak-artik/`.)
 - **Yasaklar:** `.env`/anahtar dosyası okumak; port 3000; paketleyicinin build içeriğine
   konfig/menü UYDURMASI — tek istisna K17 kök menüsü (kökte menü yoksa paket zaten açılmıyor).

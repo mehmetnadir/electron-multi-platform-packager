@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>tr.yds.impark-db-surum</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/nadir/01dev/electron-multi-platform-packager/tools/surum-olcer/impark-db-surum.js</string>
+    <string>--uygula</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nadir/01dev/electron-multi-platform-packager</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nadir/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nadir/.empp-agent/log/impark-db-surum.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nadir/.empp-agent/log/impark-db-surum.log</string>
+</dict>
+</plist>

@@ -154,7 +154,7 @@ const sql = {
 
 function yedekKomutu(cfg, { stamp, id, tablo, etiket }) {
   if (!/^\d{8}-\d{6}$/.test(stamp)) throw new Error(`geçersiz damga: ${stamp}`);
-  if (!['pipeline_book_summaries', 'pipeline_platform_summaries'].includes(tablo)) {
+  if (!['pipeline_book_summaries', 'pipeline_platform_summaries', 'impark_icerik_surumleri'].includes(tablo)) {
     throw new Error(`tablo izinli değil: ${tablo}`);
   }
   if (!/^[a-z0-9-]+$/.test(etiket)) throw new Error(`geçersiz etiket: ${etiket}`);
