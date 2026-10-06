@@ -25,7 +25,7 @@
  * Eylem (`--uygula`; varsayılan KURU):
  *   - BAYAT/paket (paket kaynak build'den eski ya da kabuk kanonik değil) → satırı yeniden kuyruğa al.
  *     Önce `mariadb-dump` yedeği ("Dump completed" + ≥1 INSERT yoksa YAZMA YOK). UPDATE yalnız
- *     `status IN ('completed','failed')`. Tavan: set×platform 24 saatte 1, toplam 24 saatte 12.
+ *     `status IN ('completed','failed')`. Tavan: set×platform 24 saatte 1, günlük üst sınır 48, kuyruk+koşu ≤8 geri basıncı.
  *     Kaynak kur isteği açıksa (set-yenile sürüyor) atlanır.
  *   - BAYAT/kaynak (İmpark sürümü build'dekinden büyük) → set başına TEK adım: önce kur isteği
  *     (`pipeline_book_summaries.kaynak_kur_istegi_at = NOW(3)`; manuel set hariç; zaten açıksa yazılmaz;
@@ -65,7 +65,8 @@ const SK = Object.freeze({
 });
 const CIKIS = Object.freeze({ TAMAM: 0, HATA: 1, KULLANIM: 2, KILIT: 75 });
 const SA = 60 * 60 * 1000;
-const TAVAN = Object.freeze({ setPlatformMs: 24 * SA, toplamPencereMs: 24 * SA, toplam: 12 });
+/** Geri basınç: kuyruk+koşu ≤ `kuyrukEsik`; günlük üst sınır `toplam` (24 sa pencere). */
+const TAVAN = Object.freeze({ setPlatformMs: 24 * SA, toplamPencereMs: 24 * SA, toplam: 48, kuyrukEsik: 8 });
 /** R2 nesnesi `last_run_at`'tan en çok bu kadar önce olabilir (yükleme, completed yazılmadan biter). */
 const R2_TOLERANS_MS = 30 * 60 * 1000;
 /** Yeni biten pakette yayın (imza bekçisi) için bildirim öncesi bekleme. */
@@ -405,7 +406,9 @@ function defterOku(metin) {
  * `platform-ayar-kuyruk` kalıbı: önce set başına `kaynak_kur_istegi_at = NOW(3)` (kur isteği), SONRA
  * o setin completed/failed satırları requeue. Kur isteği zaten açıksa (kurIstegiAcik) yeniden yazılmaz,
  * yalnız requeue yapılır. Kur isteği set başına 24 saatte 1. Manuel (M1) set kurulmaz.
- * Tavan: set×platform 24 saatte 1, toplam 24 saatte `TAVAN.toplam` requeue (kur isteği saymaz).
+ * Tavan: set×platform 24 saatte 1; kur isteği set başına 24 saatte 1; günlük toplam `TAVAN.toplam` (48)
+ * requeue. Geri basınç: koşu başında KUYRUKTA+KOŞUYOR = Q ise bu koşuda en çok max(0, 8−Q) yeni requeue;
+ * set bölünmez (sığmayan set sonraki koşuya kalır), tamamen bayat setler önce.
  * Sayılan kayıtlar: `tur='requeue'|'kur-istegi'` ve `sonuc` 'tamam' ya da 'hata' (yazma denendi).
  * running/queued hücre BAYAT olmaz (hucreKarari) → plana girmez, satıra dokunulmaz.
  * @returns {{requeue: Array<{set, platform, sebep, kur: boolean}>, kurIstegi: Array<{set, sebep}>,
@@ -415,27 +418,51 @@ function eylemPlani(hucreler, defter, simdi, tavan = TAVAN) {
   const denendi = (e) => e.sonuc === 'tamam' || e.sonuc === 'hata';
   const denenen = (defter || []).filter((e) => e.tur === 'requeue' && denendi(e));
   const kurDenenen = (defter || []).filter((e) => e.tur === 'kur-istegi' && denendi(e));
-  let toplam = denenen.filter((e) => simdi - e.ms < tavan.toplamPencereMs).length;
+  const gunluk = denenen.filter((e) => simdi - e.ms < tavan.toplamPencereMs).length;
+  // Geri basınç: üretici kuyruğu doluyken yeni iş eklenmez (istisna hücreler K.ISTISNA, sayılmaz).
+  const kuyruk = hucreler.filter((h) => h.karar === K.KUYRUKTA || h.karar === K.KOSUYOR).length;
+  const kuyrukBos = Math.max(0, tavan.kuyrukEsik - kuyruk);
+  let hak = Math.min(kuyrukBos, Math.max(0, tavan.toplam - gunluk));
   const requeue = []; const atlanan = []; const kurIstegi = [];
-  const kurYazilacak = new Set();
+  // Set başına aday hücreler (set sırası: tamamen bayat setler önce, sonra ilk görülme sırası).
+  const setler = new Map();
   for (const h of hucreler) {
-    if (h.karar !== K.BAYAT) continue;
-    const k = { set: h.set, platform: h.platform };
-    const kaynakMi = h.alt === 'kaynak' || h.kaynakGeride === true;
-    if (kaynakMi && h.kaynakModu === 'manuel') { atlanan.push({ ...k, neden: 'manuel (M1) set: İmpark\'tan kurulmaz' }); continue; }
-    if (!kaynakMi && h.kurIstegiAcik) { atlanan.push({ ...k, neden: 'kaynak kur isteği açık (set-yenile sürüyor)' }); continue; }
-    if (h.status !== 'completed' && h.status !== 'failed') { atlanan.push({ ...k, neden: `status=${h.status}` }); continue; }
-    const kurGerek = kaynakMi && !h.kurIstegiAcik;
-    if (kurGerek && !kurYazilacak.has(h.set)) {
-      const sonKur = kurDenenen.filter((e) => e.set === h.set && simdi - e.ms < tavan.setPlatformMs);
-      if (sonKur.length) { atlanan.push({ ...k, neden: `kur isteği 24 sa tavanı: son istek ${kisaZaman(sonKur[sonKur.length - 1].ms)}` }); continue; }
+    if (!setler.has(h.set)) setler.set(h.set, { hepsi: [], aday: [], kurIstegi: null });
+    setler.get(h.set).hepsi.push(h);
+  }
+  for (const [set, g] of setler) {
+    for (const h of g.hepsi) {
+      if (h.karar !== K.BAYAT) continue;
+      const k = { set: h.set, platform: h.platform };
+      const kaynakMi = h.alt === 'kaynak' || h.kaynakGeride === true;
+      if (kaynakMi && h.kaynakModu === 'manuel') { atlanan.push({ ...k, neden: 'manuel (M1) set: İmpark\'tan kurulmaz' }); continue; }
+      if (!kaynakMi && h.kurIstegiAcik) { atlanan.push({ ...k, neden: 'kaynak kur isteği açık (set-yenile sürüyor)' }); continue; }
+      if (h.status !== 'completed' && h.status !== 'failed') { atlanan.push({ ...k, neden: `status=${h.status}` }); continue; }
+      const kurGerek = kaynakMi && !h.kurIstegiAcik;
+      if (kurGerek) {
+        const sonKur = kurDenenen.filter((e) => e.set === set && simdi - e.ms < tavan.setPlatformMs);
+        if (sonKur.length) { atlanan.push({ ...k, neden: `kur isteği 24 sa tavanı: son istek ${kisaZaman(sonKur[sonKur.length - 1].ms)}` }); continue; }
+        if (!g.kurIstegi) g.kurIstegi = { set, sebep: h.sebep };
+      }
+      const son = denenen.filter((e) => e.set === set && e.platform === h.platform && simdi - e.ms < tavan.setPlatformMs);
+      if (son.length) { atlanan.push({ ...k, neden: `24 sa tavanı: son requeue ${kisaZaman(son[son.length - 1].ms)}` }); continue; }
+      g.aday.push({ ...k, sebep: h.sebep, kur: kaynakMi });
     }
-    const son = denenen.filter((e) => e.set === h.set && e.platform === h.platform && simdi - e.ms < tavan.setPlatformMs);
-    if (son.length) { atlanan.push({ ...k, neden: `24 sa tavanı: son requeue ${kisaZaman(son[son.length - 1].ms)}` }); continue; }
-    if (toplam >= tavan.toplam) { atlanan.push({ ...k, neden: `günlük toplam tavan (${tavan.toplam}) dolu` }); continue; }
-    toplam += 1;
-    if (kurGerek && !kurYazilacak.has(h.set)) { kurYazilacak.add(h.set); kurIstegi.push({ set: h.set, sebep: h.sebep }); }
-    requeue.push({ ...k, sebep: h.sebep, kur: kaynakMi });
+    g.tamBayat = g.hepsi.length > 0 && g.hepsi.every((h) => h.karar === K.BAYAT);
+  }
+  const sirali = [...setler.entries()].filter(([, g]) => g.aday.length)
+    .sort((a, b) => Number(b[1].tamBayat) - Number(a[1].tamBayat));
+  for (const [set, g] of sirali) {
+    if (g.aday.length > hak) {
+      const neden = gunluk >= tavan.toplam || tavan.toplam - gunluk - requeue.length <= 0
+        ? `günlük toplam tavan (${tavan.toplam}) dolu`
+        : `geri basınç: kuyruk+koşu ${kuyruk}/${tavan.kuyrukEsik}, set ${g.aday.length} hücre sığmıyor (set bölünmez)`;
+      for (const a of g.aday) atlanan.push({ set, platform: a.platform, neden });
+      continue;
+    }
+    hak -= g.aday.length;
+    if (g.kurIstegi && g.aday.some((a) => a.kur)) kurIstegi.push(g.kurIstegi);
+    requeue.push(...g.aday);
   }
   return { requeue, kurIstegi, atlanan };
 }

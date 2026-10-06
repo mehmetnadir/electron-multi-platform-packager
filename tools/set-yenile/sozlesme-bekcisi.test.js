@@ -324,16 +324,46 @@ test('24 sa tavanı uçtan uca: ikinci koşu aynı satırı yeniden kuyruğa alm
   assert.match(k2.r.plan.atlanan[0].neden, /24 sa tavanı/);
 });
 
-test('günlük toplam tavanı: 24 saatte en çok 12 requeue (defterdekiler dahil)', () => {
-  const hucreler = Array.from({ length: 20 }, (_, i) => bayatHucre(String(50000 + i), 'pardus'));
-  assert.equal(B.eylemPlani(hucreler, [], SIMDI).requeue.length, B.TAVAN.toplam);
-  const defter = Array.from({ length: 5 }, (_, i) => ({ tur: 'requeue', set: String(40000 + i), platform: 'mac', sonuc: 'tamam', ms: SIMDI - SA }));
-  const p = B.eylemPlani(hucreler, defter, SIMDI);
-  assert.equal(p.requeue.length, 7);
+const doluHucre = (set, platform, karar) => ({ set, platform, karar, status: karar === B.K.KOSUYOR ? 'running' : 'queued', kurIstegiAcik: false });
+const kuyrukHucreleri = (q) => Array.from({ length: q }, (_, i) => doluHucre(String(80000 + i), 'mac', i % 2 ? B.K.KOSUYOR : B.K.KUYRUKTA));
+const tekler = (n) => Array.from({ length: n }, (_, i) => bayatHucre(String(50000 + i), 'pardus'));
+
+test('geri basınç: kuyruk+koşu Q=8 → 0 eylem; Q=3 → en çok 5', () => {
+  assert.equal(B.TAVAN.kuyrukEsik, 8);
+  const p8 = B.eylemPlani([...kuyrukHucreleri(8), ...tekler(20)], [], SIMDI);
+  assert.equal(p8.requeue.length + p8.kurIstegi.length, 0);
+  assert.ok(p8.atlanan.every((a) => /geri basınç/.test(a.neden)));
+  const p3 = B.eylemPlani([...kuyrukHucreleri(3), ...tekler(20)], [], SIMDI);
+  assert.equal(p3.requeue.length, 5);
+  assert.equal(B.eylemPlani(tekler(20), [], SIMDI).requeue.length, 8);
+  // İstisna hücreler Q'ya girmez.
+  const ist = Array.from({ length: 9 }, (_, i) => ({ set: String(70000 + i), platform: 'mac', karar: B.K.ISTISNA }));
+  assert.equal(B.eylemPlani([...ist, ...tekler(3)], [], SIMDI).requeue.length, 3);
+});
+
+test('geri basınç: set bölünmez; tamamen bayat setler önce', () => {
+  const kismi = [bayatHucre('1', 'windows'), bayatHucre('1', 'mac'), { set: '1', platform: 'pardus', karar: B.K.GUNCEL }];
+  const tam = B.PLATFORMLAR.map((x) => kaynakHucre('2', x));
+  // Q=5 → hak 3: tam bayat set (4 hücre) sığmaz → bölünmez, atlanır; kısmi set (2 hücre) alınır.
+  const p = B.eylemPlani([...kuyrukHucreleri(5), ...kismi, ...tam], [], SIMDI);
+  assert.deepEqual(p.requeue.map((x) => `${x.set}/${x.platform}`), ['1/windows', '1/mac']);
+  assert.equal(p.kurIstegi.length, 0);
+  assert.equal(p.atlanan.filter((a) => a.set === '2').length, 4);
+  assert.ok(p.atlanan.filter((a) => a.set === '2').every((a) => /set bölünmez/.test(a.neden)));
+  // Q=0 → hak 8: tamamen bayat set (2) önce gelir, sonra kısmi (1).
+  const p2 = B.eylemPlani([...kismi, ...tam], [], SIMDI);
+  assert.deepEqual([...new Set(p2.requeue.map((x) => x.set))], ['2', '1']);
+  assert.deepEqual(p2.kurIstegi.map((x) => x.set), ['2']);
+});
+
+test('günlük üst sınır: 24 saatte en çok 48 requeue (defterdekiler dahil)', () => {
+  assert.equal(B.TAVAN.toplam, 48);
+  const dolu = Array.from({ length: 45 }, (_, i) => ({ tur: 'requeue', set: String(40000 + i), platform: 'mac', sonuc: 'tamam', ms: SIMDI - SA }));
+  const p = B.eylemPlani(tekler(20), dolu, SIMDI);
+  assert.equal(p.requeue.length, 3);
   assert.ok(p.atlanan.some((a) => /günlük toplam tavan/.test(a.neden)));
-  // Yazma denenmemiş kayıtlar (yedek-yok, satir-yok) tavana sayılmaz.
-  const sayilmaz = defter.map((e) => ({ ...e, sonuc: 'yedek-yok' }));
-  assert.equal(B.eylemPlani(hucreler, sayilmaz, SIMDI).requeue.length, 12);
+  assert.equal(B.eylemPlani(tekler(20), dolu.map((e) => ({ ...e, sonuc: 'yedek-yok' })), SIMDI).requeue.length, 8);
+  assert.equal(B.eylemPlani(tekler(20), dolu.map((e) => ({ ...e, ms: SIMDI - 25 * SA })), SIMDI).requeue.length, 8);
 });
 
 test('kaynak kur isteği açıkken requeue yapılmaz (set-yenile sürüyor)', () => {
@@ -391,12 +421,13 @@ test('BAYAT-K: kur isteği 24 sa tavanı (set başına 1); tavan doluysa requeue
   assert.equal(B.eylemPlani(B.PLATFORMLAR.map((x) => kaynakHucre('45550', x)), [], SIMDI).kurIstegi.length, 1);
 });
 
-test('BAYAT-K: günlük toplam tavanı kaynak requeue için de geçerli; tavan dolunca kur isteği yazılmaz', () => {
-  const hucreler = Array.from({ length: 20 }, (_, i) => kaynakHucre(String(50000 + i), 'pardus'));
+test('BAYAT-K: geri basınç dolunca kur isteği yazılmaz', () => {
+  const hucreler = [...kuyrukHucreleri(8), ...Array.from({ length: 5 }, (_, i) => kaynakHucre(String(50000 + i), 'pardus'))];
   const p = B.eylemPlani(hucreler, [], SIMDI);
-  assert.equal(p.requeue.length, B.TAVAN.toplam);
-  assert.equal(p.kurIstegi.length, B.TAVAN.toplam);
-  assert.ok(p.atlanan.every((a) => /günlük toplam tavan/.test(a.neden)));
+  assert.equal(p.requeue.length + p.kurIstegi.length, 0);
+  const q = B.eylemPlani(Array.from({ length: 20 }, (_, i) => kaynakHucre(String(50000 + i), 'pardus')), [], SIMDI);
+  assert.equal(q.requeue.length, 8);
+  assert.equal(q.kurIstegi.length, 8);
 });
 
 test('BAYAT-K: manuel (M1) set kurulmaz; kaynak geride + paket eski karışık hücre kaynak sayılır', () => {
