@@ -3212,11 +3212,21 @@ async function processJob(auth, job) {
     if (kaynak.tur === 'manuel') {
       log(`${menuKapak.ISARET} manuel build — kapak garantisi ATLANDI (sözleşme M1; kabul kapısı ölçer)`);
     }
-    if (kaynak.tur !== 'manuel') {
-      job.menuKapak = await kaynakAdim.menuKapak({
-        zip: zipPath, calisma: work, kisaKod: job.kisaKod || null,
-        setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null, log, warn,
-      });
+    // Kip EMPP_MENU_KAPAK_GARANTI: uyar (varsayılan) → hata iş kopyasını değiştirmez (aday kapısı),
+    // uyarı yazılır, üretim sürer; reddet → hata işi düşürür; kapali → adım koşmaz.
+    // (06.10 inceleme: CRC/ENOSPC/kapı RED gibi bir hata tüm set üretimini durduruyordu.)
+    const mkgKip = String(process.env.EMPP_MENU_KAPAK_GARANTI || '').trim().toLowerCase();
+    if (kaynak.tur !== 'manuel' && mkgKip !== 'kapali') {
+      try {
+        job.menuKapak = await kaynakAdim.menuKapak({
+          zip: zipPath, calisma: work, kisaKod: job.kisaKod || null,
+          setListesi: (setEk.setListesiCoz({ job }) || {}).ham || null, log, warn,
+        });
+      } catch (e) {
+        if (mkgKip === 'reddet') throw e;
+        warn(`${menuKapak.ISARET} kapak garantisi HATA (uyar kipi, üretim sürüyor, zip değişmedi): ${e.message}`);
+        job.menuKapak = { durum: 'hata', sebep: e.message };
+      }
     }
 
     // R2'YE YAZ (Dalga B, r2-kur): kurulan build yazma kapısından (B5) geçerse R2'ye yüklenir ve

@@ -350,7 +350,11 @@ async function calis(argv, yazici) {
     // 1a'. Menü kapak (06.10, 59835 Teacher's Pack/Worksheets): set menüsündeki her kartın kabuğun
     // YÜKLEYECEĞİ kapak dosyası pakette ve > 1 KB mı (menu-kapak.js). Set değilse ATLANDI (katman
     // eklenmez). Statik ölçüm: asar/dizin, dört platform aynı. Ölçülemezse ÖLÇÜLEMEDİ (GEÇTİ değil).
-    if (acilis) {
+    // Kip KABUL_MENU_KAPAK (kasa/ProBook ile tek kural, MK.kapiKarari): uyar (varsayılan) → yalnız
+    // uyarı; reddet → yalnız RED katman olur (ÖLÇÜLEMEDİ yine uyarı); kapali → ölçülmez.
+    // (06.10 inceleme: katman eskiden kipe bakmadan genel karara giriyordu → uyar kipinde iş düşerdi.)
+    const mkKip = MK.kip();
+    if (acilis && mkKip !== 'kapali') {
       let mk;
       try {
         mk = MK.menuKapakOlcKok(acilis.kok, { asar: acilis.asar });
@@ -358,7 +362,9 @@ async function calis(argv, yazici) {
         mk = { durum: MK.DURUM.OLCULEMEDI, kartlar: [], sebepler: [`ölçüm hatası: ${e.message}`], uyarilar: [] };
       }
       rapor.menuKapak = mk;
-      if (mk.durum !== MK.DURUM.ATLANDI) rapor.katmanlar.menuKapak = { durum: mk.durum, sebepler: mk.sebepler };
+      const mkKarar = MK.kapiKarari(mk, mkKip);
+      if (mkKarar.dusur) rapor.katmanlar.menuKapak = { durum: mk.durum, sebepler: mk.sebepler };
+      else if (mk.durum !== MK.DURUM.GECTI && mk.durum !== MK.DURUM.ATLANDI) rapor.uyarilar.push(mkKarar.log);
       for (const u of mk.uyarilar) rapor.uyarilar.push(u);
       say(MK.ozetSatiri(mk));
     }
