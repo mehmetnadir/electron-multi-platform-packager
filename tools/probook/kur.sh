@@ -79,6 +79,9 @@ probook_kur(){
     BOS=$(df -Pk "$S" | awk 'NR==2{print int($4/1048576)}')
     DOL=$(df -Pk "$S" | awk 'NR==2{gsub("%","",$5); print $5}')
   fi
+  # Disk temizlik süreç taraması sudo -n bash ister (salt okuma). Yoksa tarama BOZUK → temizlik HİÇ silmez.
+  if sudo -n bash -c true 2>/dev/null; then log "sudo -n bash: VAR (disk temizlik tam surec taramasi)"
+  else log "UYARI: sudo -n bash YOK — disk temizlik taramasi bozuk sayilir, temizlik silmez (fail-closed)"; fi
   [ "$BOS" -ge 30 ] || die "disk kapisi: ${BOS} GB bos < 30 GB"
   [ "$DOL" -le 85 ] || die "disk kapisi: doluluk %${DOL} > %85"
   log "disk: ${BOS} GB bos, doluluk %${DOL}"

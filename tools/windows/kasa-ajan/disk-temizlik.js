@@ -38,7 +38,7 @@
  *   --hedef-gb VERİLİRSE varsayılan rahatlık hedefinin (40) YERİNE geçer (ProBook betiğiyle aynı davranış;
  *   runner kapının gerekli GB'sini verir).
  * Çıkış: 0 hedef sağlandı · 3 adaylar bitti hâlâ dar · 2 kullanım/korkuluk · 4 kilit dolu · 1 beklenmeyen hata.
- * Son satır: SONUC bos_gb=.. silinen_mb=.. kalem=.. atlanan=.. hedef=tamam|dar
+ * Son satır: SONUC bos_gb=.. silinen_mb=.. kalem=.. atlanan=.. hedef=tamam|dar tarama=tamam|bozuk
  */
 
 const fs = require('fs');
@@ -178,6 +178,7 @@ function sahibiCanli(dizin) {
   try { ham = fs.readFileSync(path.join(dizin, SAHIP_DOSYASI), 'utf8'); } catch (e) {
     return e.code !== 'ENOENT' && e.code !== 'ENOTDIR'; // okunamadı → belirsiz → canlı say
   }
+  if (String(ham).trim() === '') return false; // boş işaret (yazım yarım kaldı, runner kaldırır) → yok
   const pid = Number(String(ham).trim());
   if (!Number.isInteger(pid) || pid <= 0) return true;
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
@@ -375,6 +376,7 @@ function calistir({ cfg, kuru = false, ekler = [], koru = [], surecler = [], bos
   if (surecler === null) {
     gunluk('-', '-', 'DUR: surec listesi olculemedi — hicbir sey silinmedi');
     yaz('surec listesi olculemedi — silme yok');
+    yaz(`SONUC bos_gb=${bos === null ? '?' : Math.floor(bos / GB)} silinen_mb=0 kalem=0 atlanan=0 hedef=dar tarama=bozuk`);
     return { ...sonuc, bos, durum: 'dar', olculemedi: true };
   }
   const hedefte = () => bos !== null && bos >= hedef;
@@ -431,7 +433,7 @@ function calistir({ cfg, kuru = false, ekler = [], koru = [], surecler = [], bos
   gunluk('-', bos === null ? '?' : `${mb(bos)} bos`,
     `BITTI silinen ${mb(sonuc.silinenBayt)} · ${sonuc.silinen.length} kalem · atlanan ${sonuc.atlanan.length} · hedef ${durum}${kuruEtiket}`);
   yaz(`SONUC bos_gb=${bos === null ? '?' : Math.floor(bos / GB)} silinen_mb=${Math.ceil(sonuc.silinenBayt / 1e6)} `
-    + `kalem=${sonuc.silinen.length} atlanan=${sonuc.atlanan.length} hedef=${durum}`);
+    + `kalem=${sonuc.silinen.length} atlanan=${sonuc.atlanan.length} hedef=${durum} tarama=tamam`);
   return { ...sonuc, bos, durum };
 }
 
@@ -462,6 +464,14 @@ function argumanlar(argv) {
   return o;
 }
 
+/**
+ * CLI ortamı: DT_* test anahtarları ÜRETİMDE okunmaz (inceleme K2) — yapılandırmaya girmeden süzülür.
+ * Saf. @returns {object} env kopyası
+ */
+function cliOrtami(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !/^DT_/i.test(k)));
+}
+
 /** --hedef-gb verilirse varsayılan rahatlık hedefinin YERİNE geçer (ProBook betiğiyle aynı). Saf. */
 function cfgUygula(cfg, a) {
   const c = { ...cfg };
@@ -477,7 +487,7 @@ async function cli(argv) {
   }
   let a;
   try { a = argumanlar(argv); } catch (e) { console.error(e.message); return 2; }
-  const cfg = cfgUygula(yapilandirma(), a);
+  const cfg = cfgUygula(yapilandirma(cliOrtami(process.env)), a);
   const birak = await kilitAl(cfg.kilit);
   if (!birak) { console.log('kilit dolu'); return 4; }
   try {
@@ -495,6 +505,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  yapilandirma, adaylar, korunuyor, kullanimda, calistir, sil, agacOlc, kilitAl, argumanlar, cfgUygula, cli,
+  yapilandirma, cliOrtami, adaylar, korunuyor, kullanimda, calistir, sil, agacOlc, kilitAl, argumanlar, cfgUygula, cli,
   gercekYol, programBizim, dijitapBizim, sahibiCanli,
 };

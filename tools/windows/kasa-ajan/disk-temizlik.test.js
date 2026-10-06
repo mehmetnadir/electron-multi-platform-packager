@@ -358,3 +358,30 @@ test('ince ps1 sarmalayıcı js\'i çağırır; görev saatlik, gizli ve izin do
   const ortam = fs.readFileSync(path.join(__dirname, 'ortam.ps1'), 'utf8');
   assert.match(ortam, /\$env:EMPP_DISK_TEMIZLIK = '1'/);
 });
+
+// ---------------------------------------------------------------- 2. inceleme (K2, K3, Ö-B)
+test('K2: CLI ortamı DT_* test anahtarlarını süzer; yapılandırmaya girmez', () => {
+  const env = D.cliOrtami({ DT_HEDEF_GB: '1', DT_KORU_DK: '0', dt_dijitap: 'C:\\', EMPP_AJAN_KOK: 'C:\\empp-ajan', PATH: 'x' });
+  assert.deepEqual(Object.keys(env).sort(), ['EMPP_AJAN_KOK', 'PATH']);
+  const cfg = D.yapilandirma(D.cliOrtami({ DT_HEDEF_GB: '1', DT_KORU_DK: '0' }), 'C:\\Users\\A');
+  assert.equal(cfg.hedefGb, 40);
+  assert.equal(cfg.koruDk, 120);
+  assert.match(fs.readFileSync(path.join(__dirname, 'disk-temizlik.js'), 'utf8'), /yapilandirma\(cliOrtami\(process\.env\)\)/);
+});
+
+test('K3: boş .empp-sahip.pid "yok" sayılır — dizin silinir', () => {
+  const { cfg } = kasa();
+  const d = path.join(cfg.tmp, 'empp-agent-BOS');
+  yaz(path.join(d, 'build.zip'), { gun: 9 });
+  fs.writeFileSync(path.join(d, '.empp-sahip.pid'), '');
+  yasla(d, 9);
+  assert.equal(D.sahibiCanli(d), false);
+  kos(cfg);
+  assert.ok(!var_(d));
+});
+
+test('Ö-B: süreç listesi ölçülemezse SONUC tarama=bozuk; normal koşuda tarama=tamam', () => {
+  const { cfg } = kasa();
+  assert.match(kos(cfg, { surecler: null }).cikti, /^SONUC .* hedef=dar tarama=bozuk$/m);
+  assert.match(kos(cfg).cikti, /^SONUC .* tarama=tamam$/m);
+});

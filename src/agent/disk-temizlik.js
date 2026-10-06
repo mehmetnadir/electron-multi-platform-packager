@@ -85,11 +85,12 @@ function varsayilanKostur(komut, arg) {
  * @param {object} p
  * @param {number} [p.gerekliGb] kapının istediği boş GB (betiğin hedefi en az bu olur)
  * @param {(s:string)=>void} [p.log]
+ * @param {(s:string)=>void} [p.warn] tarama bozuksa (SONUC tarama=bozuk) uyarı buraya; yoksa log
  * @param {string[]} [p.koru] çalışan işin yolları (arşiv dizini, iş dizini) — betiğe --koru ile geçer
  * @param {boolean} [p.zorla] bekleme süresini yok say
  * @returns {Promise<{calisti:boolean, atla?:string, kod?:number, sonuc?:object|null}>}
  */
-async function yerAc({ gerekliGb, koru = [], log = () => {}, zorla = false, platform, env, kostur = varsayilanKostur,
+async function yerAc({ gerekliGb, koru = [], log = () => {}, warn = null, zorla = false, platform, env, kostur = varsayilanKostur,
   simdi = Date.now(), varMi } = {}) {
   const sec = komutSec({ platform, env, hedefGb: gerekliGb, koru, varMi });
   if (sec.atla) return { calisti: false, atla: sec.atla };
@@ -103,6 +104,10 @@ async function yerAc({ gerekliGb, koru = [], log = () => {}, zorla = false, plat
     + (sonuc.sonuc ? `bos=${sonuc.sonuc.bos_gb} GB hedef=${sonuc.sonuc.hedef}` : `(SONUC yok) ${String(r.hata).slice(-300)}`));
   // Bekleme YALNIZ "adaylar bitti, hâlâ dar" (rc 3 + SONUC) sonucunu önbelleğe alır: 15 dk içinde yeniden
   // koşmak boşunadır. Hata (SONUC yok / başka rc) ya da hedefe ulaşılmış koşu önbelleğe ALINMAZ.
+  // Süreç taraması bozuksa betik fail-closed davranır (hiçbir şey silinmez) — bu SESSİZ kalmamalı (Ö-B).
+  if (sonuc.sonuc && sonuc.sonuc.tarama === 'bozuk') {
+    (warn || log)('disk temizlik: süreç taraması BOZUK — fail-closed, hiçbir aday silinmedi (ProBook: sudo -n bash denetle)');
+  }
   _son = r.kod === 3 && sonuc.sonuc && sonuc.sonuc.hedef === 'dar' ? { zaman: simdi, sonuc } : null;
   return sonuc;
 }

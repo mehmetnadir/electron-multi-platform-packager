@@ -361,3 +361,70 @@ test('kur.sh disk kapısı önce temizliği koşturur, sonra yeniden ölçer; za
   const ORTAM = fs.readFileSync(path.join(__dirname, 'serit-ortam.sh'), 'utf8');
   assert.match(ORTAM, /export EMPP_DISK_TEMIZLIK="\$\{EMPP_DISK_TEMIZLIK:-1\}"/);
 });
+
+// ---------------------------------------------------------------- 2. inceleme (K1, K3, K5, Ö-B)
+test('K5 srv21 negatif işareti: /opt/empp-packager (testte DT_SRV21_ISARET) varsa ana akış da kurulum da çıkış 2', () => {
+  const h = sahteEv();
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  const isaret = path.join(h, 'opt-empp-packager');
+  fs.mkdirSync(isaret);
+  const r = kostur(h, ['--ek', path.join(h, 'testler')], { DT_SRV21_ISARET: isaret });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /srv21, KOSMAZ/);
+  assert.ok(var_(h, 'testler/a.bin'));
+  fs.rmSync(path.join(h, 'empp-serit/disk-temizlik.izin'));
+  const z = kostur(h, ['--zamanlayici-kur'], { DT_SRV21_ISARET: isaret });
+  assert.equal(z.status, 2);
+  assert.ok(!var_(h, 'empp-serit/disk-temizlik.izin'), 'srv21\'de izin dosyası YAZILMAZ');
+});
+
+test('K1 test kipinde /tmp yerine $HOME/tmp: kabul-*.impark kopyası oradan silinir', () => {
+  const h = sahteEv();
+  fs.mkdirSync(path.join(h, 'tmp'), { recursive: true });
+  dosya(h, 'tmp/kabul-1.impark', { gun: 2 });
+  const r = kostur(h, ULASILMAZ);
+  assert.ok(!var_(h, 'tmp/kabul-1.impark'), r.stdout);
+  assert.match(r.stdout, /SILINDI .*\/tmp\/kabul-1\.impark \(kabul kopyasi/);
+});
+
+test('K3: boş .empp-sahip.pid "yok" sayılır — dizin silinir', () => {
+  const h = sahteEv();
+  const d = 'empp-serit/work/empp-agent-BOS';
+  dosya(h, `${d}/build.zip`, { gun: 9 });
+  fs.writeFileSync(path.join(h, d, '.empp-sahip.pid'), '');
+  yaslandir(path.join(h, d), 9);
+  const r = kostur(h, ULASILMAZ);
+  assert.ok(!var_(h, d), r.stdout);
+});
+
+test('Ö-B: SONUC satırı tarama alanı taşır (test anahtarıyla tamam)', () => {
+  const h = sahteEv();
+  const r = kostur(h, ['--kuru']);
+  assert.match(r.stdout, /^SONUC .* tarama=tamam$/m);
+});
+
+test('Ö-B (Mac): süreç taraması yoksa SONUC tarama=bozuk', { skip: LINUX }, () => {
+  const h = sahteEv();
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  const r = kostur(h, ULASILMAZ, { DT_PROC_YOK: '' });
+  assert.match(r.stdout, /^SONUC .* tarama=bozuk$/m);
+  assert.ok(var_(h, 'testler/a.bin'));
+});
+
+test('Ö-B (Linux): sudo -n bash yoksa sudosuz taramaya düşer; okunamayan süreç → fail-closed, tarama=bozuk, günlükte neden', { skip: !LINUX }, () => {
+  const h = sahteEv();
+  dosya(h, 'testler/a.bin', { gun: 9 });
+  const bin = path.join(h, 'sahte-bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'sudo'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const r = kostur(h, ULASILMAZ, { DT_PROC_YOK: '', PATH: `${bin}:${process.env.PATH}` });
+  assert.match(r.stdout, /^SONUC .* tarama=bozuk$/m, r.stdout);
+  assert.ok(var_(h, 'testler/a.bin'), 'tarama bozukken hiçbir şey silinmez');
+  assert.match(r.log, /surec taramasi eksik \(sudo -n bash yok\)/);
+});
+
+test('kur.sh sudo -n bash sonucunu raporlar', () => {
+  const KUR = fs.readFileSync(path.join(__dirname, 'kur.sh'), 'utf8');
+  assert.match(KUR, /if sudo -n bash -c true 2>\/dev\/null; then log "sudo -n bash: VAR/);
+  assert.match(KUR, /UYARI: sudo -n bash YOK/);
+});

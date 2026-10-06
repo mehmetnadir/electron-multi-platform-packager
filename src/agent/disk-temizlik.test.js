@@ -89,7 +89,7 @@ test('yerAc: koru betiğe geçer; YALNIZ "hâlâ dar" (rc 3) önbelleğe alını
 
 test('RUNNER pardus erken disk kapısı: temizlik çalışan işin arşivini ve iş dizinini --koru ile geçer; arşiv kaybolursa ertele', () => {
   const g = SRC.slice(SRC.indexOf('ERKEN DİSK KAPISI'), SRC.indexOf('pardus disk kapısı geçildi'));
-  const iTemiz = g.indexOf('await diskTemizlik.yerAc({ gerekliGb, log, koru: [work, ...(arsiv && arsiv.zip ? [path.dirname(arsiv.zip)] : [])] })');
+  const iTemiz = g.indexOf('await diskTemizlik.yerAc({ gerekliGb, log, warn, koru: [work, ...(arsiv && arsiv.zip ? [path.dirname(arsiv.zip)] : [])] })');
   const iOlc = g.indexOf('bosGb = diskBosGb(os.tmpdir());', iTemiz);
   const iKayip = g.indexOf('if (arsiv && arsiv.zip && !fs.existsSync(arsiv.zip))', iTemiz);
   const iAt = g.indexOf('pardus disk kapısı —');
@@ -97,8 +97,9 @@ test('RUNNER pardus erken disk kapısı: temizlik çalışan işin arşivini ve 
   assert.ok(iTemiz < iOlc && iOlc < iAt, 'sıra: temizlik → yeniden ölç → (hâlâ darsa) ertele');
   assert.ok(iKayip > iTemiz, 'temizlik sonrası arşiv varlığı denetlenir');
   assert.match(g.slice(iKayip, iKayip + 300), /throw new Error\(`\$\{DISK_KAPISI_ISARETI\} disk temizliği sonrası kaynak arşivi yok/);
-  const isDizini = SRC.slice(SRC.indexOf("const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'empp-agent-'));"));
-  assert.match(isDizini.slice(0, 400), /\.empp-sahip\.pid/);
+  const isDizini = SRC.slice(SRC.indexOf('  let work;\n  try { work = await isDiziniAc'));
+  assert.ok(isDizini.length < SRC.length, 'iş dizini açılışı bulunamadı');
+  assert.match(isDizini.slice(0, 600), /\.empp-sahip\.pid/);
 });
 
 test('RUNNER windows üretim kapısı: disk dar → kapı kapanmadan önce yerAc(minGb) çağrılır; temizlik yetmezse kapalı', async () => {
@@ -122,4 +123,46 @@ test('RUNNER windows üretim kapısı: disk dar → kapı kapanmadan önce yerAc
     Object.assign(CONFIG, eski);
     fs.rmSync(path.dirname(hazirKok), { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------- 2. inceleme (Ö-A, Ö-B)
+test('Ö-A isDiziniAc: ENOSPC → temizlik (taban GB) → bir kez daha; yine ENOSPC → ertelenebilir (failed yok); başka hata temizliksiz', async () => {
+  const { ertelenebilirKaynakHatasi } = require('./runner-helpers');
+  const enospc = () => Object.assign(new Error('ENOSPC: no space left on device, mkdtemp'), { code: 'ENOSPC' });
+  const temizlikler = [];
+  const temizlik = async (o) => { temizlikler.push(o.gerekliGb); return { calisti: true }; };
+  let n = 0;
+  const bir = await RUNNER.isDiziniAc('pardus', { mkdtemp: async (p) => { if (++n === 1) throw enospc(); return `${p}OK`; }, temizlik });
+  assert.match(bir, /empp-agent-OK$/);
+  assert.deepEqual(temizlikler, [Number(process.env.PARDUS_DISK_TABAN_GB) || 15]);
+  const eskiMin = CONFIG.winUretMinBosGb;
+  CONFIG.winUretMinBosGb = 22;
+  try {
+    await assert.rejects(RUNNER.isDiziniAc('windows', { mkdtemp: async () => { throw enospc(); }, temizlik }), (e) => {
+      assert.equal(ertelenebilirKaynakHatasi(e), true, 'ertelenebilir sınıf → failed yazılmaz');
+      assert.match(e.message, /iş dizini açılamadı \(ENOSPC\)/);
+      return true;
+    });
+  } finally { CONFIG.winUretMinBosGb = eskiMin; }
+  assert.deepEqual(temizlikler.slice(-1), [22], 'windows tabanı winUretMinBosGb');
+  const once = temizlikler.length;
+  await assert.rejects(RUNNER.isDiziniAc('pardus', { mkdtemp: async () => { throw Object.assign(new Error('x'), { code: 'EACCES' }); }, temizlik }),
+    (e) => e.code === 'EACCES');
+  assert.equal(temizlikler.length, once, 'ENOSPC dışı hatada temizlik yok');
+});
+
+test('Ö-A/K3 kaynak: processJob iş dizinini isDiziniAc ile açar, hata yolunda currentJob sıfırlanır; pid yazımı düşerse dosya kaldırılır', () => {
+  const pj = SRC.slice(SRC.indexOf('async function processJob'));
+  assert.match(pj.slice(0, 900), /try \{ work = await isDiziniAc\(packagerPlatform\); \} catch \(e\) \{ currentJob = null; throw e; \}/);
+  assert.doesNotMatch(pj.slice(0, 900), /const work = await fsp\.mkdtemp/);
+  assert.match(pj.slice(0, 1500), /fs\.rmSync\(sahipDosyasi, \{ force: true \}\)/);
+});
+
+test('Ö-B yerAc: SONUC tarama=bozuk → warn loglanır (sessiz 0 silme yok)', async () => {
+  DT._sifirla();
+  const uyarilar = [];
+  await DT.yerAc({ platform: 'linux', env: ACIK, varMi: () => true, gerekliGb: 20, warn: (s) => uyarilar.push(s),
+    kostur: async () => ({ kod: 3, cikti: 'SONUC bos_gb=3 hedef=dar tarama=bozuk\n', hata: '' }) });
+  assert.match(uyarilar.join('\n'), /süreç taraması BOZUK/);
+  DT._sifirla();
 });

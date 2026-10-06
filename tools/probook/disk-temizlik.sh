@@ -7,6 +7,7 @@
 #   - Darwin → çıkış 2 (yalnız test kilidiyle, sahte geçici HOME içinde koşar; aşağıda);
 #   - ~/empp-serit yok ya da ~/empp-serit/disk-temizlik.izin yok → çıkış 2 (srv21 değişmezi).
 #     İzin dosyasını yalnız --zamanlayici-kur (ProBook kurulumu) yazar.
+#   - /opt/empp-packager varsa (srv21 negatif işareti) → çıkış 2, kurulum dahil.
 #
 # Kullanım:
 #   disk-temizlik.sh [--kuru] [--ek <yol>]... [--koru <yol>]... [--hedef-gb N] [--hedef-yuzde N]
@@ -25,7 +26,7 @@
 #   --zamanlayici-kur   izin dosyasını yazar, kendini ~/empp-serit/araclar/'a kopyalar, systemd --user
 #                       saatlik zamanlayıcıyı kurar; zamanlayıcı etkin değilse çıkış 1
 # Çıkış: 0 hedef sağlandı · 3 adaylar bitti hâlâ dar · 2 kullanım/korkuluk · 4 kilit dolu · 1 kurulum hatası
-# Son satır: SONUC bos_gb=.. bos_yuzde=.. silinen_mb=.. kalem=.. atlanan=.. hedef=tamam|dar
+# Son satır: SONUC bos_gb=.. bos_yuzde=.. silinen_mb=.. kalem=.. atlanan=.. hedef=tamam|dar tarama=tamam|bozuk
 #
 # SIRA (katman içinde en eski önce — ağacın EN YENİ mtime'ı ölçülür: "en son dokunulan"):
 #   K1 test/deneme/paket artığı: ~/testler/*, ~/Silinecekler/*, *kabuk*aday*, İndirilenler/Downloads
@@ -44,7 +45,8 @@
 # DİSK TAM DOLUYKEN ÇALIŞIR: kilit flock (mevcut ~/empp-serit dizini), aday listeleri bellekte/boruda
 #   (geçici dosya yok), günlük yazılamazsa satır stdout'a düşer, iş sürer.
 # Günlük: ~/empp-serit/log/disk-temizlik.log — tarih · yol · boyut · neden.
-# Test: tools/probook/disk-temizlik.test.js. Test anahtarları (DT_DF, DT_KULLANIMDA, DT_PROC_YOK)
+# Test: tools/probook/disk-temizlik.test.js. Test anahtarları (DT_DF, DT_KULLANIMDA, DT_PROC_YOK, DT_KORU_DK,
+#   DT_KANIT_GUN, DT_SRV21_ISARET; test kipinde /tmp yerine $HOME/tmp)
 #   YALNIZ test kilidiyle okunur: DT_TEST_KILIDI="$HOME/.dt-test-kilidi" var, HOME'un adı dt-ev-* ve
 #   HOME sistem geçici dizininin altında. Kilit yoksa anahtarlar yok sayılır.
 set -u
@@ -53,8 +55,8 @@ KURU=0
 HEDEF_GB=50
 HEDEF_YUZDE=25
 SERT_GB=15
-KORU_DK="${DT_KORU_DK:-120}"
-KANIT_GUN="${DT_KANIT_GUN:-7}"
+KORU_DK=120
+KANIT_GUN=7
 ZKUR=0
 EKLER=(); EK_SAYI=0
 KORU_EK=""
@@ -107,9 +109,17 @@ if [ -n "${DT_TEST_KILIDI:-}" ] && [ "${DT_TEST_KILIDI}" = "$H0/.dt-test-kilidi"
     done ;;
   esac
 fi
-if [ "$TEST" != 1 ]; then unset DT_DF DT_KULLANIMDA DT_PROC_YOK; fi
+if [ "$TEST" != 1 ]; then unset DT_DF DT_KULLANIMDA DT_PROC_YOK DT_SRV21_ISARET; else
+  KORU_DK="${DT_KORU_DK:-120}"; KANIT_GUN="${DT_KANIT_GUN:-7}"
+  case "$KORU_DK$KANIT_GUN" in *[!0-9]*) echo "sayi bekleniyor" >&2; exit 2 ;; esac
+fi
 # Mac'te silme YASAK: Darwin'de yalnız test kilidiyle (sahte geçici HOME) koşar.
 if [ "$(uname -s)" = Darwin ] && [ "$TEST" != 1 ]; then echo "Mac'te disk-temizlik KOSMAZ" >&2; exit 2; fi
+
+# srv21 NEGATİF İŞARETİ (inceleme K5): paketleyici kurulumu olan makine srv21'dir → KOŞMA (kurulum dahil).
+SRV21_ISARET="/opt/empp-packager"
+[ "$TEST" = 1 ] && [ -n "${DT_SRV21_ISARET:-}" ] && SRV21_ISARET="$DT_SRV21_ISARET"
+if [ -d "$SRV21_ISARET" ]; then echo "$SRV21_ISARET var — srv21, KOSMAZ" >&2; exit 2; fi
 
 SERIT="$H/empp-serit"
 AJAN="$H/.empp-agent"
@@ -251,15 +261,19 @@ iki_bicim(){
 KORU_AGAC="$(iki_bicim "$KORU_AGAC_HAM")"
 KORU_KAP="$(iki_bicim "$KORU_KAP_HAM")"
 TMP_R="$(gercek_dizin /tmp)"
+# Test kipinde gerçek /tmp'ye ASLA dokunulmaz (inceleme K1).
+if [ "$TEST" = 1 ]; then mkdir -p "$H/tmp" 2>/dev/null; TMP_R="$(gercek_dizin "$H/tmp")"; fi
 
 # ------------------------------------------------------------------ süreç taraması
 # Çıktı: kullanılan yollar (satır başına bir). Tarayıcı bu betiğin kendi süreçlerini ve atalarını atlar.
-# Kendi uid'imizin süreci okunamazsa çıkış 1 (fail-closed). Başka uid'in süreçleri yalnız sudo -n
-# okuma izniyle taranır (salt okuma; silme sudo'suz).
+# Okunamayan (zombi/çekirdek iş parçacığı olmayan) her süreç → çıkış 7 = tarama BOZUK (fail-closed:
+# her aday kullanımda). Önce `sudo -n bash` ile (salt OKUMA; silme sudo'suz) taranır; sudo yoksa ya da
+# başarısızsa sudosuz taramaya düşülür — başka kullanıcının süreçleri okunamaz → BOZUK. SONUC satırı
+# `tarama=bozuk` taşır, runner yardımcısı bunu uyarı olarak loglar (sessiz 0 silme yok).
 # Ana betiğin komut satırı (çatallanan alt kabukları aynı satırı taşır) argümanla DEĞİL /proc üzerinden
 # okunur: argüman olsa sudo/bash süreçlerinin satırında --ek yolları görünür, aday kendini korurdu.
 TARAYICI='
-ATLA=" $1 $$ $PPID "; UID_=$(id -u); BOZUK=0
+ATLA=" $1 $$ $PPID "; BOZUK=0
 KENDI_CMD="$(tr "\0" "\n" < "/proc/$2/cmdline" 2>/dev/null)"
 for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
@@ -270,8 +284,9 @@ for d in /proc/[0-9]*; do
   if [ -z "$c" ]; then
     [ -d "$d" ] || continue
     case "$(awk "/^State:/{print \$2}" "$d/status" 2>/dev/null)" in Z|X|"") continue ;; esac  # zombi/ölü: cwd yok
-    s_uid="$(awk "/^Uid:/{print \$2}" "$d/status" 2>/dev/null)"
-    [ "$s_uid" = "$UID_" ] && BOZUK=1
+    [ "$pid" = 2 ] && continue
+    [ "$(awk "/^PPid:/{print \$2}" "$d/status" 2>/dev/null)" = 2 ] && continue  # çekirdek iş parçacığı
+    BOZUK=7   # okunamayan süreç → hangi yolu kullandığı bilinmez → fail-closed
     continue
   fi
   printf "%s\n" "$c"
@@ -282,6 +297,7 @@ done
 exit $BOZUK'
 KULLANIM=""
 KULLANIM_BOZUK=0
+TARAMA_NOT=""
 if [ -n "${DT_KULLANIMDA:-}" ] && [ -f "$DT_KULLANIMDA" ]; then KULLANIM="$(cat "$DT_KULLANIMDA")$NL"; fi
 if [ -z "${DT_PROC_YOK:-}" ]; then
   if [ ! -r /proc/self/cmdline ]; then
@@ -293,9 +309,10 @@ if [ -z "${DT_PROC_YOK:-}" ]; then
       p="$(awk '/^PPid:/{print $2}' "/proc/$p/status" 2>/dev/null)"
       [ -n "$p" ] && ATALAR="$ATALAR $p"
     done
-    if [ "$(id -u)" != 0 ] && sudo -n true 2>/dev/null; then
-      T="$(sudo -n bash -c "$TARAYICI" tarayici "$ATALAR" "$$")"; RC=$?
-    else
+    RC=1
+    if [ "$(id -u)" != 0 ]; then T="$(sudo -n bash -c "$TARAYICI" tarayici "$ATALAR" "$$" 2>/dev/null)"; RC=$?; fi
+    if [ "$RC" != 0 ] && [ "$RC" != 7 ]; then   # sudo yok/başarısız → sudosuz tarama
+      [ "$(id -u)" != 0 ] && TARAMA_NOT="sudo -n bash yok"
       T="$(bash -c "$TARAYICI" tarayici "$ATALAR" "$$")"; RC=$?
     fi
     [ "$RC" = 0 ] || KULLANIM_BOZUK=1
@@ -311,13 +328,19 @@ kullanimda(){   # $1 aday → 0 = bir süreç bu yolu ya da altını kullanıyor
 sahibi_canli(){ # $1 dizin → 0 = .empp-sahip.pid sahibi canlı (runner iş dizini)
   local p
   [ -f "$1/.empp-sahip.pid" ] || return 1
+  [ -r "$1/.empp-sahip.pid" ] || return 0   # okunamıyor → belirsiz → canlı say
+  [ -s "$1/.empp-sahip.pid" ] || return 1   # boş işaret (yazım yarım kaldı, runner kaldırır) → yok
   p="$(head -c 20 "$1/.empp-sahip.pid" 2>/dev/null | tr -cd '0-9')"
-  [ -n "$p" ] || return 0   # okunamadı → belirsiz → canlı say
+  [ -n "$p" ] || return 0   # sayı değil → belirsiz → canlı say
   kill -0 "$p" 2>/dev/null || [ -d "/proc/$p" ]
 }
 korunuyor(){    # $1 düz yol, $2 gerçek yol → 0 + neden (stdout) = silinmez
   local a k
-  case "$2" in "$H"/?*) ;; "$TMP_R"/kabul-*.impark) ;; *) echo "gercek yol HOME disinda: $2"; return 0 ;; esac
+  case "$2" in
+    "$H"/?*) ;;
+    "$TMP_R"/kabul-*.impark) [ "$(dirname -- "$2")" = "$TMP_R" ] || { echo "kabul kopyasi /tmp kokunde degil: $2"; return 0; } ;;
+    *) echo "gercek yol HOME disinda: $2"; return 0 ;;
+  esac
   for a in "$1" "$2"; do
     case "/$a/" in */../*|*/./*) echo "goreli yol"; return 0 ;; esac
     while IFS= read -r k; do
@@ -426,7 +449,7 @@ adaylari_uret(){
 KURU_ETIKET=""; [ "$KURU" = 1 ] && KURU_ETIKET=" KURU"
 echo "disk-temizlik: bos $(mb "$BOS_KB") MB / toplam $(mb "$TOPLAM_KB") MB · hedef $(mb "$HEDEF_KB") MB · sert $(mb "$SERT_KB") MB$KURU_ETIKET"
 gunluk "-" "$(mb "$BOS_KB") MB bos" "BASLA hedef $(mb "$HEDEF_KB") MB sert $(mb "$SERT_KB") MB$KURU_ETIKET ek=$EK_SAYI"
-[ "$KULLANIM_BOZUK" = 1 ] && gunluk "-" "-" "UYARI: surec taramasi eksik — her aday kullanimda sayilir (fail-closed)"
+[ "$KULLANIM_BOZUK" = 1 ] && gunluk "-" "-" "UYARI: surec taramasi eksik${TARAMA_NOT:+ ($TARAMA_NOT)} — her aday kullanimda sayilir (fail-closed)"
 
 # ------------------------------------------------------------------ K0: kullanıcının açık yolları
 if [ "$EK_SAYI" -gt 0 ]; then
@@ -455,5 +478,5 @@ gercek_olc
 DURUM=tamam; hedefte || DURUM=dar
 YUZDE=0; [ "$TOPLAM_KB" -gt 0 ] && YUZDE=$(( BOS_KB * 100 / TOPLAM_KB ))
 gunluk "-" "$(mb "$BOS_KB") MB bos" "BITTI silinen $(mb "$SILINEN_KB") MB · $SAYAC_SIL kalem · atlanan $SAYAC_ATLA · hedef $DURUM$KURU_ETIKET"
-echo "SONUC bos_gb=$(( BOS_KB / 1048576 )) bos_yuzde=$YUZDE silinen_mb=$(mb "$SILINEN_KB") kalem=$SAYAC_SIL atlanan=$SAYAC_ATLA hedef=$DURUM"
+echo "SONUC bos_gb=$(( BOS_KB / 1048576 )) bos_yuzde=$YUZDE silinen_mb=$(mb "$SILINEN_KB") kalem=$SAYAC_SIL atlanan=$SAYAC_ATLA hedef=$DURUM tarama=$([ "$KULLANIM_BOZUK" = 1 ] && echo bozuk || echo tamam)"
 [ "$DURUM" = tamam ] && exit 0 || exit 3
