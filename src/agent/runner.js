@@ -2366,8 +2366,11 @@ const KABUK_ERTELE_ARALIK_MS = Number(process.env.EMPP_KABUK_ERTELE_BILDIRIM_ARA
 /** Özet metni (SAF): Mac'te `ek-uret --set <id,…>` ile yeniden üretmeye yeter. */
 function kabukErteleOzetMetni(bekleyenler) {
   const liste = [...bekleyenler].sort((a, b) => String(a.bookId).localeCompare(String(b.bookId)));
+  const sha = (s) => String(s).slice(0, 12);
+  // ek-sapma: iki sha yan yana (Mac/ProBook taban ayrışması teşhisi).
   const satir = liste.slice(0, KAYNAK_YOK_LISTE_TAVAN).map((b) => `${b.bookId} (${b.kod}`
-    + `${b.girdiSha ? `, ${String(b.girdiSha).slice(0, 12)}` : ''}`
+    + `${b.macGirdiSha && b.girdiSha ? `, Mac ${sha(b.macGirdiSha)} ≠ ProBook ${sha(b.girdiSha)}`
+      : b.girdiSha ? `, ${sha(b.girdiSha)}` : ''}`
     + `${b.kaynakSurumu ? `, ${b.kaynakSurumu}` : ''})`).join('; ');
   const fazla = liste.length - KAYNAK_YOK_LISTE_TAVAN;
   const kalan = fazla > 0 ? ` … +${fazla}` : '';
@@ -2383,7 +2386,8 @@ function kabukErteleOzetMetni(bekleyenler) {
  * @returns {boolean} bu çağrıda bildirim gönderildi mi
  */
 function kabukErteleBildir({
-  bookId, kod, neden, girdiSha = null, kaynakSurumu = '', simdi = Date.now(), gonder,
+  bookId, kod, neden, girdiSha = null, macGirdiSha = null, kaynakSurumu = '', simdi = Date.now(),
+  gonder,
 }) {
   const dosya = CONFIG.kabukErteleDurumDosyasi;
   let d = { sonGonderimMs: 0, bekleyen: {} };
@@ -2406,7 +2410,7 @@ function kabukErteleBildir({
   };
   d.bekleyen[String(bookId)] = {
     bookId: String(bookId), kod: String(kod || 'ertele'), neden: String(neden || '').slice(0, 200),
-    girdiSha, kaynakSurumu: kaynakSurumu || '', sonMs: simdi,
+    girdiSha, macGirdiSha, kaynakSurumu: kaynakSurumu || '', sonMs: simdi,
   };
   if (process.env.EMPP_BILDIRIM === '0' || simdi - d.sonGonderimMs < KABUK_ERTELE_ARALIK_MS) {
     yaz(d);
@@ -2431,14 +2435,16 @@ function kabukErteleBildir({
   return true;
 }
 
-// KABUK EKİ ÖN KONTROL BELLEĞİ (birleşik inceleme Ö3): kabuk adımı eke bağlı nedenle ertelediyse
-// (ek yok/bayat/bozuk/ret/imza/kapı RED) o anki `son.json` kimliği ({uretildi, girdiSha}) yerel
-// dosyaya yazılır. Sonraki claim'de son.json DEĞİŞMEMİŞSE taban İNDİRİLMEDEN ertelenir (1–3 GB
-// boşa inmesin). Ağ/Web-Z/eşleme gibi geçici nedenler kaydedilmez. Kayıt KABUK_ON_KONTROL_OMUR_MS
-// (varsayılan 24 sa) sonra yok sayılır: günde en çok bir deneme indirmesi.
+// KABUK EKİ ÖN KONTROL BELLEĞİ (birleşik inceleme Ö3 + yeniden inceleme Önemli-1): kabuk adımı
+// HER ertelemede o anki `son.json` kimliğini ({uretildi, girdiSha}; son.json yoksa ikisi null)
+// yerel dosyaya yazar. Sonraki claim'de son.json DEĞİŞMEMİŞSE (liste boyundan bağımsız) taban
+// İNDİRİLMEDEN ertelenir (1–3 GB boşa inmesin). Ömür nedene göre: eke bağlı (ek yok/bayat/bozuk/
+// ret/imza/sapma/kapı RED) 24 sa; geçici (ağ/Web-Z/eşleme/claim) 2 sa. Başarıda kayıt silinir.
 const KABUK_ON_KONTROL_OMUR_MS = Number(process.env.EMPP_KABUK_ON_KONTROL_OMUR_MS
   || 24 * 3600 * 1000);
-const KABUK_EKE_BAGLI = /^(ek-(yok|bayat|bozuk|ret|yol|tavan|imza|imza-anahtari-yok)|kapi-red)$/;
+const KABUK_ON_KONTROL_GECICI_OMUR_MS = Number(process.env.EMPP_KABUK_ON_KONTROL_GECICI_OMUR_MS
+  || 2 * 3600 * 1000);
+const KABUK_EKE_BAGLI = /^(ek-(yok|bayat|bozuk|ret|yol|tavan|imza|imza-anahtari-yok|sapma)|kapi-red)$/;
 
 function kabukOnKontrolOku() {
   try {
@@ -2460,11 +2466,17 @@ function kabukOnKontrolYaz(bookId, kayit) {
   }
 }
 
-/** son.json kimliği önceki ertelemedekiyle aynı mı (ömür içinde). SAF. */
+/**
+ * son.json kimliği önceki ertelemedekiyle aynı mı (kaydın kendi ömrü içinde). `son` null = son.json
+ * yok; kayıt da null kimlik taşıyorsa "değişmedi" sayılır. SAF.
+ */
 function sonDegismedi(kayit, son, simdi = Date.now()) {
-  if (!kayit || !son || simdi - (Number(kayit.zaman) || 0) > KABUK_ON_KONTROL_OMUR_MS) return false;
-  return String(kayit.uretildi ?? '') === String(son.uretildi ?? '')
-    && String(kayit.girdiSha ?? '') === String(son.girdiSha ?? '');
+  if (!kayit) return false;
+  const omur = Number(kayit.omurMs) || KABUK_ON_KONTROL_OMUR_MS;
+  if (simdi - (Number(kayit.zaman) || 0) > omur) return false;
+  const s = son || {};
+  return String(kayit.uretildi ?? '') === String(s.uretildi ?? '')
+    && String(kayit.girdiSha ?? '') === String(s.girdiSha ?? '');
 }
 
 /**
@@ -2789,26 +2801,30 @@ async function processJob(auth, job) {
     // yalnız "son.json var mı" sorulur; girdiSha eşleşmesi kabuk adımında. Liste yok/tek kitapsa ön
     // kontrol yapılmaz (tek kitap kalıcı ertelemede kalmasın); set çıkarsa kabuk adımı ertele döner.
     // Ö3: son.json önceki eke bağlı ertelemedekiyle AYNIYSA (Mac yeni ek üretmedi) yine indirilmez.
+    // Önemli-1: son.json liste boyundan bağımsız sorulur (bellek beslenir); "son.json yok → ertele"
+    // kuralı yalnız ≥2 kitaplı listede.
     let onSon = null;
+    let onSorgulandi = false;
     if (kaynak.tur === 'r2-kur' && setKabuk.acik() && setKabuk.kabukKaynagiSec() === 'ek') {
       const liste = setEk.setListesiAyristir((setEk.setListesiCoz({ job }) || {}).ham || '');
-      if (liste.filter((g) => !g.link).length >= 2) {
-        const on = await kaynakAdim.kabukEkSonKontrol({ bookId: job.bookId });
-        let neden = null;
-        if (!on || !on.var) {
-          neden = `${setKabuk.ISARET} kabuk eki yok — ${(on && on.neden) || 'son.json okunamadı'}`;
-        } else if (sonDegismedi(kabukOnKontrolOku()[String(job.bookId)], on.son)) {
-          neden = `${setKabuk.ISARET} son.json önceki ertelemeden beri değişmedi `
-            + `(${String((on.son || {}).girdiSha || '-').slice(0, 12)})`;
-        }
-        if (neden) {
-          neden += '; taban İNDİRİLMEDİ';
-          kabukErteleBildir({
-            bookId: job.bookId, kod: 'on-kontrol', neden, kaynakSurumu: job.kaynakSurumu,
-          });
-          return r2Ertele(auth, job, neden, { kilitBirak: true });
-        }
-        onSon = on.son || null;
+      const set = liste.filter((g) => !g.link).length >= 2;
+      const on = await kaynakAdim.kabukEkSonKontrol({ bookId: job.bookId });
+      onSorgulandi = true;
+      onSon = on && on.var ? on.son || null : null;
+      const kayit = kabukOnKontrolOku()[String(job.bookId)];
+      let neden = null;
+      if (set && !(on && on.var)) {
+        neden = `${setKabuk.ISARET} kabuk eki yok — ${(on && on.neden) || 'son.json okunamadı'}`;
+      } else if (sonDegismedi(kayit, onSon)) {
+        neden = `${setKabuk.ISARET} son.json önceki ertelemeden (${kayit.kod || '-'}) beri değişmedi `
+          + `(${String((onSon || {}).girdiSha || '-').slice(0, 12)})`;
+      }
+      if (neden) {
+        neden += '; taban İNDİRİLMEDİ';
+        kabukErteleBildir({
+          bookId: job.bookId, kod: 'on-kontrol', neden, kaynakSurumu: job.kaynakSurumu,
+        });
+        return r2Ertele(auth, job, neden, { kilitBirak: true });
       }
     }
     // İmza kipi (§2a): yuva erişilirse bugünkü zincir; erişilemezse (hazır kuyruk açıkken) paket yine
@@ -2939,7 +2955,10 @@ async function processJob(auth, job) {
       if (kaynak.tur !== 'r2-kur' || !setKabuk.acik()) return null;
       const ekKipi = setKabuk.kabukKaynagiSec() === 'ek';
       try {
-        job.kabukTazeleme = await kaynakAdim.kabukTazele({ zip: zipPath, calisma: work, job, log, warn });
+        job.kabukTazeleme = await kaynakAdim.kabukTazele({
+          zip: zipPath, calisma: work, job, log, warn,
+          ...(onSorgulandi ? { ekSon: onSon } : {}), // ek-sapma teşhisi ikinci GET'siz
+        });
       } catch (e) {
         job.kabukTazeleme = {
           durum: ekKipi ? 'ertele' : 'atlandi', kod: 'hata', neden: `beklenmeyen hata: ${agHatasiOzeti(e)}`,
@@ -2948,17 +2967,27 @@ async function processJob(auth, job) {
       }
       const k = job.kabukTazeleme;
       if (!k || k.durum !== 'ertele') {
-        if (onSon) kabukOnKontrolYaz(job.bookId, null); // ek uygulandı/güncel: bellek temizlenir
+        // ek uygulandı/güncel/atlandı: bellek temizlenir (varsa)
+        if (kabukOnKontrolOku()[String(job.bookId)]) kabukOnKontrolYaz(job.bookId, null);
         return null;
       }
-      if (onSon && KABUK_EKE_BAGLI.test(String(k.kod || ''))) {
-        kabukOnKontrolYaz(job.bookId, {
-          uretildi: onSon.uretildi ?? null, girdiSha: onSon.girdiSha ?? null, zaman: Date.now(),
-        });
+      // Önemli-1: HER ertelemede bellek yazılır (geçici nedenler kısa ömürlü).
+      let son = onSon;
+      if (!son && !onSorgulandi) {
+        try {
+          const on = await kaynakAdim.kabukEkSonKontrol({ bookId: job.bookId });
+          son = on && on.var ? on.son || null : null;
+        } catch (_) { son = null; }
       }
+      const ekeBagli = KABUK_EKE_BAGLI.test(String(k.kod || ''));
+      kabukOnKontrolYaz(job.bookId, {
+        uretildi: (son && son.uretildi) ?? null, girdiSha: (son && son.girdiSha) ?? null,
+        zaman: Date.now(), kod: k.kod || 'ertele',
+        omurMs: ekeBagli ? KABUK_ON_KONTROL_OMUR_MS : KABUK_ON_KONTROL_GECICI_OMUR_MS,
+      });
       kabukErteleBildir({
         bookId: job.bookId, kod: k.kod || 'ertele', neden: k.neden, girdiSha: k.girdiSha,
-        kaynakSurumu: job.kaynakSurumu,
+        macGirdiSha: k.macGirdiSha || null, kaynakSurumu: job.kaynakSurumu,
       });
       const sebep = `${setKabuk.ISARET} ${k.neden || 'kabuk eki yok'}`;
       return r2Ertele(auth, job, sebep, { kilitBirak: true });

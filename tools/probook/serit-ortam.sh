@@ -21,7 +21,8 @@ export PATH="$REPO/tools/probook/bin:$SERIT/opt/bin:$SERIT/node/bin:/usr/local/b
 # (tools/set-kabuk/ek-uret.js). ProBook aynı JS ile girdi parmak izini hesaplar, eki uygular; bütün
 # kapılar aynen koşar. Ek yok/bayat/bozuk/imzasız ya da kapı RED → iş ERTELENİR (eski kabukla kaynak
 # çıkmaz). runner Linux'ta kaynak-kur'u YALNIZ tazeleme açık + kaynak 'ek' + açık anahtar dosyası
-# varken ilan eder (K1 değişmezi). Acil geri dönüş YALNIZ: EMPP_KAYNAK_KUR=0.
+# varken ilan eder (K1 değişmezi). EMPP_SET_KABUK_KAYNAGI'yı boşaltmak kapatmaz (varsayılan 'ek');
+# kapatmak için EMPP_KAYNAK_KUR=0.
 export AGENT_CAPS="${AGENT_CAPS:-pardus,kaynak-r2,kaynak-kur}"
 export EMPP_SET_KABUK_TAZELE="${EMPP_SET_KABUK_TAZELE:-1}"
 export EMPP_SET_KABUK_KAYNAGI="${EMPP_SET_KABUK_KAYNAGI:-ek}"

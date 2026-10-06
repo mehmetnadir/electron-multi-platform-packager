@@ -126,13 +126,14 @@ function ekAcikAnahtarYolu(env = process.env) {
 
 /**
  * `kaynak-kur` DEĞİŞMEZİ (06.10, birleşik inceleme K1): Mac (darwin) Swift ikilisiyle kabuğu kurar.
- * Başka platform build'i ancak kabuk tazeleme AÇIK + kabuk kaynağı 'ek' + imza açık anahtarı
- * VAR iken kurar; yoksa kabuk ESKİ kalıp yeni build.zip geçerli olur (45551 2.51.3 arızası).
- * Heartbeat (yetenek ilanı) ve r2-kur iş anı aynı karardan geçer. SAF (varMi enjekte).
+ * Başka platform build'i ancak kabuk tazeleme AÇIK + kabuk kaynağı 'ek' + GEÇERLİ ed25519 açık
+ * anahtarı varken kurar; yoksa kabuk ESKİ kalıp yeni build.zip geçerli olur (45551 2.51.3).
+ * Anahtarın yalnız varlığı yetmez: boş/bozuk/RSA dosya her eki `ek-imza` ile ertelerdi.
+ * Heartbeat (yetenek ilanı) ve r2-kur iş anı aynı karardan geçer. SAF (oku enjekte).
  * @returns {{uygun: boolean, neden: string|null}}
  */
 function kaynakKurKabukKarari({
-  platform = process.platform, env = process.env, varMi = fs.existsSync,
+  platform = process.platform, env = process.env, oku = fs.readFileSync,
 } = {}) {
   if (platform === 'darwin') return { uygun: true, neden: null };
   const red = (neden) => ({ uygun: false, neden: `${platform}: ${neden}` });
@@ -140,9 +141,15 @@ function kaynakKurKabukKarari({
   const k = kabukKaynagiSec({ env, platform });
   if (k !== 'ek') return red(`kabuk kaynağı '${k}' (yalnız 'ek' kurabilir)`);
   const anahtar = ekAcikAnahtarYolu(env);
-  let var_ = false;
-  try { var_ = Boolean(varMi(anahtar)); } catch (_) { var_ = false; }
-  if (!var_) return red(`kabuk eki açık anahtarı yok (${anahtar})`);
+  let pem;
+  try { pem = oku(anahtar, 'utf8'); } catch (_) {
+    return red(`kabuk eki açık anahtarı yok (${anahtar})`);
+  }
+  let tur = null;
+  try { tur = crypto.createPublicKey(String(pem)).asymmetricKeyType; } catch (_) { tur = null; }
+  if (tur !== 'ed25519') {
+    return red(`kabuk eki açık anahtarı geçersiz (${anahtar}: ${tur || 'okunamadı'}, ed25519 değil)`);
+  }
   return { uygun: true, neden: null };
 }
 
@@ -167,8 +174,8 @@ function a1GirdiOzeti(a1Girdi) {
         const xml = ig.menuCoz(v);
         if (xml) {
           liste = ig.kapaklar(xml).map((c) => {
-            const a = /\bactName\s*=\s*"([^"]*)"/.exec(c.etiket || '');
-            return [String(c.ID || ''), a ? a[1].trim() : ''];
+            const a = /\bactName\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(c.etiket || '');
+            return [String(c.ID || ''), a ? String(a[1] ?? a[2] ?? '').trim() : ''];
           });
         }
       } catch (_) { liste = null; }
@@ -594,7 +601,8 @@ async function kabukTazele(o) {
     return dur('ag', `Web-Z settings.json alınamadı: ${String(e && e.message || e).slice(0, 120)}`);
   }
   const liste = webzListesi(ayar);
-  if (!liste.some((g) => !g.link)) return bitir('Web-Z listesinde kitap yok');
+  // 'ek' kipinde uygun sette boş Web-Z listesi ERTELE (eski kabukla kaynak çıkmaz); ikili: atlandi.
+  if (!liste.some((g) => !g.link)) return dur('esleme', 'Web-Z listesinde kitap yok');
 
   // 3. Kimlik eşlemesi (yazma kapısının çözümü; liste = Web-Z).
   let kapi;
@@ -722,7 +730,22 @@ async function kabukTazele(o) {
         g = { durum: 'hata', kod: 'ag', mesaj: String(e && e.message || e) };
       }
       const sha12 = String(rapor.girdiSha || '').slice(0, 12);
-      if (!g || g.durum === 'yok') return ertele('ek-yok', `ek yok (girdiSha ${sha12})`);
+      if (!g || g.durum === 'yok') {
+        // Teşhis (Önemli-3b): Mac son.json'u başka girdiSha'yı gösteriyorsa iki makine aynı seti
+        // farklı tabandan kuruyor (merdiven/set eki ayrışması) — kod `ek-sapma`, iki sha raporda.
+        let son = o.ekSon;
+        if (son === undefined) {
+          try {
+            son = await EK.sonOku({ bookId, ...(o.cdnGetir ? { getir: o.cdnGetir } : {}) });
+          } catch (_) { son = null; }
+        }
+        const mac = son && son.girdiSha ? String(son.girdiSha) : null;
+        if (mac && mac !== String(rapor.girdiSha)) {
+          return ertele('ek-sapma', `Mac ${mac.slice(0, 12)} ≠ ProBook ${sha12} (taban ayrışması)`,
+            { macGirdiSha: mac });
+        }
+        return ertele('ek-yok', `ek yok (girdiSha ${sha12})`);
+      }
       if (g.durum === 'ret') {
         return ertele('ek-ret', `Mac ek üretemedi (ret işareti): ${String(g.neden || '-').slice(0, 160)}`);
       }

@@ -92,7 +92,7 @@ function buildZip({ kokIndex = ESKI_INDEX, tekMotor = false, sarma = '', cift = 
 
 async function kostur({
   zip = buildZip(), ayar = WEBZ, kapakYok, mod = '', job = {}, platform = 'darwin', status, aracSuresiMs,
-  kabukKaynagi, kabukEk, ekCikti, cdnGetir, acikAnahtar = 'SAHTE-PEM', env,
+  kabukKaynagi, kabukEk, ekCikti, cdnGetir, acikAnahtar = 'SAHTE-PEM', env, ekSon,
 } = {}) {
   const d = tmp('is');
   const zipYolu = path.join(d, 'build.zip');
@@ -106,7 +106,7 @@ async function kostur({
   try {
     const r = await S.kabukTazele({
       zip: zipYolu, calisma: d, ikili, platform, getir: w.getir, aracSuresiMs, kabukKaynagi, kabukEk, ekCikti,
-      cdnGetir, acikAnahtar, env,
+      cdnGetir, acikAnahtar, env, ...(ekSon !== undefined ? { ekSon } : {}),
       job: { bookId: '45550', kisaKod: 'tlk2k', ...job },
       log: (s) => loglar.push(s), warn: (s) => loglar.push(s),
     });
@@ -914,26 +914,68 @@ test('GERÇEK modül: imzası GEÇERLİ ama içerik bozuk (sha tutmuyor) → ERT
   assert.ok(r.once.equals(r.sonra));
 });
 
-test('GERÇEK modül: Web-Z üye sırası değişti (girdiSha farklı) → ek yok → ERTELE (ek-yok)', async () => {
-  const { cdn } = await gercekEkUret();
+test('GERÇEK modül: Web-Z sırası değişti, son.json başka sha → ERTELE (ek-sapma, iki sha)', async () => {
+  const { c, cdn } = await gercekEkUret();
   const r = await ekKip(cdn, { ayar: WEBZ_SIRALI });
   assert.equal(r.r.durum, 'ertele', r.r.neden);
-  assert.equal(r.r.kod, 'ek-yok');
+  assert.equal(r.r.kod, 'ek-sapma');
+  assert.equal(r.r.macGirdiSha, c.girdiSha);
+  assert.match(r.r.neden, new RegExp(`Mac ${c.girdiSha.slice(0, 12)} ≠ ProBook ${r.r.girdiSha.slice(0, 12)}`));
   assert.ok(r.once.equals(r.sonra));
+});
+
+test('GERÇEK modül: girdiSha farklı ve son.json YOK → ERTELE (ek-yok)', async () => {
+  const { cdn } = await gercekEkUret();
+  cdn.nesneler.delete(sorgusuz(KE.sonUrl('45550')));
+  const r = await ekKip(cdn, { ayar: WEBZ_SIRALI });
+  assert.equal(r.r.kod, 'ek-yok', r.r.neden);
+  // Çağıran son.json'u zaten okuduysa (ekSon) ikinci GET yapılmaz.
+  const n = cdn.istekler.length;
+  const r2 = await ekKip(cdn, { ayar: WEBZ_SIRALI, ekSon: null });
+  assert.equal(r2.r.kod, 'ek-yok');
+  assert.ok(!cdn.istekler.slice(n).some((u) => sorgusuz(u).endsWith('son.json')));
+});
+
+test('Küçük-7: Web-Z listesi boş → ek kipinde ERTELE (esleme), ikili kipte ATLANDI', async () => {
+  const bos = { setTitle: 'S', books: { link1: { type: 'link', url: 'https://example.com/' } } };
+  const ek = await kostur({ platform: 'linux', kabukKaynagi: 'ek', kabukEk: sahteKabukEk(), ayar: bos });
+  assert.equal(ek.r.durum, 'ertele');
+  assert.equal(ek.r.kod, 'esleme');
+  const ik = await kostur({ ayar: bos });
+  assert.equal(ik.r.durum, 'atlandi');
+  assert.match(ik.r.neden, /Web-Z listesinde kitap yok/);
+});
+
+test('Küçük-7: menü actName tek tırnakla da okunur', () => {
+  const { imwinYaz } = require('../platforms/common/fs-shim');
+  const m = (q, ad) => imwinYaz(`<?xml version="1.0"?><main ID="1"><Group ID="1"><Tab ID="1">`
+    + `<cover ID="11" actName=${q}${ad}${q} version="1"/></Tab></Group></main>`, 127, 17);
+  const oz = (b) => S.a1GirdiOzeti(new Map([['classlibraries/ImWin32.dll', b]]))['classlibraries/ImWin32.dll'];
+  assert.equal(oz(m("'", 'Kitap A')), oz(m('"', 'Kitap A')));
+  assert.notEqual(oz(m("'", 'Kitap A')), oz(m("'", 'Kitap B')));
 });
 
 // ─── birleşik inceleme düzeltmeleri: K1 kararı, Ö2 imza anahtarı, D9 A1 girdi özeti ─────────
 
-test('K1 kaynakKurKabukKarari: darwin uygun; linux yalnız tazeleme + ek + anahtar ile', () => {
+test('K1 kaynakKurKabukKarari: darwin uygun; linux yalnız tazeleme + ek + GEÇERLİ ed25519 anahtar', () => {
   const tam = { EMPP_SET_KABUK_TAZELE: '1', EMPP_SET_KABUK_KAYNAGI: 'ek', EMPP_KABUK_EK_ACIK_ANAHTAR: '/a.pem' };
-  const var_ = () => true;
-  const k = (env, varMi = var_) => S.kaynakKurKabukKarari({ platform: 'linux', env, varMi });
+  const ed = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
+  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey
+    .export({ type: 'spki', format: 'pem' });
+  const k = (env, pem = ed) => S.kaynakKurKabukKarari({ platform: 'linux', env,
+    oku: () => { if (pem == null) throw new Error('ENOENT'); return pem; } });
   assert.equal(S.kaynakKurKabukKarari({ platform: 'darwin', env: {} }).uygun, true);
   assert.equal(k(tam).uygun, true);
   assert.match(k({ ...tam, EMPP_SET_KABUK_KAYNAGI: '' }).neden, /kabuk kaynağı 'yok'/);
   assert.match(k({ ...tam, EMPP_SET_KABUK_KAYNAGI: 'ekk' }).neden, /kabuk kaynağı 'ekk'/);
   assert.match(k({ ...tam, EMPP_SET_KABUK_TAZELE: '0' }).neden, /kabuk tazeleme kapalı/);
-  assert.match(k(tam, () => false).neden, /açık anahtarı yok \(\/a\.pem\)/);
+  assert.match(k(tam, null).neden, /açık anahtarı yok \(\/a\.pem\)/);
+  for (const [ad, pem] of [['boş', ''], ['bozuk', '-----BEGIN PUBLIC KEY-----\nxx\n-----END PUBLIC KEY-----\n'],
+    ['RSA', rsa]]) {
+    const r = k(tam, pem);
+    assert.equal(r.uygun, false, ad);
+    assert.match(r.neden, /açık anahtarı geçersiz .*ed25519 değil/, ad);
+  }
 });
 
 test('Ö2: açık anahtar ekGetir\'e geçer; anahtar okunamazsa eke gidilmez → ERTELE', async () => {

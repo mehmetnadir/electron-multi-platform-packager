@@ -491,3 +491,33 @@ test('EkHatasi: kod ve sınıf', () => {
   assert.equal(e.message, 'mesaj');
   assert.equal(E.SOZLESME, 1);
 });
+
+test('Küçük-7: content-length > tavan → gövde okunmadan ekGetir tavan', async () => {
+  const http = require('node:http');
+  let gonderilen = 0;
+  const s = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Length': String(5 * 1024 * 1024) });
+    res.write(Buffer.alloc(64 * 1024));
+    gonderilen += 1;
+    // Gövdenin kalanı hiç yazılmaz: okuyucu beklerse test zaman aşımına düşerdi.
+  });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${s.address().port}/x.zip`;
+  try {
+    const r = await E.varsayilanGetir(url, { tavan: 1024 * 1024 });
+    assert.equal(r.status, 200);
+    assert.equal(r.tavanAsimi, 5 * 1024 * 1024);
+    assert.equal(r.buffer.length, 0);
+    // ekGetir tavanı getiriciye geçirir ve `tavan` döner (imzaya gidilmez).
+    const istekler = [];
+    const sonuc = await E.ekGetir({ bookId: '45550', girdiSha: 'a'.repeat(64), kip: 'bookN', acikAnahtar: 'x',
+      getir: async (u, o) => { istekler.push(u); return E.varsayilanGetir(url, o); } });
+    assert.equal(sonuc.durum, 'hata');
+    assert.equal(sonuc.kod, 'tavan');
+    assert.equal(istekler.length, 1);
+    assert.ok(gonderilen >= 2);
+  } finally {
+    if (s.closeAllConnections) s.closeAllConnections();
+    await new Promise((r) => s.close(r));
+  }
+});

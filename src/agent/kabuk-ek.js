@@ -478,13 +478,21 @@ const retUrl = (bookId, sha, simdi = Date.now()) =>
   `${CDN_TABAN}/${retAnahtari(bookId, sha)}?t=${simdi}`;
 const sonUrl = (bookId, simdi = Date.now()) => `${CDN_TABAN}/${sonAnahtari(bookId)}?t=${simdi}`;
 
-/** Varsayılan getir: global fetch + tarayıcı UA + 30 sn. Ağ hatasında fırlatır. */
-async function varsayilanGetir(url) {
+/**
+ * Varsayılan getir: global fetch + tarayıcı UA + 30 sn. Ağ hatasında fırlatır.
+ * `tavan` verilirse ve `content-length` onu aşıyorsa gövde OKUNMAZ (bellek), `tavanAsimi` döner.
+ */
+async function varsayilanGetir(url, { tavan = null } = {}) {
   const r = await fetch(url, {
     headers: { 'User-Agent': UA },
     signal: AbortSignal.timeout(GETIR_SURESI_MS),
     redirect: 'follow',
   });
+  const uzunluk = Number(r.headers && r.headers.get ? r.headers.get('content-length') : NaN);
+  if (r.status === 200 && tavan != null && Number.isFinite(uzunluk) && uzunluk > tavan) {
+    try { if (r.body && r.body.cancel) await r.body.cancel(); } catch (_) { /* yok sayılır */ }
+    return { status: r.status, buffer: Buffer.alloc(0), tavanAsimi: uzunluk };
+  }
   const buffer = r.status === 200 ? Buffer.from(await r.arrayBuffer()) : Buffer.alloc(0);
   return { status: r.status, buffer };
 }
@@ -509,14 +517,16 @@ async function ekGetir({ bookId, girdiSha, kip, acikAnahtar, getir = varsayilanG
   const hata = (kod, mesaj) => ({ durum: 'hata', kod, mesaj });
   let url;
   try { url = ekUrl(bookId, girdiSha); } catch (e) { return hata('yol', hataMetni(e)); }
+  const tavan = tavanAl(s);
   let r;
-  try { r = await getir(url); } catch (e) { return hata('ag', hataMetni(e)); }
+  // Tavan getiriciye de verilir: content-length aşarsa gövde hiç okunmaz (bellek).
+  try { r = await getir(url, { tavan }); } catch (e) { return hata('ag', hataMetni(e)); }
   const status = r && r.status;
   if (status === 200) {
+    if (r.tavanAsimi != null) return hata('tavan', `ek ${r.tavanAsimi} bayt (content-length) > tavan ${tavan}`);
     if (!acikAnahtar) return hata('imza-anahtari-yok', 'ek imza açık anahtarı verilmedi');
     const buf = r.buffer;
     if (!Buffer.isBuffer(buf)) return hata('bozuk', 'gövde Buffer değil');
-    const tavan = tavanAl(s);
     if (buf.length > tavan) return hata('tavan', `ek ${buf.length} bayt > tavan ${tavan}`);
     let ri;
     try { ri = await getir(imzaUrl(bookId, girdiSha)); } catch (e) {
@@ -568,5 +578,5 @@ module.exports = {
   kanonikJson, girdiParmakIzi, manifestKur, ekPaketle, ekAc, yolDenetle,
   ekImzala, ekImzaDogrula,
   ekAnahtari, imzaAnahtari, retAnahtari, sonAnahtari, ekUrl, imzaUrl, retUrl, sonUrl,
-  ekGetir, sonOku, zipYaz, zipOku,
+  ekGetir, sonOku, zipYaz, zipOku, varsayilanGetir,
 };

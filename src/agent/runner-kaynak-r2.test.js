@@ -517,12 +517,12 @@ test('kabuk eki: son.json var + kabuk UYGULANDI → zincir sürer (R2 yazılır,
   assert.equal(r.kayit.govdeler.release, undefined);
 });
 
-test('kabuk eki: tek kitaplı liste → ön kontrol YOK; kabuk ATLANDI → zincir sürer', async () => {
+test('kabuk eki: tek kitaplı liste → son.json sorulur ama yoksa ERTELENMEZ; kabuk ATLANDI → zincir sürer', async () => {
   const k = kabukCasus({ sonVar: false, kabuk: { durum: 'atlandi', neden: 'bookN düzeni yok' } });
   const r = await isKostur({ arsivKoku: arsivKur('45549', setBuildZip()), env: EK_ENV, adim: k.adim,
     job: r2Kur(), merdivenDonus: MERDIVEN });
   assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
-  assert.equal(k.c.on.length, 0);
+  assert.equal(k.c.on.length, 1, 'bellek için son.json sorulur');
   assert.equal(k.c.kabuk, 1);
   assert.equal(r.kayit.govdeler['kaynak/tamamla'].length, 1);
 });
@@ -572,7 +572,7 @@ test('kabukErteleBildir: bookId anahtarlı toplu özet — saatte 1 bildirim, N 
 
 test('K1 yetenek: linux + kaynak-kur — KAYNAGI boş/yanlış, TAZELE=0, anahtar yok → düşer; tam → ilan', () => {
   const anahtar = path.join(tmp('anahtar'), 'kabuk-ek-acik.pem');
-  fs.writeFileSync(anahtar, '-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----\n');
+  fs.writeFileSync(anahtar, crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }));
   const eski = { caps: CONFIG.caps, kaynakKur: CONFIG.kaynakKur, kaynakKurSerbestFlag: CONFIG.kaynakKurSerbestFlag };
   const anahtarlar = ['EMPP_SET_KABUK_TAZELE', 'EMPP_SET_KABUK_KAYNAGI', 'EMPP_KABUK_EK_ACIK_ANAHTAR'];
   const eskiEnv = Object.fromEntries(anahtarlar.map((k) => [k, process.env[k]]));
@@ -635,7 +635,7 @@ test('Ö3 ön kontrol belleği: eke bağlı erteleme sonrası son.json aynı →
   const k2 = kabukCasus({ kabuk: ertele });
   const r2 = await kos(k2);
   assert.equal(r2.donus.ertelendi, true);
-  assert.match(r2.donus.sebep, /son\.json önceki ertelemeden beri değişmedi \(abababababab\); taban İNDİRİLMEDİ/);
+  assert.match(r2.donus.sebep, /son\.json önceki ertelemeden \(ek-yok\) beri değişmedi \(abababababab\); taban İNDİRİLMEDİ/);
   assert.equal(r1.casus.r2Indir.length + r2.casus.r2Indir.length, 1, 'toplam indirme 1');
   assert.equal(k2.c.kabuk, 0);
   assert.equal(r2.kayit.govdeler.release.length, 1);
@@ -649,15 +649,59 @@ test('Ö3 ön kontrol belleği: eke bağlı erteleme sonrası son.json aynı →
   assert.deepEqual(JSON.parse(fs.readFileSync(dosya, 'utf8')), {}, 'başarıda bellek silinir');
 });
 
-test('Ö3: geçici neden (ek-ag) belleğe yazılmaz; sonDegismedi ömür dolunca false', async () => {
+test('Önemli-1: geçici erteleme (ag) da belleğe yazılır (2 sa) → ikinci kiralama indirmez (indirme 1)', async () => {
+  const taban = ikiKitapZip();
+  const tabanYol = '/kaynak/45549/2.51.9/build.zip';
   const dosya = path.join(tmp('on-bellek2'), 'kabuk-ek-on-kontrol.json');
-  const k = kabukCasus({ kabuk: { durum: 'ertele', kod: 'ek-ag', neden: 'kabuk eki (ek-ag): ECONNRESET' } });
-  const r = await isKostur({ arsivKoku: arsivKur('45549', ikiKitapZip()), env: EK_ENV, adim: k.adim,
-    onKontrolDosyasi: dosya, job: r2Kur({ setListesi: IKI_KITAP }), merdivenDonus: MERDIVEN });
-  assert.equal(r.donus.ertelendi, true);
-  assert.equal(fs.existsSync(dosya), false);
+  const job = (u) => r2Kur({ setListesi: IKI_KITAP, tabanUrl: `${u}${tabanYol}?X-Amz-Signature=abc`,
+    tabanSha256: sha256(taban) })();
+  const ag = { durum: 'ertele', kod: 'ag', neden: 'kabuk eki (ag): Web-Z settings.json HTTP 503' };
+  const kos = (k) => isKostur({ env: EK_ENV, adim: k.adim, onKontrolDosyasi: dosya, merdivenDonus: MERDIVEN,
+    sunucu: { dosyalar: { [tabanYol]: taban } }, job });
+  const r1 = await kos(kabukCasus({ kabuk: ag }));
+  assert.equal(r1.donus.ertelendi, true, r1.hata && r1.hata.stack);
+  const kayit = JSON.parse(fs.readFileSync(dosya, 'utf8'))['45549'];
+  assert.equal(kayit.kod, 'ag');
+  assert.equal(kayit.omurMs, 2 * 3600 * 1000, 'geçici neden kısa ömürlü');
+  const k2 = kabukCasus({ kabuk: ag });
+  const r2 = await kos(k2);
+  assert.match(r2.donus.sebep, /önceki ertelemeden \(ag\) beri değişmedi/);
+  assert.equal(r1.casus.r2Indir.length + r2.casus.r2Indir.length, 1, 'toplam indirme 1');
+  assert.equal(k2.c.kabuk, 0);
+});
+
+test('Önemli-1: tek kitaplı listede son.json yokken erteleme → bellek null kimlikle yazılır, ikinci kiralama indirmez', async () => {
+  const taban = setBuildZip();
+  const tabanYol = '/kaynak/45549/2.51.9/build.zip';
+  const dosya = path.join(tmp('on-bellek3'), 'kabuk-ek-on-kontrol.json');
+  const job = (u) => r2Kur({ tabanUrl: `${u}${tabanYol}?X-Amz-Signature=abc`, tabanSha256: sha256(taban) })();
+  const ertele = { durum: 'ertele', kod: 'ek-yok', neden: 'kabuk eki (ek-yok): ek yok' };
+  const kos = (k) => isKostur({ env: EK_ENV, adim: k.adim, onKontrolDosyasi: dosya, merdivenDonus: MERDIVEN,
+    sunucu: { dosyalar: { [tabanYol]: taban } }, job });
+  const r1 = await kos(kabukCasus({ sonVar: false, kabuk: ertele }));
+  assert.equal(r1.donus.ertelendi, true, r1.hata && r1.hata.stack);
+  const kayit = JSON.parse(fs.readFileSync(dosya, 'utf8'))['45549'];
+  assert.deepEqual([kayit.uretildi, kayit.girdiSha, kayit.omurMs], [null, null, 24 * 3600 * 1000]);
+  const r2 = await kos(kabukCasus({ sonVar: false, kabuk: ertele }));
+  assert.equal(r2.donus.ertelendi, true);
+  assert.equal(r1.casus.r2Indir.length + r2.casus.r2Indir.length, 1);
+});
+
+test('sonDegismedi: kaydın kendi ömrü; null son = null kimlik', () => {
   const kayit = { uretildi: 'U1', girdiSha: 'ab', zaman: 1000 };
   assert.equal(runner.sonDegismedi(kayit, { uretildi: 'U1', girdiSha: 'ab' }, 2000), true);
   assert.equal(runner.sonDegismedi(kayit, { uretildi: 'U2', girdiSha: 'ab' }, 2000), false);
   assert.equal(runner.sonDegismedi(kayit, { uretildi: 'U1', girdiSha: 'ab' }, 1000 + 25 * 3600 * 1000), false);
+  const kisa = { ...kayit, omurMs: 2 * 3600 * 1000 };
+  assert.equal(runner.sonDegismedi(kisa, { uretildi: 'U1', girdiSha: 'ab' }, 1000 + 3 * 3600 * 1000), false);
+  assert.equal(runner.sonDegismedi({ uretildi: null, girdiSha: null, zaman: 1000 }, null, 2000), true);
+  assert.equal(runner.sonDegismedi({ uretildi: null, girdiSha: null, zaman: 1000 }, kayit, 2000), false);
+  assert.equal(runner.sonDegismedi(null, null, 2000), false);
 });
+
+test('ek-sapma bildirimi: özette Mac ve ProBook sha\'ları yan yana', () => {
+  const m = runner.kabukErteleOzetMetni([{ bookId: '45550', kod: 'ek-sapma', girdiSha: 'b'.repeat(64),
+    macGirdiSha: 'a'.repeat(64), kaynakSurumu: '2.25.6' }]);
+  assert.match(m, /45550 \(ek-sapma, Mac aaaaaaaaaaaa ≠ ProBook bbbbbbbbbbbb, 2\.25\.6\)/);
+});
+
