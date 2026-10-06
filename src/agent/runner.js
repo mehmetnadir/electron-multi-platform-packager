@@ -2785,6 +2785,13 @@ async function isDiziniAc(packagerPlatform, { mkdtemp = (p) => fsp.mkdtemp(p), t
   }
 }
 
+/** Arşiv zip'i içeriksiz (motor-only) ise `arsiv.iceriksiz = true`: kaynak kararı set + üreteçte üretece düşer. */
+async function arsivIceriksizIsaretle(arsiv, bookId, log) {
+  if (!arsiv || !arsiv.zip) return;
+  const z = await icerikKapisiDenetleZip(arsiv.zip, { kaynakAdi: bookId, log });
+  if (!z.gecti && String(z.sebep || '').startsWith('[kaynak-iceriksiz]')) arsiv.iceriksiz = true;
+}
+
 async function processJob(auth, job) {
   const packagerPlatform = mapPlatform(job.platform);
   if (!packagerPlatform) {
@@ -2845,6 +2852,7 @@ async function processJob(auth, job) {
     // orada önbellek — `r2Onbellek` ayrı okur) ve tabanUrl'li r2-kur'da OKUNMAZ.
     const arsiv = !arsivOkunurMu(job) ? null
       : await arsivKaynagi(job.bookId, { imparkKaynagi: imparkSrcVersion, bilgi: log });
+    await arsivIceriksizIsaretle(arsiv, job.bookId, log);
     const kaynak = kaynakKarari({ job, arsiv, uretec: uretecKaynak.uretecAcik() });
     // r2-kur kurulamıyor (taban yok / claim sözleşme dışı): kurma kilidini HEMEN bırak — sunucu
     // build'i başka ajana ya da sonraya verir; kilit kurulumBitis'e kadar asılı kalmasın.
@@ -3105,8 +3113,25 @@ async function processJob(auth, job) {
     // olmayan varsa (set eki ekleyemedi) taban atlanır, üreteç koşar; merdiven + set eki yeni build'e
     // yeniden uygulanır. Set eki eksiği tamamladıysa taban korunur. Üreteç kapalıysa dokunulmaz.
     let tabanIstisnasi = null; // panel hizalamasının çıkardığı sanılan kimlikler (aşağıda doğrulanır)
+    // LİSTE KÜÇÜLDÜ (r2-kur): taban claim listesinde olmayan kitap taşıyorsa taban atlanır (yazma kapısı
+    // liste-disi-kitap RED yerine). r2-al DIŞI: orada kaynak build R2'dedir, platform işi üreteç koşmaz.
+    const kapiListeHam = (setEk.setListesiCoz({ job }) || {}).ham || null;
+    if (kaynak.tur === 'r2-kur' && !job.uretecOzeti && uretecKaynak.uretecAcik() && kapiListeHam) {
+      const kapi = yazmaKapisi({ zipYolu: zipPath, setListesi: kapiListeHam });
+      const fazla = kapi.nedenler.map(n => {
+        const m = n.match(/liste-disi-kitap:.*kimliği (\d+) listede yok/);
+        return m ? m[1] : null;
+      }).filter(Boolean);
+      const atlananlar = new Set((job.atlananUyeler || []).map(a => String(a.kitapId)));
+      const gercekFazla = fazla.filter(id => !atlananlar.has(id));
+      if (gercekFazla.length > 0) {
+        log(`taban kapsama: liste küçüldü (${gercekFazla.join(', ')} tabanda var ama claim'de yok) — taban atlanıp üreteçle yeniden kurulacak`);
+        const d = await tabaniUretecleKur(`liste kuculdu: ${gercekFazla.join(', ')}`);
+        if (d) return d;
+      }
+    }
     if (kaynak.tur === 'r2-kur' && !job.uretecOzeti && uretecKaynak.uretecAcik()) {
-      const eksik = uretecKaynak.tabanKitapEksik(zipPath, (setEk.setListesiCoz({ job }) || {}).ham || null);
+      const eksik = uretecKaynak.tabanKitapEksik(zipPath, kapiListeHam);
       // Panel hizalaması panelde olmayan üyeyi (claim listesinde bayat kalan) menüden çıkarır ama
       // içeriğini silmez: içeriği kökte duran kimlik "eksik" sayılmaz (üreteç boşuna koşmaz;
       // ölçüm 05.10 — 45448/45449/45469/45472 claim'i 61633/61635 taşıyor, panel 73010/73147).

@@ -142,7 +142,14 @@ function r2Karari(job, arsiv, uretec = false) {
     if (!SHA_RE.test(String(job.tabanSha256 || ''))) return gecersiz('tabanUrl var, tabanSha256 yok');
     return { ...ortak, taban: { tur: 'r2', url: job.tabanUrl, sha256: job.tabanSha256 } };
   }
-  if (arsiv && typeof arsiv === 'object' && arsiv.zip) return { ...ortak, taban: { tur: 'arsiv', arsiv } };
+  const isSet = job && (job.setKimligi != null || (typeof job.setListesi === 'string' && job.setListesi.includes('|')));
+  if (arsiv && typeof arsiv === 'object' && arsiv.zip) {
+    if (arsiv.iceriksiz && isSet && uretec) {
+      // arsiv içeriksiz ve set ise üretece düşer
+    } else {
+      return { ...ortak, taban: { tur: 'arsiv', arsiv } };
+    }
+  }
   // INDEX ÜRETECİ (02.10, şef kararı): taban yoksa build'i üreteç kurar (Web-Z listesi + ZKitapZipH +
   // aynı kurumun arşiv motoru) — r2-kur'un kaynak adımı; zincirin kalanı aynen. Kapalıysa §6a BEKLER.
   if (uretec) return { ...ortak, taban: { tur: 'uretec' } };
