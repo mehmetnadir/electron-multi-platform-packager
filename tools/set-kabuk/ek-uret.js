@@ -647,7 +647,10 @@ async function setIsle(bag, s, o) {
       return bitir('tavan', `ek ${bayt ?? '?'} bayt > tavan ${tavan}`);
     }
     sonuc.bayt = paket.length;
-    const imza = o.ozelAnahtar ? ek.ekImzala(paket, o.ozelAnahtar) : null;
+    // Kuru koşuda A'nın imza arayüzü henüz yoksa ek imzasız üretilir (gerçek kipte main denetler).
+    const imzalanir = Boolean(o.ozelAnahtar) && typeof ek.ekImzala === 'function'
+      && typeof ek.imzaAnahtari === 'function';
+    const imza = imzalanir ? ek.ekImzala(paket, o.ozelAnahtar) : null;
     const ekSha = crypto.createHash('sha256').update(paket).digest('hex');
     const anahtar = ek.ekAnahtari(String(s.bookId), girdiSha);
     const imzaAnahtar = imza ? ek.imzaAnahtari(String(s.bookId), girdiSha) : null;

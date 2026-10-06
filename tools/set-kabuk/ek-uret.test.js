@@ -546,3 +546,24 @@ test('gerçek kabuk-ek modülü: üretilen ek ekAc doğrulamasından geçer', as
   assert.equal(acik.manifest.tabanSurum, '2.25.6');
   assert.deepEqual(acik.manifest.arac, { kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' });
 });
+
+test('--kuru: A modülünde ekImzala yoksa ek imzasız üretilir, çökme yok', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const ek = sahteEk();
+  delete ek.ekImzala;
+  const { bag, kayit } = sahteBag(ev, { ekModulu: ek });
+  assert.equal(await E.main(['--set', '45550', '--kuru'], bag), 0);
+  assert.ok(kayit.log.some((l) => /imza YOK/.test(l)));
+});
+
+test('gerçek kip: A modülünde ekImzala yoksa yükleme yok + bildir', async () => {
+  const ev = geciciDizin();
+  anahtarKur(ev);
+  const ek = sahteEk();
+  delete ek.ekImzala;
+  const { bag, kayit } = sahteBag(ev, { ekModulu: ek });
+  assert.equal(await E.main(['--set', '45550'], bag), 1);
+  assert.equal(kayit.ssh.length, 0);
+  assert.match(kayit.bildir[0], /ekImzala/);
+});
