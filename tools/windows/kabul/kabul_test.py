@@ -1231,3 +1231,39 @@ class KurTaniTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SeriKartiTest(unittest.TestCase):
+    def test_js_kutu_guncelle(self):
+        js_kodu = kabul.js_kutu_guncelle("B", "Seri 1", 0)
+        self.assertIn("scrollIntoView", js_kodu)
+        self.assertIn("getBoundingClientRect", js_kodu)
+        self.assertIn("book-group-back", js_kodu)
+
+    def test_kitaplari_genislet_seri_karti(self):
+        kitaplar = [
+            {"ad": "Normal Kitap", "seri": False},
+            {"ad": "Seri Karti", "seri": True, "varyant": "B"}
+        ]
+        
+        log = []
+        def sahte_cagirici(islem, arg):
+            log.append((islem, arg.get("ad") if isinstance(arg, dict) else arg))
+            if islem == "menu_al":
+                return [
+                    {"ad": "Seri Ici Kitap 1", "seri": False},
+                    {"ad": "Seri Ici Kitap 2", "seri": False}
+                ]
+        
+        genisletilmis = kabul.kitaplari_genislet(kitaplar, sahte_cagirici)
+        
+        # Test 1: Seri karti listeden silinir, yerine icindeki kitaplar gelir
+        self.assertEqual(len(genisletilmis), 3)
+        self.assertEqual(genisletilmis[0]["ad"], "Normal Kitap")
+        self.assertEqual(genisletilmis[1]["ad"], "Seri Karti / Seri Ici Kitap 1")
+        self.assertEqual(genisletilmis[2]["ad"], "Seri Karti / Seri Ici Kitap 2")
+        
+        # Test 2: Cagri akisi dogru mu (scroll + tikla + menu_al + don)
+        self.assertIn(("kutu_guncelle", "Seri Karti"), log)
+        self.assertIn(("tikla", "Seri Karti"), log)
+        self.assertIn(("menu_al", None), log)
+        self.assertIn(("ana_menu", None), log)

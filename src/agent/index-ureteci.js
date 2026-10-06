@@ -712,19 +712,22 @@ async function icerikleriTopla({ plan, sablon, getir, indir, onbellek, log, bekl
   return { sonuc, eksik, kitapDisi, atlananUye: [] };
 }
 
-async function icerikAc(k, hedef, komut) {
+async function icerikAc(k, hedef, komut, log) {
   await fsp.mkdir(hedef, { recursive: true });
   await unzipKomut([k.arsiv, '-d', hedef], komut);
   const bozuk = [...k.gDizin.values()].filter((g) => !g.dizin).find((g) => {
     try { return fs.statSync(path.join(hedef, g.ad)).size !== g.boyut; } catch (_) { return true; }
   });
   if (bozuk) throw new UretecHatasi(`${k.id} açma eksik: ${bozuk.ad}`, { kod: KOD.IO });
-  // Kapaksız içerik: ilk sayfa thumbs/1.jpg olarak kopyalanır (menü kartı + yazma kapısı KAPAK ölçütü aynı kalır).
-  if (!k.gDizin.has(KAPAK)) {
-    const ilk = ILK_SAYFA.find((p) => k.gDizin.has(p));
-    if (!ilk) throw new UretecHatasi(`${k.id} kapak ve ilk sayfa yok`, { kod: KOD.IO });
-    await fsp.mkdir(path.join(hedef, 'thumbs'), { recursive: true });
-    await fsp.copyFile(path.join(hedef, ilk), path.join(hedef, KAPAK));
+  
+  // Eksik thumbnail'leri (1.jpg ve diğer sayfalar) üret
+  const { thumbsUret } = require('./thumbs-uret');
+  await thumbsUret(hedef, log);
+
+  // Hala kapak yoksa (pages de yoksa veya tüm ilk sayfa varyasyonları eksikse), hata at:
+  // (Çünkü thumbsUret mod1 durumunda ya da normal durumda 1.jpg üretmeye çalışır)
+  if (!k.gDizin.has(KAPAK) && !fs.existsSync(path.join(hedef, KAPAK))) {
+    throw new UretecHatasi(`${k.id} kapak ve ilk sayfa yok`, { kod: KOD.IO });
   }
 }
 
@@ -845,7 +848,7 @@ async function uret(o) {
       });
       await menuYaz(kok, xml, kalip.menuBicim, `${o.setId}:${sonuc.map((k) => `${k.id}-${k.vs}`).join(',')}`);
       for (const k of sonuc) {
-        await icerikAc(k, path.join(kok, 'assets', k.id), komut);
+        await icerikAc(k, path.join(kok, 'assets', k.id), komut, log);
         kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `assets/${k.id}`, ad: k.ad, grup: k.grup, kaynak: k.kaynak });
       }
     } else {
@@ -861,7 +864,7 @@ async function uret(o) {
         await fsp.cp(motorKalibi, path.join(kok, d), { recursive: true, errorOnExist: true, force: false });
         const xml = setEk.menuXmlUret(kalip.kalipXml, { id: k.id, vs: k.vs, url: k.url, ad: k.ad });
         await menuYaz(path.join(kok, d), xml, kalip.menuBicim, `${k.id}:${k.vs}`);
-        await icerikAc(k, path.join(kok, d, 'assets', k.id), komut);
+        await icerikAc(k, path.join(kok, d, 'assets', k.id), komut, log);
         motorlar.push(d);
         kitapRapor.push({ n: k.n, id: k.id, vs: k.vs, yer: `${d}/assets/${k.id}`, ad: k.ad, grup: k.grup, kaynak: k.kaynak });
       }
