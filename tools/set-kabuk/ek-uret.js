@@ -435,6 +435,12 @@ function varsayilanBag(env = process.env) {
     // ProBook r2-kur'un üreteç kararı: runner'ın kullandığı AYNI modül işlevleri (kopya yok).
     uretec: () => require('../../src/agent/uretec-kaynak'),
     panelMenu: () => require('../../src/agent/panel-menu-hizala'),
+    /** Taban tek motorlu (A1 adayı) mı: zip ad listesi üzerinden (içerik açılmaz). */
+    tabanTekMotor: (zip) => {
+      const M = require('../../src/agent/icerik-merdiven');
+      const adlar = [...M.zipDizini(zip).values()].filter((g) => !g.dizin).map((g) => g.ad);
+      return tekMotorDuzeniMi(adlar, kabuk().onEkBul);
+    },
     aracSurumu: () => aracSurumuAyristir(okuSessiz(`${kabuk().ikiliYolu(env)}.surum`)),
     webzSha: (kisaKod) => webzSettingsShaGetir(kabuk().WEBZ_KOKU, kisaKod),
     /** Swift ikilisi + zip + rclone; eksikse neden döner. */
@@ -537,6 +543,18 @@ function onbellekBoyutu(ev) {
   };
   gez(kok);
   return top;
+}
+
+/**
+ * Tek motorlu düzen mi (set-kabuk-tazele `uygunluk` A1 ön koşulu): kökte hiç `bookN/index.html`
+ * yok VE kökte `classlibraries/ImWin32.dll` var. Sarmalayıcı klasör `onEkBul` ile soyulur. SAF.
+ */
+function tekMotorDuzeniMi(adlar, onEkBul) {
+  const temiz = adlar.filter((a) => !/(^|\/)(__MACOSX|\._)/.test(a));
+  const onEk = onEkBul(temiz);
+  const kume = new Set(temiz.filter((a) => a.startsWith(onEk)).map((a) => a.slice(onEk.length)));
+  const bookN = [...kume].some((a) => /^book\d+\/index\.html$/.test(a));
+  return !bookN && kume.has('classlibraries/ImWin32.dll');
 }
 
 /**
@@ -673,18 +691,25 @@ async function setIsle(bag, s, o) {
     const taban = await tabanHazirla(bag, s, calisma);
     sonuc.taban = `${s.surum}/${taban.kaynak}`;
     sonuc.indirilenBayt = taban.indirilenBayt;
-    // ProBook bu tabanı üreteçle yeniden kuracaksa ek girdiSha'sı tutmaz: üretme, bildir (kesin).
+    // ÜRETEÇ TABANI: ProBook bu tabanı üreteçle yeniden kurabilir.
+    //   · A1 (tek motor, bookN yok): girdiSha iki yolda EŞİT — motor sayfası parmak izine yalnız
+    //     varlığıyla girer (B 193f071; 45485 ölçümü 06.10: 46598c79ca5a… iki yolda aynı).
+    //     Kural YOK.
+    //   · bookN: eşlik ölçülmedi (klasör numarası farkı riski) → atla + bildir (kesin).
     const uretecAtla = async (neden) => {
-      await bag.bildir(`kabuk-ek ${s.bookId}: üreteç tabanı — ek üretilmedi (${neden})`);
-      return bitir('atlandi', `üreteç tabanı: ${neden}`);
+      await bag.bildir(`kabuk-ek ${s.bookId}: bookN üreteç tabanı: eşlik ölçülmedi — ek üretilmedi`
+        + ` (${neden})`);
+      return bitir('atlandi', `bookN üreteç tabanı: eşlik ölçülmedi — ${neden}`);
     };
+    const tekMotor = bag.tabanTekMotor(taban.zip);
     const U = bag.uretec();
     const P = bag.panelMenu();
-    const n1 = uretecTabaniNedeni({ U, P, zip: taban.zip, asama: 'taban', env: bag.env });
+    const n1 = tekMotor ? null
+      : uretecTabaniNedeni({ U, P, zip: taban.zip, asama: 'taban', env: bag.env });
     if (n1) return uretecAtla(n1);
     const job = await kaynakAdimlari(bag, s, taban.zip, calisma);
     const liste = bag.setEki().setListesiCoz({ job, env: bag.env });
-    const n2 = uretecTabaniNedeni({
+    const n2 = tekMotor ? null : uretecTabaniNedeni({
       U, P, zip: taban.zip, setListesi: liste ? liste.ham : null, asama: 'kapsama', env: bag.env,
     });
     if (n2) return uretecAtla(n2);
@@ -950,8 +975,8 @@ if (require.main === module) {
 
 module.exports = {
   ISARET, EK_BUCKET, argAyristir, sshHedefi, sqlKur, satirlariAyristir, satirEngeli,
-  kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, onbellekBoyutu, kenaraAl,
-  geriCekilmeMs, atlamaNedeni, kesinSonucMu,
+  kaliciRetMi, aracSurumuAyristir, sqlSonucu, uretecTabaniNedeni, tekMotorDuzeniMi,
+  onbellekBoyutu, kenaraAl, geriCekilmeMs, atlamaNedeni, kesinSonucMu,
   durumKaydi, parmakIzi, anahtarUret, kilitAl, canliMi, klonla, tabanHazirla, setIsle, main,
   varsayilanBag,
 };

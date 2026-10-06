@@ -37,7 +37,7 @@ araç denetimi (Swift ikilisi, zip, rclone) + imza anahtarı (kuru değilse ZORU
 | Özel anahtar yok (kuru değil) | Hiçbir set işlenmez, yükleme yok. Çıkış 1, `bildir`. |
 | Araç eksik | Taban indirilmez. Çıkış 1. |
 | Tavan aşıldı | Yükleme yok. Log + `bildir kosucu`. Kesin sonuç. |
-| ProBook tabanı üreteçle kurar | Ek üretilmez (`atlandi: üreteç tabanı`), `bildir`. Kesin sonuç. Ayrıntı aşağıda. |
+| bookN seti, ProBook tabanı üreteçle kurar | Ek üretilmez (`atlandi: bookN üreteç tabanı: eşlik ölçülmedi`), `bildir`. Kesin sonuç. A1 setinde kural yok. Ayrıntı aşağıda. |
 | R2'de aynı girdiSha + Web-Z sha için doğrulanmış ek var | Yükleme yok (`mevcut`). Kesin sonuç. |
 | Kapı RED, eşleme, kapak 404 ya da küçük gövde | Ek yok. girdiSha varsa `<girdiSha>.ret.json` yazılır. `bildir`. |
 | Kapak HTTP 5xx, ağ, Web-Z hatası | Geçici. Geri çekilme: 15 dk → 30 → 60 → 120 …, tavan 6 sa. |
@@ -81,12 +81,15 @@ ProBook r2-kur, geçerli R2 build'ini iki durumda taban almaz, build'i üreteçl
 2. Set ekinden sonra listedeki bir kitap build'de yoktur (`tabanKitapEksik`). İçeriği kökte duran
    kitap eksik sayılmaz (`panel-menu-hizala.kokIcerikVarMi`).
 
-Bu durumda Mac'in geçerli build'den ürettiği ekin girdiSha'sı ProBook'unkiyle tutmaz. ProBook her
-seferinde "ek yok" ile erteler. `ek-uret.js` aynı modül işlevleriyle aynı kararı verir. Karar
-olumluysa seti atlar ve `bildir` gönderir. `EMPP_INDEX_URETECI=0` iken karar uygulanmaz.
+Karar set düzenine göre değişir:
 
-**DİKKAT:** A1 seti 45485 (geçerli build 2.51.5) üreteç build'idir (06.10 ölçümü). Bu set şu an ek
-alamaz. Mac'te üreteç yolu açılırsa (ayrı karar) bu sınırlama kalkar.
+| Düzen | Davranış | Kanıt |
+|---|---|---|
+| A1 (tek motor: bookN yok, kökte `classlibraries/ImWin32.dll`) | Kural YOK, ek üretilir. | 45485, 06.10: girdiSha iki yolda eşit (`46598c79ca5a…`). Fark yalnız motor sayfası içeriğiydi; parmak izine artık yalnız varlığıyla girer (B 193f071). |
+| bookN | Atla + `bildir` ("bookN üreteç tabanı: eşlik ölçülmedi"). | Ölçülmedi. Klasör numarası farkı riski. |
+
+`ek-uret.js` kararı runner'ın modül işlevleriyle verir. `EMPP_INDEX_URETECI=0` iken karar
+uygulanmaz.
 
 ## Evde taban indirme (karar 06.10)
 
