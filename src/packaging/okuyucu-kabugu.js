@@ -21,6 +21,13 @@
  *     harf DUYARLI yoklanır — Pardus ext4); var olan core dosyası asla ezilmez.
  * DOKUNULMAZ: assets/ data/ pages/ thumbs/ htmletk/ core/ app.config.js motor.
  * Kapsam: `bookN/` dizinleri; bookN yoksa (tek kitap) kök. SET kökü (menü/set kabuğu) atlanır.
+ *
+ * A1 DÜZENİ (06.10, 45496 kasa "karisik" → bayat): tek motorlu 11-12 setinde bookN YOK, kök
+ * `index.html` sf425 kabuğudur (main.js çağırmaz), okuyucu sayfası `kapak/index.html`dir
+ * (`<base href="../">` → main.js + parçalar KÖKTE). Kök index ölçülürse rozet okunamaz →
+ * 'bilinmiyor' → durum 'karisik' ve kabuk HİÇ değişmez (45496 2.53.4: okuyucu 1.13.3 kaldı,
+ * kanonik 1.13.14). A1'de ölçüm/değişim birimi: dosyalar kökte, sayfa `kapak/index.html`
+ * (tanım tek kaynak: `a1-duzen.js`). A1 işaretli ama bozuk düzen → 'bilinmiyor' (fail-closed).
  */
 
 const path = require('path');
@@ -29,6 +36,7 @@ const crypto = require('crypto');
 const fs = require('fs-extra');
 const { dizinCoz } = require('./kanonik-sart');
 const { surumKiyasla, surumParcala, rozetSurumuOku, tekEksizAnaAd } = require('./motor-surumu');
+const A1 = require('./a1-duzen');
 
 const KANONIK_YOLU_VARSAYILAN = process.env.EMPP_KABUK_KANONIK
   || path.join(os.homedir(), '.empp-agent', 'kabuk', 'kanonik.json');
@@ -93,6 +101,21 @@ async function kitapDizinleri(kokDizin) {
   const kitaplar = girisler.filter((g) => g.isDirectory() && /^book\d+$/.test(g.name))
     .map((g) => g.name).sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)));
   return kitaplar.length ? kitaplar : [''];
+}
+
+/**
+ * Ölçüm/değişim birimleri: `{rel, index, duzen?, a1Bozuk?}`. `rel` = kabuk dosyalarının dizini
+ * (kök-göreli), `index` = okuyucu sayfası (`rel`'e göreli). bookN varsa her biri `index.html`;
+ * yalnız kök varsa ve kök A1 düzenindeyse sayfa `kapak/index.html` (bkz. üst not). I/O.
+ */
+async function kabukBirimleri(kokDizin) {
+  const dizinler = await kitapDizinleri(kokDizin);
+  if (dizinler.length === 1 && dizinler[0] === '') {
+    const d = A1.a1Durumu(kokDizin);
+    if (d.durum === 'a1') return [{ rel: '', index: A1.A1_MOTOR_SAYFASI, duzen: 'a1' }];
+    if (d.durum === 'bozuk') return [{ rel: '', index: A1.A1_MOTOR_SAYFASI, duzen: 'a1', a1Bozuk: d.neden }];
+  }
+  return dizinler.map((rel) => ({ rel, index: 'index.html' }));
 }
 
 /**
@@ -172,16 +195,24 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
     || path.join(path.dirname(path.resolve(kokDizin)), '.empp-eski', path.basename(kokDizin));
   const kitaplar = [];
 
-  for (const rel of await kitapDizinleri(kokDizin)) {
+  for (const birim of await kabukBirimleri(kokDizin)) {
+    const { rel } = birim;
     const dir = path.join(kokDizin, rel);
     if (await okuyucusuzMu(kokDizin, rel)) {
       kitaplar.push({ dizin: rel, onceSurum: null, karar: 'kabuksuz', sonraSurum: null });
       log(`   kabuk ${rel}: index.html yok (okuyucusuz) — atlandı`);
       continue;
     }
-    const once = await rozetSurumuOku(dir);
+    if (birim.a1Bozuk) {
+      kitaplar.push({ dizin: '.', duzen: 'a1', index: birim.index, onceSurum: null, karar: 'bilinmiyor',
+        sonraSurum: null, hata: birim.a1Bozuk });
+      log(`   kabuk . (A1): ${birim.a1Bozuk} — ölçülmedi, dokunulmadı`);
+      continue;
+    }
+    const once = await rozetSurumuOku(dir, birim.index);
     const karar = kabukKarari(once.surum, kanonik);
     const kayit = { dizin: rel || '.', onceSurum: once.surum, karar, sonraSurum: once.surum };
+    if (birim.duzen) { kayit.duzen = birim.duzen; kayit.index = birim.index; }
     if (karar === 'ayni') {
       // Aynı kabuk sürümü ama çekirdek varlık eksik olabilir (yayıncı kabuğu core'suz gelmiş) —
       // yalnız EKLE, hiçbir şey ezme/taşıma.
@@ -222,7 +253,7 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
           eklenen.push(hedef);
           await fs.copy(path.join(kanonik.dizin, d.ad), hedef);
         }
-        const idx = path.join(dir, 'index.html');
+        const idx = path.join(dir, birim.index);
         const html = await fs.readFile(idx, 'utf8');
         const yeniHtml = indexYenidenYaz(html, kanonik.main, kanonik.mainCss);
         const eskiRef = indexMainReferanslari(html);
@@ -233,7 +264,7 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
           await yedekle(vt);
           await fs.writeFile(vt, kanonik.surum, 'utf8');
         }
-        const sonra = await rozetSurumuOku(dir);
+        const sonra = await rozetSurumuOku(dir, birim.index);
         if (sonra.surum !== kanonik.surum) throw new Error(`rozet ${sonra.surum} ≠ ${kanonik.surum}`);
         // ölü kalan eski main.js/main.css: yedeğe TAŞI (silme yok), hata dalı geri koyar
         let eskiMain = 0;
@@ -295,19 +326,27 @@ async function okuyucuKabuguDegistir(kokDizin, kanonikYol = KANONIK_YOLU_VARSAYI
 async function kabukKapisi(kokDizin, kanonik) {
   if (!kanonik || !surumParcala(kanonik.surum)) return { gecti: null, kitaplar: [], sebep: 'kanonik bilinmiyor' };
   const kitaplar = [];
-  for (const rel of await kitapDizinleri(kokDizin)) {
+  for (const birim of await kabukBirimleri(kokDizin)) {
+    const { rel } = birim;
     if (await okuyucusuzMu(kokDizin, rel)) {
       kitaplar.push({ dizin: rel, surum: null, karar: 'kabuksuz', eksikCekirdek: [] });
       continue;
     }
-    const r = await rozetSurumuOku(path.join(kokDizin, rel));
+    if (birim.a1Bozuk) {
+      kitaplar.push({ dizin: '.', duzen: 'a1', surum: null, karar: 'bilinmiyor', eksikCekirdek: [],
+        hata: birim.a1Bozuk });
+      continue;
+    }
+    const r = await rozetSurumuOku(path.join(kokDizin, rel), birim.index);
     const eksikCekirdek = [];
     for (const d of kanonik.cekirdek || []) {
       if (!(await tamAdlaVarMi(path.join(kokDizin, rel), d.ad))) eksikCekirdek.push(d.ad);
     }
     let karar = kabukKarari(r.surum, kanonik);
     if ((karar === 'ayni' || karar === 'yeni') && eksikCekirdek.length) karar = 'eksik-cekirdek';
-    kitaplar.push({ dizin: rel || '.', surum: r.surum, karar, eksikCekirdek });
+    const kayit = { dizin: rel || '.', surum: r.surum, karar, eksikCekirdek };
+    if (birim.duzen) kayit.duzen = birim.duzen;
+    kitaplar.push(kayit);
   }
   const okuyuculu = kitaplar.filter((k) => k.karar !== 'kabuksuz');
   const kotu = okuyuculu.filter((k) => k.karar !== 'ayni' && k.karar !== 'yeni');
@@ -320,6 +359,7 @@ module.exports = {
   acikMi,
   kanonikKabukYukle,
   kitapDizinleri,
+  kabukBirimleri,
   okuyucusuzMu,
   tekEksizAnaAd,
   tamAdlaVarMi,

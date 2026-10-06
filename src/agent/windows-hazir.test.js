@@ -219,3 +219,76 @@ test('kabulListesi: yalnız kabul-bekliyor, en eski önce; olculemedi/ ve alt di
   assert.deepEqual(l.map((x) => x.isleniyor), [false, true], 'ölü pid izi bekleyen sayılır, canlı pid işleniyor');
   assert.ok(H.ALT_DIZINLER.includes('olculemedi'));
 });
+
+// ── KARIŞIK KABUK (06.10, kasa 45496 2.53.4 A1 seti) ──────────────────────────────────────────
+// manifest.kanonik.kabukSurum ÖLÇÜLEN sürüm DEĞİL, damganın kanonikSurum'udur (kanonik-surum.js):
+// paket eski kabukla çıksa da kanonik sürümü taşır. Bu yüzden "kabukSurum eşit → karisik bayat değil"
+// gevşetmesi YAPILMAZ: 45496'da okuyucu gerçekten 1.13.3 kaldı (kanonik 1.13.14). Onarım ölçümde
+// (okuyucu-kabugu.js A1 birimi); bayat kuralı aynen kalır.
+const GK = { motorSha12: '03e8af70a0f3', kabukSurum: '1.13.14' };
+const kanonikli = (k) => ({ job: { kaynakSurumu: '2.53.4' },
+  kanonik: { motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.14', kabukDurum: 'guncel', ...k } });
+
+test('bayatKarari: A1 yeni kabuk (damga guncel, kanonik eşit) → bayat DEĞİL', () => {
+  const r = H.bayatKarari(kanonikli({}), { gecerliKaynakSurumu: '2.53.4', gecerliKanonik: GK });
+  assert.equal(r.bayat, false, r.sebep);
+});
+
+test('bayatKarari: bookN eski kabuk (kabuk 1.13.3 ≠ kanonik 1.13.14) → bayat', () => {
+  const r = H.bayatKarari(kanonikli({ kabukSurum: '1.13.3' }), { gecerliKanonik: GK });
+  assert.equal(r.bayat, true);
+  assert.match(r.sebep, /kabuk 1\.13\.3 ≠ kanonik 1\.13\.14/);
+});
+
+test('bayatKarari: kanoniksiz kayıt (damga yok / boş) → bayat (fail-closed)', () => {
+  for (const m of [{ job: {} }, { job: {}, kanonik: {} }, { job: {}, kanonik: { kabukDurum: null } }]) {
+    const r = H.bayatKarari(m, { gecerliKanonik: GK });
+    assert.equal(r.bayat, true);
+    assert.match(r.sebep, /damgası yok/);
+  }
+});
+
+test('bayatKarari: karisik + kabukSurum kanonikle EŞİT → yine bayat (kabukSurum ölçüm değil)', () => {
+  const r = H.bayatKarari(kanonikli({ kabukDurum: 'karisik' }), { gecerliKanonik: GK });
+  assert.equal(r.bayat, true);
+  assert.match(r.sebep, /kabuk durum "karisik"/);
+});
+
+test('ZİNCİR A1: okuyucuKabuguDegistir → paket.json → kanonik özet → bayatKarari bayat DEĞİL', async () => {
+  const K = require('../packaging/okuyucu-kabugu');
+  const A1 = require('../packaging/a1-duzen');
+  const { paketJsondanOku, govdeAlanlari } = require('./kanonik-surum');
+  const kok = tmp('zincir-a1');
+  const yaz = (rel, icerik) => {
+    fs.mkdirSync(path.dirname(path.join(kok, rel)), { recursive: true });
+    fs.writeFileSync(path.join(kok, rel), icerik);
+  };
+  const kab = (dir, main, parca, surum) => {
+    yaz(path.join(dir, main), `x={923:"${parca}"}`);
+    yaz(path.join(dir, `${parca}.923.js`), `e.exports={i8:"${surum}"}`);
+  };
+  const eskiMain = `${'a'.repeat(20)}.main.js`;
+  kab('paket', eskiMain, 'b'.repeat(20), '1.13.3');
+  yaz('paket/index.html', '<html><head></head><body>sf425</body></html>');
+  yaz('paket/kapak/index.html', A1.baslikEkle(`<html><head><script src="./${eskiMain}"></script></head></html>`));
+  yaz('paket/app.config.js', 'x');
+  yaz('paket/classlibraries/ImWin32.dll', 'x');
+  const yeniMain = `${'d'.repeat(20)}.main.js`;
+  kab('kabuk/1.13.14', yeniMain, 'e'.repeat(20), '1.13.14');
+  const sha = (rel) => crypto.createHash('sha256').update(fs.readFileSync(path.join(kok, rel)))
+    .digest('hex').slice(0, 12);
+  const dosyalar = [yeniMain, `${'e'.repeat(20)}.923.js`].map((ad) => ({ ad, sha12: sha(`kabuk/1.13.14/${ad}`) }));
+  yaz('kabuk/1.13.14/manifest.json', JSON.stringify({ surum: '1.13.14', main: yeniMain, dosyalar }));
+  yaz('kabuk/kanonik.json', JSON.stringify({ surum: '1.13.14', dizin: path.join(kok, 'kabuk', '1.13.14') }));
+  const d = await K.okuyucuKabuguDegistir(path.join(kok, 'paket'), path.join(kok, 'kabuk', 'kanonik.json'));
+  assert.equal(d.durum, 'guncel');
+  const pj = JSON.parse(fs.readFileSync(path.join(kok, 'paket', 'paket.json'), 'utf8'));
+  pj.motorSurumu = { durum: 'guncel', sha12: '03e8af70a0f3' };
+  fs.writeFileSync(path.join(kok, 'paket', 'paket.json'), JSON.stringify(pj));
+  const kanonik = govdeAlanlari(await paketJsondanOku(path.join(kok, 'paket')));
+  assert.deepEqual(kanonik,
+    { motorSha12: '03e8af70a0f3', motorDurum: 'guncel', kabukSurum: '1.13.14', kabukDurum: 'guncel' });
+  const r = H.bayatKarari({ job: { kaynakSurumu: '2.53.4' }, kanonik },
+    { gecerliKaynakSurumu: '2.53.4', gecerliKanonik: GK });
+  assert.equal(r.bayat, false, r.sebep);
+});

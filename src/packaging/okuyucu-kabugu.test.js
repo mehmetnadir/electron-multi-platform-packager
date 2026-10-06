@@ -346,3 +346,120 @@ test('okuyucusuzMu: tek kitap kökü istisnaya girmez', async () => {
     assert.equal(await K.okuyucusuzMu(tmp, 'book1'), false);
   } finally { await fs.remove(tmp); }
 });
+
+// ── A1 DÜZENİ (06.10, kasa 45496 2.53.4: "karisik, 0 kitap değişti" → kabul işçisinde bayat) ──
+// Kök index.html sf425 kabuğu (main.js çağırmaz); okuyucu sayfası kapak/index.html (<base href="../">),
+// main.js + parçalar KÖKTE. Eski kod kökü ölçüyordu → rozet yok → 'bilinmiyor' → 'karisik', kabuk eski kaldı.
+const A1 = require('./a1-duzen');
+const SF425 = '<html><head><script src="scripts/language-set.js"></script></head><body>kartlar</body></html>';
+
+async function a1AlanKur({ paketSurum = '1.13.3', kanonikSurum = '1.13.14', isaret = true, dll = true } = {}) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'kabuk-a1-'));
+  const kok = path.join(tmp, 'paket');
+  await kabukYaz(kok, { main: `${H('a')}.main.js`, parcaHash: H('b'), surum: paketSurum, css: `${H('c')}.main.css` });
+  await fs.writeFile(path.join(kok, 'index.html'), SF425);
+  const motor = `<html><head><script src="app.config.js"></script><script defer="defer" src="./${H('a')}.main.js">`
+    + `</script><link href="./${H('c')}.main.css" rel="stylesheet"></head><body></body></html>`;
+  await fs.outputFile(path.join(kok, 'kapak', 'index.html'), isaret ? A1.baslikEkle(motor) : motor);
+  await fs.writeFile(path.join(kok, 'app.config.js'), 'KOK-CONFIG');
+  if (dll) await fs.outputFile(path.join(kok, 'classlibraries', 'ImWin32.dll'), 'DLL');
+  await fs.writeFile(path.join(kok, 'version.txt'), '1.11.5');
+  await fs.outputFile(path.join(kok, 'assets', '33828', 'pages', '1.png'), 'SAYFA');
+  await fs.writeFile(path.join(kok, 'paket.json'), JSON.stringify({ setId: '45496' }));
+  const kd = path.join(tmp, 'kabuk', kanonikSurum);
+  const main = `${H('d')}.main.js`;
+  const mainCss = `${H('f')}.main.css`;
+  await kabukYaz(kd, { main, parcaHash: H('e'), surum: kanonikSurum, css: mainCss });
+  const dosyalar = [];
+  for (const ad of [main, `${H('e')}.923.js`, mainCss]) {
+    dosyalar.push({ ad, sha12: sha12(await fs.readFile(path.join(kd, ad))) });
+  }
+  await fs.writeFile(path.join(kd, 'manifest.json'), JSON.stringify({ surum: kanonikSurum, main, mainCss, dosyalar }));
+  const kYol = path.join(tmp, 'kabuk', 'kanonik.json');
+  await fs.writeFile(kYol, JSON.stringify({ surum: kanonikSurum, dizin: kd }));
+  return { tmp, kok, kYol, main, mainCss };
+}
+
+test('A1: birim kök + kapak/index.html (kök sf425 ölçülmez); bookN düzeni değişmez', async () => {
+  const { tmp, kok } = await a1AlanKur();
+  try {
+    assert.deepStrictEqual(await K.kabukBirimleri(kok), [{ rel: '', index: 'kapak/index.html', duzen: 'a1' }]);
+  } finally { await fs.remove(tmp); }
+  const b = await alanKur();
+  try {
+    assert.deepStrictEqual(await K.kabukBirimleri(b.kok), [
+      { rel: 'book1', index: 'index.html' }, { rel: 'book2', index: 'index.html' }]);
+  } finally { await fs.remove(b.tmp); }
+});
+
+test('A1 eski kabuk (1.13.3 < 1.13.14) → kökte değişir, kapak/index.html yeniden yazılır, durum guncel', async () => {
+  const { tmp, kok, kYol, main, mainCss } = await a1AlanKur();
+  try {
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.durum, 'guncel', 'A1 karisik DEĞİL');
+    assert.equal(d.degisen, 1);
+    assert.equal(d.kitaplar[0].duzen, 'a1');
+    assert.equal(d.kitaplar[0].onceSurum, '1.13.3');
+    assert.equal(d.kitaplar[0].sonraSurum, '1.13.14');
+    const kapak = await fs.readFile(path.join(kok, 'kapak', 'index.html'), 'utf8');
+    assert.ok(kapak.includes(`src="./${main}"`) && kapak.includes(`href="./${mainCss}"`));
+    assert.deepStrictEqual(A1.kapakDenetle(kapak), [], 'A1 başlığı (<base> + kök betiği) korunur');
+    assert.equal(await fs.readFile(path.join(kok, 'index.html'), 'utf8'), SF425, 'kök sf425 kabuğu DOKUNULMAZ');
+    assert.ok(await fs.pathExists(path.join(kok, main)), 'kanonik main kökte');
+    assert.equal(await fs.pathExists(path.join(kok, 'kapak', main)), false, 'kapak/ altına dosya kopyalanmaz');
+    assert.equal(await fs.pathExists(path.join(kok, `${H('a')}.main.js`)), false, 'eski main ağaç dışına taşındı');
+    assert.ok(await fs.pathExists(path.join(tmp, '.empp-eski', 'paket', 'kapak', 'index.html')), 'eski kapak yedekte');
+    assert.equal(await fs.readFile(path.join(kok, 'app.config.js'), 'utf8'), 'KOK-CONFIG');
+    assert.equal(await fs.readFile(path.join(kok, 'assets/33828/pages/1.png'), 'utf8'), 'SAYFA');
+    const pj = JSON.parse(await fs.readFile(path.join(kok, 'paket.json'), 'utf8'));
+    assert.equal(pj.kabukSurumu.durum, 'guncel');
+    const kapi = await K.kabukKapisi(kok, await K.kanonikKabukYukle(kYol));
+    assert.equal(kapi.gecti, true, kapi.sebep);
+    assert.equal(kapi.kitaplar[0].duzen, 'a1');
+  } finally { await fs.remove(tmp); }
+});
+
+test('A1 kabuk zaten kanonik → ölçüm guncel, hiçbir dosya değişmez', async () => {
+  const { tmp, kok, kYol } = await a1AlanKur({ paketSurum: '1.13.14' });
+  try {
+    const onceKapak = await fs.readFile(path.join(kok, 'kapak', 'index.html'), 'utf8');
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.durum, 'guncel');
+    assert.equal(d.degisen, 0);
+    assert.equal(d.kitaplar[0].karar, 'ayni');
+    assert.equal(await fs.readFile(path.join(kok, 'kapak', 'index.html'), 'utf8'), onceKapak);
+    assert.equal(await fs.pathExists(path.join(tmp, '.empp-eski')), false);
+  } finally { await fs.remove(tmp); }
+});
+
+test('A1 kabukKapisi: eski kabuk (değişim öncesi) → GEÇMEZ (fail-closed sürer)', async () => {
+  const { tmp, kok, kYol } = await a1AlanKur();
+  try {
+    const kapi = await K.kabukKapisi(kok, await K.kanonikKabukYukle(kYol));
+    assert.equal(kapi.gecti, false);
+    assert.equal(kapi.kitaplar[0].karar, 'eski');
+  } finally { await fs.remove(tmp); }
+});
+
+test('MUTASYON A1 bozuk (işaret var, kökte ImWin32.dll yok) → karisik, dokunulmaz', async () => {
+  const { tmp, kok, kYol } = await a1AlanKur({ dll: false });
+  try {
+    const onceKapak = await fs.readFile(path.join(kok, 'kapak', 'index.html'), 'utf8');
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.durum, 'karisik');
+    assert.equal(d.degisen, 0);
+    assert.match(d.kitaplar[0].hata, /ImWin32\.dll/);
+    assert.equal(await fs.readFile(path.join(kok, 'kapak', 'index.html'), 'utf8'), onceKapak);
+    const kapi = await K.kabukKapisi(kok, await K.kanonikKabukYukle(kYol));
+    assert.equal(kapi.gecti, false);
+  } finally { await fs.remove(tmp); }
+});
+
+test('MUTASYON A1 işareti yok (kapak/ var ama A1 değil) → eski yol: kök ölçülür, rozet yok → karisik', async () => {
+  const { tmp, kok, kYol } = await a1AlanKur({ isaret: false });
+  try {
+    const d = await K.okuyucuKabuguDegistir(kok, kYol);
+    assert.equal(d.durum, 'karisik', 'A1 olmayan rozetsiz kök fail-closed kalır');
+    assert.equal(d.kitaplar[0].duzen, undefined);
+  } finally { await fs.remove(tmp); }
+});
