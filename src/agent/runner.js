@@ -204,6 +204,8 @@ let stopping = false;
 // lease window (e.g. a 39-min download on a slow link) loses the lease mid-build
 // and the job gets re-dispatched, wasting the work. Null when idle.
 let currentJob = null;
+// Sinyalle kapanışta kirayı bırakmak için (06.10, 11845 mac: SIGTERM 2 sn'de çıktı, kira 30 dk asılı kaldı).
+let sonAuth = null;
 
 // ---------------------------------------------------------------------------
 // Small process helper.
@@ -3447,6 +3449,7 @@ async function processJob(auth, job) {
 async function main() {
   log('starting. API:', CONFIG.apiBase, '| packager:', CONFIG.packagerApi, '| caps:', CONFIG.caps.join(','));
   const auth = await enrollOrLoad();
+  sonAuth = auth;
   // İlk next-job'dan ÖNCE yetenekleri bildir: sunucu eski listeyle (evde macos dahil) iş kiralamasın.
   // ProBook şeridi açıksa ilk karar BEKLENİR — sağlıklı ProBook varken Mac ilk pardus işini kapmasın.
   if (seritDenetcisi) await seritDenetcisi.tazele({ zorla: true });
@@ -3563,10 +3566,33 @@ async function main() {
 // yoldan çıkıldığı ÖLÇÜLEMEDİ. Aşağıdaki kancalar davranışı değiştirmez —
 // yalnız her çıkışın kodunu ve sebebini log'a yazar ki bir sonraki olayda
 // "harici sonlandırma mı, kendi kodumuz mu" sorusu kanıtla kapansın.
+/**
+ * Kapanışta elde tutulan işin kirasını bırakır (06.10). Elde iş ya da kimlik yoksa null döner.
+ * FIRLATMAZ. @returns {Promise<boolean>|null}
+ */
+function kapanisKirasiBirak(sig, { job, auth, birak = releaseJob } = {}) {
+  if (!job || !auth) return null;
+  return Promise.resolve()
+    .then(() => birak(auth, job, `ajan kapanıyor (${sig}) — iş yarıda kaldı`))
+    .then((ok) => {
+      log(`kapanış: ${job.bookId} ${job.platform} kirası ${ok ? 'BIRAKILDI' : 'bırakılamadı'}`);
+      return Boolean(ok);
+    })
+    .catch(() => false);
+}
+
 function installSignalHandlers() {
   const onSignal = (sig) => {
     log(`received ${sig}, finishing current work then exiting...`);
     stopping = true;
+    // Elde iş varsa kirası bırakılır: yeni süreç onu bilmez, kira 30 dk asılı kalıp setin
+    // diğer platformlarını (kur bekleyen Windows) bekletir. Bırakma en çok 8 sn sürer.
+    const bekle = kapanisKirasiBirak(sig, { job: currentJob, auth: sonAuth });
+    if (bekle) {
+      setTimeout(() => process.exit(0), 8000).unref?.();
+      bekle.finally(() => process.exit(0));
+      return;
+    }
     // Give in-flight work a brief window; hard-exit fallback.
     setTimeout(() => process.exit(0), 2000).unref?.();
   };
@@ -3598,6 +3624,7 @@ if (require.main === module) {
 
 module.exports = {
   installSignalHandlers,
+  kapanisKirasiBirak,
   // downloadFile/zipDir: kaynak ön-ısıtıcısı (kaynak-isitici.js) için dışa açılmıştı; ısıtıcı
   // exe'siz sözleşmeyle (01.10) kapıyla KAPALI, downloadFile .exe yolunu reddeder.
   downloadFile, zipDir,
