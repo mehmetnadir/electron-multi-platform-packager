@@ -2,7 +2,8 @@
 # ProBook Pardus şeridi ORTAMI — serit-ajan.sh (canlı ajan) ve kuru-kosu.sh (yüklemesiz deneme)
 # AYNI dosyayı `source` eder: kuru koşu canlıyla birebir aynı bayraklarla derler/kabul eder.
 # runner.js yalnız ortamla ProBook kipine alınır:
-#   AGENT_CAPS=pardus,kaynak-r2 (kaynak-kur YOK, 05.10: sf425 kabuk tazeleme yalnız Mac'te — Swift) · PARDUS_BUILD_SCRIPT=pardus-yerel-build.sh (docker'sız, DEB kapalı)
+#   AGENT_CAPS=pardus,kaynak-r2,kaynak-kur (06.10: sf425 kabuğu Mac'in kabuk ekinden)
+#   PARDUS_BUILD_SCRIPT=pardus-yerel-build.sh (docker'sız, DEB kapalı)
 #   EMPP_PARDUS_KABUL=1 + PROBOOK_HOST=yerel (kabul aynı makinede, scp yok)
 #   PACKAGER_API=yerel logo ucu (ikon Mac'e bağımlı değil) · TMPDIR/önbellek ~/empp-serit altında
 #   PATH başında docker şimi (runner'ın ensureDockerReady'si için; bkz. bin/docker)
@@ -14,10 +15,15 @@ export PATH="$REPO/tools/probook/bin:$SERIT/opt/bin:$SERIT/node/bin:/usr/local/b
 # 02.10 (sözleşme §2c): ProBook ofis makinesi → build kurulumu (kaynak-kur, 1–3 GB R2 yüklemesi) da
 # burada koşar. runner iki rolü heartbeat'te yeniden hesaplar: kaynak-r2 her zaman, kaynak-kur yalnız
 # ofis geçidinde (ip route default via 192.168.1.254) ya da ~/.empp-agent/kaynak-kur-serbest.istek ile.
-# kaynak-kur YOK (05.10): r2-kur zincirindeki sf425 kabuk tazeleme (set-kabuk-tazele.js) Swift ikilisiyle
-# yalnız Mac'te koşar. ProBook r2-kur alırsa kabuk ESKİ kalır ve yeni build.zip geçerli olur (45551 2.51.3
-# böyle kuruldu). Kaynak kurmayı Mac üstlenir; ProBook r2-al ile paketler.
-export AGENT_CAPS="${AGENT_CAPS:-pardus,kaynak-r2}"
+# kaynak-kur GERİ (06.10, kabuk-eki-tasarim.md §4): 17de4c8 bu yeteneği kaldırmıştı. Sebep: sf425
+# kabuğunu üreten Swift ikilisi Linux'ta yok; ProBook r2-kur alınca kabuk ESKİ kalıp yeni build.zip
+# geçerli oluyordu (45551 2.51.3). Artık Mac kabuğu üretip CDN'e "kabuk eki" olarak koyar
+# (tools/set-kabuk/ek-uret.js). ProBook aynı JS ile girdi parmak izini hesaplar, eki uygular; bütün
+# kapılar aynen koşar. Ek yok/bayat/bozuk ya da kapı RED → iş ERTELENİR (eski kabukla kaynak çıkmaz).
+# Acil geri dönüş: EMPP_SET_KABUK_KAYNAGI= (boş) ya da EMPP_KAYNAK_KUR=0.
+export AGENT_CAPS="${AGENT_CAPS:-pardus,kaynak-r2,kaynak-kur}"
+export EMPP_SET_KABUK_TAZELE="${EMPP_SET_KABUK_TAZELE:-1}"
+export EMPP_SET_KABUK_KAYNAGI="${EMPP_SET_KABUK_KAYNAGI-ek}"
 export AGENT_NAME="${AGENT_NAME:-probook-serit}"
 export PARDUS_BUILD_SCRIPT="${PARDUS_BUILD_SCRIPT:-$REPO/tools/pardus/pardus-yerel-build.sh}"
 export PARDUS_KABUL_SCRIPT="${PARDUS_KABUL_SCRIPT:-$REPO/tools/pardus/probook-kabul.sh}"
