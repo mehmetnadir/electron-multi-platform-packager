@@ -2176,6 +2176,9 @@ const kaynakAdim = {
   // Üreteç (r2-kur kaynak adımı): anahtarlı mı sorusu okuyucunun kendi HasZKitapKey'i (imkeys).
   // (imKeys ile AYNI bağımlılık kaynağı: test-yalitim sahtesi burada da geçerli — internete çıkılmaz).
   uretec: (o) => uretecKaynak.uretecKaynagi({ anahtarliMi: imKeys.varsayilanBagimliliklar().anahtarliMi, ...o }),
+  // r2-kur YAYIN (kapı → presign → yükle → tamamla): tek-set elle kurulum aracı
+  // (tools/kaynak-kur/elle-kur.js) kuru kipte bunu kendi kapı-yalnız adımıyla değiştirir.
+  r2KurYayinla: (o) => kaynakR2.r2KurYayinla(o),
 };
 
 /** Kaynak uç istemcisi (B2) — runner'ın axios + ajan başlığıyla; biçim kaynak-r2.js'te. */
@@ -3182,7 +3185,7 @@ async function processJob(auth, job) {
     if (kaynak.tur === 'r2-kur') {
       let yayin;
       try {
-        yayin = await kaynakR2.r2KurYayinla({
+        yayin = await kaynakAdim.r2KurYayinla({
           job, zipYolu: zipPath, setListesi: kapiSetListesi,
           oncekiBoyut: r2OncekiBoyut, oncekiEnvanter: r2OncekiEnvanter, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
@@ -3512,6 +3515,8 @@ module.exports = {
   kaynakIndirme, manuelZipIndir, manuelBuildHazirla, zipGirisleri, kaynakYokBekle, kaynakYokOzet,
   bildirGonder,
   kaynakYokOzetMetni, kaynakYokDurumOku, kaynakBoyutuTahmin, KAYNAK_YOK_ISARETI,
+  // Token OKUYUCUSU (elle-kur aracı jetonu yalnız bununla alır; içerik basılmaz).
+  loadToken,
   looksLikeRealApk, isValidArchiveOutput, CONFIG, processJob, extractSfx, findBuildDir, signAndNotarizeMac,
   STAPLE_KAPISI_ISARETI, agStapleCikti,
   packagerReleaseJob,

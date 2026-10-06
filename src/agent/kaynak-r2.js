@@ -323,6 +323,16 @@ function kaynakUcIstemcisi({
 /* ───────────────────────────── r2-kur yayın akışı ───────────────────────────── */
 
 /**
+ * Yazma kapısı (B5) çağrısı — r2KurYayinla'nın İLK adımı, TEK yer. Elle kurulum aracının kuru kipi
+ * (tools/kaynak-kur/elle-kur.js) kapıyı bununla AYNI girdiyle sorar (yayın yapmadan). SAF (kapı hariç).
+ */
+function yazmaKapisiSor({
+  kapi, zipYolu, setListesi = null, oncekiBoyut = null, oncekiEnvanter = null, vsler = {},
+}) {
+  return kapi({ zipYolu, setListesi, oncekiBoyut, oncekiEnvanter, tur: 'otomatik', vsler });
+}
+
+/**
  * Kurulmuş build'i (`zipYolu`) R2'ye yazar: yazma kapısı (B5) → kilit süresi → özet → presign →
  * parça yükleme → tamamla. Herhangi bir adım düşerse `birak` ÇAĞRILIR ve KaynakR2Hatasi fırlar:
  * kapı reddi / 409 nedenler / diğer 4xx → kalıcı (paket ÜRETİLMEZ, failed + bildirim);
@@ -354,7 +364,7 @@ async function r2KurYayinla({
     throw hata;
   };
 
-  const k = kapi({ zipYolu, setListesi, oncekiBoyut, oncekiEnvanter, tur: 'otomatik', vsler });
+  const k = yazmaKapisiSor({ kapi, zipYolu, setListesi, oncekiBoyut, oncekiEnvanter, vsler });
   if (!k.gecti) {
     return birakVeFirlat(
       new KaynakR2Hatasi(`yazma kapısı RED — R2'ye yazılmadı, eski sürüm geçerli kalır: ${k.nedenler.join(' | ')}`, { nedenler: k.nedenler }),
@@ -426,5 +436,5 @@ module.exports = {
   kaynakKurIzinli, kaynakKurEkle, kaynakR2Ekle,
   merdivenKaniti, tamamlaKitaplari, tamamlaWebzVarliklari,
   KaynakR2Hatasi, r2OzetDogrula, surumGecerli,
-  kaynakUcIstemcisi, r2KurYayinla,
+  kaynakUcIstemcisi, r2KurYayinla, yazmaKapisiSor,
 };
