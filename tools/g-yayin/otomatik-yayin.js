@@ -24,6 +24,7 @@
  *     Electron `empp-fs-shim.js`, Android `empp-android-shim.js` (+ fullscreen stili). Android
  *     istemcisi shim'siz index'i `index-android-shim-yok` ile RED eder. Önceki imzalı durumda index
  *     varsa (ör. e2e ile açılmış set) birikimli manifest onu taşır; araç bunu UYARI olarak yazar.
+ *     Canlı index shim'siz ise set yeni sürüm almaz, "Nadir kararı" listesine girer.
  *   - Okuyucu kabuğu (bookN `<hash>.main.js` + parçalar, kabuk_surum 1.13.14) G kapsamında DEĞİL
  *     (`durum.gYoluMu`): yeni kabuk kurulu pakete G ile gitmez.
  *
@@ -607,9 +608,15 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
   }
   s.paketSurum = paketSurumu(bs.gecerli, satirlar, kitap);
   s.canli = await canliOku(taban, id, ops.getir, acik);
-  if (s.canli.androidIndexShimli === false) {
-    s.uyarilar.push('android-index-shimsiz: canlı imzalı durumdaki index.html empp-android-shim ' +
-      'taşımıyor; Android bu ve sonraki her G sürümünü index-android-shim-yok ile RED eder');
+  if (s.canli.androidIndexShimli === false && !s.canli.hata) {
+    // Birikimli manifest shim'siz index'i her yeni sürüme taşır → Android her sürümü RED eder
+    // (gerçek empp-g-istemci ölçümü 06.10: 2.25.8 red, index'siz 2.25.9 kabul). yayinla.js
+    // index düşüremez; çözüm Nadir kararı. Yeni sürüm yayınlanmaz.
+    return Object.assign(s, { karar: 'nadir',
+      sebep: `android-donuk-index: canlı ${s.canli.surum} ` +
+      'index.html empp-android-shim taşımıyor; birikimli manifest onu her sürüme taşır, Android ' +
+      'index-android-shim-yok ile RED eder. Önce index düşüren sürüm kararı (yayinla.js bugün ' +
+      'kabuk düşüremez)' });
   }
   const ck = canliKarari(s.canli, mdz.dizinler, kanonik.sha256);
   s.karar = ck.karar;
