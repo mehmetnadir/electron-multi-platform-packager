@@ -173,3 +173,248 @@ test('bildirim tavanı: saatte en çok 1; tek-kopya kilidi canlı pid ile ikinci
   assert.equal(K.tekKopyaAl(kilit, () => t + 1000, () => false), true, 'ölü pid');
   assert.equal(K.tekKopyaAl(kilit, () => t + 16 * 60000, () => true), true, 'bayat kilit');
 });
+
+// ------------------------------------------------------------------ nöbet (Mac ofiste, srv21 diğer zamanlarda)
+// 05.10.2026 Pazartesi … 11.10.2026 Pazar. İstanbul = UTC+3 (yaz saati yok).
+const ist = (gun, sa, dk, sn = 0) => Date.UTC(2026, 9, gun, sa - 3, dk, sn);
+const PZT = 5; const CUM = 9; const CMT = 10; const PAZ = 11;
+
+function nobetUzak(d) {
+  const cagri = [];
+  const temel = yerelUzak(d);
+  const damgaYol = path.join(d, K.DAMGA_ADI);
+  return {
+    ...temel,
+    cagri,
+    listele: () => { cagri.push('listele'); return temel.listele(); },
+    oku: (ad) => { cagri.push('oku'); return temel.oku(ad); },
+    tasi: (ad, s) => { cagri.push('tasi'); return temel.tasi(ad, s); },
+    damgaOku: () => { cagri.push('damgaOku'); try { return K.damgaCoz(fs.readFileSync(damgaYol, 'utf8')); } catch (_) { return null; } },
+    damgaYaz: (konak, zaman, zorla) => {
+      cagri.push('damgaYaz');
+      fs.writeFileSync(damgaYol, `${JSON.stringify({ konak, zaman, zorla: zorla === true })}\r\n`);
+      return true;
+    },
+  };
+}
+const konakCfg = (konak, kip) => ({ konak, kip });
+const istekSay = (d) => fs.readdirSync(d).filter((a) => I.AD_DESENI.test(a)).length;
+
+test('nöbet saati: 09:29 srv21 · 09:30 mac · 17:45 mac · 17:46 srv21; Cuma mac, hafta sonu srv21', () => {
+  const N = K.saatNobetcisi;
+  assert.equal(N(ist(PZT, 9, 29, 59)), 'srv21');
+  assert.equal(N(ist(PZT, 9, 30)), 'mac');
+  assert.equal(N(ist(PZT, 12, 0)), 'mac');
+  assert.equal(N(ist(PZT, 17, 45)), 'mac');
+  assert.equal(N(ist(PZT, 17, 45, 59)), 'mac');
+  assert.equal(N(ist(PZT, 17, 46)), 'srv21');
+  assert.equal(N(ist(PZT, 0, 0)), 'srv21');
+  assert.equal(N(ist(PZT + 1, 2, 30)), 'srv21', 'UTC gece yarısı öncesi/sonrası');
+  assert.equal(N(ist(CUM, 9, 30)), 'mac');
+  assert.equal(N(ist(CUM, 17, 46)), 'srv21');
+  assert.equal(N(ist(CMT, 12, 0)), 'srv21');
+  assert.equal(N(ist(PAZ, 12, 0)), 'srv21');
+  assert.equal(N(ist(PAZ, 23, 59)), 'srv21');
+  assert.deepEqual(K.istanbulZamani(ist(PZT, 9, 30)), { gun: 1, dk: 570 });
+});
+
+test('nöbet saati konağın TZ ayarından bağımsız (srv21 Europe/Istanbul, Mac başka olabilir)', () => {
+  const { spawnSync } = require('child_process');
+  const kod = `const K=require(${JSON.stringify(require.resolve('./imza-tetik-koprusu'))});`
+    + `process.stdout.write([${ist(PZT, 9, 29)},${ist(PZT, 9, 30)},${ist(PZT, 17, 46)}].map(K.saatNobetcisi).join(','))`;
+  for (const tz of ['UTC', 'America/Los_Angeles', 'Asia/Tokyo']) {
+    const r = spawnSync(process.execPath, ['-e', kod], { encoding: 'utf8', env: { ...process.env, TZ: tz } });
+    assert.equal(r.stdout, 'srv21,mac,srv21', tz);
+  }
+});
+
+test('ayarlar: konak yok → hep (eski davranış) · konak var → saat · EMPP_KOPRU_NOBET=zorla → zorla', () => {
+  assert.deepEqual([K.ayarlar({}).konak, K.ayarlar({}).kip], ['mac', 'hep']);
+  assert.deepEqual([K.ayarlar({ EMPP_KOPRU_KONAK: 'srv21' }).konak, K.ayarlar({ EMPP_KOPRU_KONAK: 'srv21' }).kip], ['srv21', 'saat']);
+  assert.equal(K.ayarlar({ EMPP_KOPRU_KONAK: 'mac', EMPP_KOPRU_NOBET: 'zorla' }).kip, 'zorla');
+  assert.equal(K.ayarlar({ EMPP_KASA_SSH_ANAHTAR: '/root/.ssh/kasa-kopru' }).anahtar, '/root/.ssh/kasa-kopru');
+  assert.equal(K.ayarlar({}).anahtar, '');
+});
+
+test('nöbet hükmü: pasif / nöbetçi / taze yabancı → çekil / bayat yabancı → nöbetçi / zorla → devir', () => {
+  const t = ist(CMT, 12, 0);
+  const H = (konak, kip, damga, s = t) => K.nobetKarari({ konak, kip, simdiMs: s, damga });
+  assert.equal(H('mac', 'saat', null).rol, 'pasif');
+  assert.equal(H('srv21', 'saat', null).rol, 'nobetci');
+  assert.equal(H('srv21', 'saat', null).damgaYaz, true);
+  assert.equal(H('srv21', 'saat', { konak: 'srv21', zaman: t - 10000 }).rol, 'nobetci', 'kendi damgası engel değil');
+  assert.equal(H('srv21', 'saat', { konak: 'mac', zaman: t - 2 * 60000 }).rol, 'cekildi');
+  assert.equal(H('srv21', 'saat', { konak: 'mac', zaman: t - 2 * 60000 }).damgaYaz, false);
+  assert.equal(H('srv21', 'saat', { konak: 'mac', zaman: t + 2 * 60000 }).rol, 'cekildi', 'ileri kaymış saat');
+  assert.equal(H('srv21', 'saat', { konak: 'mac', zaman: t - K.DAMGA_TAZE_MS - 1000 }).rol, 'nobetci', 'bayat damga');
+  assert.equal(H('mac', 'hep', null).rol, 'nobetci', 'hep: saatten bağımsız');
+  assert.equal(H('mac', 'hep', { konak: 'srv21', zaman: t - 30000 }).rol, 'cekildi', 'hep de damgaya uyar');
+  const dv = H('mac', 'zorla', { konak: 'srv21', zaman: t - 30000 });
+  assert.deepEqual([dv.rol, dv.damgaYaz], ['devir', true]);
+  assert.equal(H('mac', 'zorla', { konak: 'srv21', zaman: t - 30000, zorla: true }).rol, 'cekildi', 'iki zorla');
+  assert.equal(H('pc', 'hep', null).rol, 'pasif', 'bilinmeyen konak');
+});
+
+test('damga: cmd komutu sabit biçim, konak beyaz listede; bozuk damga null', () => {
+  assert.equal(K.damgaYazKomutu('C:\\d', 'srv21', 1791099197917.7, false),
+    'mkdir "C:\\d" 2>nul & echo {"konak":"srv21","zaman":1791099197917,"zorla":false}>"C:\\d\\.nobetci.json"');
+  assert.throws(() => K.damgaYazKomutu('C:\\d', 'x" & del', 1), /güvensiz konak/);
+  assert.deepEqual(K.damgaCoz('{"konak":"mac","zaman":5,"zorla":true}\r\n'), { konak: 'mac', zaman: 5, zorla: true });
+  assert.equal(K.damgaCoz(''), null);
+  assert.equal(K.damgaCoz('{bozuk'), null);
+  assert.equal(K.damgaCoz('{"konak":"pc","zaman":5}'), null);
+  assert.equal(K.damgaCoz('{"konak":"mac"}'), null);
+});
+
+test('pasif konak isteği OKUMAZ/TÜKETMEZ: kasaya hiç dokunmaz, kos çağrılmaz', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet1-'));
+  const t = ist(PZT, 11, 0);
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t });
+  const uzak = nobetUzak(d);
+  const kosulan = [];
+  for (const [cfg, s] of [[konakCfg('srv21', 'saat'), t], [konakCfg('mac', 'saat'), ist(CMT, 11, 0)]]) {
+    const o = await K.nobetliTur({ cfg, uzak, kos: async (a) => { kosulan.push(a); return { kod: 0 }; }, log: () => {}, simdi: () => s });
+    assert.equal(o.rol, 'pasif');
+  }
+  assert.deepEqual(uzak.cagri, [], 'pasif konak listele/oku/damga çağırdı');
+  assert.equal(kosulan.length, 0);
+  assert.equal(istekSay(d), 1);
+  // uzak=null ile de çalışır (ana() pasifte ssh ucu bile kurmaz)
+  const o = await K.nobetliTur({ cfg: konakCfg('srv21', 'saat'), uzak: null, kos: null, log: () => {}, simdi: () => t });
+  assert.equal(o.rol, 'pasif');
+});
+
+test('çift tetik freni: saat devrinde (17:45→17:46) srv21, Mac damgası bayatlayana dek çekilir', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet2-'));
+  const uzak = nobetUzak(d);
+  const kosulan = [];
+  const kos = (kim) => async (a) => { kosulan.push(`${kim}:${a[2]}`); return { kod: 0 }; };
+  const mac = konakCfg('mac', 'saat'); const srv = konakCfg('srv21', 'saat');
+  const t0 = ist(PZT, 17, 45, 10);
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t0 - 5000 });
+  let o = await K.nobetliTur({ cfg: mac, uzak, kos: kos('mac'), log: () => {}, simdi: () => t0 });
+  assert.equal(o.rol, 'nobetci');
+  assert.deepEqual(kosulan, ['mac:exe-create']);
+  assert.equal(K.damgaCoz(fs.readFileSync(path.join(d, K.DAMGA_ADI), 'utf8')).konak, 'mac');
+  // 17:46: yeni istek; Mac pasif (yazmaz), srv21 Mac'in taze damgasını görüp çekilir → kimse tüketmez
+  const t1 = ist(PZT, 17, 46, 5);
+  await I.istekYaz(d, 'exe-remove', {}, { simdi: () => t1 - 1000 });
+  o = await K.nobetliTur({ cfg: mac, uzak, kos: kos('mac'), log: () => {}, simdi: () => t1 });
+  assert.equal(o.rol, 'pasif');
+  o = await K.nobetliTur({ cfg: srv, uzak, kos: kos('srv21'), log: () => {}, simdi: () => t1 + 1000 });
+  assert.equal(o.rol, 'cekildi');
+  assert.equal(istekSay(d), 1, 'çekilen konak isteği tüketti');
+  assert.equal(K.damgaCoz(fs.readFileSync(path.join(d, K.DAMGA_ADI), 'utf8')).konak, 'mac', 'çekilen konak damga yazdı');
+  // 17:49: Mac damgası 3 dk'yı aştı → srv21 nöbetçi
+  o = await K.nobetliTur({ cfg: srv, uzak, kos: kos('srv21'), log: () => {}, simdi: () => ist(PZT, 17, 48, 11) });
+  assert.equal(o.rol, 'nobetci');
+  assert.deepEqual(kosulan, ['mac:exe-create', 'srv21:exe-remove']);
+  assert.equal(istekSay(d), 0);
+});
+
+test('çift tetik freni (hep kipi): srv21 açılınca, konaksız eski Mac köprüsü damgasıyla srv21 boşta kalır', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet3-'));
+  const uzak = nobetUzak(d);
+  const kosulan = [];
+  const t = ist(CMT, 3, 0);
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t - 1000 });
+  const kos = (kim) => async () => { kosulan.push(kim); return { kod: 0 }; };
+  // eski Mac (konak verilmemiş = hep) önce koştu
+  await K.nobetliTur({ cfg: K.ayarlar({}), uzak, kos: kos('mac'), log: () => {}, simdi: () => t });
+  await I.istekYaz(d, 'exe-remove', {}, { simdi: () => t + 30000 });
+  const o = await K.nobetliTur({ cfg: konakCfg('srv21', 'saat'), uzak, kos: kos('srv21'), log: () => {}, simdi: () => t + 40000 });
+  assert.equal(o.rol, 'cekildi');
+  assert.deepEqual(kosulan, ['mac']);
+});
+
+test('tur ortasında karşı konak damga yazarsa sonraki komut çalışmaz, istek yerinde kalır', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet4-'));
+  const t = ist(CMT, 12, 0);
+  let n = 0;
+  const simdi = () => t + (n += 1);
+  await I.istekYaz(d, 'exe-remove', {}, { simdi: () => t - 2000 });
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t - 1000 });
+  const uzak = nobetUzak(d);
+  const kosulan = [];
+  const kos = async (a) => {
+    kosulan.push(a[2]);
+    // ilk komut koşarken Mac (zorla) damga yazdı
+    fs.writeFileSync(path.join(d, K.DAMGA_ADI), JSON.stringify({ konak: 'mac', zaman: t, zorla: true }));
+    return { kod: 0 };
+  };
+  const loglar = [];
+  const o = await K.nobetliTur({ cfg: konakCfg('srv21', 'saat'), uzak, kos, log: (m) => loglar.push(m), simdi });
+  assert.equal(o.kesildi, true);
+  assert.deepEqual(kosulan, ['exe-remove'], 'adlar zaman sırasıyla: önce exe-remove (t-2000)');
+  assert.equal(istekSay(d), 1);
+  assert.ok(loglar.some((m) => /nöbet karşı konağa geçti/.test(m)));
+  assert.equal(K.damgaCoz(fs.readFileSync(path.join(d, K.DAMGA_ADI), 'utf8')).konak, 'mac', 'kesilen konak damgayı ezdi');
+});
+
+test('zorla devir el sıkışması: zorla önce yalnız damga yazar, karşı konak çekilir, sonraki turda zorla işler', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet5-'));
+  const uzak = nobetUzak(d);
+  const kosulan = [];
+  const kos = (kim) => async () => { kosulan.push(kim); return { kod: 0 }; };
+  const mac = konakCfg('mac', 'saat'); const srvZ = konakCfg('srv21', 'zorla');
+  const t = ist(PZT, 11, 0);
+  await K.nobetliTur({ cfg: mac, uzak, kos: kos('mac'), log: () => {}, simdi: () => t }); // Mac damgası
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t + 10000 });
+  let o = await K.nobetliTur({ cfg: srvZ, uzak, kos: kos('srv21'), log: () => {}, simdi: () => t + 30000 });
+  assert.equal(o.rol, 'devir');
+  assert.deepEqual(K.damgaCoz(fs.readFileSync(path.join(d, K.DAMGA_ADI), 'utf8')), { konak: 'srv21', zaman: t + 30000, zorla: true });
+  o = await K.nobetliTur({ cfg: mac, uzak, kos: kos('mac'), log: () => {}, simdi: () => t + 60000 });
+  assert.equal(o.rol, 'cekildi');
+  o = await K.nobetliTur({ cfg: srvZ, uzak, kos: kos('srv21'), log: () => {}, simdi: () => t + 90000 });
+  assert.equal(o.rol, 'nobetci');
+  assert.deepEqual(kosulan, ['srv21']);
+  assert.equal(istekSay(d), 0);
+});
+
+test('damga yazılamazsa tur atlanır (freni kör konak iş yapmaz); --kuru damga yazmaz', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet6-'));
+  const t = ist(CMT, 12, 0);
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t });
+  const kosulan = [];
+  const kos = async () => { kosulan.push(1); return { kod: 0 }; };
+  const bozuk = { ...nobetUzak(d), damgaYaz: () => false };
+  const o = await K.nobetliTur({ cfg: konakCfg('srv21', 'saat'), uzak: bozuk, kos, log: () => {}, simdi: () => t });
+  assert.equal(o.rol, 'damga-yok');
+  assert.equal(kosulan.length, 0);
+  const uzak = nobetUzak(d);
+  const k = await K.nobetliTur({ cfg: konakCfg('srv21', 'saat'), uzak, kos, log: () => {}, kuru: true, simdi: () => t });
+  assert.equal(k.rol, 'nobetci');
+  assert.ok(!uzak.cagri.includes('damgaYaz'));
+  assert.equal(kosulan.length, 0);
+  assert.equal(istekSay(d), 1);
+});
+
+test('kosOrtami: srv21 hesap devralmayı kapatır (başkasının işini öldürmez), Mac eski davranış', () => {
+  assert.equal(K.kosOrtami('srv21', {}).YAYINCILIKADM_HESAP_DEVRAL_SN, '0');
+  assert.equal(K.kosOrtami('srv21', {}).YAYINCILIKADM_HESAP_BEKLE, '90');
+  assert.equal(K.kosOrtami('mac', {}).YAYINCILIKADM_HESAP_DEVRAL_SN, undefined);
+  assert.equal(K.kosOrtami('srv21', { YAYINCILIKADM_HESAP_DEVRAL_SN: '3600' }).YAYINCILIKADM_HESAP_DEVRAL_SN, '3600');
+});
+
+test('ssh uzak ucu: anahtar verilirse -i + IdentitiesOnly; damga oku/yaz komutları', () => {
+  const cagri = [];
+  const u = K.sshUzak({ ssh: 'Administrator@h', dizin: 'C:\\d', anahtar: '/root/.ssh/kasa-kopru' },
+    (...a) => { cagri.push(a); return { status: 0, stdout: '{"konak":"mac","zaman":7}\r\n' }; });
+  assert.deepEqual(u.damgaOku(), { konak: 'mac', zaman: 7, zorla: false });
+  assert.equal(u.damgaYaz('srv21', 9, false), true);
+  const argv = cagri[0][1];
+  assert.deepEqual(argv.slice(4, 8), ['-i', '/root/.ssh/kasa-kopru', '-o', 'IdentitiesOnly=yes']);
+  assert.equal(argv[argv.length - 1], 'type "C:\\d\\.nobetci.json" 2>nul');
+  assert.equal(cagri[1][1][cagri[1][1].length - 1], K.damgaYazKomutu('C:\\d', 'srv21', 9, false));
+  const c2 = [];
+  K.sshUzak({ ssh: 'h', dizin: 'C:\\d' }, (...a) => { c2.push(a); return { status: 0, stdout: '' }; }).listele();
+  assert.ok(!c2[0][1].includes('-i'), 'anahtarsız Mac çağrısı değişmedi');
+});
+
+test('rol günlüğü yalnız rol değişince yazar', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'nobet7-'));
+  const y = path.join(d, 'rol');
+  assert.equal(K.rolDegisti(y, 'pasif'), true);
+  assert.equal(K.rolDegisti(y, 'pasif'), false);
+  assert.equal(K.rolDegisti(y, 'nobetci'), true);
+});

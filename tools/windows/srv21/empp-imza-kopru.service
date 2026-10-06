@@ -1,0 +1,23 @@
+# İmza tetik köprüsü — srv21 ikizi (tek tur). Kaynak: tools/windows/imza-tetik-koprusu.js
+# Nöbet: Pzt-Cum 09:30-17:45 Mac, diğer zamanlar srv21 (Nadir 06.10). Pasif turda kasaya bağlanmaz.
+# Kurulum: tools/windows/srv21/kur.sh (ETKİNLEŞTİRMEZ). Etkinleştirme: systemctl enable --now empp-imza-kopru.timer
+# Elle devir: systemctl edit empp-imza-kopru.service → [Service] Environment=EMPP_KOPRU_NOBET=zorla
+[Unit]
+Description=EMPP imza tetik köprüsü (srv21 ikizi) — tek tur
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/empp-imza-kopru
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+Environment=EMPP_KOPRU_KONAK=srv21
+Environment=EMPP_KASA_SSH=Administrator@100.99.245.17
+Environment=EMPP_KASA_SSH_ANAHTAR=/root/.ssh/kasa-kopru
+ExecStart=/usr/local/bin/node /opt/empp-imza-kopru/tools/windows/imza-tetik-koprusu.js
+StandardOutput=append:/var/log/empp-imza-kopru.log
+StandardError=append:/var/log/empp-imza-kopru.log
+# yayincilikadm çağrısı en çok 10 dk (kod içi zaman aşımı) + ssh payı
+TimeoutStartSec=15min
+Nice=10

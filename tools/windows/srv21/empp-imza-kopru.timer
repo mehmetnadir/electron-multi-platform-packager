@@ -1,0 +1,10 @@
+[Unit]
+Description=EMPP imza tetik köprüsü (srv21 ikizi) — 60 sn'de bir
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
