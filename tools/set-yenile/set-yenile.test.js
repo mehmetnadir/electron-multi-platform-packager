@@ -38,6 +38,9 @@ function sahteDunya(ayar = {}) {
     yedekBozuk: Boolean(ayar.yedekBozuk),
     ekKod: ayar.ekKod === undefined ? 0 : ayar.ekKod,
     tikHook: ayar.tikHook || (() => {}),
+    okumaHata: ayar.okumaHata || (() => false),
+    yazmaHata: ayar.yazmaHata || (() => false),
+    bekleler: [],
     ekUretVar: ayar.ekUretVar !== false,
   };
   const tsv = (satirlar, kolonlar) => {
@@ -60,6 +63,7 @@ function sahteDunya(ayar = {}) {
     if (cmd === 'ssh' && (args.includes('root@100.117.187.26') || args.includes('root@10.0.0.21'))) {
       if (son === 'pipeline-sql') {
         const q = opts.girdi;
+        if (w.okumaHata(q, w)) return { kod: -1, stdout: '', stderr: 'ControlSocket already exists, disabling multiplexing\nzaman aşımı 90000 ms' };
         const ids = idleri(q);
         if (/FROM pipeline_book_summaries/.test(q)) {
           const r = ids.map((id) => w.kitaplar[id]).filter(Boolean);
@@ -83,6 +87,7 @@ function sahteDunya(ayar = {}) {
       if (/^mariadb --defaults-extra-file/.test(son)) {
         const q = opts.girdi;
         const id = idleri(q)[0];
+        if (w.yazmaHata(q, w)) return { kod: 1, stdout: '', stderr: 'ERROR 2013 (HY000): Lost connection to server during query' };
         if (/UPDATE pipeline_book_summaries/.test(q)) {
           w.kitaplar[id].kaynak_kur_istegi_at = DB_T0;
           return tamam(`${DB_T0}\n1\n`);
@@ -120,7 +125,7 @@ function sahteDunya(ayar = {}) {
   const d = {
     calistir,
     simdi: () => w.simdi,
-    bekle: async (ms) => { w.simdi += ms; w.tik += 1; w.tikHook(w); },
+    bekle: async (ms) => { w.bekleler.push(ms); w.simdi += ms; w.tik += 1; w.tikHook(w); },
     getir: async () => ({ kod: 200, govde: JSON.stringify({ girdiSha: 'abc123', uretildi: new Date(w.simdi + 1000).toISOString() }) }),
     dosyaVar: (y) => (y === CFG.ekUret ? w.ekUretVar : w.arsiv.has(y)),
     dosyaOku: (y) => w.yazilan[y],
@@ -318,7 +323,7 @@ test('ret yolu o kitabı durdurur, diğer kitap sürer', async () => {
 test('kur tavanı dolunca eylemsiz durur ve bildirir (requeue önceden yapılmıştır)', async () => {
   const { w, d } = sahteDunya();
   const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '3'], d, CFG);
-  assert.equal(kod, 1);
+  assert.equal(kod, S.CIKIS.KUR_TAVAN, 'tavan doldu = çıkış 3');
   assert.match(durumOku(w).kitaplar['45550'].durdu.neden, /3 dk içinde bitmedi/);
   assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 1);
   assert.ok(w.bildirimler.some((b) => /45550 durdu \(bekle\)/.test(b[1])));
@@ -425,7 +430,7 @@ test('akış: kurulum_* dolsa da yeni geçerli satır yoksa başarı sayılmaz (
     tikHook: (x) => { if (x.tik === 1) Object.assign(x.kitaplar['45550'], { kaynak_kurulum_bitis: '2026-10-06 09:30:00.000', kaynak_kurulum_surum: '2.25.7' }); },
   });
   const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '3'], d, CFG);
-  assert.equal(kod, 1);
+  assert.equal(kod, S.CIKIS.KUR_TAVAN, 'tavan doldu = çıkış 3');
   const k = durumOku(w).kitaplar['45550'];
   assert.equal(k.adimlar.bekle.durum, 'hata');
   assert.match(k.durdu.neden, /bitmedi/);
@@ -466,4 +471,87 @@ test('kur isteği başarısızsa (yedek yok) requeue YAPILMAZ: eski kaynakla ür
   await S.ana(['45550', '--uygula', '--ek-atla'], d, CFG);
   assert.equal(w.cagrilar.filter((c) => /mariadb-dump .*pipeline_platform_summaries/.test(c.args ? c.args[c.args.length - 1] : '')).length, 0);
   assert.equal(mariadbCagrilari(w).length, 0);
+});
+
+// ─── Dayanıklılık (06.10, 15 set canlı koşusu) ────────────────────────────────────────────
+
+test('ssh: srv21, kasa ve ProBook çağrılarının hepsi ControlPath=none taşır (mux çakışması yok)', async () => {
+  const { w, d } = sahteDunya();
+  await S.ana(['45550', '--ek-atla'], d, CFG);
+  const ssh = w.cagrilar.filter((c) => c.cmd === 'ssh');
+  assert.ok(ssh.length >= 5);
+  for (const c of ssh) {
+    const i = c.args.indexOf('ControlPath=none');
+    assert.ok(i > 0 && c.args[i - 1] === '-o', c.args.join(' '));
+  }
+});
+
+test('izleme: okuma zaman aşımı → 15 sn arayla 3 deneme → ölçüm atlandı → döngü sürer, sonra tamamlanır', async () => {
+  let izleOkuma = 0;
+  const { w, d } = sahteDunya({
+    // requeue sonrası izleme okumalarının ilk 3'ü zaman aşımı (bir tur tamamen atlanır).
+    okumaHata: (q, x) => {
+      if (!/FROM pipeline_platform_summaries/.test(q) || !x.izlemeBasladi) return false;
+      izleOkuma += 1;
+      return izleOkuma <= 3;
+    },
+    tikHook: (x) => {
+      x.izlemeBasladi = true;
+      if (izleOkuma > 3) for (const p of x.platformlar.filter((y) => y.book_id === '45550')) Object.assign(p, { status: 'completed', last_run_at: '2026-10-06 11:00:00' });
+    },
+  });
+  w.izlemeBasladi = false;
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--kur-atla', '--platform', 'pardus', '--izle'], d, CFG);
+  assert.equal(kod, 0, w.loglar.join('\n'));
+  assert.ok(w.uyarilar.filter((u) => /izleme ölçümü: okuma hatası \(\d\/3\)/.test(u)).length >= 3);
+  assert.ok(w.uyarilar.some((u) => /izleme ölçümü: ölçüm atlandı/.test(u)));
+  assert.ok(w.bekleler.filter((ms) => ms === 15000).length >= 2, 'denemeler arası 15 sn');
+  assert.equal(durumOku(w).kitaplar['45550'].adimlar.izle.platformlar.pardus.durum, 'uretildi-bitti');
+  assert.equal(w.bildirimler.filter((b) => b[3] === 'Set yenileme bitti').length, 1);
+});
+
+test('bekleme: iki zaman aşımından sonra üçüncü deneme başarılı → yeni kaynak görülür', async () => {
+  let n = 0;
+  const { w, d } = sahteDunya({
+    okumaHata: (q, x) => x.tik >= 1 && /FROM pipeline_book_summaries/.test(q) && (n += 1) <= 2,
+    tikHook: kurBitir('45550', 1),
+  });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus'], d, CFG);
+  assert.equal(kod, 0, w.loglar.join('\n'));
+  assert.equal(durumOku(w).kitaplar['45550'].adimlar.bekle.durum, 'tamam');
+  assert.ok(!w.uyarilar.some((u) => /ölçüm atlandı/.test(u)));
+});
+
+test('bekleme: ölçüm hep başarısızsa araç düşmez, tavan dolunca çıkış 3', async () => {
+  const { w, d } = sahteDunya({ okumaHata: (q, x) => x.tik >= 1 && /FROM kaynak_build_surumleri/.test(q) });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '2'], d, CFG);
+  assert.equal(kod, S.CIKIS.KUR_TAVAN);
+  assert.match(durumOku(w).kitaplar['45550'].durdu.neden, /son ölçüm atlandı/);
+});
+
+test('yazma hatası (requeue) ilk hatada o kitabı durdurur, yeniden denemez; diğer kitap sürer; çıkış 1', async () => {
+  const { w, d } = sahteDunya({ yazmaHata: (q) => /UPDATE pipeline_platform_summaries/.test(q) && /book_id='11845'/.test(q) });
+  const kod = await S.ana(['11845', '45550', '--uygula', '--ek-atla', '--kur-atla', '--platform', 'pardus'], d, CFG);
+  assert.equal(kod, S.CIKIS.HATA);
+  const st = durumOku(w);
+  assert.equal(st.kitaplar['11845'].durdu.adim, 'requeue');
+  assert.match(st.kitaplar['11845'].durdu.neden, /yazma adımı hatası.*Lost connection/);
+  assert.equal(mariadbCagrilari(w).filter((c) => /book_id='11845'/.test(c.girdi)).length, 1, 'yazma yeniden denenmedi');
+  assert.equal(st.kitaplar['45550'].adimlar.requeue.platformlar.pardus.durum, 'tamam');
+  assert.equal(w.bekleler.filter((ms) => ms === 15000).length, 0, 'yazmada yeniden deneme beklemesi yok');
+});
+
+test('yazma hatası (kur isteği) o kitapta requeue yapılmaz', async () => {
+  const { w, d } = sahteDunya({ yazmaHata: (q) => /UPDATE pipeline_book_summaries/.test(q) });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus'], d, CFG);
+  assert.equal(kod, S.CIKIS.HATA);
+  assert.equal(durumOku(w).kitaplar['45550'].durdu.adim, 'kur');
+  assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 0);
+});
+
+test('çıkış kodu: tavan + başka hata birlikte → 1 (3 yalnız bütün durmalar tavansa)', async () => {
+  const { w, d } = sahteDunya({ yazmaHata: (q) => /UPDATE pipeline_book_summaries/.test(q) && /book_id='11845'/.test(q) });
+  const kod = await S.ana(['11845', '45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '2'], d, CFG);
+  assert.equal(kod, S.CIKIS.HATA);
+  assert.equal(durumOku(w).kitaplar['45550'].durdu.kod, S.CIKIS.KUR_TAVAN);
 });
