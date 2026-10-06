@@ -182,7 +182,7 @@ node tools/set-yenile/sozlesme-bekcisi.js --uygula --setler "45550" # + requeue 
 |---|---|---|
 | GÜNCEL | completed, kabuk kanonik, paket ≥ kaynak build, İmpark sürümü = build, R2 nesnesi paketten sonra | — |
 | BAYAT-P | paket kaynak build'den eski ya da kabuk kanonik değil | yedek → requeue |
-| BAYAT-K | İmpark sürümü build'dekinden büyük | bildirim: `set-yenile <S> --uygula` |
+| BAYAT-K | İmpark sürümü build'dekinden büyük | yedek → set başına kur isteği (`kaynak_kur_istegi_at = NOW(3)`) → completed/failed satırları requeue |
 | KUYRUKTA / KOŞUYOR | satır işte | — |
 | FAIL | `last_error` ilk 100 kr | bildirim (`-p yuksek`) |
 | YAYIN-EKSİK | R2'de yok, eski ya da boyutu DB'den farklı | bildirim (2 sa beklemeden sonra) |
@@ -195,7 +195,9 @@ Set kararı: KANAL-G-YOK, KANAL-G-ESKİ, LİSTE-FARKI (ayar ≠ panel), BAYAT-KA
 
 - Requeue öncesi yedek: `/root/yedek-deploy/<damga>-sozlesme-bekcisi/once.sql`. "Dump completed" + ≥1 INSERT yoksa yazma YOK.
 - UPDATE yalnız `status IN ('completed','failed')` satıra dokunur. queued/running satır plana girmez.
-- Tavan: set×platform 24 saatte 1, toplam 24 saatte 12. Kaynak kur isteği açıksa requeue atlanır.
+- Tavan (geri basınç): koşu başında KUYRUKTA+KOŞUYOR = Q (istisnalar hariç) ise bu koşuda en çok max(0, 8−Q) yeni requeue. Set bölünmez: sığmayan set sonraki koşuya kalır, tamamen bayat setler önce. Günlük üst sınır 48 requeue (24 sa). set×platform 24 saatte 1; kur isteği set başına 24 saatte 1. BAYAT-P: kaynak kur isteği açıksa requeue atlanır.
+- BAYAT-K: kur isteği requeue'dan ÖNCE yazılır (book-update `platform-ayar-kuyruk` kalıbı; üretici yeni build'i kurar). İstek zaten açıksa yazılmaz, yalnız requeue. Manuel (M1) set kurulmaz. Kur isteği yazılamazsa o setin requeue'su yapılmaz. Running/queued satıra dokunulmaz.
+- Yedek `pipeline_platform_summaries` + `pipeline_book_summaries` dump'ıdır.
 - Bildirim: set başına günde 1. 5'ten çok set varsa tek özet bildirim gider.
 - Çıktı: `~/.empp-agent/sozlesme-bekcisi/` → `son-rapor.md`, `son-rapor.json`, `eylem.jsonl`, `bildirim.json`.
 - Zaman: DB ve rclone lsl +03 yerel saattir. Araç saate ekleme yapmaz.
