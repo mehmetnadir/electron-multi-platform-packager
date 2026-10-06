@@ -19,6 +19,10 @@ const zlib = require('zlib');
 const SOZLESME = 1;
 const MANIFEST_ADI = 'kabuk-ek.json';
 const VARSAYILAN_TAVAN = 2 * 1024 * 1024;
+/**
+ * Yükleme anındaki tavan (bilgi amaçlı). Denetim için TEK KAYNAK `tavanAl()`'dır: env'i her
+ * çağrıda okur ve `{tavan}` seçeneğini tanır. Bu sabite güvenen çağıran env değişimini görmez.
+ */
 const EK_TAVAN_BAYT = Number(process.env.EMPP_KABUK_EK_TAVAN || VARSAYILAN_TAVAN);
 const CDN_TABAN = (process.env.EMPP_KABUK_EK_CDN || 'https://cdn.ydspublishing.com')
   .replace(/\/+$/, '');
@@ -36,7 +40,7 @@ class EkHatasi extends Error {
   }
 }
 
-/** Geçerli tavan (çağrı anında env okunur; testte küçük tavan verilebilir). */
+/** Geçerli tavan — TEK KAYNAK (çağrı anında env okunur; `{tavan}` seçeneği önceliklidir). */
 function tavanAl(o = {}) {
   if (Number.isFinite(o.tavan) && o.tavan > 0) return o.tavan;
   const n = Number(process.env.EMPP_KABUK_EK_TAVAN || VARSAYILAN_TAVAN);
@@ -226,10 +230,19 @@ function zipYaz(girdiler) {
   return Buffer.concat([...yerel, md, son]);
 }
 
-/** Zip Buffer → Map<ad, Buffer>. Biçim/CRC/çift ad hatası → EkHatasi('bozuk'). SAF. */
-function zipOku(buf) {
+/** Zip girdi sayısı tavanı (kabuk ~20 dosya; bomba/merkez dizin şişirmesine karşı). */
+const GIRDI_TAVANI = 512;
+
+/**
+ * Zip Buffer → Map<ad, Buffer>. Biçim/CRC/çift ad hatası → EkHatasi('bozuk'). SAF.
+ * Şişirmeden ÖNCE (zip bombası): girdi sayısı ≤ 512, tek girdi açık boyu ≤ 4×tavan, açık boy
+ * toplamı ≤ 8×tavan, her yerel başlık ofseti tekil, veri aralıkları çakışmaz.
+ * @param {Buffer} buf @param {{tavan?: number}} [o]
+ */
+function zipOku(buf, o = {}) {
   const bozuk = (m) => new EkHatasi('bozuk', `zip bozuk: ${m}`);
   if (!Buffer.isBuffer(buf) || buf.length < 22) throw bozuk('çok kısa');
+  const tavan = tavanAl(o);
   let e = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {
     if (buf.readUInt32LE(i) === 0x06054b50) { e = i; break; }
@@ -239,11 +252,16 @@ function zipOku(buf) {
   const mdBoy = buf.readUInt32LE(e + 12);
   const mdOfs = buf.readUInt32LE(e + 16);
   if (adet === 0xffff || mdOfs === 0xffffffff) throw bozuk('ZIP64 desteklenmez');
+  if (adet > GIRDI_TAVANI) throw bozuk(`girdi sayısı ${adet} > ${GIRDI_TAVANI}`);
   if (mdOfs + mdBoy > e) throw bozuk('merkez dizin taşıyor');
-  const c = new Map();
+  // 1. geçiş: yalnız başlıklar (şişirme YOK).
+  const girdiler = [];
+  const adlar = new Set();
+  const ofsetler = new Set();
+  let acikToplam = 0;
   let p = mdOfs;
   for (let n = 0; n < adet; n++) {
-    if (p + 46 > e || buf.readUInt32LE(p) !== 0x02014b50) throw bozuk('merkez başlık');
+    if (p + 46 > mdOfs + mdBoy || buf.readUInt32LE(p) !== 0x02014b50) throw bozuk('merkez başlık');
     const bayrak = buf.readUInt16LE(p + 8);
     const yontem = buf.readUInt16LE(p + 10);
     const crc = buf.readUInt32LE(p + 16);
@@ -253,28 +271,50 @@ function zipOku(buf) {
     const ekBoy = buf.readUInt16LE(p + 30);
     const yorumBoy = buf.readUInt16LE(p + 32);
     const lhOfs = buf.readUInt32LE(p + 42);
+    if (p + 46 + adBoy > mdOfs + mdBoy) throw bozuk('merkez başlık adı taşıyor');
     const ad = buf.subarray(p + 46, p + 46 + adBoy).toString('utf8');
     p += 46 + adBoy + ekBoy + yorumBoy;
     if (bayrak & 0x1) throw bozuk(`şifreli girdi: ${ad}`);
-    if (c.has(ad)) throw bozuk(`çift girdi: ${ad}`);
+    if (yontem !== 0 && yontem !== 8) throw bozuk(`desteklenmeyen yöntem ${yontem}: ${ad}`);
+    if (adlar.has(ad)) throw bozuk(`çift girdi: ${ad}`);
+    adlar.add(ad);
+    if (ofsetler.has(lhOfs)) throw bozuk(`aynı yerel başlığa işaret eden girdi: ${ad}`);
+    ofsetler.add(lhOfs);
+    if (acikBoy > tavan * 4) throw bozuk(`açık boy ${acikBoy} > 4×tavan: ${ad}`);
+    acikToplam += acikBoy;
+    if (acikToplam > tavan * 8) throw bozuk(`açık boy toplamı ${acikToplam} > 8×tavan`);
+    if (yontem === 0 && sikBoy !== acikBoy) throw bozuk(`saklı girdi boyu uyuşmuyor: ${ad}`);
     if (lhOfs + 30 > mdOfs || buf.readUInt32LE(lhOfs) !== 0x04034b50) {
       throw bozuk(`yerel başlık: ${ad}`);
     }
     const vOfs = lhOfs + 30 + buf.readUInt16LE(lhOfs + 26) + buf.readUInt16LE(lhOfs + 28);
     if (vOfs + sikBoy > mdOfs) throw bozuk(`veri taşıyor: ${ad}`);
-    const ham = buf.subarray(vOfs, vOfs + sikBoy);
+    girdiler.push({ ad, yontem, crc, sikBoy, acikBoy, lhOfs, vOfs });
+  }
+  // Veri aralıkları [yerel başlık, veri sonu) çakışmamalı.
+  const sirali = [...girdiler].sort((a, b) => a.lhOfs - b.lhOfs);
+  for (let i = 1; i < sirali.length; i++) {
+    const once = sirali[i - 1];
+    if (once.vOfs + once.sikBoy > sirali[i].lhOfs) {
+      throw bozuk(`çakışan girdiler: ${once.ad} / ${sirali[i].ad}`);
+    }
+  }
+  // 2. geçiş: şişirme (her girdi beyan edilen boyla sınırlı).
+  const c = new Map();
+  for (const g of girdiler) {
+    const ham = buf.subarray(g.vOfs, g.vOfs + g.sikBoy);
     let veri;
-    if (yontem === 0) veri = Buffer.from(ham);
-    else if (yontem === 8) {
+    if (g.yontem === 0) veri = Buffer.from(ham);
+    else {
       try {
-        veri = zlib.inflateRawSync(ham, { maxOutputLength: Math.max(acikBoy, 1) });
+        veri = zlib.inflateRawSync(ham, { maxOutputLength: Math.max(g.acikBoy, 1) });
       } catch (err) {
-        throw bozuk(`açılamadı: ${ad} (${String(err && err.message).slice(0, 60)})`);
+        throw bozuk(`açılamadı: ${g.ad} (${String(err && err.message).slice(0, 60)})`);
       }
-    } else throw bozuk(`desteklenmeyen yöntem ${yontem}: ${ad}`);
-    if (veri.length !== acikBoy) throw bozuk(`boyut uyuşmuyor: ${ad}`);
-    if ((zlib.crc32(veri) >>> 0) !== crc) throw bozuk(`CRC uyuşmuyor: ${ad}`);
-    c.set(ad, veri);
+    }
+    if (veri.length !== g.acikBoy) throw bozuk(`boyut uyuşmuyor: ${g.ad}`);
+    if ((zlib.crc32(veri) >>> 0) !== g.crc) throw bozuk(`CRC uyuşmuyor: ${g.ad}`);
+    c.set(g.ad, veri);
   }
   return c;
 }
@@ -342,7 +382,7 @@ function ekAc(buf, b = {}) {
   if (!Buffer.isBuffer(buf)) throw new EkHatasi('bozuk', 'Buffer bekleniyor');
   const tavan = tavanAl(b);
   if (buf.length > tavan) throw new EkHatasi('tavan', `ek ${buf.length} bayt > tavan ${tavan}`);
-  const girdiler = zipOku(buf);
+  const girdiler = zipOku(buf, { tavan });
   const mHam = girdiler.get(MANIFEST_ADI);
   if (!mHam) throw new EkHatasi('bozuk', `${MANIFEST_ADI} yok`);
   let manifest;
@@ -372,6 +412,44 @@ function ekAc(buf, b = {}) {
   return { manifest, dosyalar: girdiler };
 }
 
+// ── İmza (ed25519) ──────────────────────────────────────────────────────────────────────────
+
+function anahtarNesnesi(anahtar, ozel) {
+  if (anahtar && typeof anahtar === 'object' && anahtar.asymmetricKeyType) return anahtar;
+  return ozel ? crypto.createPrivateKey(anahtar) : crypto.createPublicKey(anahtar);
+}
+
+/**
+ * Ek zip'ini imzalar (Mac). ed25519 dışı anahtar → TypeError.
+ * @param {Buffer} buf @param {string|crypto.KeyObject} ozelAnahtarPem @returns {string} base64
+ */
+function ekImzala(buf, ozelAnahtarPem) {
+  if (!Buffer.isBuffer(buf)) throw new TypeError('Buffer bekleniyor');
+  const k = anahtarNesnesi(ozelAnahtarPem, true);
+  if (k.asymmetricKeyType !== 'ed25519') throw new TypeError('ed25519 özel anahtar bekleniyor');
+  return crypto.sign(null, buf, k).toString('base64');
+}
+
+/**
+ * İmzayı doğrular (ProBook). Geçersiz girdi/anahtar → false. FIRLATMAZ.
+ * @param {Buffer} buf @param {string} imzaB64 @param {string|crypto.KeyObject} acikAnahtarPem
+ * @returns {boolean}
+ */
+function ekImzaDogrula(buf, imzaB64, acikAnahtarPem) {
+  try {
+    if (!Buffer.isBuffer(buf) || typeof imzaB64 !== 'string') return false;
+    const temiz = imzaB64.trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(temiz)) return false;
+    const imza = Buffer.from(temiz, 'base64');
+    if (imza.length !== 64) return false;
+    const k = anahtarNesnesi(acikAnahtarPem, false);
+    if (k.asymmetricKeyType !== 'ed25519') return false;
+    return crypto.verify(null, buf, k, imza);
+  } catch (_) {
+    return false;
+  }
+}
+
 // ── R2 anahtarları / CDN ────────────────────────────────────────────────────────────────────
 
 const ID_DESENI = /^[A-Za-z0-9_-]+$/;
@@ -387,15 +465,17 @@ function shaDenetle(sha) {
 }
 
 const ekAnahtari = (bookId, sha) => `kabuk-ek/${idDenetle(bookId)}/${shaDenetle(sha)}.zip`;
+const imzaAnahtari = (bookId, sha) => `kabuk-ek/${idDenetle(bookId)}/${shaDenetle(sha)}.imza`;
 const retAnahtari = (bookId, sha) => `kabuk-ek/${idDenetle(bookId)}/${shaDenetle(sha)}.ret.json`;
 const sonAnahtari = (bookId) => `kabuk-ek/${idDenetle(bookId)}/son.json`;
 
-/** İçerik adresli (değişmez) → önbellek kırıcı YOK. */
-const ekUrl = (bookId, sha) => `${CDN_TABAN}/${ekAnahtari(bookId, sha)}`;
-/** Önbellek kırıcılı (`?t=<ms>`): ret işareti 404'ten sonra yazılabilir. */
+// Hepsi önbellek kırıcılı (`?t=<ms>`): CDN'de önbelleğe girmiş eski 404 yeni yüklemeyi gizlemesin.
+const ekUrl = (bookId, sha, simdi = Date.now()) =>
+  `${CDN_TABAN}/${ekAnahtari(bookId, sha)}?t=${simdi}`;
+const imzaUrl = (bookId, sha, simdi = Date.now()) =>
+  `${CDN_TABAN}/${imzaAnahtari(bookId, sha)}?t=${simdi}`;
 const retUrl = (bookId, sha, simdi = Date.now()) =>
   `${CDN_TABAN}/${retAnahtari(bookId, sha)}?t=${simdi}`;
-/** Önbellek kırıcılı (`?t=<ms>`): son.json her üretimde değişir. */
 const sonUrl = (bookId, simdi = Date.now()) => `${CDN_TABAN}/${sonAnahtari(bookId)}?t=${simdi}`;
 
 /** Varsayılan getir: global fetch + tarayıcı UA + 30 sn. Ağ hatasında fırlatır. */
@@ -412,40 +492,52 @@ async function varsayilanGetir(url) {
 const hataMetni = (e) => String((e && e.message) || e).slice(0, 200);
 
 /**
- * CDN'den eki alır ve doğrular. FIRLATMAZ.
+ * CDN'den eki alır, İMZAYI doğrular, sonra ayrıştırır. FIRLATMAZ.
+ * Sıra: zip GET → 200 ise `acikAnahtar` şart → tavan → `.imza` GET → imza doğrula → `ekAc`.
+ * İmzasız / geçersiz imzalı zip ayrıştırılmaz. 404 → yok (ya da ret); 403 ve diğerleri → ağ
+ * hatası (bot kapısı "yok" sanılmasın).
  * @param {{bookId: string|number, girdiSha: string, kip: string,
+ *   acikAnahtar?: string|crypto.KeyObject,
  *   getir?: (url: string) => Promise<{status: number, buffer: Buffer}>,
  *   beyazListe?: Function, klasorler?: Iterable<string>, tavan?: number}} o
  * @returns {Promise<{durum: 'var', manifest: object, dosyalar: Map<string, Buffer>}
  *   | {durum: 'yok'} | {durum: 'ret', neden: string}
- *   | {durum: 'hata', kod: string, mesaj: string}>}  kod: 'ag' | EkHatasi kodu
+ *   | {durum: 'hata', kod: string, mesaj: string}>}
+ *   kod: 'ag' | 'imza' | 'imza-anahtari-yok' | EkHatasi kodu
  */
-async function ekGetir({ bookId, girdiSha, kip, getir = varsayilanGetir, ...s }) {
+async function ekGetir({ bookId, girdiSha, kip, acikAnahtar, getir = varsayilanGetir, ...s }) {
+  const hata = (kod, mesaj) => ({ durum: 'hata', kod, mesaj });
   let url;
-  try { url = ekUrl(bookId, girdiSha); } catch (e) {
-    return { durum: 'hata', kod: 'yol', mesaj: hataMetni(e) };
-  }
+  try { url = ekUrl(bookId, girdiSha); } catch (e) { return hata('yol', hataMetni(e)); }
   let r;
-  try { r = await getir(url); } catch (e) {
-    return { durum: 'hata', kod: 'ag', mesaj: hataMetni(e) };
-  }
+  try { r = await getir(url); } catch (e) { return hata('ag', hataMetni(e)); }
   const status = r && r.status;
   if (status === 200) {
+    if (!acikAnahtar) return hata('imza-anahtari-yok', 'ek imza açık anahtarı verilmedi');
+    const buf = r.buffer;
+    if (!Buffer.isBuffer(buf)) return hata('bozuk', 'gövde Buffer değil');
+    const tavan = tavanAl(s);
+    if (buf.length > tavan) return hata('tavan', `ek ${buf.length} bayt > tavan ${tavan}`);
+    let ri;
+    try { ri = await getir(imzaUrl(bookId, girdiSha)); } catch (e) {
+      return hata('ag', `imza okunamadı: ${hataMetni(e)}`);
+    }
+    if (!ri || ri.status === 404) return hata('imza', 'imza dosyası yok');
+    if (ri.status !== 200) return hata('ag', `imza HTTP ${ri.status}`);
+    const imza = Buffer.from(ri.buffer || '').toString('utf8');
+    if (!ekImzaDogrula(buf, imza, acikAnahtar)) return hata('imza', 'imza geçersiz');
     try {
-      const { manifest, dosyalar } = ekAc(r.buffer, { bookId, girdiSha, kip, ...s });
+      const { manifest, dosyalar } = ekAc(buf, { bookId, girdiSha, kip, ...s });
       return { durum: 'var', manifest, dosyalar };
     } catch (e) {
-      return { durum: 'hata', kod: e instanceof EkHatasi ? e.kod : 'bozuk', mesaj: hataMetni(e) };
+      return hata(e instanceof EkHatasi ? e.kod : 'bozuk', hataMetni(e));
     }
   }
-  // R2 herkese açık uçta olmayan nesne 404 (bazı CDN'ler 403) döner; ikisi de "yok" sayılır.
-  if (status !== 404 && status !== 403) {
-    return { durum: 'hata', kod: 'ag', mesaj: `HTTP ${status} (${url})` };
-  }
+  if (status !== 404) return hata('ag', `HTTP ${status} (${url})`);
   // Ek yok → kalıcı ret işareti var mı?
   let rr;
   try { rr = await getir(retUrl(bookId, girdiSha)); } catch (e) {
-    return { durum: 'hata', kod: 'ag', mesaj: `ret işareti okunamadı: ${hataMetni(e)}` };
+    return hata('ag', `ret işareti okunamadı: ${hataMetni(e)}`);
   }
   if (rr && rr.status === 200) {
     let neden = 'ret işareti (neden okunamadı)';
@@ -455,9 +547,7 @@ async function ekGetir({ bookId, girdiSha, kip, getir = varsayilanGetir, ...s })
     } catch (_) { /* gövde bozuk: ret yine geçerli, neden bilinmiyor */ }
     return { durum: 'ret', neden };
   }
-  if (rr && rr.status !== 404 && rr.status !== 403) {
-    return { durum: 'hata', kod: 'ag', mesaj: `ret işareti HTTP ${rr.status}` };
-  }
+  if (!rr || rr.status !== 404) return hata('ag', `ret işareti HTTP ${rr && rr.status}`);
   return { durum: 'yok' };
 }
 
@@ -474,8 +564,9 @@ async function sonOku({ bookId, getir = varsayilanGetir }) {
 }
 
 module.exports = {
-  EK_TAVAN_BAYT, SOZLESME, MANIFEST_ADI, CDN_TABAN, EkHatasi,
+  EK_TAVAN_BAYT, SOZLESME, MANIFEST_ADI, CDN_TABAN, GIRDI_TAVANI, EkHatasi, tavanAl,
   kanonikJson, girdiParmakIzi, manifestKur, ekPaketle, ekAc, yolDenetle,
-  ekAnahtari, retAnahtari, sonAnahtari, ekUrl, retUrl, sonUrl, ekGetir, sonOku,
-  zipYaz, zipOku,
+  ekImzala, ekImzaDogrula,
+  ekAnahtari, imzaAnahtari, retAnahtari, sonAnahtari, ekUrl, imzaUrl, retUrl, sonUrl,
+  ekGetir, sonOku, zipYaz, zipOku,
 };

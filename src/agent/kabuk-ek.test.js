@@ -255,20 +255,34 @@ test('bayat: girdiSha / bookId / kip / sözleşme farkı', () => {
   hataKodu(() => E.ekAc(zip2, AC), 'bayat');
 });
 
-test('anahtarlar ve URL\'ler', () => {
+test('anahtarlar ve URL\'ler (hepsi önbellek kırıcılı)', () => {
   assert.equal(E.ekAnahtari('45550', GIRDI_SHA), `kabuk-ek/45550/${GIRDI_SHA}.zip`);
+  assert.equal(E.imzaAnahtari('45550', GIRDI_SHA), `kabuk-ek/45550/${GIRDI_SHA}.imza`);
   assert.equal(E.retAnahtari(45550, GIRDI_SHA), `kabuk-ek/45550/${GIRDI_SHA}.ret.json`);
   assert.equal(E.sonAnahtari('45550'), 'kabuk-ek/45550/son.json');
-  assert.equal(E.ekUrl('45550', GIRDI_SHA), `${E.CDN_TABAN}/kabuk-ek/45550/${GIRDI_SHA}.zip`);
+  assert.equal(E.ekUrl('45550', GIRDI_SHA, 7),
+    `${E.CDN_TABAN}/kabuk-ek/45550/${GIRDI_SHA}.zip?t=7`);
+  assert.match(E.ekUrl('45550', GIRDI_SHA), /\.zip\?t=\d+$/);
+  assert.match(E.imzaUrl('45550', GIRDI_SHA), /\.imza\?t=\d+$/);
   assert.match(E.sonUrl('45550'), /\/kabuk-ek\/45550\/son\.json\?t=\d+$/);
   assert.equal(E.sonUrl('1', 5), `${E.CDN_TABAN}/kabuk-ek/1/son.json?t=5`);
   assert.match(E.retUrl('45550', GIRDI_SHA), /\.ret\.json\?t=\d+$/);
   assert.throws(() => E.ekAnahtari('../x', GIRDI_SHA), TypeError);
-  assert.throws(() => E.ekAnahtari('1', 'kısa'), TypeError);
+  assert.throws(() => E.imzaAnahtari('1', 'kısa'), TypeError);
 });
 
 const ZIP = `${GIRDI_SHA}.zip`;
 const RET = `${GIRDI_SHA}.ret.json`;
+const IMZA = `${GIRDI_SHA}.imza`;
+
+function anahtarCifti() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  return {
+    ozel: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    acik: publicKey.export({ type: 'spki', format: 'pem' }),
+  };
+}
+const ANAHTAR = anahtarCifti();
 
 function sahteGetir(tablo) {
   const cagrilar = [];
@@ -286,49 +300,175 @@ function sahteGetir(tablo) {
   return { getir, cagrilar };
 }
 
-test('ekGetir: 200 → var (doğrulanmış dosyalar)', async () => {
+/** İmzalı ek: [zip cevabı, imza cevabı]. */
+function imzaliTablo(zip, imza = E.ekImzala(zip, ANAHTAR.ozel)) {
+  return [[ZIP, { status: 200, buffer: zip }], [IMZA, { status: 200, buffer: Buffer.from(imza) }]];
+}
+const ACG = { ...AC, acikAnahtar: ANAHTAR.acik };
+
+test('ekImzala / ekImzaDogrula: geçerli, bozuk, yanlış anahtar, ed25519 dışı', () => {
+  const buf = Buffer.from('kabuk eki zip baytları');
+  const imza = E.ekImzala(buf, ANAHTAR.ozel);
+  assert.match(imza, /^[A-Za-z0-9+/]+=*$/);
+  assert.equal(E.ekImzaDogrula(buf, imza, ANAHTAR.acik), true);
+  assert.equal(E.ekImzaDogrula(buf, `${imza}\n`, ANAHTAR.acik), true);
+  const degisik = Buffer.from(buf);
+  degisik[0] ^= 1;
+  assert.equal(E.ekImzaDogrula(degisik, imza, ANAHTAR.acik), false);
+  const ham = Buffer.from(imza, 'base64');
+  ham[5] ^= 0xff;
+  assert.equal(E.ekImzaDogrula(buf, ham.toString('base64'), ANAHTAR.acik), false);
+  assert.equal(E.ekImzaDogrula(buf, imza, anahtarCifti().acik), false);
+  assert.equal(E.ekImzaDogrula(buf, '', ANAHTAR.acik), false);
+  assert.equal(E.ekImzaDogrula(buf, 'çöp!', ANAHTAR.acik), false);
+  assert.equal(E.ekImzaDogrula(buf, imza, 'pem değil'), false);
+  const rsa = crypto.generateKeyPairSync('rsa', { modulusLength: 1024 });
+  assert.throws(() => E.ekImzala(buf, rsa.privateKey), TypeError);
+  assert.equal(E.ekImzaDogrula(buf, imza, rsa.publicKey), false);
+});
+
+test('ekGetir: imzalı 200 → var (doğrulanmış dosyalar)', async () => {
   const d = ornekDosyalar();
   const zip = E.ekPaketle({ manifest: ornekManifest(d), dosyalar: d });
-  const { getir, cagrilar } = sahteGetir([[`${GIRDI_SHA}.zip`, { status: 200, buffer: zip }]]);
-  const r = await E.ekGetir({ ...AC, getir });
+  const { getir, cagrilar } = sahteGetir(imzaliTablo(zip));
+  const r = await E.ekGetir({ ...ACG, getir });
   assert.equal(r.durum, 'var');
   assert.equal(r.manifest.girdiSha, GIRDI_SHA);
   assert.ok(r.dosyalar.get('index.html').equals(d.get('index.html')));
-  assert.deepEqual(cagrilar, [E.ekUrl('45550', GIRDI_SHA)]);
+  assert.equal(cagrilar.length, 2);
+  assert.match(cagrilar[0], /\.zip\?t=\d+$/);
+  assert.match(cagrilar[1], /\.imza\?t=\d+$/);
+});
+
+test('ekGetir imza: yok, bozuk, yanlış anahtar, anahtarsız → hata; zip ayrıştırılmaz', async () => {
+  const d = ornekDosyalar();
+  const zip = E.ekPaketle({ manifest: ornekManifest(d), dosyalar: d });
+  const yok = await E.ekGetir({ ...ACG,
+    getir: sahteGetir([[ZIP, { status: 200, buffer: zip }]]).getir });
+  assert.deepEqual([yok.durum, yok.kod], ['hata', 'imza']);
+  const ham = Buffer.from(E.ekImzala(zip, ANAHTAR.ozel), 'base64');
+  ham[0] ^= 1;
+  const bozuk = await E.ekGetir({ ...ACG,
+    getir: sahteGetir(imzaliTablo(zip, ham.toString('base64'))).getir });
+  assert.deepEqual([bozuk.durum, bozuk.kod], ['hata', 'imza']);
+  const yanlis = await E.ekGetir({ ...AC, acikAnahtar: anahtarCifti().acik,
+    getir: sahteGetir(imzaliTablo(zip)).getir });
+  assert.deepEqual([yanlis.durum, yanlis.kod], ['hata', 'imza']);
+  const anahtarsiz = sahteGetir(imzaliTablo(zip));
+  const r = await E.ekGetir({ ...AC, getir: anahtarsiz.getir });
+  assert.deepEqual([r.durum, r.kod], ['hata', 'imza-anahtari-yok']);
+  assert.equal(anahtarsiz.cagrilar.length, 1);
+  // İmzasız çöp gövde: ayrıştırılmadan imza hatası (bozuk değil).
+  const cop = await E.ekGetir({ ...ACG,
+    getir: sahteGetir([[ZIP, { status: 200, buffer: Buffer.from('html 200 sayfası') }]]).getir });
+  assert.deepEqual([cop.durum, cop.kod], ['hata', 'imza']);
+  // İmza ağ hatası / 5xx → ag.
+  const imzaAg = await E.ekGetir({ ...ACG,
+    getir: sahteGetir([[ZIP, { status: 200, buffer: zip }],
+      [IMZA, new Error('ETIMEDOUT')]]).getir });
+  assert.deepEqual([imzaAg.durum, imzaAg.kod], ['hata', 'ag']);
 });
 
 test('ekGetir: 404 + ret yok → yok; 404 + ret.json → ret', async () => {
-  const yok = await E.ekGetir({ ...AC, getir: sahteGetir([]).getir });
+  const yok = await E.ekGetir({ ...ACG, getir: sahteGetir([]).getir });
   assert.deepEqual(yok, { durum: 'yok' });
-  const ret = sahteGetir([[`${GIRDI_SHA}.ret.json`,
+  assert.deepEqual(await E.ekGetir({ ...AC, getir: sahteGetir([]).getir }), { durum: 'yok' });
+  const ret = sahteGetir([[RET,
     { status: 200, buffer: Buffer.from(JSON.stringify({ neden: 'kapı RED: eşleme' })) }]]);
-  assert.deepEqual(await E.ekGetir({ ...AC, getir: ret.getir }),
+  assert.deepEqual(await E.ekGetir({ ...ACG, getir: ret.getir }),
     { durum: 'ret', neden: 'kapı RED: eşleme' });
   assert.match(ret.cagrilar[1], /\.ret\.json\?t=\d+$/);
   const bozukRet = sahteGetir([[RET, { status: 200, buffer: Buffer.from('{') }]]);
-  assert.equal((await E.ekGetir({ ...AC, getir: bozukRet.getir })).durum, 'ret');
+  assert.equal((await E.ekGetir({ ...ACG, getir: bozukRet.getir })).durum, 'ret');
 });
 
-test('ekGetir: ağ hatası / 5xx / bozuk / bayat → hata, FIRLATMAZ', async () => {
-  const ag = await E.ekGetir({ ...AC, getir: sahteGetir([[ZIP, new Error('ECONNRESET')]]).getir });
-  assert.equal(ag.durum, 'hata');
-  assert.equal(ag.kod, 'ag');
+test('ekGetir: 403 / ağ hatası / 5xx / bozuk / bayat → hata, FIRLATMAZ', async () => {
+  const ag = await E.ekGetir({ ...ACG, getir: sahteGetir([[ZIP, new Error('ECONNRESET')]]).getir });
+  assert.deepEqual([ag.durum, ag.kod], ['hata', 'ag']);
   assert.match(ag.mesaj, /ECONNRESET/);
-  const s5 = await E.ekGetir({ ...AC, getir: sahteGetir([[ZIP, { status: 502 }]]).getir });
+  const s403 = await E.ekGetir({ ...ACG, getir: sahteGetir([[ZIP, { status: 403 }]]).getir });
+  assert.deepEqual([s403.durum, s403.kod], ['hata', 'ag']);
+  const ret403 = await E.ekGetir({ ...ACG, getir: sahteGetir([[RET, { status: 403 }]]).getir });
+  assert.deepEqual([ret403.durum, ret403.kod], ['hata', 'ag']);
+  const s5 = await E.ekGetir({ ...ACG, getir: sahteGetir([[ZIP, { status: 502 }]]).getir });
   assert.deepEqual([s5.durum, s5.kod], ['hata', 'ag']);
-  const retAg = await E.ekGetir({ ...AC,
-    getir: sahteGetir([[`${GIRDI_SHA}.ret.json`, new Error('zaman aşımı')]]).getir });
+  const retAg = await E.ekGetir({ ...ACG,
+    getir: sahteGetir([[RET, new Error('zaman aşımı')]]).getir });
   assert.deepEqual([retAg.durum, retAg.kod], ['hata', 'ag']);
-  const bozuk = await E.ekGetir({ ...AC,
-    getir: sahteGetir([[ZIP, { status: 200, buffer: Buffer.from('html 200 sayfası') }]]).getir });
+  // İmzası geçerli ama ayrıştırılamayan gövde → bozuk.
+  const cop = Buffer.from('imzalı ama zip değil');
+  const bozuk = await E.ekGetir({ ...ACG, getir: sahteGetir(imzaliTablo(cop)).getir });
   assert.deepEqual([bozuk.durum, bozuk.kod], ['hata', 'bozuk']);
   const d = ornekDosyalar();
   const zip = E.ekPaketle({ manifest: ornekManifest(d), dosyalar: d });
-  const bayat = await E.ekGetir({ ...AC, kip: 'a1',
-    getir: sahteGetir([[`${GIRDI_SHA}.zip`, { status: 200, buffer: zip }]]).getir });
+  const bayat = await E.ekGetir({ ...ACG, kip: 'a1', getir: sahteGetir(imzaliTablo(zip)).getir });
   assert.deepEqual([bayat.durum, bayat.kod], ['hata', 'bayat']);
-  const kotuId = await E.ekGetir({ ...AC, bookId: '../x', getir: sahteGetir([]).getir });
+  const tavan = await E.ekGetir({ ...ACG, tavan: 10, getir: sahteGetir(imzaliTablo(zip)).getir });
+  assert.deepEqual([tavan.durum, tavan.kod], ['hata', 'tavan']);
+  const kotuId = await E.ekGetir({ ...ACG, bookId: '../x', getir: sahteGetir([]).getir });
   assert.equal(kotuId.durum, 'hata');
+});
+
+/** Merkez dizindeki n. girdinin başlık ofseti. */
+function merkezOfseti(zip, n) {
+  const e = zip.length - 22;
+  let p = zip.readUInt32LE(e + 16);
+  for (let i = 0; i < n; i++) {
+    p += 46 + zip.readUInt16LE(p + 28) + zip.readUInt16LE(p + 30) + zip.readUInt16LE(p + 32);
+  }
+  return p;
+}
+
+test('zip bombası: çakışan/aynı ofsetli girdi, büyük açık boy, toplam ve sayı tavanı', () => {
+  const T = 1000;
+  // Aynı yerel başlığa işaret eden iki girdi (bomba.js kalıbı).
+  const iki = E.zipYaz([{ ad: 'a', veri: Buffer.alloc(100) },
+    { ad: 'b', veri: Buffer.alloc(100) }]);
+  const ayni = Buffer.from(iki);
+  ayni.writeUInt32LE(0, merkezOfseti(ayni, 1) + 42);
+  hataKodu(() => E.zipOku(ayni), 'bozuk');
+  assert.throws(() => E.zipOku(ayni), /aynı yerel başlığa/);
+  // Çakışan aralık: ilk girdinin sıkıştırılmış boyu ikinciye taşar.
+  const cakisan = Buffer.from(iki);
+  const p0 = merkezOfseti(cakisan, 0);
+  cakisan.writeUInt32LE(cakisan.readUInt32LE(p0 + 20) + 10, p0 + 20);
+  assert.throws(() => E.zipOku(cakisan), /çakışan girdiler/);
+  // Tek girdi açık boy beyanı > 4×tavan (şişirmeden önce red).
+  const tek = E.zipYaz([{ ad: 'a', veri: Buffer.alloc(100) }]);
+  const buyuk = Buffer.from(tek);
+  buyuk.writeUInt32LE(4 * T + 1, merkezOfseti(buyuk, 0) + 24);
+  assert.throws(() => E.zipOku(buyuk, { tavan: T }), /4×tavan/);
+  // Gerçek bomba: 20 MB sıfır ~20 KB'a sıkışır; varsayılan tavanla açılmadan reddedilir.
+  const bomba = E.zipYaz([{ ad: 'index.html', veri: Buffer.alloc(20 * 1024 * 1024) }]);
+  assert.ok(bomba.length < 100 * 1024);
+  assert.throws(() => E.zipOku(bomba), /4×tavan/);
+  hataKodu(() => E.ekAc(bomba, AC), 'bozuk');
+  // Toplam: 3 × 3T (her biri ≤ 4T) = 9T > 8T.
+  const uc = E.zipYaz(['a', 'b', 'c'].map((ad) => ({ ad, veri: Buffer.alloc(3 * T) })));
+  assert.throws(() => E.zipOku(uc, { tavan: T }), /toplamı/);
+  assert.equal(E.zipOku(uc, { tavan: 2 * T }).size, 3);
+  // Girdi sayısı tavanı.
+  const cok = E.zipYaz(Array.from({ length: E.GIRDI_TAVANI + 1 },
+    (_, i) => ({ ad: `f${i}`, veri: Buffer.from('x') })));
+  assert.throws(() => E.zipOku(cok), /girdi sayısı/);
+  const sinir = E.zipYaz(Array.from({ length: E.GIRDI_TAVANI },
+    (_, i) => ({ ad: `f${i}`, veri: Buffer.from('x') })));
+  assert.equal(E.zipOku(sinir).size, E.GIRDI_TAVANI);
+});
+
+test('tavanAl: tek kaynak — seçenek > env > varsayılan', (t) => {
+  const eski = process.env.EMPP_KABUK_EK_TAVAN;
+  t.after(() => {
+    if (eski === undefined) delete process.env.EMPP_KABUK_EK_TAVAN;
+    else process.env.EMPP_KABUK_EK_TAVAN = eski;
+  });
+  delete process.env.EMPP_KABUK_EK_TAVAN;
+  assert.equal(E.tavanAl(), 2 * 1024 * 1024);
+  process.env.EMPP_KABUK_EK_TAVAN = '1234';
+  assert.equal(E.tavanAl(), 1234);
+  assert.equal(E.tavanAl({ tavan: 99 }), 99);
+  process.env.EMPP_KABUK_EK_TAVAN = 'çöp';
+  assert.equal(E.tavanAl(), 2 * 1024 * 1024);
 });
 
 test('sonOku: 200 → obje, 404/ağ/bozuk → null', async () => {
