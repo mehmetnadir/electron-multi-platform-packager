@@ -472,9 +472,13 @@ async function setIsle(bag, s, o) {
       webzSettingsSha: cikti.webzSettingsSha, tabanSurum: s.surum, tabanSha256: s.sha256,
       arac: { kaynak: arac.kaynak, sha256: arac.sha256 }, dosyalar,
     });
+    // Beyaz liste klasörleri (images/<klasör>.png) — ProBook ekAc ile AYNI küme.
+    const kitaplar = cikti.girdi && Array.isArray(cikti.girdi.kitaplar)
+      ? cikti.girdi.kitaplar : null;
+    const secenek = kitaplar ? { klasorler: new Set(kitaplar.map((k) => String(k.klasor))) } : {};
     let paket = null;
     try {
-      paket = ek.ekPaketle({ manifest, dosyalar });
+      paket = ek.ekPaketle({ manifest, dosyalar }, secenek);
     } catch (e) {
       if (!(e && e.kod === 'tavan')) throw e;
     }

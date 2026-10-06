@@ -36,7 +36,8 @@ function sahteEk({ tavan = 4096 } = {}) {
   return {
     EK_TAVAN_BAYT: tavan,
     manifestKur: (m) => ({ sozlesme: 1, ...m, dosyalar: [...m.dosyalar.keys()].sort() }),
-    ekPaketle: ({ manifest, dosyalar }) => Buffer.from(JSON.stringify({
+    ekPaketle: ({ manifest, dosyalar }, s) => Buffer.from(JSON.stringify({
+      klasorler: [...((s && s.klasorler) || [])],
       manifest: { ...manifest, uretildi: undefined },
       dosyalar: [...dosyalar].map(([k, v]) => [k, v.toString('base64')]),
     })),
@@ -76,7 +77,8 @@ function sahteBag(ev, o = {}) {
       if (o.kabuk) return o.kabuk(x);
       assert.equal(x.kabukKaynagi, 'ikili');
       await x.ekCikti({
-        girdiSha: 'a'.repeat(64), kip: 'bookN', girdi: {}, dosyalar, kapaklar: {},
+        girdiSha: 'a'.repeat(64), kip: 'bookN', girdi: { kitaplar: [{ klasor: 'book1' }] },
+        dosyalar, kapaklar: {},
         a1Girdi: null, webzSettingsSha: 'b'.repeat(64),
       });
       return { durum: 'uygulandi', neden: null, girdiSha: 'a'.repeat(64) };
@@ -327,4 +329,44 @@ test('ekCikti çağrılmazsa (kabuk atlandı) ek yok', async () => {
   assert.deepEqual(yazmalar(kayit), []);
   const d = JSON.parse(fs.readFileSync(path.join(ev, 'kabuk-ek-durum.json'), 'utf8'));
   assert.equal(d['45550'].durum, 'atlandi'); // uygun değil: aynı istekte yeniden denenmez
+});
+
+test('ekPaketle beyaz liste klasörlerini girdi.kitaplar\'dan alır', async () => {
+  const ev = geciciDizin();
+  const cikti = geciciDizin();
+  const { bag } = sahteBag(ev);
+  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
+  await E.setIsle(bag, s, { kuru: true, cikti });
+  const paket = JSON.parse(fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`)));
+  assert.deepEqual(paket.klasorler, ['book1']);
+});
+
+test('gerçek kabuk-ek modülü: üretilen ek ekAc doğrulamasından geçer', async (t) => {
+  let A;
+  try {
+    A = require('../../src/agent/kabuk-ek');
+  } catch (_) {
+    t.skip('src/agent/kabuk-ek.js yok (Parça A birleşmedi)');
+    return;
+  }
+  const ev = geciciDizin();
+  const cikti = geciciDizin();
+  const { bag } = sahteBag(ev, {
+    dosyalar: new Map([
+      ['index.html', Buffer.from('<html>kabuk</html>')],
+      ['scripts/language-set.js', Buffer.from('sonrakiSatirDugmesi')],
+      ['images/book1.png', Buffer.alloc(2048, 1)],
+    ]),
+  });
+  bag.ek = () => A;
+  const s = E.satirlariAyristir(tsv([satir(45550)]))[0];
+  const r = await E.setIsle(bag, s, { kuru: true, cikti });
+  assert.equal(r.durum, 'kuru');
+  assert.equal(r.anahtar, `kabuk-ek/45550/${'a'.repeat(64)}.zip`);
+  const buf = fs.readFileSync(path.join(cikti, '45550', `${'a'.repeat(64)}.zip`));
+  const acik = A.ekAc(buf, { bookId: '45550', girdiSha: 'a'.repeat(64), kip: 'bookN',
+    klasorler: ['book1'] });
+  assert.equal(acik.dosyalar.size, 3);
+  assert.equal(acik.manifest.tabanSurum, '2.25.6');
+  assert.deepEqual(acik.manifest.arac, { kaynak: 'a810e9f9', sha256: '6ccb35b1ae0c' });
 });
