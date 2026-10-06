@@ -24,6 +24,12 @@
  *           doğrulanınca aynı klasördeki eski *.exe silinir. Hata yayını düşürmez (uyarı + bildir bekci).
  *        İmzalı kopya kabulden KALDI → `reddedildi/`'ye taşı + bildir (paket kusuru). İmza/doğrulama/
  *        yükleme hatası → kayıt yerinde kalır, `sonHata` yazılır, tur DURUR (kuyruk tek yuvalı).
+ *      BORU HATTI (06.10, Nadir: "imzayı da paralel yapalım"): bir kaydın `_hazir` kopyası bitince
+ *      (imza/kabul/yayın sürerken) SIRADAKİ kaydın kopyası arka planda başlar — en çok 1 ileri kopya, kayıt
+ *      kilidi altında; bitince manifest'e `onKopya` yazılır. Sıra o kayda gelince kopya ATLANIR (uzak boyut
+ *      eşitse; değilse normal kopya). Yuva/istek/takas/imza TEK sıralı kalır (imza kilidi + tek döngü).
+ *      Çökme: yarım kopya `.kopyalaniyor` adında kalır, onKopya yazılmaz → sonraki tur baştan kopyalar.
+ *      Kapatma: EMPP_IMZA_ON_KOPYA=0. (Geri okuma ayrı bayrak: EMPP_IMZA_GERI_OKUMA=1.)
  *   4. Bildirim: bekleyen varken yuva erişilemiyorsa ya da en eski bekleyen 3 saati aştıysa
  *      `bildir paket "<N> Windows paketi imza bekliyor: <sebep>" -p yuksek`; aynı sebep için en çok
  *      3 saatte bir (`.bildirim-durum.json`).
@@ -62,7 +68,74 @@ function bekciAyarlari(env = process.env) {
     bekciBildirIkili: env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir'),
     // İmzalı son sürüm arşivi (Nadir 06.10): win32 varsayılanı D:\empp-imzali-son; win32 dışı/`0` → kapalı.
     imzaliArsivKoku: A.arsivKoku(env),
+    // Boru hattı (06.10): sıradaki paketin _hazir kopyası önceki paket imzadayken. `0` kapatır.
+    bekciOnKopya: env.EMPP_IMZA_ON_KOPYA !== '0',
+    bekciUzakStatMs: Number(env.EMPP_IMZA_UZAK_STAT_MS || 30000),
   };
+}
+
+/** Uzak (SMB) dosya boyutu; yok/erişilemez/zaman aşımı → null. Asılmaz. */
+async function uzakBoyut(yol, msTavan = 30000) {
+  if (!yol) return null;
+  let t = null;
+  try {
+    return await Promise.race([
+      fsp.stat(yol).then((s) => s.size).catch(() => null),
+      new Promise((coz) => { t = setTimeout(() => coz(null), msTavan); }),
+    ]);
+  } finally { if (t) clearTimeout(t); }
+}
+
+/** Kaydın `_hazir` ön-kopyası kullanılabilir mi (manifest diskten TAZE okunur). */
+async function onKopyaHazirMi(giris, cfg) {
+  const m = (await H.manifestOku(giris.dizin)) || giris.manifest;
+  if (!m || !m.onKopya) return { gecerli: false, sebep: 'ön-kopya kaydı yok' };
+  const exeAdi = path.basename(giris.exeYolu);
+  return H.onKopyaKarari(m, { exeAdi, uzakBoyut: await uzakBoyut(W.hazirKopyaYolu(cfg, giris.exeYolu), cfg.bekciUzakStatMs) });
+}
+
+/**
+ * Ön-kopya (boru hattı): kaydın `_hazir` kopyasını windows-serit `imzaHazirla` ile (runner'ın AYNI kopya
+ * adımı) yapar; kayıt kilidi altında, yuvaya dokunmaz. Başarıda manifest'e `onKopya` yazar. ASLA fırlatmaz.
+ * @returns {Promise<{durum:'hazir'|'zaten'|'atlandi'|'hata', sebep?:string}>}
+ */
+async function onKopyala(giris, d) {
+  const { cfg, log } = d;
+  const ad = path.basename(giris.dizin);
+  try {
+    if ((await onKopyaHazirMi(giris, cfg)).gecerli) { log(`imza-bekçisi: ön-kopya ${ad}: zaten hazır`); return { durum: 'zaten' }; }
+  } catch (_) { /* karar verilemedi → kopyala */ }
+  const kilit = await H.kayitKilidiDene(giris.dizin);
+  if (!kilit) return { durum: 'atlandi', sebep: 'kayıt başka süreçte' };
+  let work = null;
+  try {
+    work = await fsp.mkdtemp(path.join(os.tmpdir(), 'imza-onkopya-'));
+    const t0 = Date.now();
+    log(`imza-bekçisi: ön-kopya başladı: ${ad} (önceki paket imza/kabul/yayında)`);
+    const hazirla = d.imzaHazirla || W.imzaHazirla;
+    const kanit = await hazirla({ exe: giris.exeYolu, work, cfg, log: (...a) => log('[ön-kopya]', ...a) });
+    const m = (await H.manifestOku(giris.dizin)) || giris.manifest;
+    const sha256 = (kanit && kanit.sha256) || m.sha256 || null;
+    if (kanit && kanit.sha256 && m.sha256 && kanit.sha256 !== m.sha256) {
+      return { durum: 'hata', sebep: `yerel exe sha256 kayıtla tutmadı (${kanit.sha256.slice(0, 12)} ≠ ${String(m.sha256).slice(0, 12)})` };
+    }
+    const boyut = (kanit && kanit.boyut) || m.boyut || (await fsp.stat(giris.exeYolu)).size;
+    const uzak = await uzakBoyut(W.hazirKopyaYolu(cfg, giris.exeYolu), cfg.bekciUzakStatMs);
+    if (uzak !== boyut) return { durum: 'hata', sebep: `uzak kopya boyutu ${uzak === null ? 'yok' : uzak} ≠ ${boyut}` };
+    await H.manifestGuncelle(giris.dizin, {
+      onKopya: {
+        ad: path.basename(giris.exeYolu), boyut, sha256, geriOkuma: Boolean(kanit && kanit.geriOkuma),
+        zaman: new Date().toISOString(), sureSn: Math.round((Date.now() - t0) / 1000),
+      },
+    });
+    log(`imza-bekçisi: ön-kopya bitti: ${ad} (${Math.round((Date.now() - t0) / 1000)} sn, ${boyut} B)`);
+    return { durum: 'hazir' };
+  } catch (e) {
+    return { durum: 'hata', sebep: e.message };
+  } finally {
+    await kilit();
+    if (work) await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** Kabul KALDI mı (paket kusuru) — imza/ağ/ölçülemedi DEĞİL. Saf. */
@@ -140,7 +213,7 @@ async function bayatIsle(giris, job, karar, d) {
 /**
  * Tek kaydı imzalat + doğrula + yayınla. @returns {Promise<{durum:string, sebep?:string, dizin?:string}>}
  */
-async function kaydiIsle(giris, d) {
+async function kaydiIsle(giris, d, boru = {}) {
   const { cfg, log } = d;
   const m = giris.manifest;
   const job = { ...(m.job || {}), bookId: m.bookId, platform: 'windows' };
@@ -172,11 +245,20 @@ async function kaydiIsle(giris, d) {
     if (karar.bayat) return bayatIsle(giris, job, karar, d);
     const kanit = await kanitOku(cfg, giris);
     kanit.hazirDizini = giris.dizin;
+    // Boru hattı: ön-kopya hazırsa (uzak boyut eşit) `_hazir` kopyası atlanır.
+    let hazirlaAtla = false;
+    if (cfg.bekciOnKopya) {
+      const ok = await onKopyaHazirMi(giris, cfg).catch((e) => ({ gecerli: false, sebep: e.message }));
+      hazirlaAtla = ok.gecerli;
+      if (giris.manifest.onKopya || ok.gecerli) log(`imza-bekçisi: ${path.basename(giris.dizin)} ön-kopya: ${ok.sebep}${ok.gecerli ? ' → kopya ATLANIR' : ' → kopya yeniden'}`);
+    }
+    boru.hazirlaAtlandi = hazirlaAtla;
     let zincir;
     try {
       zincir = await d.imzaliYayinZinciri({
         imzasiz: giris.exeYolu, job, work, cfg: { ...cfg, winImzaKilitBeklemeMs: cfg.bekciImzaKilitBeklemeMs, winKasaKilitBeklemeMs: cfg.bekciKasaKilitBeklemeMs },
         log, sleep: d.sleep, aktivasyon: d.aktivasyonBeklenir(job.bookTitle), kanit,
+        hazirlaAtla, hazirlandi: typeof boru.hazirlandi === 'function' ? boru.hazirlandi : null,
       });
     } catch (e) {
       if (kabulKaldiMi(e)) {
@@ -315,21 +397,48 @@ async function tur(d) {
       // kayıt (imza-oncelik.txt) ya da yeni kayıt sıradaki ilk aday olur. Bu turda işlenmiş dizin
       // (atlandı/bayat vb.) aynı turda tekrar alınmaz.
       const islenen = new Set();
-      for (;;) {
-        const giris = liste.find((g) => !islenen.has(g.dizin));
-        if (!giris) break;
-        islenen.add(giris.dizin);
-        const r = await kaydiIsle(giris, d);
-        log(`imza-bekçisi: ${path.basename(giris.dizin)} → ${r.durum}${r.sebep ? ` (${String(r.sebep).slice(0, 200)})` : ''}`);
-        if (r.durum === 'yayinlandi') ozet.yayinlanan += 1;
-        else if (r.durum === 'red') {
-          ozet.reddedilen += 1;
-          await bildirimGonder(d, { anahtar: `red:${giris.manifest.bookId}`, mesaj: `Windows paketi ${giris.manifest.bookId} imzalı kabulden KALDI — yayınlanmadı: ${String(r.sebep).slice(0, 160)}` }, await H.bildirimDurumuOku(cfg));
-        } else if (r.durum === 'bayat') { ozet.bayat = (ozet.bayat || 0) + 1; }
-        else if (r.durum === 'atlandi') { ozet.atlanan += 1; sebep = sebep || r.sebep; }
-        else { sebep = `imza/yayın hatası: ${String(r.sebep).slice(0, 160)}`; break; }
-        liste = await H.hazirListesi(cfg);
-        if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
+      // BORU HATTI (06.10): tek ileri kopya yuvası. Mevcut kaydın `_hazir` kopyası bitince (hazirlandi)
+      // sıradaki ilk aday arka planda kopyalanır; bir sonraki kayda geçmeden önce beklenir (kayıt kilidi
+      // ön-kopyada; aynı anda iki kopya yok → bant genişliği bölünmez).
+      const ileri = { is: null };
+      const listeOku = async () => {
+        const l = await H.hazirListesi(cfg);
+        return d.yalniz ? l.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz)) : l;
+      };
+      const onKopyaBaslat = () => {
+        if (!cfg.bekciOnKopya || ileri.is) return;
+        ileri.is = (async () => {
+          const aday = (await listeOku()).find((g) => !islenen.has(g.dizin));
+          if (!aday) return null;
+          const r = await onKopyala(aday, d);
+          log(`imza-bekçisi: ön-kopya ${path.basename(aday.dizin)} → ${r.durum}${r.sebep ? ` (${String(r.sebep).slice(0, 200)})` : ''}`);
+          if (r.durum === 'hazir') ozet.onKopya = (ozet.onKopya || 0) + 1;
+          return r;
+        })().catch((e) => { log(`imza-bekçisi: ön-kopya hatası: ${e.message}`); return null; });
+      };
+      const ileriBekle = async () => { if (ileri.is) { const p = ileri.is; await p; ileri.is = null; } };
+      try {
+        for (;;) {
+          await ileriBekle();
+          const giris = liste.find((g) => !islenen.has(g.dizin));
+          if (!giris) break;
+          islenen.add(giris.dizin);
+          const boru = { hazirlandi: onKopyaBaslat };
+          const r = await kaydiIsle(giris, d, boru);
+          if (boru.hazirlaAtlandi) ozet.hazirlaAtlanan = (ozet.hazirlaAtlanan || 0) + 1;
+          log(`imza-bekçisi: ${path.basename(giris.dizin)} → ${r.durum}${r.sebep ? ` (${String(r.sebep).slice(0, 200)})` : ''}`);
+          if (r.durum === 'yayinlandi') ozet.yayinlanan += 1;
+          else if (r.durum === 'red') {
+            ozet.reddedilen += 1;
+            await bildirimGonder(d, { anahtar: `red:${giris.manifest.bookId}`, mesaj: `Windows paketi ${giris.manifest.bookId} imzalı kabulden KALDI — yayınlanmadı: ${String(r.sebep).slice(0, 160)}` }, await H.bildirimDurumuOku(cfg));
+          } else if (r.durum === 'bayat') { ozet.bayat = (ozet.bayat || 0) + 1; }
+          else if (r.durum === 'atlandi') { ozet.atlanan += 1; sebep = sebep || r.sebep; }
+          else { sebep = `imza/yayın hatası: ${String(r.sebep).slice(0, 160)}`; break; }
+          liste = await listeOku();
+        }
+      } finally {
+        // Süren ön-kopya yarıda bırakılmaz (süreç çıkarsa `.kopyalaniyor` kalır; sonraki tur baştan alır).
+        await ileriBekle();
       }
       liste = await H.hazirListesi(cfg);
       if (d.yalniz) liste = liste.filter((g) => String(g.manifest && g.manifest.bookId) === String(d.yalniz));
@@ -356,7 +465,7 @@ async function ana(argv = process.argv.slice(2)) {
     yalniz: (argv.find((a) => a.startsWith('--yalniz=')) || '').slice('--yalniz='.length) || null,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)), imzaliYayinZinciri: W.imzaliYayinZinciri,
     postResultSuccess: runner.postResultSuccess, postResultFailure: runner.postResultFailure, presignUpload: runner.presignUpload,
-    aktivasyonBeklenir: runner.aktivasyonBeklenir, auth: null,
+    aktivasyonBeklenir: runner.aktivasyonBeklenir, auth: null, imzaHazirla: W.imzaHazirla,
   };
   if ((await H.hazirListesi(cfg)).length && !d.kuru) d.auth = await tokenOku(cfg);
   const ozet = await tur(d);
@@ -368,4 +477,4 @@ if (require.main === module) {
   ana().then(() => process.exit(0)).catch((e) => { console.error('imza-bekçisi HATA:', e && e.stack); process.exit(1); });
 }
 
-module.exports = { imzaliArsivle, yayinMesaji, yayinBildir, bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };
+module.exports = { onKopyala, onKopyaHazirMi, uzakBoyut, imzaliArsivle, yayinMesaji, yayinBildir, bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };

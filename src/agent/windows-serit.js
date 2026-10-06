@@ -697,9 +697,33 @@ function imzaEnv(work, cfg = {}) {
   return e;
 }
 
-/** Toplu akış 2: `_hazir`'a kopyala + geri oku (yuvaya dokunmaz → kilitsiz). */
+/** `hazirla` kanıt satırı öneki (imza-yuva-win.js HAZIR_KANIT ile aynı; bash betiği yazmaz → null). */
+const HAZIR_KANIT_DESENI = /HAZIR-KANIT (\{.*\})\s*$/;
+
+/** Betik çıktısından `HAZIR-KANIT {…}` satırını ayrıştırır. Yoksa/bozuksa null. Saf. */
+function hazirKanitiAyristir(cikti) {
+  const satirlar = String(cikti || '').split('\n');
+  for (let i = satirlar.length - 1; i >= 0; i -= 1) {
+    const m = HAZIR_KANIT_DESENI.exec(satirlar[i]);
+    if (!m) continue;
+    try { return JSON.parse(m[1]); } catch (_) { return null; }
+  }
+  return null;
+}
+
+/** `_hazir` kopyasının uzak yolu (imza-yuva-win `hazirDizin` + exe adı). Kök yoksa null. Saf. */
+function hazirKopyaYolu(cfg, exe) {
+  if (!cfg || !cfg.winImzaYuvaKoku) return null;
+  return path.join(cfg.winImzaYuvaKoku, '_hazir', path.basename(exe));
+}
+
+/**
+ * Toplu akış 2: `_hazir`'a kopyala (yuvaya dokunmaz → kilitsiz). Geri okuma varsayılan KAPALI (06.10, Nadir):
+ * betik sha256'yı yerelde kopyadan ÖNCE ölçer, kopya sonrası uzak BOYUT eşitliğini denetler;
+ * `EMPP_IMZA_GERI_OKUMA=1` eski geri okumayı açar. @returns {Promise<object|null>} betiğin HAZIR-KANIT'ı
+ */
 async function imzaHazirla({ exe, work, cfg, log, esikBitisMs = 0 }) {
-  log('windows: imza hazırlığı (_hazir kopyası + geri okuma) —', path.basename(exe));
+  log('windows: imza hazırlığı (_hazir kopyası) —', path.basename(exe));
   // Eşik: hazırlık yuvaya dokunmaz (yalnız _hazir kopyası) → eşikte kesmek güvenlidir.
   const kalan = esikBitisMs > 0 ? Math.max(1000, esikBitisMs - Date.now()) : 0;
   const sure = kalan > 0 ? Math.min(cfg.winImzaHazirlaTimeoutMs, kalan) : cfg.winImzaHazirlaTimeoutMs;
@@ -712,6 +736,7 @@ async function imzaHazirla({ exe, work, cfg, log, esikBitisMs = 0 }) {
   if (r.hata || r.zamanAsimi || r.kod !== 0) {
     throw new Error(`${ISARET} imza hazırlığı (_hazir) düştü: ${r.hata || (r.zamanAsimi ? 'zaman aşımı' : `çıkış ${r.kod}`)} — R2'ye YAZILMADI`);
   }
+  return hazirKanitiAyristir(r.cikti);
 }
 
 /** Toplu akış 3: pencere → takas → imza (bekleme kuralı betikte). İmzalı yerel kopyanın yolu. */
@@ -878,12 +903,21 @@ async function yayinOncesiZincir({ artifactPath, job, plan, work, jobId, cfg, lo
  * tamamlanır ve diske yazılır. Düşerse FIRLATIR (R2'ye hiçbir şey yazılmamıştır).
  * @returns {Promise<{imzaliYol:string, kanit:object, kanitYolu:string}>}
  */
-async function imzaliYayinZinciri({ imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit, esikMs = 0 }) {
+async function imzaliYayinZinciri({
+  imzasiz, job, work, cfg, log, sleep, aktivasyon, kanit, esikMs = 0, hazirlaAtla = false, hazirlandi = null,
+}) {
   const bekle = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   // esikMs > 0 (yalnız runner): imza adımı (hazırlık + kilit + pencere) bu süreyi aşarsa
   // `imzaEsigiHatasi` fırlar — çağıran paketi hazır kuyruğa alır. Takas başladıktan sonra eşik YOK.
   const esikBitisMs = esikMs > 0 ? Date.now() + esikMs : 0;
-  await imzaHazirla({ exe: imzasiz, work, cfg, log, esikBitisMs });
+  // hazirlaAtla (yalnız imza bekçisi, 06.10 boru hattı): `_hazir` kopyası önceki paket imzadayken ön-kopyada
+  // yapıldı ve boyutu doğrulandı. Kopya yine de eksikse bekle-ve-tak çıkış 2 verir / takas yeniden kopyalar.
+  if (hazirlaAtla) log('windows: imza hazırlığı ATLANDI — _hazir kopyası ön-kopyada hazır (boyut eşit) —', path.basename(imzasiz));
+  else await imzaHazirla({ exe: imzasiz, work, cfg, log, esikBitisMs });
+  // Boru hattı tetiği: bu paketin kopyası bitti → çağıran sıradaki paketin ön-kopyasını başlatabilir.
+  if (typeof hazirlandi === 'function') {
+    try { hazirlandi(); } catch (e) { log('windows: UYARI hazırlandı geri çağrısı:', e.message); }
+  }
   const birak = await imzaKilidiAl(cfg, { log, sleep: bekle, esikBitisMs });
   let imzaliYol;
   try {
@@ -936,5 +970,5 @@ module.exports = {
   yuvaProbKomutlari,
   imzaliYayinZinciri, kanitYaz, IMZA_ESIK_ISARETI, imzaEsigiHatasi, imzaEsigiMi,
   kapiKos, kabulKos, basliksizKabul, imzaKilidiAl, kilitDene, kilitBirak, dosyaKilidiDene, pidCanliMi, acilisZamaniMs, tetikCek, imzaEnv, WIN_YUVA_KOKU, imzaHazirla, imzaBekleVeTak, yuvayiArsivle, imzaDogrula,
-  yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir,
+  yayinOncesiZincir, yayinKaniti, kanitYolu, bekciBildir, hazirKanitiAyristir, hazirKopyaYolu,
 };

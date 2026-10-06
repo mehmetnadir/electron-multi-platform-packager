@@ -76,7 +76,7 @@ function ortam({ yuva = false, ping = false, sudo = false, diskYuvaKurar = true 
       kanit: { imzasiz: { md5: md5(govde), sha256: 's', boyut: govde.length } }, cfg, kabul: { kapi: 'kasa' },
     });
     await H.manifestGuncelle(h.dizin, { zaman: new Date(simdi - yasMs).toISOString() });
-    return { ...h, govde };
+    return { ...h, govde, exeYolu: path.join(h.dizin, h.manifest.exe) };
   };
   return { cfg, cagri, oku, bagimlilik, ekle, ileri: (ms) => { simdi += ms; } };
 }
@@ -522,4 +522,193 @@ test('İMZALI ARŞİV: D: yoksa atlanır, yayın etkilenmez, bildirim yok', asyn
 test('bekciAyarlari: arşiv kökü env ile, "0" kapatır', () => {
   assert.equal(B.bekciAyarlari({ EMPP_IMZALI_ARSIV_KOKU: 'E:\\a' }).imzaliArsivKoku, 'E:\\a');
   assert.equal(B.bekciAyarlari({ EMPP_IMZALI_ARSIV_KOKU: '0' }).imzaliArsivKoku, null);
+});
+
+// ---------------------------------------------------------------------------
+// BORU HATTI (06.10, Nadir: "imzayı da paralel yapalım"): sıradaki paketin _hazir kopyası önceki paket
+// imza/kabul/yayındayken; en çok 1 ileri kopya; yuva/imza tekil; kopyası hazır paket kopyayı atlar.
+// ---------------------------------------------------------------------------
+
+const bekle = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Gerçeğe yakın sahte zincir: hazirlaAtla değilse ANA kopya (yuva/_hazir'a yazar), sonra hazirlandi(),
+ * sonra imza (yuva tekil sayacı). Ön-kopya (d.imzaHazirla) aynı _hazir'a yazar. Olaylar zaman sırasıyla.
+ */
+function boruOrtami(o, { imzaMs = 40, kopyaMs = 15, imzaHata = null } = {}) {
+  const olay = [];
+  const sayac = { kopya: 0, kopyaMax: 0, imza: 0, imzaMax: 0, ana: [], on: [], atla: [] };
+  const hazirDz = path.join(o.cfg.winImzaYuvaKoku, '_hazir');
+  const kopyala = async (exe, tur) => {
+    sayac.kopya += 1; sayac.kopyaMax = Math.max(sayac.kopyaMax, sayac.kopya);
+    olay.push(`${tur}-basla:${path.basename(exe)}`);
+    await bekle(kopyaMs);
+    fs.mkdirSync(hazirDz, { recursive: true });
+    fs.copyFileSync(exe, path.join(hazirDz, path.basename(exe)));
+    olay.push(`${tur}-bitti:${path.basename(exe)}`);
+    sayac.kopya -= 1;
+    return { ad: path.basename(exe), boyut: fs.statSync(exe).size, geriOkuma: false };
+  };
+  const d = o.bagimlilik({
+    imzaHazirla: async ({ exe }) => { sayac.on.push(path.basename(exe)); return kopyala(exe, 'on'); },
+    imzaliYayinZinciri: async ({ imzasiz, kanit, work, hazirlaAtla, hazirlandi }) => {
+      const ad = path.basename(imzasiz);
+      sayac.atla.push(Boolean(hazirlaAtla));
+      if (!hazirlaAtla) { sayac.ana.push(ad); await kopyala(imzasiz, 'ana'); }
+      if (hazirlandi) hazirlandi();
+      sayac.imza += 1; sayac.imzaMax = Math.max(sayac.imzaMax, sayac.imza);
+      olay.push(`imza-basla:${ad}`);
+      await bekle(imzaMs);
+      olay.push(`imza-bitti:${ad}`);
+      sayac.imza -= 1;
+      if (imzaHata && imzaHata(ad)) throw new Error('[windows-serit] imza zaman aşımı');
+      const imzali = path.join(work, 'imzali.exe');
+      fs.writeFileSync(imzali, Buffer.concat([fs.readFileSync(imzasiz), Buffer.from('IMZA')]));
+      kanit.imzali = { md5: md5(fs.readFileSync(imzali)) };
+      return { imzaliYol: imzali, kanit, kanitYolu: null };
+    },
+  });
+  return { d, olay, sayac, hazirDz };
+}
+
+test('BORU HATTI: B\'nin kopyası A imzadayken başlar; en çok 1 kopya, yuva tekil; B ve C kopyayı ATLAR', async () => {
+  const o = ortam({ yuva: true });
+  const a = await o.ekle('1001', { yasMs: 3000 });
+  const b = await o.ekle('1002', { yasMs: 2000 });
+  const c = await o.ekle('1003', { yasMs: 1000 });
+  const t = boruOrtami(o);
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 3);
+  assert.equal(z.onKopya, 2, 'B ve C ön-kopyada hazırlandı');
+  assert.equal(z.hazirlaAtlanan, 2);
+  const ad = (k) => path.basename(k.exeYolu);
+  assert.deepEqual(t.sayac.ana, [ad(a)], 'ana (sıralı) kopya yalnız ilk pakette');
+  assert.deepEqual(t.sayac.on, [ad(b), ad(c)]);
+  assert.deepEqual(t.sayac.atla, [false, true, true]);
+  assert.equal(t.sayac.kopyaMax, 1, 'aynı anda en çok 1 kopya (ileri kopya 1)');
+  assert.equal(t.sayac.imzaMax, 1, 'yuva/imza tekil');
+  const i = (s) => t.olay.indexOf(s);
+  assert.ok(i(`on-basla:${ad(b)}`) > i(`ana-bitti:${ad(a)}`), 'B kopyası A kopyası bittikten sonra');
+  assert.ok(i(`on-basla:${ad(b)}`) < i(`imza-bitti:${ad(a)}`), 'B kopyası A imzadayken başladı (paralel)');
+  assert.ok(i(`on-basla:${ad(c)}`) < i(`imza-bitti:${ad(b)}`), 'C kopyası B imzadayken başladı');
+  assert.ok(i(`imza-basla:${ad(b)}`) > i(`imza-bitti:${ad(a)}`), 'B imzası A bitmeden başlamaz');
+  for (const k of [b, c]) {
+    const m = JSON.parse(fs.readFileSync(path.join(o.cfg.winHazirKoku, 'yayinlandi', fs.readdirSync(path.join(o.cfg.winHazirKoku, 'yayinlandi')).find((x) => x.startsWith(path.basename(k.dizin))), 'manifest.json'), 'utf8'));
+    assert.equal(m.onKopya.ad, ad(k));
+    assert.equal(m.onKopya.boyut, k.govde.length);
+    assert.equal(m.onKopya.geriOkuma, false);
+  }
+});
+
+test('BORU HATTI: EMPP_IMZA_ON_KOPYA=0 → ön-kopya yok, her paket kendi kopyasını sırayla yapar', async () => {
+  assert.equal(B.bekciAyarlari({}).bekciOnKopya, true);
+  assert.equal(B.bekciAyarlari({ EMPP_IMZA_ON_KOPYA: '0' }).bekciOnKopya, false);
+  const o = ortam({ yuva: true });
+  o.cfg.bekciOnKopya = false;
+  await o.ekle('1011', { yasMs: 2000 });
+  await o.ekle('1012', { yasMs: 1000 });
+  const t = boruOrtami(o);
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 2);
+  assert.equal(t.sayac.on.length, 0);
+  assert.deepEqual(t.sayac.atla, [false, false]);
+  assert.equal(z.onKopya, undefined);
+});
+
+test('BORU HATTI: kopyası hazır paket (önceki turdan onKopya + uzak boyut eşit) kopyayı ATLAR', async () => {
+  const o = ortam({ yuva: true });
+  const k = await o.ekle('1021');
+  const hazirDz = path.join(o.cfg.winImzaYuvaKoku, '_hazir');
+  fs.mkdirSync(hazirDz, { recursive: true });
+  fs.copyFileSync(k.exeYolu, path.join(hazirDz, path.basename(k.exeYolu)));
+  await H.manifestGuncelle(k.dizin, { onKopya: { ad: path.basename(k.exeYolu), boyut: k.govde.length, sha256: 's', zaman: 'x' } });
+  const t = boruOrtami(o);
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 1);
+  assert.deepEqual(t.sayac.atla, [true]);
+  assert.equal(t.sayac.ana.length, 0);
+});
+
+test('BORU HATTI: onKopya kaydı var ama uzak kopya yok/yarım (takas aldı ya da silindi) → normal kopya', async () => {
+  for (const uzak of [null, 'yarim']) {
+    const o = ortam({ yuva: true });
+    const k = await o.ekle('1031');
+    const hazirDz = path.join(o.cfg.winImzaYuvaKoku, '_hazir');
+    fs.mkdirSync(hazirDz, { recursive: true });
+    if (uzak === 'yarim') fs.writeFileSync(path.join(hazirDz, path.basename(k.exeYolu)), k.govde.subarray(0, 100));
+    await H.manifestGuncelle(k.dizin, { onKopya: { ad: path.basename(k.exeYolu), boyut: k.govde.length, sha256: 's', zaman: 'x' } });
+    const t = boruOrtami(o);
+    await B.tur(t.d);
+    assert.deepEqual(t.sayac.atla, [false], `uzak=${uzak}`);
+    assert.equal(t.sayac.ana.length, 1);
+  }
+});
+
+test('BORU HATTI çökme sonrası: yarım `.kopyalaniyor` + onKopya yok → kopya baştan; eski artıklara dokunulmaz', async () => {
+  const o = ortam({ yuva: true });
+  const k = await o.ekle('1041');
+  const hazirDz = path.join(o.cfg.winImzaYuvaKoku, '_hazir');
+  fs.mkdirSync(hazirDz, { recursive: true });
+  const yarim = path.join(hazirDz, `${path.basename(k.exeYolu)}.kopyalaniyor`);
+  fs.writeFileSync(yarim, k.govde.subarray(0, 10));
+  const eski = path.join(hazirDz, 'runner-45001-Eski-2.1.1-Setup.exe.kopyalaniyor');
+  fs.writeFileSync(eski, 'artık 02.10');
+  const t = boruOrtami(o);
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 1);
+  assert.deepEqual(t.sayac.atla, [false], 'yarım kopya hazır sayılmadı');
+  assert.equal(fs.readFileSync(eski, 'utf8'), 'artık 02.10', 'bekçi _hazir artıklarını silmez/değiştirmez');
+});
+
+test('BORU HATTI: A imzada düşerse tur DURUR ama süren B ön-kopyası beklenir; sonraki tur B kopyayı atlar', async () => {
+  const o = ortam({ yuva: true });
+  const a = await o.ekle('1051', { yasMs: 2000 });
+  const b = await o.ekle('1052', { yasMs: 1000 });
+  const t = boruOrtami(o, { imzaMs: 5, kopyaMs: 40, imzaHata: (ad) => ad === path.basename(a.exeYolu) });
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 0);
+  assert.ok(t.olay.includes(`on-bitti:${path.basename(b.exeYolu)}`), 'tur dönmeden ön-kopya bitti (yarıda bırakılmadı)');
+  assert.equal((await H.manifestOku(b.dizin)).onKopya.boyut, b.govde.length);
+  assert.match((await H.manifestOku(a.dizin)).sonHata, /imza zaman aşımı/);
+  // ikinci tur: A yine düşer (aynı sıra) → B'ye gelinmez; A'yı çıkar, B kopyayı atlar
+  const t2 = boruOrtami(o);
+  await B.tur({ ...t2.d, yalniz: '1052' });
+  assert.deepEqual(t2.sayac.atla, [true]);
+});
+
+test('BORU HATTI: ön-kopya sha256 kayıtla tutmazsa onKopya YAZILMAZ (paket sırası gelince normal kopya)', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('1061', { yasMs: 2000 });
+  const b = await o.ekle('1062', { yasMs: 1000 });
+  const t = boruOrtami(o);
+  const asil = t.d.imzaHazirla;
+  t.d.imzaHazirla = async (a) => ({ ...(await asil(a)), sha256: 'baska' });
+  const z = await B.tur(t.d);
+  assert.equal(z.yayinlanan, 2);
+  assert.deepEqual(t.sayac.atla, [false, false]);
+  assert.equal(z.onKopya, undefined);
+  const y = fs.readdirSync(path.join(o.cfg.winHazirKoku, 'yayinlandi')).find((x) => x.startsWith(path.basename(b.dizin)));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(o.cfg.winHazirKoku, 'yayinlandi', y, 'manifest.json'), 'utf8')).onKopya, undefined);
+});
+
+test('BORU HATTI: sıradaki kayıt runner kilidindeyse ön-kopya yapılmaz (aynı dosyaya iki yazar yok)', async () => {
+  const o = ortam({ yuva: true });
+  await o.ekle('1071', { yasMs: 2000 });
+  const b = await o.ekle('1072', { yasMs: 1000 });
+  const birak = await H.kayitKilidiDene(b.dizin);
+  try {
+    const t = boruOrtami(o);
+    const z = await B.tur(t.d);
+    assert.equal(t.sayac.on.length, 0, 'kilitli kayda ön-kopya yok');
+    assert.equal(z.yayinlanan, 1);
+    assert.equal(z.atlanan, 1);
+  } finally { await birak(); }
+});
+
+test('uzakBoyut: yok → null, var → boyut; asılmaz', async () => {
+  const d = tmp('uzak');
+  assert.equal(await B.uzakBoyut(path.join(d, 'yok.exe')), null);
+  fs.writeFileSync(path.join(d, 'a.exe'), 'abc');
+  assert.equal(await B.uzakBoyut(path.join(d, 'a.exe')), 3);
+  assert.equal(await B.uzakBoyut(null), null);
 });

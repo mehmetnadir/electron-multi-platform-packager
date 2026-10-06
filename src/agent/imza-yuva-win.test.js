@@ -88,12 +88,67 @@ function sahteImpark(o, { imzaFn = imzalaBuf, gecikmeMs = 60, imzala = true } = 
   return async () => { dur = true; await p; };
 }
 
-test('hazirla: _hazir/<ad> kopyası + geri okuma doğrulanır', async () => {
+/** `fs.createReadStream` casusu: hangi yollar okundu (sha256 ölçümü bu akışla yapılır). */
+async function okunanYollar(fn) {
+  const asil = fs.createReadStream;
+  const yollar = [];
+  fs.createReadStream = (p, ...a) => { yollar.push(String(p)); return asil.call(fs, p, ...a); };
+  try { return { sonuc: await fn(), yollar }; } finally { fs.createReadStream = asil; }
+}
+
+test('hazirla (06.10 varsayılan): geri okuma YOK — uzak kopya okunmaz, boyut kapısı + yerel sha256 kanıtı', async () => {
   const o = ortam();
+  const hazir = path.join(o.kok, '_hazir', path.basename(o.exe));
+  const { sonuc: r, yollar } = await okunanYollar(() => kos(['hazirla', o.exe], o.env));
+  assert.equal(r.kod, 0, r.cikti);
+  assert.match(r.cikti, /HAZIR — boyut DOĞRULANDI \(sha256 yerelde, kopyadan önce\)/);
+  assert.match(r.cikti, /geri okuma KAPALI \(EMPP_IMZA_GERI_OKUMA=1 açar\)/);
+  assert.doesNotMatch(r.cikti, /geri okuma\+sha256/);
+  assert.ok(fs.readFileSync(hazir).equals(o.buf));
+  assert.equal(yollar.filter((y) => y === hazir).length, 0, 'uzak _hazir kopyası geri OKUNMADI');
+  assert.ok(yollar.includes(o.exe), 'sha256 yerel exe üzerinden (kopyadan önce) ölçüldü');
+  const kanit = require('./windows-serit').hazirKanitiAyristir(r.cikti);
+  const beklenen = require('crypto').createHash('sha256').update(o.buf).digest('hex');
+  assert.deepEqual(kanit, { ad: path.basename(o.exe), boyut: o.buf.length, sha256: beklenen, geriOkuma: false });
+});
+
+test('hazirla EMPP_IMZA_GERI_OKUMA=1: eski yol — uzak kopya geri okunur, boyut+sha256 DOĞRULANDI', async () => {
+  const o = ortam();
+  const hazir = path.join(o.kok, '_hazir', path.basename(o.exe));
+  const { sonuc: r, yollar } = await okunanYollar(() => kos(['hazirla', o.exe], { ...o.env, EMPP_IMZA_GERI_OKUMA: '1' }));
+  assert.equal(r.kod, 0, r.cikti);
+  assert.match(r.cikti, /geri okuma\+sha256: /);
+  assert.match(r.cikti, /HAZIR — boyut\+sha256 DOĞRULANDI/);
+  assert.equal(yollar.filter((y) => y === hazir).length, 1, 'uzak kopya bir kez geri okundu');
+  assert.equal(require('./windows-serit').hazirKanitiAyristir(r.cikti).geriOkuma, true);
+});
+
+test('hazirla boyut kapısı: uzak kopya kısa kalırsa çıkış 4, son ad (_hazir/<ad>) OLUŞMAZ', async () => {
+  const o = ortam();
+  const fsp = require('fs/promises');
+  const asil = fsp.copyFile;
+  fsp.copyFile = async (a, b) => { await asil(a, b); await fsp.truncate(b, 100); };
+  let r;
+  try { r = await kos(['hazirla', o.exe], o.env); } finally { fsp.copyFile = asil; }
+  assert.equal(r.kod, 4, r.cikti);
+  assert.match(r.cikti, /kopya boyutu tutmadı \(uzak 100 B, yerel 5000 B\)/);
+  assert.equal(fs.existsSync(path.join(o.kok, '_hazir', path.basename(o.exe))), false);
+});
+
+test('hazirla çökme sonrası idempotent: yarım `.kopyalaniyor` (eski artık) üzerine baştan yazılır', async () => {
+  const o = ortam();
+  const dz = path.join(o.kok, '_hazir');
+  fs.mkdirSync(dz, { recursive: true });
+  const ara = path.join(dz, `${path.basename(o.exe)}.kopyalaniyor`);
+  fs.writeFileSync(ara, Buffer.alloc(1234, 7)); // çöken sürecin yarım kopyası
+  const yabanci = path.join(dz, 'runner-9-Eski-2.0.1-Setup.exe.kopyalaniyor');
+  fs.writeFileSync(yabanci, 'eski artık');
   const r = await kos(['hazirla', o.exe], o.env);
   assert.equal(r.kod, 0, r.cikti);
-  assert.match(r.cikti, /HAZIR — boyut\+sha256 DOĞRULANDI/);
-  assert.ok(fs.readFileSync(path.join(o.kok, '_hazir', path.basename(o.exe))).equals(o.buf));
+  assert.ok(fs.readFileSync(path.join(dz, path.basename(o.exe))).equals(o.buf));
+  assert.equal(fs.existsSync(ara), false, 'yarım kopya son ada dönüştü');
+  assert.equal(fs.readFileSync(yabanci, 'utf8'), 'eski artık', 'başka paketin artığına DOKUNULMADI');
+  assert.equal((await kos(['hazirla', o.exe], o.env)).kod, 0, 'ikinci koşu da geçer (üzerine yazar)');
 });
 
 test('bekle-ve-tak: pencere → takas → imza → İMZALI (aynı log işaretleri)', async () => {
