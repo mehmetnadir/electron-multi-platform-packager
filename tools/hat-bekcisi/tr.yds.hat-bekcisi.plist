@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hat bekçisi (TASLAK, 06.10): 10 dk'da bir hattı onarır — geçici hatayı requeue, askıda kur isteğini
+  öne alma, dolmuş kira requeue; kalıcı hata/ölü ajan/kasa sapması/kapalı kapı bildirimi (S1-S7).
+  Bu dosya kendi kendine KURULMAZ. Kurmadan önce dal ana ağaca birleşmiş olmalı (yol ana ağacı gösterir).
+  Kurulum:
+    cp tools/hat-bekcisi/tr.yds.hat-bekcisi.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tr.yds.hat-bekcisi.plist
+  Geri alma: launchctl bootout gui/$(id -u)/tr.yds.hat-bekcisi
+  Plan görmek (yazmaz): node tools/hat-bekcisi/hat-bekcisi.js --kuru
+  Kanıt: ~/.empp-agent/hat-bekcisi/eylem.jsonl, bildirim.json
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>tr.yds.hat-bekcisi</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/nadir/01dev/electron-multi-platform-packager/tools/hat-bekcisi/hat-bekcisi.js</string>
+    <string>--uygula</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/nadir/01dev/electron-multi-platform-packager</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/nadir/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/nadir/.empp-agent/log/hat-bekcisi.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/nadir/.empp-agent/log/hat-bekcisi.launchd.log</string>
+</dict>
+</plist>

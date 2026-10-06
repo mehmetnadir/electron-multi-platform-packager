@@ -146,3 +146,4 @@ Her satır Açık Karar/İş'tir; "VAR" olan da gecikme taşır.
 ## Anlık yama katmanı ve Windows sözleşmesi
 - **Anlık yama (2026-09-21, HENÜZ BAĞLANMADI):** `yama-katmani.js`+`yama-defteri.js`: protokol-kancalı, sha256 doğrulamalı atomik küçük-yama; `EMPP_YAMA=1` varsayılan KAPALI — yayıncının güncelleyicisi zaten ~350 MB indiriyor, bizimki İKİNCİ bloklayıcı güncelleme OLMAYACAK.
 - **Windows paketleme sözleşmesi ONAYLI (Nadir, 26.09):** `windows-paketleme-sozlesmesi.md`: G1–G6 uygulandı, kurulum ekranı kuralı + zamanlama günlüğü eklendi; VM'de A 2.51.0 kuruldu. Kod ana ağaçta (`ded619e`, `c11aae0`, `436daa0`); imza bekleme kuralı `4e78243`.
+- **Hat bekçisi (Nadir, 06.10):** geçici hata/askıda kur/dolmuş kira kendiliğinden onarılır, kalıcı hata ve ajan ölümü bildirilir (`tools/hat-bekcisi/`).
