@@ -1286,3 +1286,16 @@ class SeriKartiTest(unittest.TestCase):
         self.assertIn(("tikla", "Seri Karti"), log)
         self.assertIn(("menu_al", None), log)
         self.assertIn(("ana_menu", None), log)
+
+
+# ── Varyant C (45792 MP11, 06.10): <a href="bookN/index.html"><img class="button-book"> ──
+def test_varyant_c_kutu_en_yakin_a_ve_bos_ad_indisle():
+    js = kabul.js_kutu_guncelle("C", "", 1)
+    assert "closest('a, div')" in js          # dis <div id="wrapper"> degil, kitabin kendi <a>'si
+    assert "(ad ? els.find(" in js            # bos ad -> find hep 1. kitabi secmez, indis kullanilir
+    assert "closest('a, div')" in kabul.JS_MENU
+
+
+def test_hedef_sec_varyant_c_puanlar():
+    import inspect
+    assert "img.button-book" in inspect.getsource(kabul.hedef_sec)
