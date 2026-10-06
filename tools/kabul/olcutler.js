@@ -353,6 +353,36 @@ function sayfaIzi(olcum) {
 }
 
 /**
+ * OKUYUCU SÜRÜMÜ katmanı (06.10, A1 olayı): `okuyucu-surumu-kapisi.js` sonucunu kabul katmanına
+ * çevirir. FAIL-CLOSED: ölçülemeyen okuyucu sürümü ÖLÇÜLEMEDİ değil RED olur — eski okuyuculu
+ * paket "ölçemedim" diye yayına sızmaz (45496/45485 pardus+mac yayını). `KABUL_OKUYUCU_SURUM=uyar`
+ * sonucu zaten GEÇTİ + uyarı getirir; uyarı katmanın notuna düşer. Saf.
+ * @param {{karar:string, hamKarar?:string, olculen?:string|null, kanonik?:string|null,
+ *   sebepler?:string[], uyari?:string}|null} sonuc
+ * @returns {{durum:string, sebepler:string[], notlar:string[], olculen:string|null,
+ *   kanonik:string|null, hamKarar:string}}
+ */
+function okuyucuSurumKatmani(sonuc) {
+  if (!sonuc || typeof sonuc !== 'object') {
+    return {
+      durum: DURUM.RED, sebepler: ['okuyucu sürümü ölçülmedi (fail-closed)'], notlar: [],
+      olculen: null, kanonik: null, hamKarar: DURUM.OLCULEMEDI,
+    };
+  }
+  const ortak = {
+    notlar: sonuc.uyari ? [sonuc.uyari] : [],
+    olculen: sonuc.olculen || null,
+    kanonik: sonuc.kanonik || null,
+    hamKarar: sonuc.hamKarar || sonuc.karar,
+  };
+  if (sonuc.karar === DURUM.GECTI) return { durum: DURUM.GECTI, sebepler: [], ...ortak };
+  const bas = sonuc.karar === DURUM.RED
+    ? `okuyucu kabuğu ${sonuc.olculen || '?'} ≠ kanonik ${sonuc.kanonik || '?'}`
+    : 'okuyucu sürümü ölçülemedi (fail-closed RED)';
+  return { durum: DURUM.RED, sebepler: [bas, ...(sonuc.sebepler || [])], ...ortak };
+}
+
+/**
  * Katman sonuçlarını genel karara indirger: herhangi biri RED → RED; değilse
  * herhangi biri ÖLÇÜLEMEDİ → ÖLÇÜLEMEDİ; hepsi GEÇTİ → GEÇTİ. Boş liste ÖLÇÜLEMEDİ.
  * @param {Array<{durum:string}>} katmanlar
@@ -425,6 +455,7 @@ module.exports = {
   menuTaninmadiKusuru,
   sayfaIzi,
   asamaKarari,
+  okuyucuSurumKatmani,
   genelKarar,
   aktivasyonEkraniMi,
   AKTIVASYON_HATA_DESENI,

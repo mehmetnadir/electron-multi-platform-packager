@@ -242,6 +242,27 @@ test('asamaKarari: ölçüm yoksa / ekran alınamadıysa ÖLÇÜLEMEDİ', () => 
   assert.equal(k.durum, 'OLCULEMEDI');
 });
 
+test('okuyucuSurumKatmani: GEÇTİ geçer; RED ve ÖLÇÜLEMEDİ RED olur (fail-closed); uyarı nota düşer', () => {
+  const g = O.okuyucuSurumKatmani({ karar: 'GECTI', olculen: '1.13.14', kanonik: '1.13.14', sebepler: [] });
+  assert.equal(g.durum, 'GECTI');
+  assert.deepEqual(g.sebepler, []);
+  const r = O.okuyucuSurumKatmani({ karar: 'RED', olculen: '1.13.3', kanonik: '1.13.14',
+    sebepler: ['kapak/index.html: okuyucu 1.13.3 < kanonik 1.13.14'] });
+  assert.equal(r.durum, 'RED');
+  assert.equal(r.sebepler[0], 'okuyucu kabuğu 1.13.3 ≠ kanonik 1.13.14');
+  assert.match(r.sebepler[1], /kapak\/index\.html/);
+  const o = O.okuyucuSurumKatmani({ karar: 'OLCULEMEDI', olculen: null, kanonik: '1.13.14', sebepler: ['index.html yok'] });
+  assert.equal(o.durum, 'RED');
+  assert.equal(o.hamKarar, 'OLCULEMEDI');
+  assert.match(o.sebepler[0], /fail-closed/);
+  assert.equal(O.okuyucuSurumKatmani(null).durum, 'RED');
+  const u = O.okuyucuSurumKatmani({ karar: 'GECTI', hamKarar: 'RED', uyari: 'KABUL_OKUYUCU_SURUM=uyar: …', sebepler: ['x'] });
+  assert.equal(u.durum, 'GECTI');
+  assert.equal(u.hamKarar, 'RED');
+  assert.deepEqual(u.notlar, ['KABUL_OKUYUCU_SURUM=uyar: …']);
+  assert.equal(O.genelKarar([{ durum: 'GECTI' }, r]), 'RED');
+});
+
 test('genelKarar: RED baskın, sonra ÖLÇÜLEMEDİ, boş liste ÖLÇÜLEMEDİ', () => {
   assert.equal(O.genelKarar([{ durum: 'GECTI' }, { durum: 'GECTI' }]), 'GECTI');
   assert.equal(O.genelKarar([{ durum: 'GECTI' }, { durum: 'OLCULEMEDI' }]), 'OLCULEMEDI');

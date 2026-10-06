@@ -11,6 +11,10 @@
  *
  * Katmanlar:
  *   cikarma  paket türüne göre görünmez açma (DMG -nobrowse, 7z, unzip)
+ *   okuyucu  (06.10, A1 olayı) paketteki okuyucu kabuğu sürümü kanonikle EŞİT mi — ölçülen sürüm,
+ *            damga değil (`okuyucu-surumu-kapisi.js`; A1'de kapak/index.html, bookN'de her kitap).
+ *            Fail-closed: ölçülemezse RED; `KABUL_OKUYUCU_SURUM=uyar` yalnız uyarı. Kanonik:
+ *            `--okuyucu-kanonik X.Y.Z` ya da ~/.empp-agent/kabuk/kanonik.json (EMPP_KABUK_KANONIK).
  *   imza     (mac) codesign + stapler + spctl — noter/zımba yoksa RED
  *   icerik   Electron görünmez koşum: kök sayfa → DOM + piksel (ProBook eşikleri) →
  *            ilk kitap kartına tıkla → okuyucu sayfa çizdi mi
@@ -26,7 +30,7 @@
  *   node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip]
  *        [--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut]
  *        [--ag] [--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4]
- *        [--set-tum]
+ *        [--set-tum] [--okuyucu-kanonik X.Y.Z]
  * Çıkış: 0 GEÇTİ · 1 RED · 3 ÖLÇÜLEMEDİ · 2 kullanım hatası.
  *   K4 AÇIKKEN sözlük ProBook kapısıyla (kabul-karar.sh) aynı: 0 GEÇTİ · 1 RED · 3 GÜNCEL-DEĞİL
  *   (stdout "GUNCEL-DEGIL: …" + "yeniden kuyruk onerisi: …") · 4 ÖLÇÜLEMEDİ.
@@ -45,6 +49,7 @@ const { motorKopyasiMi } = require('../../src/packaging/set-menu');
 const K4 = require('./k4-guncellik');
 const ST = require('./set-guncellik');
 const { anaSurecDenetle } = require('./ana-surec-denetimi');
+const OSK = require('./okuyucu-surumu-kapisi');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
@@ -76,7 +81,7 @@ function argumanCoz(argv) {
   const s = {
     paket: null, platform: null, kitapSayisi: null, kitapId: null, kanit: null, calisma: null,
     tut: false, ag: false, aktivasyon: false, cihaz: true, avd: null, menuBekle: 45, kitapBekle: 60,
-    k4: false, setTum: false, yardim: false,
+    k4: false, setTum: false, okuyucuKanonik: null, yardim: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -91,6 +96,7 @@ function argumanCoz(argv) {
     else if (a === '--aktivasyon') s.aktivasyon = true;
     else if (a === '--k4') s.k4 = true;
     else if (a === '--set-tum') s.setTum = true;
+    else if (a === '--okuyucu-kanonik') s.okuyucuKanonik = sonraki();
     else if (a === '--cihaz-yok') s.cihaz = false;
     else if (a === '--cihaz') s.cihaz = true;
     else if (a === '--avd') s.avd = sonraki();
@@ -262,7 +268,8 @@ async function calis(argv, yazici) {
   if (s.yardim || !s.paket) {
     yaz('Kullanım: node tools/kabul/basliksiz-kabul.js <paket> [--platform mac|android|windows|pardus|dizin|zip] '
       + '[--kitap-sayisi N] [--kitap-id ID] [--kanit <dizin>] [--calisma <dizin>] [--tut] [--ag] '
-      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4] [--set-tum]');
+      + '[--aktivasyon] [--cihaz-yok] [--avd <ad>] [--menu-bekle sn] [--kitap-bekle sn] [--k4] [--set-tum] '
+      + '[--okuyucu-kanonik X.Y.Z]');
     return { kod: 2 };
   }
   const paket = path.resolve(s.paket);
@@ -311,6 +318,27 @@ async function calis(argv, yazici) {
     } catch (e) {
       rapor.katmanlar.cikarma = { durum: O.DURUM.OLCULEMEDI, sebepler: [`paket açılamadı: ${e.message}`] };
       say(`ÖLÇÜLEMEDİ: paket açılamadı — ${e.message}`);
+    }
+
+    // 1a. Okuyucu sürümü (06.10, A1 olayı): paketteki okuyucu kabuğu kanonikle EŞİT mi? Damga değil
+    // ÖLÇÜM — 45496/45485 A1 setleri paketleyicinin 'karisik' damgasıyla ESKİ okuyucuyla yayınlandı.
+    // asar (mac/pardus/windows) DMG ayrılmadan, ölçüm dosyaları çalışma dizinine çıkarılarak okunur.
+    if (acilis) {
+      let ok;
+      try {
+        ok = await OSK.okuyucuSurumuOlc(acilis.kok, {
+          asar: acilis.asar, kanonik: s.okuyucuKanonik, calisma, env: process.env,
+        });
+      } catch (e) {
+        ok = {
+          karar: O.DURUM.OLCULEMEDI, hamKarar: O.DURUM.OLCULEMEDI, olculen: null, kanonik: s.okuyucuKanonik,
+          birimler: [], sebepler: [`ölçüm hatası: ${e.message}`],
+        };
+      }
+      rapor.okuyucuSurumu = ok;
+      rapor.katmanlar.okuyucu = O.okuyucuSurumKatmani(ok);
+      if (ok.uyari) rapor.uyarilar.push(ok.uyari);
+      say(OSK.ozetSatiri(ok));
     }
 
     // 1b. Paketin KENDİ ana süreci (main.js): koşum kosum/main.js ile açıldığı için yürütülmez;

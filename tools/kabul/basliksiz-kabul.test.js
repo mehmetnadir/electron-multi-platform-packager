@@ -55,12 +55,24 @@ function sahteSet(ad, { kok, okuyucu = OKUYUCU_HTML, kitaplar = ['book1', 'book2
   return d;
 }
 
-async function kos(d, ek = []) {
+/**
+ * İçerik fikstürleri gerçek okuyucu kabuğu (main.js + i8 rozeti) taşımaz; okuyucu sürümü katmanı
+ * (06.10) bu testlerin konusu değil → varsayılan `KABUL_OKUYUCU_SURUM=uyar`. Okuyucu katmanını
+ * ölçen testler `{ okuyucu: 'zorunlu' }` geçer.
+ */
+async function kos(d, ek = [], { okuyucu = 'uyar' } = {}) {
   const kanit = fs.mkdtempSync(path.join(os.tmpdir(), 'bk-test-kanit-'));
   const calisma = fs.mkdtempSync(path.join(os.tmpdir(), 'bk-test-calisma-'));
   const satirlar = [];
-  const r = await calis([d, '--platform', 'dizin', '--kanit', kanit, '--calisma', calisma, '--tut',
-    '--menu-bekle', '8', '--kitap-bekle', '8', ...ek], (s) => satirlar.push(s));
+  const onceki = process.env.KABUL_OKUYUCU_SURUM;
+  process.env.KABUL_OKUYUCU_SURUM = okuyucu === 'uyar' ? 'uyar' : '';
+  let r;
+  try {
+    r = await calis([d, '--platform', 'dizin', '--kanit', kanit, '--calisma', calisma, '--tut',
+      '--menu-bekle', '8', '--kitap-bekle', '8', '--okuyucu-kanonik', '1.13.14', ...ek], (s) => satirlar.push(s));
+  } finally {
+    if (onceki === undefined) delete process.env.KABUL_OKUYUCU_SURUM; else process.env.KABUL_OKUYUCU_SURUM = onceki;
+  }
   const temizle = () => {
     for (const x of [d, kanit, calisma]) fs.rmSync(x, { recursive: true, force: true });
   };
@@ -205,6 +217,57 @@ test('mutasyon: raftaki kapak okuyucuyu açmıyor → RED', secenek, async () =>
   } finally { r.temizle(); }
 });
 
+// OKUYUCU SÜRÜMÜ KATMANI (06.10 A1 olayı): içerik sağlam olsa da eski okuyucu kabuğu kabulü düşürür.
+const KABUK_MAIN = 'a1b2c3d4e5f6a7b8c9d0.main.js';
+function kabukluSet(ad, surumler) {
+  const okuyucu = OKUYUCU_HTML.replace('</head>', `<script src="./${KABUK_MAIN}"></script></head>`);
+  const d = sahteSet(ad, { kok: menuHtml({ kartlar: surumler.map((_, i) => `book${i + 1}`) }), okuyucu,
+    kitaplar: surumler.map((_, i) => `book${i + 1}`) });
+  surumler.forEach((s, i) => {
+    fs.writeFileSync(path.join(d, `book${i + 1}`, KABUK_MAIN), `/* rozet */ void {exports:0}; /*e.exports={i8:"${s}"}*/`);
+  });
+  return d;
+}
+
+test('okuyucu katmanı: kabuk kanonikle eşit → GEÇTİ, ölçüm karar.json\'da', secenek, async () => {
+  const r = await kos(kabukluSet('kabuk-iyi', ['1.13.14', '1.13.14']), [], { okuyucu: 'zorunlu' });
+  try {
+    assert.equal(r.kod, 0, r.satirlar.join('\n'));
+    assert.equal(r.rapor.katmanlar.okuyucu.durum, 'GECTI');
+    const kj = JSON.parse(fs.readFileSync(path.join(r.kanit, 'karar.json'), 'utf8'));
+    assert.equal(kj.okuyucuSurumu.olculen, '1.13.14');
+    assert.equal(kj.okuyucuSurumu.kanonik, '1.13.14');
+    assert.deepEqual(kj.okuyucuSurumu.birimler.map((b) => b.sayfa), ['book1/index.html', 'book2/index.html']);
+  } finally { r.temizle(); }
+});
+
+test('okuyucu katmanı: bir kitap eski (1.13.3) → içerik GEÇTİ olsa da RED', secenek, async () => {
+  const r = await kos(kabukluSet('kabuk-eski', ['1.13.14', '1.13.3']), [], { okuyucu: 'zorunlu' });
+  try {
+    assert.equal(r.kod, 1, r.satirlar.join('\n'));
+    assert.equal(r.rapor.katmanlar.icerik.durum, 'GECTI', 'içerik sağlam — RED yalnız okuyucu sürümünden');
+    assert.equal(r.rapor.katmanlar.okuyucu.durum, 'RED');
+    assert.match(r.rapor.sebepler.join(' | '), /okuyucu: okuyucu kabuğu 1\.13\.14,1\.13\.3 ≠ kanonik 1\.13\.14/);
+    assert.match(r.rapor.sebepler.join(' | '), /book2\/index\.html: okuyucu 1\.13\.3 < kanonik/);
+  } finally { r.temizle(); }
+});
+
+test('okuyucu katmanı: kabuk ölçülemez → fail-closed RED; uyar bayrağıyla GEÇTİ + uyarı', secenek, async () => {
+  const r = await kos(sahteSet('kabuksuz', { kok: menuHtml() }), [], { okuyucu: 'zorunlu' });
+  try {
+    assert.equal(r.kod, 1, r.satirlar.join('\n'));
+    assert.equal(r.rapor.katmanlar.okuyucu.durum, 'RED');
+    assert.match(r.rapor.sebepler.join(' | '), /okuyucu sürümü ölçülemedi \(fail-closed RED\)/);
+  } finally { r.temizle(); }
+  const u = await kos(sahteSet('kabuksuz-uyar', { kok: menuHtml() }));
+  try {
+    assert.equal(u.kod, 0, u.satirlar.join('\n'));
+    assert.equal(u.rapor.katmanlar.okuyucu.durum, 'GECTI');
+    assert.equal(u.rapor.okuyucuSurumu.hamKarar, 'OLCULEMEDI');
+    assert.ok(u.rapor.uyarilar.some((x) => /KABUL_OKUYUCU_SURUM=uyar/.test(x)));
+  } finally { u.temizle(); }
+});
+
 test('kullanım hatası → 2; olmayan paket → 2', async () => {
   assert.equal((await calis([], () => {})).kod, 2);
   assert.equal((await calis(['/yok/boyle/bir/paket.dmg'], () => {})).kod, 2);
@@ -220,6 +283,8 @@ test('kitapIdTuret / kanitAdi / argumanCoz (saf)', () => {
   assert.equal(s.kitapSayisi, 3);
   assert.equal(s.cihaz, false);
   assert.equal(s.tut, true);
+  assert.equal(s.okuyucuKanonik, null);
+  assert.equal(argumanCoz(['p.dmg', '--okuyucu-kanonik', '1.13.14']).okuyucuKanonik, '1.13.14');
 });
 
 test('icerikKarari: koşum ölçüm üretmediyse ÖLÇÜLEMEDİ (GEÇTİ değil)', () => {
