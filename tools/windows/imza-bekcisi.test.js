@@ -138,7 +138,30 @@ test('yuva kapalı + VPN AYAKTA → yalnız disk bağlanır (--sessiz), yuva aç
   const m = JSON.parse(fs.readFileSync(path.join(o.cfg.winHazirKoku, 'yayinlandi', y[0], 'manifest.json'), 'utf8'));
   assert.equal(m.durum, 'yayinlandi');
   assert.equal(m.yayin.yayinlayan, 'imza-bekcisi');
-  assert.doesNotMatch(o.oku(), /^bildir/m, 'sorun yok → bildirim yok');
+  // 06.10: yayın sonrası BAŞARI bildirimi (kanal paket, normal öncelik); sorun bildirimi (yüksek) YOK.
+  assert.match(o.oku(), /^bildir paket 102 Kitap 102 — \d+ MB, imzalı, kabulden geçti, yayınlandı -b ✅ windows yayınlandı -p normal -e white_check_mark$/m);
+  assert.doesNotMatch(o.oku(), /-p yuksek/, 'sorun bildirimi yok');
+});
+
+test('yayinMesaji: kitap adı varsa bookId + ad + MB; yoksa yalnız bookId', () => {
+  assert.equal(B.yayinMesaji({ bookId: '71717', boyut: 644e6 }, { bookTitle: 'Lingoland 3' }),
+    '71717 Lingoland 3 — 644 MB, imzalı, kabulden geçti, yayınlandı');
+  assert.equal(B.yayinMesaji({ bookId: '71717' }, {}), '71717 — imzalı, kabulden geçti, yayınlandı');
+});
+
+test('yayinBildir: bildir komutu hata verse de fırlatmaz; .cmd ikilisi powershell -File ile çağrılır', async () => {
+  const komutlar = [];
+  const dizin = tmp('yb');
+  const cmd = path.join(dizin, 'bildir.cmd');
+  fs.writeFileSync(cmd, '@echo off\r\n');
+  fs.writeFileSync(path.join(dizin, 'bildir.ps1'), '');
+  const d = { cfg: { bekciBildirIkili: cmd }, log: () => {}, komutKos: async (argv) => { komutlar.push(argv); return { kod: 1 }; } };
+  await B.yayinBildir(d, { bookId: '9', boyut: 5e6 }, { bookTitle: 'Çalışma Kitabı' });
+  assert.equal(komutlar.length, 1);
+  assert.deepEqual(komutlar[0].slice(0, 5), ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File']);
+  assert.equal(komutlar[0][5], path.join(dizin, 'bildir.ps1'));
+  assert.deepEqual(komutlar[0].slice(6, 8), ['paket', '9 Çalışma Kitabı — 5 MB, imzalı, kabulden geçti, yayınlandı']);
+  assert.ok(komutlar[0].includes('✅ windows yayınlandı'));
 });
 
 test('hazır kayıttaki kanonik damga /result işine kanonikSurum olarak geçer (motor/kabuk sütunları)', async () => {

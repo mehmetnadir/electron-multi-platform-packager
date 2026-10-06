@@ -38,3 +38,4 @@ Set-Location $R
 $env:EMPP_IMZA_YUVA_KOKU = '\\172.17.2.23\Storage7\vhosts\akillitahta.ydspublishing.com\httpdocs\Uploads\KitapTekExe'   # 04.10 imza kapısı AÇIK: kasa tek imzacı (şef: AÇ)
 $env:KABUL_KOK = 'C:\kabul'   # kabul.py exe önbelleği + profiller (04.10 C: taşıması)
 $env:KABUL_AKT_KOD_DOSYASI = "$K\kabul\aktivasyon-test-kodu.txt"
+$env:EMPP_BILDIR_IKILI = 'C:\Users\Administrator\.local\bin\bildir.cmd'   # 06.10 ntfy bildirimi (kanal paket); bildir.ps1/.cmd kasada .local\bin altında

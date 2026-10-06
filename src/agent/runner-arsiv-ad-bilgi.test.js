@@ -212,3 +212,21 @@ test('kimlik runner önbelleğiyle aynı: presigned imza kimliği değiştirmez'
   assert.equal(srcVersionTuret(kopruUrl(45482, 'ShallWe8-v47.exe')),
     srcVersionTuret(kopruUrl(45482, 'ShallWe8-v47.exe')));
 });
+
+test('bildirGonder: gövde kitap adını içerir ve ikili ikiliKomutu ile çağrılır', async () => {
+  const dizin = fs.mkdtempSync(path.join(os.tmpdir(), 'bildir-ad-'));
+  const gunluk = path.join(dizin, 'g.txt');
+  const sahte = path.join(dizin, 'bildir');
+  fs.writeFileSync(sahte, `#!/bin/bash\nprintf '%s\\n' "$@" > ${JSON.stringify(gunluk)}\n`, { mode: 0o755 });
+  const once = process.env.EMPP_BILDIR_IKILI;
+  process.env.EMPP_BILDIR_IKILI = sahte;
+  try {
+    require('./runner').bildirGonder({ basarili: true, bookId: '71717', bookTitle: 'Çalışma Kitabı', platform: 'macos', boyutMb: 12 });
+    for (let i = 0; i < 50 && !fs.existsSync(gunluk); i += 1) await new Promise((r) => setTimeout(r, 100));
+    const satirlar = fs.readFileSync(gunluk, 'utf8').split('\n');
+    assert.equal(satirlar[0], 'paket');
+    assert.equal(satirlar[1], '71717 Çalışma Kitabı — 12 MB, kapıdan geçti ve yüklendi');
+  } finally {
+    if (once === undefined) delete process.env.EMPP_BILDIR_IKILI; else process.env.EMPP_BILDIR_IKILI = once;
+  }
+});

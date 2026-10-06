@@ -39,6 +39,7 @@ const os = require('os');
 const path = require('path');
 
 const runner = require('../../src/agent/runner.js');
+const { ikiliKomutu } = require('../../src/agent/bildir-ikili');
 const W = require('../../src/agent/windows-serit');
 const H = require('../../src/agent/windows-hazir');
 const { WIN_KASA_KABUL_ISARETI, ertelenebilirKaynakHatasi } = require('../../src/agent/runner-helpers');
@@ -203,6 +204,7 @@ async function kaydiIsle(giris, d) {
       durum: 'yayinlandi', imzali: zincir.kanit.imzali,
       yayin: { r2ObjectKey: yayin.r2ObjectKey, publicUrl: yayin.publicUrl, zaman: new Date().toISOString(), yayinlayan: 'imza-bekcisi' },
     });
+    await yayinBildir(d, m, job);
     return { durum: 'yayinlandi', dizin: s.dizin };
   } catch (e) {
     try { await H.manifestGuncelle(giris.dizin, { sonHata: e.message, sonDeneme: new Date().toISOString() }); } catch (_) { /* kayıt taşınmış olabilir */ }
@@ -219,9 +221,30 @@ async function bildirimGonder(d, karar, durum) {
     log(`imza-bekçisi: bildir yok (${cfg.bekciBildirIkili}) — bildirim atlandı: ${karar.mesaj}`);
     return;
   }
-  const r = await komutKos([cfg.bekciBildirIkili, 'paket', karar.mesaj, '-p', 'yuksek'], { zamanAsimiMs: 20000 });
+  const [bk, ba] = ikiliKomutu(cfg.bekciBildirIkili, ['paket', karar.mesaj, '-p', 'yuksek']);
+  const r = await komutKos([bk, ...ba], { zamanAsimiMs: 20000 });
   log(`imza-bekçisi: bildirim ${r.kod === 0 ? 'gönderildi' : `GÖNDERİLEMEDİ (çıkış ${r.kod})`}: ${karar.mesaj}`);
   if (r.kod === 0) await H.bildirimDurumuYaz(cfg, { ...durum, [karar.anahtar]: d.simdi() });
+}
+
+/** Yayın başarı mesajı: `<bookId> <kitap adı> — <MB> MB, imzalı, kabulden geçti, yayınlandı`. */
+function yayinMesaji(m, job) {
+  const ad = job && job.bookTitle && String(job.bookTitle) !== String(m.bookId) ? ` ${job.bookTitle}` : '';
+  const mb = m.boyut ? ` — ${Math.round(m.boyut / 1e6)} MB,` : ' —';
+  return `${m.bookId}${ad}${mb} imzalı, kabulden geçti, yayınlandı`;
+}
+
+/** Yayın sonrası BAŞARI bildirimi (kanal `paket`). Asla fırlatmaz; EMPP_BILDIRIM=0 kapatır. */
+async function yayinBildir(d, m, job) {
+  const { cfg, komutKos, log } = d;
+  try {
+    if (process.env.EMPP_BILDIRIM === '0') return;
+    if (!fs.existsSync(cfg.bekciBildirIkili)) { log(`imza-bekçisi: bildir yok (${cfg.bekciBildirIkili}) — yayın bildirimi atlandı`); return; }
+    const mesaj = yayinMesaji(m, job);
+    const [bk, ba] = ikiliKomutu(cfg.bekciBildirIkili, ['paket', mesaj, '-b', '✅ windows yayınlandı', '-p', 'normal', '-e', 'white_check_mark']);
+    const r = await komutKos([bk, ...ba], { zamanAsimiMs: 20000 });
+    log(`imza-bekçisi: yayın bildirimi ${r.kod === 0 ? 'gönderildi' : `GÖNDERİLEMEDİ (çıkış ${r.kod})`}: ${mesaj}`);
+  } catch (e) { log(`imza-bekçisi: yayın bildirimi hatası: ${e.message}`); }
 }
 
 /**
@@ -312,4 +335,4 @@ if (require.main === module) {
   ana().then(() => process.exit(0)).catch((e) => { console.error('imza-bekçisi HATA:', e && e.stack); process.exit(1); });
 }
 
-module.exports = { bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };
+module.exports = { yayinMesaji, yayinBildir, bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };
