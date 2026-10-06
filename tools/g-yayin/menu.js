@@ -450,5 +450,6 @@ module.exports = {
   kitapBilgisi,
   menuKitaplari,
   menuGuncelle,
+  kanonik,
   kararliKimlik,
 };
