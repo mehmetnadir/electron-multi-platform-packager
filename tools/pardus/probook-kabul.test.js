@@ -7,6 +7,26 @@ const BETIK = path.join(__dirname, 'probook-kabul.sh');
 const kaynak = () => fs.readFileSync(BETIK, 'utf8');
 
 /**
+ * OKUYUCU SÜRÜMÜ KAPISI sahte node'u (06.10): verilen kapı satırlarını basar, argümanları iz dosyasına
+ * yazar. Kapı kilitten ÖNCE koştuğu için betiği koşturan HER test ortamı bunu verir (varsayılan GEÇTİ).
+ */
+function sahteOkuyucuNode(dizin, {
+  karar = 'GECTI', ham = karar, olculen = '1.13.14', kanonik = '1.13.14', sebep = 'tumu kanonikle esit', rc = null,
+} = {}) {
+  const yol = path.join(dizin, `okuyucu-node-${karar}-${ham}-${olculen}`);
+  const iz = `${yol}.iz`;
+  const cikis = rc != null ? rc : (karar === 'GECTI' ? 0 : 1);
+  fs.writeFileSync(yol, [
+    '#!/bin/bash',
+    `printf '%s\\n' "$*" >> "${iz}"`,
+    `printf 'OKUYUCU_KARAR=${karar}\\nOKUYUCU_HAM_KARAR=${ham}\\nOKUYUCU_OLCULEN=${olculen}\\n'`,
+    `printf 'OKUYUCU_KANONIK=${kanonik}\\nOKUYUCU_SEBEP=${sebep}\\n'`,
+    `exit ${cikis}`, '',
+  ].join('\n'), { mode: 0o755 });
+  return { yol, iz };
+}
+
+/**
  * NEDEN BU TEST VAR (ölçüldü 2026-09-21):
  * Kabul kapısının varsayılan adresi `etapadmin@192.168.1.55` (ofis LAN) idi.
  * Nadir ofis dışındayken ya da paketleyici başka ağdayken kapı
@@ -71,6 +91,7 @@ function yerelOrtam() {
   fs.writeFileSync(paket, '#!/bin/bash\nsleep 1\n', { mode: 0o755 });
   const env = {
     ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`,
+    KABUL_OKUYUCU_NODE: sahteOkuyucuNode(bin).yol, KABUL_OKUYUCU_SURUM: '',
     PROBOOK_HOST: 'yerel', KABUL_ISARET_DIZIN: isaret, PROBOOK_BEKLE: '10',
     KABUL_BOSLUK_ARALIK: '1', PROBOOK_BEKLE_TABAN: '0',
     // Paralel koşan diğer test dosyaları sahte probook-kabul.sh başlatır; hermetik kal.
@@ -431,6 +452,8 @@ exit 0
     ...process.env,
     HOME: home,
     PATH: `${bin}:${process.env.PATH}`,
+    KABUL_OKUYUCU_NODE: sahteOkuyucuNode(bin).yol,
+    KABUL_OKUYUCU_SURUM: '',
     PROBOOK_BEKLE: '1',
     PROBOOK_BEKLE_TABAN: '0',
     KABUL_BOSLUK_TAVAN: '1',
@@ -616,4 +639,118 @@ test('bekleme dongusu say_sinirli kullanir (ham say yok), artik kapatma bayragi 
   assert.doesNotMatch(k, /BEKLENEN % 60/);
   assert.match(k, /KABUL_ARTIK_KAPAT="\$\{KABUL_ARTIK_KAPAT:-1\}"/);
   assert.match(k, /KABUL_ARTIK_BEKLE="\$\{KABUL_ARTIK_BEKLE:-120\}"/);
+});
+
+// ---------------------------------------------------------------------------
+// OKUYUCU SÜRÜMÜ KAPISI (06.10, A1 olayı): 45477/45478/45480/45485/45487/45496 A1 setleri okuyucu
+// 1.13.3 ile üretildi (kanonik 1.13.14); bu kapı okuyucu sürümünü ÖLÇMEDİĞİ için 5 pardus paketi
+// yayınlandı. Kapı kilitten/kopyadan/başlatmadan ÖNCE koşar. Sahte node: karar satırları + argüman izi.
+// ---------------------------------------------------------------------------
+const OKP = require('../kabul/fikstur/okuyucu-paket');
+
+test('okuyucu kapisi (yerel kip): RED → cikis 1 ProBook kilidinden ve baslatmadan ONCE; node paket + --platform pardus alir', () => {
+  const o = yerelOrtam();
+  const red = sahteOkuyucuNode(o.kok, { karar: 'RED', olculen: '1.12.7', sebep: 'kapak/index.html: okuyucu 1.12.7 < kanonik 1.13.14' });
+  const kanit = path.join(o.kok, 'kanit');
+  const r = spawnSync('bash', [BETIK, o.paket, kanit], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: red.yol }, timeout: 30000,
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /\[kabul\] RED: okuyucu surumu kanonikle esit degil \(olculen 1\.12\.7, kanonik 1\.13\.14\): kapak\/index\.html: okuyucu 1\.12\.7 < kanonik 1\.13\.14 — paket yeniden uretilmeli/);
+  assert.doesNotMatch(r.stdout, /yerel kip:|ProBook mesgul|gizleniyor|baslatiliyor/, 'kilit/baslatma olmamali');
+  assert.equal(fs.existsSync(path.join(o.home, '.kabul.lock')), false, 'ProBook kilidi alinmamali');
+  const arg = fs.readFileSync(red.iz, 'utf8');
+  assert.ok(arg.includes(o.paket), arg);
+  assert.match(arg, /okuyucu-surumu-kapisi\.js .* --platform pardus/);
+  assert.match(fs.readFileSync(path.join(kanit, 'okuyucu-surumu.txt'), 'utf8'), /^OKUYUCU_KARAR=RED$/m);
+  assert.ok(fs.existsSync(o.paket), 'paket silinmemeli');
+});
+
+test('okuyucu kapisi: uyar kipi (KABUL_OKUYUCU_SURUM) → UYARI + kabul SURER (geri alma yolu)', () => {
+  const o = yerelOrtam();
+  // Gerçek CLI uyar kipinde KARAR=GECTI, HAM=RED, çıkış 0 basar; betik ayrıca kendi uyar kontrolünü yapar.
+  const uyar = sahteOkuyucuNode(o.kok, { karar: 'GECTI', ham: 'RED', olculen: '1.12.7', rc: 0 });
+  fs.writeFileSync(path.join(o.isaret, 'kabul-onceki-1.txt'), ''); // gate'ten sonra hızlı bitsin: ProBook meşgul
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: uyar.yol, KABUL_OKUYUCU_SURUM: 'uyar', KABUL_BOSLUK_TAVAN: '1' },
+    timeout: 30000,
+  });
+  assert.match(r.stdout, /UYARI: okuyucu surumu RED \(olculen 1\.12\.7, kanonik 1\.13\.14\).*KABUL_OKUYUCU_SURUM=uyar, kabul suruyor/);
+  assert.match(r.stdout, /ProBook mesgul/, 'kapi gecirmeli, akis kilide ulasmali');
+  // Uyar kipinde node RED + çıkış 1 (eski CLI / çökme) bile geçirilir.
+  const sert = sahteOkuyucuNode(o.kok, { karar: 'RED', olculen: '1.12.6' });
+  const r2 = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit2')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: sert.yol, KABUL_OKUYUCU_SURUM: 'UYAR', KABUL_BOSLUK_TAVAN: '1' },
+    timeout: 30000,
+  });
+  assert.match(r2.stdout, /UYARI: okuyucu surumu RED/);
+  assert.match(r2.stdout, /ProBook mesgul/);
+});
+
+test('okuyucu kapisi: OLCULEMEDI → cikis 4 (paket kusuru degil); node yoksa da cikis 4', () => {
+  const o = yerelOrtam();
+  const olc = sahteOkuyucuNode(o.kok, { karar: 'OLCULEMEDI', olculen: '', sebep: 'pakette olculebilir okuyucu birimi yok' });
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: olc.yol }, timeout: 30000,
+  });
+  assert.equal(r.status, 4, r.stdout);
+  assert.match(r.stdout, /\[kabul\] OLCULEMEDI: okuyucu surumu olculemedi: pakette olculebilir okuyucu birimi yok/);
+  const r2 = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit2')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: path.join(o.kok, 'yok-node') }, timeout: 30000,
+  });
+  assert.equal(r2.status, 4, r2.stdout);
+  assert.match(r2.stdout, /OLCULEMEDI: okuyucu surumu olculemedi: node yok/);
+});
+
+test('okuyucu kapisi (uzak + kopya): RED kopyadan ve kilitten ONCE (scp/kilit yok); uzak girdide olcum --uzak-konak ile', () => {
+  const o = uzakStubOrtam();
+  const red = sahteOkuyucuNode(o.kok, { karar: 'RED', olculen: '1.13.3' });
+  const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: red.yol }, timeout: 30000,
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /RED: okuyucu surumu kanonikle esit degil \(olculen 1\.13\.3/);
+  const iz = fs.existsSync(o.iz) ? fs.readFileSync(o.iz, 'utf8') : '';
+  assert.doesNotMatch(iz, /^scp /m, 'paket kopyalanmamali');
+  assert.doesNotMatch(iz, /bash -s 'al'/, 'ProBook kilidi alinmamali');
+  // uzak: girdi → ölçüm ProBook'ta (node argümanları), kilitten ÖNCE
+  const red2 = sahteOkuyucuNode(o.kok, { karar: 'RED', olculen: '1.13.2' });
+  const r2 = spawnSync('bash', [BETIK, 'uzak:/home/etapadmin/Indirilenler/X.impark', path.join(o.kok, 'kanit2')], {
+    encoding: 'utf8', env: { ...o.env, KABUL_OKUYUCU_NODE: red2.yol, PROBOOK_KEY: '/k/id' }, timeout: 30000,
+  });
+  assert.equal(r2.status, 1, r2.stdout);
+  const arg = fs.readFileSync(red2.iz, 'utf8');
+  assert.match(arg, /\/home\/etapadmin\/Indirilenler\/X\.impark --uzak-konak etapadmin@\S+ --uzak-anahtar \/k\/id --platform pardus/);
+  const iz2 = fs.readFileSync(o.iz, 'utf8');
+  assert.doesNotMatch(iz2, /bash -s 'al'/, 'uzak olcum RED → kilit alinmamali');
+});
+
+test('okuyucu kapisi UCTAN UCA (gercek node + 7z akisi, sahte yok): 1.12.7 paket kanonik 1.13.14 → RED; '
+  + 'kanonik 1.12.7 → GECTI ve akis surer', { skip: !OKP.yediz() && '7z yok' }, async () => {
+  const o = yerelOrtam();
+  const agac = OKP.a1Agaci('1.12.7', { dolguKb: 256 });
+  try {
+    fs.rmSync(o.paket);
+    await OKP.imparkYap(agac, path.dirname(o.paket), path.basename(o.paket));
+    const env = { ...o.env, KABUL_NODE: process.execPath, KABUL_OKUYUCU_KANONIK: '1.13.14' };
+    delete env.KABUL_OKUYUCU_NODE;
+    const r = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit')], { encoding: 'utf8', env, timeout: 60000 });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stdout, /RED: okuyucu surumu kanonikle esit degil \(olculen 1\.12\.7, kanonik 1\.13\.14\): kapak\/index\.html: okuyucu 1\.12\.7 < kanonik 1\.13\.14/);
+    fs.writeFileSync(path.join(o.isaret, 'kabul-onceki-2.txt'), '');
+    const g = spawnSync('bash', [BETIK, o.paket, path.join(o.kok, 'kanit2')], {
+      encoding: 'utf8', env: { ...env, KABUL_OKUYUCU_KANONIK: '1.12.7', KABUL_BOSLUK_TAVAN: '1' }, timeout: 60000,
+    });
+    assert.match(g.stdout, /okuyucu surumu GECTI: 1\.12\.7 = kanonik 1\.12\.7/, g.stdout + g.stderr);
+    assert.match(g.stdout, /ProBook mesgul/, 'GECTI sonrasi akis kilide ulasmali');
+  } finally { OKP.temizle(agac); }
+});
+
+test('okuyucu kapisi kaynakta: kilit dongusunden ONCE cagrilir (yerel + kopya), uzak girdide host seciminden sonra', () => {
+  const k = kaynak();
+  const cagri = k.indexOf('okuyucu_kapisi "$UZAK"\nelif');
+  const kilit = k.indexOf('while SEBEP=$(kilit_ve_bosluk)');
+  assert.ok(cagri > 0 && kilit > 0 && cagri < kilit, 'yerel/kopya kapisi kilitten once');
+  const uzak = k.indexOf('okuyucu_kapisi "$UZAK" --uzak-konak');
+  assert.ok(uzak > k.indexOf('ssh_kur "$SECILEN_HOST"') && uzak < k.indexOf('until C=$(kilit al)'), 'uzak kapisi kilitten once');
 });
