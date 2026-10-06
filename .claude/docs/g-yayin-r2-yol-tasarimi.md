@@ -24,6 +24,21 @@ bu düzenin birebir yerel aynasıdır; yerel sınama sunucusu da aynı ağacı s
 `<surum>` = `2.<panel>.<sayaç>` (G3). Sayaç alanı paket sürümüyle ortaktır: ilk G yayını kurulu paketin
 sürümünden büyük olmalıdır (`--onceki-surum`).
 
+## Kabuktan dosya düşürme — `--dusur` (06.10, 45550)
+Manifest birikimlidir. Bir kez yayınlanan kabuk dosyası sonraki her sürüme taşınır.
+`--dusur <yol>[,<yol>]` girdiyi yeni manifestten çıkarır. R2'den nesne SİLMEZ.
+
+| İstemci | Düşen yol için davranış |
+|---|---|
+| mac / Pardus (örtü) | Yol örtüden çıkar. Paketin kendi kopyası sunulur (`ortuCoz` → null). |
+| Android | Dosya uygulanmaz. Boş kabuk kabul edilir, sürüm damgalanır. |
+| Windows (yerinde) | Önceki G yazımı yerinde kalır. Paket kopyası geri gelmez. |
+
+RED durumları: önceki imzalı durumda olmayan yol, aynı yayında yeniden yazılan yol, G kapsamı dışı yol.
+Örnek (45550 2.25.9, Android'i donduran shim'siz index):
+`yayinla.js yayinla --set-kimligi 45550 --taban <taban> --cikti ~/.empp-agent/g-yayin --surum 2.25.9
+--onceki-manifest <taban>/set/45550/manifest.json --dusur index.html --anahtar-zinciri`.
+
 ## Yükleme sırası (aracın `yayin/<id>/<surum>.json` planı)
 1. `kitap/*.zip` (yeni olanlar) → 2. değişen `dosya/*` → 3. `surumler/<surum>/*` → 4. `manifest.json`,
    `manifest.json.sig` → 5. `surum.json`.

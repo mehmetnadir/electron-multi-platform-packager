@@ -300,6 +300,30 @@ test('canlı index android-shim taşımıyor → Nadir listesi, yayın yok', asy
   assert.deepEqual(r.nadirKarari.map((n) => n.set), ['45550']);
 });
 
+test('canlı index düşürülmüş (kabuk=[], R2\'de eski shim\'siz index duruyor) → kapı geçer', async () => {
+  // 45550, 06.10: 2.25.9 `--dusur index.html` ile yayınlandı; R2'den silme yok, eski
+  // android/dosya/index.html (shim'siz) yerinde kalır. Kapı canlı manifeste bakar → geçer.
+  const { ops } = ortam();
+  const kok = `${TABAN}/set/45550`;
+  const m = imzaliManifest('45550', '2.25.9', []);
+  const t = {
+    [`${kok}/surum.json`]: JSON.stringify({ surum: '2.25.9', setKimligi: '45550' }),
+    [`${kok}/manifest.json`]: m.govde,
+    [`${kok}/manifest.json.sig`]: m.imza,
+    [`${kok}/android/surum.json`]: JSON.stringify({ surum: '2.25.9' }),
+    [`${kok}/android/dosya/index.html`]: '<html><head><script src="empp-fs-shim.js"></script>',
+  };
+  const getir = sahteGetir(t);
+  const r = await oy.kos(oy.argsAyristir(['45550']), { ...ops, getir, sql: sahteSql() });
+  const s = r.setler[0];
+  assert.equal(s.canli.androidIndexShimli, null, 'manifestte index yok → index hiç sorulmaz');
+  assert.equal(s.karar, 'sec');
+  assert.match(s.sebep, /motor-farki/);
+  assert.equal(s.tahminiSurum, '2.25.10');
+  assert.ok(!s.komutlar[0].arg.includes('--index'), 'index geri getirilmez');
+  assert.deepEqual(r.nadirKarari, []);
+});
+
 test('canlı index android-shim taşıyor → kapı geçer', async () => {
   const { ops } = ortam();
   const t = canliTablo('45550', { motorSha: 'e'.repeat(64),
