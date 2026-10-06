@@ -35,10 +35,14 @@ const DIZIN = { isFile: () => false, isDirectory: () => true };
 
 // ─────────────────────────────── (1) SÖZLEŞME ───────────────────────────────
 
-test('SÖZLEŞME: Windows dizisi taşımadan önceki (26.09) literal liste ile BİREBİR aynı', () => {
+test('SÖZLEŞME: Windows dizisi 26.09 literal listesini BİREBİR taşır, ardından chrome-profili',
+  () => {
+  const ad = `{${liste.CHROME_PROFIL_ADLARI.join(',')}}`;
   assert.deepStrictEqual(sentinel.canliFilesDesenleri('windows'), [
     '**/*', '!node_modules', '!temp', '!uploads', '!build', '!**/temp/data/storage.im',
     '!_*', '!_*/**/*',
+    // 06.10 (11845 windows NSIS MAX_PATH): htmletk birimine yazılmış Chrome profili.
+    `!**/htmletk/*/${ad}`, `!**/htmletk/*/${ad}/**`,
   ]);
 });
 
@@ -170,4 +174,69 @@ test('EŞLİK: aynı yol kümesinde Android süzgeci ile electron-builder AYNI k
     const e = eb(`/k/${f}`, DOSYA);
     assert.strictEqual(a, e, `${f}: android=${a} electron-builder=${e} — listeler ayrıştı`);
   }
+});
+
+// ─────────────── (4) CHROME PROFİLİ (11845 windows, 06.10) ───────────────
+// Kanıt: kasa packager.log, iş 7bdc7446: makensis `customFiles_ia32` →
+// File: "...\\htmletk\\u1\\Default\\Extensions\\efaidnbm...\\summary.mp4" -> no files found.
+// Kaynak zip (R2 kaynak/11845/2.51.81/build.zip) `book1/assets/11822/htmletk/u1/`
+// altında Chrome user-data-dir taşıyor (426 Default dosyası + Local State ...).
+
+const PROFIL = 'book1/assets/11822/htmletk/u1';
+const PROFIL_YOLLARI = [
+  `${PROFIL}/Default/Extensions/efaidnbmnnnibpcajpcglclefindmkaj/26.2.2.1_0/browser/images/`
+    + 'LocalizedSummaryFte/pt_BR/summary.mp4',
+  `${PROFIL}/Default/Preferences`, `${PROFIL}/Crashpad/settings.dat`,
+  `${PROFIL}/BrowserMetrics/BrowserMetrics-1.pma`, `${PROFIL}/component_crx_cache/x.crx`,
+  `${PROFIL}/Local State`, `${PROFIL}/First Run`, `${PROFIL}/Last Version`,
+  `${PROFIL}/Last Browser`, `${PROFIL}/Variations`, `${PROFIL}/BrowserMetrics-spare.pma`,
+  `${PROFIL}/CrashpadMetrics-active.pma`, `${PROFIL}/first_party_sets.db`,
+  `${PROFIL}/first_party_sets.db-journal`,
+];
+const BIRIM_ICERIGI = [
+  `${PROFIL}/index.html`, `${PROFIL}/favicon.ico`, `${PROFIL}/etk/assets/a.png`,
+  `${PROFIL}/player/Tema1/pageNumber.png`,
+  // ad eşleşmesi yalnız htmletk/<birim>/ DOĞRUDAN altında — derindeki ad içeriktir
+  `${PROFIL}/etk/Default/x.png`, 'book1/Default/x.png', 'core/Local State',
+  'book1/assets/11822/htmletk/Default/x.png',
+];
+
+test('CHROME PROFİLİ: win/mac/linux FileMatcher profil dosyalarını atar, birim içeriğini tutar',
+  () => {
+  for (const p of ELEKTRON) {
+    const e = ele(sentinel.canliFilesDesenleri(p));
+    assert.strictEqual(e(`/k/${PROFIL}/Default`, DIZIN), false, `${p}: Default dizini giriyor`);
+    for (const f of PROFIL_YOLLARI) {
+      assert.strictEqual(e(`/k/${f}`, DOSYA), false, `${p}: ${f} pakete giriyor`);
+    }
+    for (const f of BIRIM_ICERIGI) {
+      assert.strictEqual(e(`/k/${f}`, DOSYA), true, `${p}: ${f} yanlışlıkla dışlandı`);
+    }
+  }
+});
+
+test('CHROME PROFİLİ: dislayanMadde dört platformda aynı maddeyi adlandırır', () => {
+  for (const p of liste.PLATFORMLAR) {
+    for (const f of PROFIL_YOLLARI) assert.strictEqual(liste.dislayanMadde(f, p), 'chrome-profili');
+    for (const f of BIRIM_ICERIGI) assert.strictEqual(liste.dislayanMadde(f, p), null, f);
+    // Windows ayracı da tanınır (kasa yolları)
+    assert.strictEqual(liste.dislayanMadde(`${PROFIL.replace(/\//g, '\\')}\\Local State`, p),
+      'chrome-profili');
+  }
+});
+
+test('CHROME PROFİLİ: Android süzgeci ile electron-builder aynı kararı verir (gerçek fs.copy)',
+  async () => {
+  const kok = await fs.mkdtemp(path.join(os.tmpdir(), 'empp-pdl-chrome-'));
+  const dosyalar = [...PROFIL_YOLLARI, ...BIRIM_ICERIGI];
+  for (const f of dosyalar) await fs.outputFile(path.join(kok, f), 'x');
+  const hedef = `${kok}-www`;
+  await fs.copy(kok, hedef, { filter: createWwwCopyFilter(kok) });
+  const eb = ele(sentinel.canliFilesDesenleri('windows'));
+  for (const f of dosyalar) {
+    const kopyalandi = await fs.pathExists(path.join(hedef, f));
+    assert.strictEqual(kopyalandi, eb(`/k/${f}`, DOSYA), `${f}: android≠electron-builder`);
+  }
+  assert.strictEqual(await fs.pathExists(path.join(hedef, PROFIL, 'Default')), false);
+  assert.strictEqual(await fs.pathExists(path.join(hedef, PROFIL, 'index.html')), true);
 });
