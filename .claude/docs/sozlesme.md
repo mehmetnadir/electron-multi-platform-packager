@@ -134,6 +134,10 @@ kurum logolu paketler üretmek.
   srv21 `:3093` eşitleme + systemd birimi, `r2.conf` açık metin R2 anahtarı döndürme.
 - Android G ekleme kalıcı donma riski: ekleme sonrası o setin Android'i hiçbir G güncellemesi ALAMAZ
   (manifest tasarımı); kapı (`--ekle` RED) korumada, ürün çözümü Nadir'de (`g-android-kitap-ekleme-onerisi-20260926.md`).
+- **06.10 — G kanalı hiç yayınlanmamıştı:** `cdn.ydspublishing.com/guncelleme/set/<id>/surum.json` bütün setlerde 404,
+  R2 `guncelleme/` boş (26.09'dan beri tek yazar `g-yayin`, beyaz liste yalnız 74390). Paket yeniden üretimi kurulu paketi
+  güncellemez. Nadir 06.10: "bana sorma, tam yetki sende" → 45550 e2e ile açılıyor, sonra bugün biten YDS setleri; kalıcı
+  yol (her set bitince G yayını adımı, Mac/Anahtar Zinciri) ayrı karar.
 
 ## Değişiklik Günlüğü
 
@@ -159,6 +163,7 @@ kurum logolu paketler üretmek.
 | 2026-10-05 | **A1 tek motor düzeni** (40d9547; 45485 uçtan uca: 7 kart, kapak doğrudan açıldı, ikinci kapak kod sormadı; 3 inceleme turu) + Swift `--kip tek-motor` (book-update a810e9f9, 617 test) | 006cff11 (a1) |
 | 2026-10-05 | **Evde Mac üretmez:** `androidEvKurali` (4cc3a10) evde android'i de düşürür, `android-serbest.istek` açar; platform yeteneği yoksa runner next-job çağırmaz (ea5aba9 — sunucu boş platform listesinde CSV'yi güncellemiyordu, düzeltme book-update `heartbeat-caps-20261005` 35bdca7e, deploy onay bekliyor) | 006cff11 |
 | 2026-10-05 | ICO küçük karelerde köşe alfa sızıntısı kesildi (07326e9, 74404 statik kapı); kabul aktivasyon b hata latch'i + boş girdide tek yeniden giriş (2894008, 45469) | 006cff11 |
+| 2026-10-06 | **A1 okuyucu kabuğu** `kapak/index.html`'den ölçülür/değişir (a7e6e88; kök sf425 ölçümü 'karisik' verip okuyucuyu 1.13.3'te bırakıyordu — kasa kabul işçisi RED'i doğruydu, Pardus/Mac eski okuyucuyla yayınlamıştı) · 11845 kabul link kartı çift sayımı (6c04986) · kasa imza şeridi geri okuma kapalı + ön-kopya boru hattı (b579000) · imza köprüsü nöbeti Mac 09:30-17:45 / srv21 (b40e204) · imzalı exe arşivi `D:\empp-imzali-son` (8fdc899); birleşim `65db3fa` kasa+ProBook+Mac'te | 006cff11 |
 
 ## Anlık yama katmanı (2026-09-21, HENÜZ BAĞLANMADI)
 
