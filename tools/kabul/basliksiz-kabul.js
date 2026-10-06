@@ -15,6 +15,8 @@
  *            damga değil (`okuyucu-surumu-kapisi.js`; A1'de kapak/index.html, bookN'de her kitap).
  *            Fail-closed: ölçülemezse RED; `KABUL_OKUYUCU_SURUM=uyar` yalnız uyarı. Kanonik:
  *            `--okuyucu-kanonik X.Y.Z` ya da ~/.empp-agent/kabuk/kanonik.json (EMPP_KABUK_KANONIK).
+ *   menuKapak (06.10, 59835) set menüsündeki her kartın kapak dosyası pakette ve > 1 KB mı
+ *            (`menu-kapak.js`, kabuğun kendi yedek kuralıyla). Kapaksız kart → RED. Set değil → yok.
  *   imza     (mac) codesign + stapler + spctl — noter/zımba yoksa RED
  *   icerik   Electron görünmez koşum: kök sayfa → DOM + piksel (ProBook eşikleri) →
  *            ilk kitap kartına tıkla → okuyucu sayfa çizdi mi
@@ -50,6 +52,7 @@ const K4 = require('./k4-guncellik');
 const ST = require('./set-guncellik');
 const { anaSurecDenetle } = require('./ana-surec-denetimi');
 const OSK = require('./okuyucu-surumu-kapisi');
+const MK = require('./menu-kapak');
 
 const DURUM_TR = { GECTI: 'GEÇTİ', RED: 'RED', OLCULEMEDI: 'ÖLÇÜLEMEDİ', GUNCEL_DEGIL: 'GÜNCEL-DEĞİL' };
 
@@ -339,6 +342,22 @@ async function calis(argv, yazici) {
       rapor.katmanlar.okuyucu = O.okuyucuSurumKatmani(ok);
       if (ok.uyari) rapor.uyarilar.push(ok.uyari);
       say(OSK.ozetSatiri(ok));
+    }
+
+    // 1a'. Menü kapak (06.10, 59835 Teacher's Pack/Worksheets): set menüsündeki her kartın kabuğun
+    // YÜKLEYECEĞİ kapak dosyası pakette ve > 1 KB mı (menu-kapak.js). Set değilse ATLANDI (katman
+    // eklenmez). Statik ölçüm: asar/dizin, dört platform aynı. Ölçülemezse ÖLÇÜLEMEDİ (GEÇTİ değil).
+    if (acilis) {
+      let mk;
+      try {
+        mk = MK.menuKapakOlcKok(acilis.kok, { asar: acilis.asar });
+      } catch (e) {
+        mk = { durum: MK.DURUM.OLCULEMEDI, kartlar: [], sebepler: [`ölçüm hatası: ${e.message}`], uyarilar: [] };
+      }
+      rapor.menuKapak = mk;
+      if (mk.durum !== MK.DURUM.ATLANDI) rapor.katmanlar.menuKapak = { durum: mk.durum, sebepler: mk.sebepler };
+      for (const u of mk.uyarilar) rapor.uyarilar.push(u);
+      say(MK.ozetSatiri(mk));
     }
 
     // 1b. Paketin KENDİ ana süreci (main.js): koşum kosum/main.js ile açıldığı için yürütülmez;
