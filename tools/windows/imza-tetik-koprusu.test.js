@@ -17,6 +17,23 @@ function yerelUzak(d) {
     listele: () => fs.readdirSync(d).filter((a) => I.AD_DESENI.test(a)),
     oku: (ad) => fs.readFileSync(path.join(d, ad), 'utf8'),
     tasi: (ad, s) => { tasinan.push([ad, s]); fs.renameSync(path.join(d, ad), path.join(d, `${ad}.${s}`)); return true; },
+    // K2: kasadaki cmd move'un yerel eşi (rename atomik; kaynak yoksa başarısız)
+    sahiplen: (ad, etiket) => {
+      fs.mkdirSync(path.join(d, 'isleniyor'), { recursive: true });
+      try { fs.renameSync(path.join(d, ad), path.join(d, 'isleniyor', `${ad}.${etiket}`)); } catch (_) { return null; }
+      return `${ad}.${etiket}`;
+    },
+    bitir: (isAd, ad, s) => {
+      tasinan.push([ad, s]);
+      fs.mkdirSync(path.join(d, 'islendi'), { recursive: true });
+      try { fs.renameSync(path.join(d, 'isleniyor', isAd), path.join(d, 'islendi', `${ad}.${s}`)); } catch (_) { return false; }
+      return true;
+    },
+    geriAl: (isAd, ad) => {
+      try { fs.renameSync(path.join(d, 'isleniyor', isAd), path.join(d, ad)); } catch (_) { return false; }
+      return true;
+    },
+    isleniyorListele: () => { try { return fs.readdirSync(path.join(d, 'isleniyor')); } catch (_) { return []; } },
   };
 }
 
@@ -81,7 +98,7 @@ test('taşıma tutmazsa istek İKİNCİ KEZ çalıştırılmaz (defter); taşım
   const loglar = [];
   const islenmis = new Set();
   let isaret = 0;
-  const bozukUzak = { ...yerelUzak(d), tasi: () => false };
+  const bozukUzak = { ...yerelUzak(d), bitir: () => false }; // K2: taşıma isleniyor\ → islendi\ adımında
   const kos = async (a) => { kosulan.push(a.join(' ')); return { kod: 0 }; };
   const o1 = await K.tur({ uzak: bozukUzak, kos, log: (m) => loglar.push(m), islenmis, isaretle: () => { isaret += 1; } });
   assert.equal(kosulan.length, 1);
@@ -94,8 +111,9 @@ test('taşıma tutmazsa istek İKİNCİ KEZ çalıştırılmaz (defter); taşım
   const iyiUzak = yerelUzak(d);
   await K.tur({ uzak: iyiUzak, kos, log: () => {}, islenmis });
   assert.equal(kosulan.length, 1);
-  assert.deepEqual(iyiUzak.tasinan.map((x) => x[1]), ['tamam-tekrar']);
+  assert.deepEqual(iyiUzak.tasinan.map((x) => x[1]), ['defter-tekrar']);
   assert.equal(iyiUzak.listele().length, 0);
+  assert.deepEqual(iyiUzak.isleniyorListele(), []);
 });
 
 test('defter: diske yazılır/okunur, son 500 ad tutulur, bozuk dosya boş küme', () => {
@@ -417,4 +435,109 @@ test('rol günlüğü yalnız rol değişince yazar', () => {
   assert.equal(K.rolDegisti(y, 'pasif'), true);
   assert.equal(K.rolDegisti(y, 'pasif'), false);
   assert.equal(K.rolDegisti(y, 'nobetci'), true);
+});
+
+// ------------------------------------------------------------------ inceleme 06.10 (K1 + K2)
+test('K1: 4 dk süren komut sırasında damga tazelenir → karşı konak ÇEKİLİR (çift exe-create yok)', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'k1-'));
+  const uzak = nobetUzak(d);
+  const t0 = ist(CMT, 12, 0);
+  let saat = t0;
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t0 - 1000 });
+  const kosulan = [];
+  let ikinciRol = null;
+  const macKos = async (a) => {
+    kosulan.push(`mac:${a[2]}`);
+    for (let i = 0; i < 4; i += 1) { saat += 60000; t.mock.timers.tick(60000); }
+    // 4. dakikada srv21 (zorla değil, hep kipi) turunu koşar
+    const o = await K.nobetliTur({ cfg: { konak: 'srv21', kip: 'hep' },
+      uzak, kos: async (b) => { kosulan.push(`srv21:${b[2]}`); return { kod: 0 }; }, log: () => {}, simdi: () => saat });
+    ikinciRol = o.rol;
+    return { kod: 0 };
+  };
+  const o = await K.nobetliTur({ cfg: { konak: 'mac', kip: 'hep' }, uzak, kos: macKos, log: () => {}, simdi: () => saat });
+  assert.equal(o.rol, 'nobetci');
+  assert.equal(ikinciRol, 'cekildi', 'karşı konak 4. dakikada bayat damga gördü');
+  assert.deepEqual(kosulan, ['mac:exe-create']);
+});
+
+test('K1: kosAsenkron olay döngüsünü kilitlemez (setInterval komut sürerken tetiklenir)', async () => {
+  let vurus = 0;
+  const z = setInterval(() => { vurus += 1; }, 50);
+  try {
+    const r = await K.kosAsenkron([process.execPath, '-e', 'setTimeout(()=>{process.stdout.write("ok")},400)'], process.env, 5000);
+    assert.equal(r.kod, 0);
+    assert.equal(r.cikti, 'ok');
+  } finally { clearInterval(z); }
+  assert.ok(vurus >= 3, `setInterval komut sürerken ${vurus} kez tetiklendi`);
+  const t = await K.kosAsenkron([process.execPath, '-e', 'setTimeout(()=>{},5000)'], process.env, 200);
+  assert.notEqual(t.kod, 0, 'tavan aşımı başarı sayılmaz');
+});
+
+test('K2: komut öncesi isleniyor\\ altına sahiplenir; taşınamayan istek KARŞI KONAKTA yeniden koşmaz', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'k2-'));
+  const t0 = ist(CMT, 12, 0);
+  await I.istekYaz(d, 'exe-create', {}, { simdi: () => t0 - 1000 });
+  const kosulan = [];
+  const kos = (kim) => async (a) => { kosulan.push(`${kim}:${a[2]}`); return { kod: 0 }; };
+  // Mac çalıştırır ama islendi\'ye taşıyamaz (ssh koptu)
+  const macUzak = { ...yerelUzak(d), bitir: () => false };
+  const loglar = [];
+  const o1 = await K.tur({ uzak: macUzak, kos: kos('mac'), log: (m) => loglar.push(m), konak: 'mac',
+    simdi: () => t0, islenmis: new Set() });
+  assert.equal(o1.tasinamayan, 1);
+  assert.equal(istekSay(d), 0, 'istek kökte kalmadı (isleniyor\\ altında)');
+  assert.equal(fs.readdirSync(path.join(d, 'isleniyor')).length, 1);
+  // srv21: ayrı defter (boş) — kökte istek yok, yeniden koşmaz
+  const o2 = await K.tur({ uzak: yerelUzak(d), kos: kos('srv21'), log: (m) => loglar.push(m), konak: 'srv21',
+    simdi: () => t0 + 120000, islenmis: new Set() });
+  assert.deepEqual(kosulan, ['mac:exe-create']);
+  assert.equal(o2.yetim, 0, '30 dk dolmadan yetim sayılmaz');
+  // 31 dk sonra: yetim → yalnız raporlanır, geri alınmaz
+  const o3 = await K.tur({ uzak: yerelUzak(d), kos: kos('srv21'), log: (m) => loglar.push(m), konak: 'srv21',
+    simdi: () => t0 + 31 * 60000, islenmis: new Set() });
+  assert.equal(o3.yetim, 1);
+  assert.ok(loglar.some((m) => /YETİM/.test(m)));
+  assert.equal(istekSay(d), 0, 'yetim imza-istek\\e geri alınmadı');
+  assert.deepEqual(kosulan, ['mac:exe-create']);
+});
+
+test('K2: sahiplenme başarısızsa (başka konak aldı) komut ÇALIŞMAZ', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'k2b-'));
+  await I.istekYaz(d, 'exe-create', {});
+  const kosulan = [];
+  const uzak = { ...yerelUzak(d), sahiplen: () => null };
+  const o = await K.tur({ uzak, kos: async (a) => { kosulan.push(a); return { kod: 0 }; }, log: () => {} });
+  assert.equal(kosulan.length, 0);
+  assert.equal(o.sahiplenilemeyen, 1);
+  assert.equal(o.islenen, 0);
+});
+
+test('K2: hesap kilidinde istek isleniyor\\den kökte geri alınır (iş koşmadı)', async () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'k2c-'));
+  await I.istekYaz(d, 'exe-create', {});
+  const uzak = yerelUzak(d);
+  await K.tur({ uzak, kos: async () => ({ kod: 1, cikti: 'HESAP_KILIDI' }), log: () => {} });
+  assert.equal(istekSay(d), 1, 'kilitli istek kökte yeniden denenmeli');
+  assert.deepEqual(fs.readdirSync(path.join(d, 'isleniyor')), []);
+});
+
+test('K2: ssh komutları — sahiplen/bitir/geriAl atomik move, etiket ve ad beyaz listede', () => {
+  const ad = '1791099197917-exe-create-1.json';
+  assert.equal(K.sahiplenKomutu('C:\\d', ad, 'mac-1791099197999'),
+    `mkdir "C:\\d\\isleniyor" 2>nul & move /y "C:\\d\\${ad}" "C:\\d\\isleniyor\\${ad}.mac-1791099197999"`);
+  assert.equal(K.bitirKomutu('C:\\d', `${ad}.mac-1791099197999`, ad, 'tamam'),
+    `mkdir "C:\\d\\islendi" 2>nul & move /y "C:\\d\\isleniyor\\${ad}.mac-1791099197999" "C:\\d\\islendi\\${ad}.tamam"`);
+  assert.equal(K.geriAlKomutu('C:\\d', `${ad}.mac-1791099197999`, ad),
+    `move /y "C:\\d\\isleniyor\\${ad}.mac-1791099197999" "C:\\d\\${ad}"`);
+  assert.throws(() => K.sahiplenKomutu('C:\\d', ad, 'x" & del'), /güvensiz etiket/);
+  assert.deepEqual(K.isleniyorCoz(`${ad}.srv21-1791099197999`), { isAd: `${ad}.srv21-1791099197999`, ad, konak: 'srv21', zaman: 1791099197999 });
+  assert.equal(K.isleniyorCoz('rastgele.txt'), null);
+  const cagri = [];
+  const u = K.sshUzak({ ssh: 'h', dizin: 'C:\\d' }, (...a) => { cagri.push(a); return { status: 0, stdout: '' }; });
+  assert.equal(u.sahiplen(ad, 'mac-1791099197999'), `${ad}.mac-1791099197999`);
+  assert.equal(cagri[0][1][cagri[0][1].length - 1], K.sahiplenKomutu('C:\\d', ad, 'mac-1791099197999'));
+  const u2 = K.sshUzak({ ssh: 'h', dizin: 'C:\\d' }, () => ({ status: 1, stdout: '' }));
+  assert.equal(u2.sahiplen(ad, 'mac-1791099197999'), null, 'move başarısız → sahiplenilmedi');
 });
