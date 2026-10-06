@@ -16,6 +16,7 @@ tek bir web build'den, her işletim sisteminde çift tıkla açılan, çevrimdı
 kurum logolu paketler üretmek.
 
 **İlke (Nadir 06.10):** "Kitap güncellenince paket 4 platformda güncellenir; kurulu paket güncellemeyi görür."
+**İlke:** İçeriksiz üye atlanır ve raporlanır (Nadir 06.10).
 
 ## İşlevler
 

@@ -200,3 +200,44 @@ test('uretecKaynagi: üreteç varsayılan yedekleri (webz-smb → önbellek → 
   assert.equal(r.yok, `SMB bağlı değil (${path.join(d, 'impark', 'Storage7/vhosts/akillitahta.ydspublishing.com/httpdocs/Uploads')})`);
   assert.equal(uk.YAYINCILAR['flashy elt'].uploads, 'Storage3/vhosts/yayincilik.net/flashyelt.yayincilik.net/Uploads');
 });
+
+// ─── KESİN "yok" işareti (Nadir 06.10 — uye-atla.js sınıf ayrımı) ──────────────────────────────────────
+
+test('kesin işareti: açık "yok" kanıtı kesin:true; ölçülemedi/bağlı değil/zip kurulamadı/okunamayan arşiv kesin DEĞİL', async () => {
+  const d = await gecici();
+  const up = path.join(d, 'Uploads');
+  await fsp.mkdir(path.join(up, 'WebDijitapDosyalar', '14835', 'pages'), { recursive: true });
+  const c = { id: '14835', imparkVs: 1, calisma: path.join(d, 'w') };
+  // SMB: dizin yok / BookContent yok / yol tanımlı değil → kesin; SMB bağlı değil → ASLA kesin
+  const y = Y.webzDosyaYedegi({ uploadsKoku: up, smbDenetle: SMB_VAR });
+  assert.equal((await y.getir(c)).kesin, true, 'BookContent yok');
+  assert.equal((await y.getir({ ...c, id: '60068' })).kesin, true, 'dizin yok');
+  assert.equal((await Y.webzDosyaYedegi({ uploadsKoku: null }).getir(c)).kesin, true, 'SMB yolu tanımlı değil');
+  assert.equal((await Y.webzDosyaYedegi({ uploadsKoku: up, smbDenetle: SMB_YOK }).getir(c)).kesin, undefined,
+    'SMB bağlı değil = ölçülemedi');
+  // zip kurulamadı (zip komutu hata) → kesin değil
+  await yaz(path.join(up, 'WebDijitapDosyalar', '777'), { 'data/BookContent.xml': '<Book/>' });
+  const zk = Y.webzDosyaYedegi({ uploadsKoku: up, smbDenetle: SMB_VAR, komut: async () => ({ code: 12, stderr: 'x', stdout: '' }) });
+  const zr = await zk.getir({ ...c, id: '777' });
+  assert.match(zr.yok, /zip kurulamadı/);
+  assert.equal(zr.kesin, undefined);
+  // önbellek: dizin yok / zip yok → kesin
+  const ob = Y.onbellekYedegi({ onbellek: d });
+  assert.equal((await ob.getir({ id: '1' })).kesin, true);
+  assert.equal((await Y.onbellekYedegi({ onbellek: null }).getir({ id: '1' })).kesin, true);
+  // arşiv: temiz "yok" kesin; notlu (menüde kapak yok) / okunamayan build kesin DEĞİL
+  const kok = path.join(d, 'arsiv');
+  const s0 = path.join(d, 's0');
+  await yaz(s0, { 'assets/11822/data/BookContent.xml': '<Book/>' });
+  await zipla(s0, path.join(kok, '44000', 'build.zip'));
+  const ar = Y.arsivYedegi({ arsivKoku: kok });
+  assert.equal((await ar.getir({ id: '14835', calisma: path.join(d, 'w') })).kesin, true, 'temiz yok');
+  const notlu = await ar.getir({ id: '11822', calisma: path.join(d, 'w') });
+  assert.match(notlu.yok, /menüde 11822 kapağı yok/);
+  assert.equal(notlu.kesin, false, 'notlu yok kesin değil');
+  await fsp.mkdir(path.join(kok, '55000'), { recursive: true });
+  await fsp.writeFile(path.join(kok, '55000', 'build.zip'), 'zip-degil');
+  const bozuk = await Y.arsivYedegi({ arsivKoku: kok }).getir({ id: '14835', calisma: path.join(d, 'w') });
+  assert.equal(bozuk.kesin, false, 'okunamayan build varsa kesin değil');
+  assert.equal((await Y.arsivYedegi({ arsivKoku: path.join(d, 'yok-kok') }).getir({ id: '1' })).kesin, true);
+});

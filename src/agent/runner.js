@@ -737,6 +737,7 @@ const {
 // INDEX ÜRETECİ (02.10): taban/arşiv yoksa r2-kur build'i üreteçle kurar (uretec-kaynak.js).
 const uretecKaynak = require('./uretec-kaynak');
 const indexUreteci = require('./index-ureteci');
+const uyeAtla = require('./uye-atla');
 const { icerikKapisiDenetleZip, zipGirisAdlariniOku } = require('./icerik-kapisi');
 const { ozetSatiriKur: kokIndexOzetSatiriKur, pardusLogundanCikar } = require('../packaging/kok-index-log-koprusu');
 // İÇERİK MERDİVENİ S0/S1 (2026-09-26): kitap içeriği İmpark'ın en son sürümüne — arşiv VE exe
@@ -1012,6 +1013,9 @@ async function postResultSuccess(auth, job, artifactPath) {
       // SF425 KABUK TAZELEME özeti (Z2, 05.10): yalnız adım koştuysa {durum, neden}. Sunucu şeması
       // (zod, strict değil) bilinmeyen alanı atar; book-update kaydetmek isterse alan hazır.
       ...kabukTazelemeGovdesi(job.kabukTazeleme),
+      // İÇERİKSİZ ÜYE ATLAMA (Nadir 06.10): atlanan üyeler + tek satır not (yeni DB sütunu yok; sunucu
+      // bilinmeyen alanı atar, ajan günlüğü/sonuç notu için).
+      ...uyeAtla.govdeAlanlari(job.atlananUyeler),
     },
     { headers: { ...agentHeaders(auth), 'Content-Type': 'application/json' }, timeout: 60000, validateStatus: () => true },
   );
@@ -2255,6 +2259,8 @@ async function r2KurTabanHazirla({ bookId, kaynak, zipPath, work, job = null, ur
     // Sonraki adımlar (set eki, yazma kapısı) AYNI listeyi görsün: kitap-dışı varlık link'e çevrilmiş hâli.
     job.setListesi = rapor.kapiListesi;
     job.uretecOzeti = { ...indexUreteci.uretecOzeti(rapor), liste: liste.kaynak };
+    // Kesin "içerik yok" nedeniyle atlanan üyeler (Nadir 06.10): `/result` + `tamamla` özetine taşınır.
+    job.atlananUyeler = uyeAtla.birlestir(job.atlananUyeler, rapor.atlananUyeler);
     // Link kartına çevrilen öğeler sunucu kapısına `webzVarliklari` (yol 'link') olarak bildirilir.
     job.uretecWebzVarliklari = indexUreteci.linkVarliklari(rapor);
     return { oncekiBoyut: null };
@@ -3144,8 +3150,13 @@ async function processJob(auth, job) {
       try {
         const pm = await kaynakAdim.panelMenuHizala({
           zip: zipPath, calisma: work, bookId: job.bookId, platform: job.platform, log, warn,
-          claimListesi: kapiSetListesi,
+          claimListesi: kapiSetListesi, setAdi: job.bookTitle || '',
+          atlananUyeler: (job.atlananUyeler || []).map((a) => a.kitapId),
+          bildir: (a) => uyeAtla.bildirimGonder({ ...a, warn }),
         });
+        if (pm && Array.isArray(pm.atlananUyeler) && pm.atlananUyeler.length) {
+          job.atlananUyeler = uyeAtla.birlestir(job.atlananUyeler, pm.atlananUyeler);
+        }
         // Panel ölçüldü ve menü panele hizalı (UYGULANDI ya da zaten hizalı) → yazma kapısı panel
         // listesini görür (claim listesi bayat ya da boş olabilir; Web-Z listesine dokunulmaz).
         if (pm && pm.hizali && pm.panelSetListesi) {
@@ -3175,6 +3186,8 @@ async function processJob(auth, job) {
       panelSonuc = await panelUygula();
       if (panelSonuc.ertele) return panelSonuc.ertele;
     }
+    // r2-al/arşiv (üreteç koşmadı): atlanan üyeler build'in üreteç işaretinden okunur (rapor tutarlı olsun).
+    job.atlananUyeler = uyeAtla.birlestir(job.atlananUyeler, uyeAtla.zipIsaretindenOku(zipPath));
     // İçerik sürümü kanıtı (merdiven + set eki): tamamla `kitaplar[].vs` ve `/result` icerikSurumleri.
     const icerikKaniti = kaynakR2.merdivenKaniti({ merdiven: merdivenSonuc, setEki: setEkiRapor });
     job.icerikSurumleri = icerikKaniti.icerikSurumleri; // runner'ın doldurduğu alan (claim DEĞİL)
@@ -3230,7 +3243,8 @@ async function processJob(auth, job) {
           oncekiBoyut: r2OncekiBoyut, oncekiEnvanter: r2OncekiEnvanter, vsler: icerikKaniti.vsler, istemci: kaynakIstemcisi(auth),
           kapi: imKeys.kapiSar(yazmaKapisi, imk.kapi), ozet: ikiOzet, parcalariYukle,
           // Üreteç özeti `tamamla`ya (sunucu bilinmeyen alanı atar; kayıt `kaynak='uretec'` book-update işi).
-          tamamlaEki: job.uretecOzeti ? { uretec: job.uretecOzeti } : {},
+          tamamlaEki: job.uretecOzeti || (job.atlananUyeler || []).length
+            ? { uretec: { ...(job.uretecOzeti || {}), ...uyeAtla.govdeAlanlari(job.atlananUyeler) } } : {},
           ekWebzVarliklari: job.uretecWebzVarliklari || [],
           parcaBoyutu: MULTIPART_PART_SIZE, log,
           ...r2GecerliSurumKimligi(kaynak),

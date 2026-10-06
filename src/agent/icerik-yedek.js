@@ -16,7 +16,8 @@
  *
  * SÖZLEŞME — her yedek `{ ad, getir(c) }`; `getir` şunu döner:
  *   { zip, kaynakId, vs, url?, not? }  — kaynakId = kaynağın içeriği SAKLADIĞI kimlik (dizin/anahtar)
- *   { yok: '<sebep>' }                 — bu kaynakta yok (sebep rapora girer)
+ *   { yok: '<sebep>', kesin?: true }   — bu kaynakta yok (sebep rapora girer); `kesin: true` = AÇIK "yok" kanıtı
+ *                                        (ölçülemedi/bağlı değil/kurulamadı ASLA kesin değildir — uye-atla.js)
  * `c` = { id, imparkVs, calisma, log }. Doğrulama (kaynakId = kitap, içerik düzeni, BookContent kitapId
  * = İmpark referansı) ÜRETEÇTE yapılır — yedek kendi kendini onaylamaz.
  */
@@ -63,14 +64,17 @@ function webzDosyaYedegi({ uploadsKoku, komut = M.komut, smbDenetle = smbBagliMi
   return {
     ad: 'webz-smb',
     async getir({ id, imparkVs, calisma, log = () => {} }) {
-      if (!uploadsKoku) return { yok: 'yayıncının SMB yolu tanımlı değil' };
+      if (!uploadsKoku) return { yok: 'yayıncının SMB yolu tanımlı değil', kesin: true };
       if (!(await smbDenetle(uploadsKoku, komut))) return { yok: `SMB bağlı değil (${uploadsKoku})` };
       const dizin = path.join(uploadsKoku, WEBZ_DIZINI, String(id));
-      if (!fs.existsSync(dizin)) return { yok: `${WEBZ_DIZINI}/${id} yok` };
+      if (!fs.existsSync(dizin)) return { yok: `${WEBZ_DIZINI}/${id} yok`, kesin: true };
       if (!fs.existsSync(path.join(dizin, 'data', 'BookContent.xml'))) {
         let icerik = [];
         try { icerik = fs.readdirSync(dizin); } catch (_) { /* okunamadı */ }
-        return { yok: `${WEBZ_DIZINI}/${id} içinde data/BookContent.xml yok (dizinde: ${icerik.join(', ') || 'boş'})` };
+        return {
+          yok: `${WEBZ_DIZINI}/${id} içinde data/BookContent.xml yok (dizinde: ${icerik.join(', ') || 'boş'})`,
+          kesin: true,
+        };
       }
       await fsp.mkdir(calisma, { recursive: true });
       const hedef = path.join(calisma, `${id}-webz.zip`);
@@ -99,14 +103,14 @@ function onbellekYedegi({ onbellek } = {}) {
   return {
     ad: 'onbellek',
     async getir({ id }) {
-      if (!onbellek) return { yok: 'önbellek kökü yok' };
+      if (!onbellek) return { yok: 'önbellek kökü yok', kesin: true };
       const dizin = path.join(onbellek, String(id));
       let adlar = [];
-      try { adlar = fs.readdirSync(dizin); } catch (_) { return { yok: 'önbellekte dizin yok' }; }
+      try { adlar = fs.readdirSync(dizin); } catch (_) { return { yok: 'önbellekte dizin yok', kesin: true }; }
       const re = new RegExp(`^${String(id)}-(\\d+)\\.zip$`);
       const adaylar = adlar.map((a) => ({ a, m: re.exec(a) })).filter((x) => x.m)
         .map((x) => ({ zip: path.join(dizin, x.a), vs: Number(x.m[1]) })).sort((a, b) => b.vs - a.vs);
-      if (!adaylar.length) return { yok: 'önbellekte zip yok' };
+      if (!adaylar.length) return { yok: 'önbellekte zip yok', kesin: true };
       const s = adaylar[0];
       return { zip: s.zip, kaynakId: String(id), vs: s.vs, url: null, not: `önbellek ${path.basename(s.zip)}` };
     },
@@ -147,15 +151,16 @@ function arsivYedegi({ arsivKoku, komut = M.komut } = {}) {
       try {
         setler = fs.readdirSync(arsivKoku, { withFileTypes: true }).filter((d) => d.isDirectory())
           .map((d) => d.name).sort();
-      } catch (_) { return { yok: 'arşiv kökü yok' }; }
+      } catch (_) { return { yok: 'arşiv kökü yok', kesin: true }; }
       let bakilan = 0;
+      let okunamayan = 0;
       const notlar = [];
       for (const set of setler) {
         const zip = path.join(arsivKoku, set, 'build.zip');
         if (!fs.existsSync(zip)) continue;
         let dz = dizinler.get(zip);
         if (!dz) {
-          try { dz = M.zipDizini(zip); } catch (_) { continue; }
+          try { dz = M.zipDizini(zip); } catch (_) { okunamayan += 1; continue; }
           dizinler.set(zip, dz);
         }
         bakilan += 1;
@@ -175,7 +180,11 @@ function arsivYedegi({ arsivKoku, komut = M.komut } = {}) {
         if (z.code !== 0) { notlar.push(`${set}: zip ${z.code}`); continue; }
         return { zip: hedef, kaynakId: String(id), vs: kapak.vs, url: kapak.url, not: `arşiv ${set}/${onek}assets/${id}` };
       }
-      return { yok: `${bakilan} arşiv build'inde yok${notlar.length ? ` (${notlar.slice(0, 3).join('; ')})` : ''}` };
+      return {
+        yok: `${bakilan} arşiv build'inde yok${notlar.length ? ` (${notlar.slice(0, 3).join('; ')})` : ''}`,
+        // Okunamayan build ya da kopya hatası varsa "yok" kesin değildir (uye-atla.js).
+        kesin: !notlar.length && !okunamayan,
+      };
     },
   };
 }

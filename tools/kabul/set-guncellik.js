@@ -41,6 +41,7 @@
  */
 const { s0Kaynaktan, menuKonumlari, DURUM: S0 } = require('../../src/agent/icerik-merdiven');
 const { guncelDegilOneri } = require('./guncel-degil-oneri');
+const atlananUye = require('./atlanan-uyeler');
 
 const DURUM = Object.freeze({
   GECTI: 'GECTI', GUNCEL_DEGIL: 'GUNCEL_DEGIL', OLCULEMEDI: 'OLCULEMEDI', ATLANDI: 'ATLANDI',
@@ -84,6 +85,7 @@ function agacTopla(fs, path, kok, tavan) {
   try {
     al(MENU);
     al('app.config.js');
+    al('empp-uretec.json'); // üreteç manifesti: atlananUyeler (Nadir 06.10) — yoksa sessizce yok
     girdiler.slice().sort().forEach(function (ad) {
       if (ad.charAt(0) === '.' || ad === 'classlibraries' || ad === 'node_modules') return;
       if (!fs.existsSync(path.join(kok, ad, MENU))) return;
@@ -135,7 +137,14 @@ async function agacOlc(agac, { getir, zamanAsimiMs } = {}) {
   // Tek kitap: motor açılışta bütün kapakları sorar (E7/K4) — ağa çıkılmaz.
   if (!menuKonumlari(agac.adlar || []).set) return { set: false, satirlar: [] };
   const r = await s0Kaynaktan({ ...agactanOkuyucu(agac), ...(getir ? { getir } : {}), zamanAsimiMs });
-  return { set: r.set, satirlar: r.satirlar };
+  // ATLANAN ÜYE (Nadir 06.10): manifestteki kimlik beklenenden düşer (Data boş İmpark'ta "güncel",
+  // 404 "ölçülemedi" görünürdü — ikisi de yanıltıcı); karar notuna girer.
+  const atlananUyeler = atlananUye.atlananUyelerOku(agactanOkuyucu(agac));
+  if (!atlananUyeler.length) return { set: r.set, satirlar: r.satirlar };
+  const ak = atlananUye.kume(atlananUyeler);
+  return {
+    set: r.set, satirlar: r.satirlar.filter((s) => !ak.has(String(s.id))), atlananUyeler,
+  };
 }
 
 function satirOzeti(s) {
@@ -166,6 +175,9 @@ function setTumKarari(olcum) {
   const guncel = satirlar.filter((s) => s.durum === S0.GUNCEL);
   const atl = satirlar.filter((s) => s.durum === S0.ATLANDI);
   const notlar = atl.map(satirOzeti);
+  if (olcum && Array.isArray(olcum.atlananUyeler) && olcum.atlananUyeler.length) {
+    notlar.push(`SET: ${atlananUye.notSatiri(olcum.atlananUyeler)}`);
+  }
   if (geride.length) {
     const oneri = guncelDegilOneri(geride.map((s) => `ZKitapZipH/${s.id}-${s.vs}.zip`));
     return sonuc(DURUM.GUNCEL_DEGIL, `SET alt kitap geride: ${geride.map((s) => `${s.kitap} ${s.id} paket v${s.surum} `

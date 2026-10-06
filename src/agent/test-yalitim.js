@@ -78,6 +78,8 @@ const ENV_ESLEME = {
   EMPP_IMPARK_SMB_KOKU: 'impark-smb-yok',
   // İmzalı son sürüm arşivi (06.10, imzali-arsiv.js): kasada testler gerçek D:\empp-imzali-son'a yazmasın.
   EMPP_IMZALI_ARSIV_KOKU: 'imzali-son',
+  // İçeriksiz üye atlama bildirimi (06.10, uye-atla.js): günlük damga gerçek ~/.empp-agent'a yazılmasın.
+  EMPP_UYE_ATLA_BILDIRIM_DIZINI: 'uye-atla-bildirim',
 };
 
 /**

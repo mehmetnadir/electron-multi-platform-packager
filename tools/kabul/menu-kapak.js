@@ -28,6 +28,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { atlananUyelerOku, notSatiri: atlananNotSatiri } = require('./atlanan-uyeler');
 
 const DURUM = Object.freeze({
   GECTI: 'GECTI', RED: 'RED', OLCULEMEDI: 'OLCULEMEDI', ATLANDI: 'ATLANDI',
@@ -181,6 +182,12 @@ function menuKapakOlc(okuyucu) {
   }
   if (sorunlu.length) sonuc.durum = DURUM.RED;
   else if (sonuc.sebepler.length) sonuc.durum = DURUM.OLCULEMEDI;
+  // ATLANAN ÜYE (Nadir 06.10): build manifesti (`empp-uretec.json` atlananUyeler) — kart beklenmez; rapora not.
+  const atlanan = atlananUyelerOku(okuyucu);
+  if (atlanan.length) {
+    sonuc.atlananUyeler = atlanan;
+    sonuc.notlar = [atlananNotSatiri(atlanan)];
+  }
   return sonuc;
 }
 
@@ -227,7 +234,8 @@ function ozetSatiri(s) {
   const kart = new Set(s.kartlar.map((k) => k.anahtar)).size;
   return `menü kapak: ${tr[s.durum] || s.durum} · ${kart} kart`
     + `${s.sebepler.length ? ` — ${s.sebepler.slice(0, 4).join(' | ')}` : ''}`
-    + `${s.uyarilar.length ? ` · UYARI: ${s.uyarilar.join(' | ')}` : ''}`;
+    + `${s.uyarilar.length ? ` · UYARI: ${s.uyarilar.join(' | ')}` : ''}`
+    + `${s.notlar && s.notlar.length ? ` · NOT: ${s.notlar.join(' | ')}` : ''}`;
 }
 
 /** KABUL_MENU_KAPAK kipi: `uyar` (varsayılan) | `reddet` | `kapali`. Tanınmayan değer → uyar. Saf. */
@@ -275,7 +283,8 @@ async function paketMenuKapakOlc(p) {
       const IC = require('./impark-okuyucu-cikar');
       const hedef = path.join(calisma, 'impark-menu');
       const ortak = {
-        paket: p.paket, hedef, gerekliMi: (rel) => rel === YAMA || rel === AYAR || rel.startsWith('images/'),
+        paket: p.paket, hedef,
+        gerekliMi: (rel) => rel === YAMA || rel === AYAR || rel === 'empp-uretec.json' || rel.startsWith('images/'),
       };
       const c = p.uzak
         ? await IC.uzakImparkAgaciCikar({ ...ortak, sshArgv: p.uzak.sshArgv, uzakNode: p.uzak.node })
