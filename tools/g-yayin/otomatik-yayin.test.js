@@ -287,13 +287,26 @@ test('canlı manifest imzası tutmuyor → hata, plan yok', async () => {
   assert.equal(r.cikis, 1);
 });
 
-test('canlı index android-shim taşımıyor → uyarı yazılır', async () => {
+test('canlı index android-shim taşımıyor → Nadir listesi, yayın yok', async () => {
   const { ops } = ortam();
-  const t = canliTablo('45550', { index: '<html><head><script src="empp-fs-shim.js"></script>' });
+  const t = canliTablo('45550', { motorSha: 'e'.repeat(64),
+    index: '<html><head><script src="empp-fs-shim.js"></script>' });
+  const r = await oy.kos(oy.argsAyristir(['45550', '--uygula']),
+    { ...ops, getir: sahteGetir(t), sql: sahteSql(),
+      adimKos: async () => assert.fail('donuk sette adım koşmamalı') });
+  assert.equal(r.setler[0].karar, 'nadir');
+  assert.match(r.setler[0].sebep, /android-donuk-index/);
+  assert.equal(r.setler[0].komutlar, undefined);
+  assert.deepEqual(r.nadirKarari.map((n) => n.set), ['45550']);
+});
+
+test('canlı index android-shim taşıyor → kapı geçer', async () => {
+  const { ops } = ortam();
+  const t = canliTablo('45550', { motorSha: 'e'.repeat(64),
+    index: '<html><head><script src="empp-android-shim.js"></script>' });
   const r = await oy.kos(oy.argsAyristir(['45550']),
     { ...ops, getir: sahteGetir(t), sql: sahteSql() });
-  assert.equal(r.setler[0].karar, 'guncel');
-  assert.match(r.setler[0].uyarilar.join(' '), /android-index-shimsiz/);
+  assert.equal(r.setler[0].karar, 'sec');
 });
 
 test('ekleme var → Nadir listesi, yayınlanmaz, canlıya gidilmez', async () => {
