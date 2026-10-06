@@ -750,6 +750,7 @@ const setEk = require('./set-uyelik-ek');
 const setKabuk = require('./set-kabuk-tazele');
 // Menü kapak garantisi (06.10, 59835): her set kartının kapak dosyası build.zip'te.
 const menuKapak = require('./menu-kapak-garanti');
+const thumbsOnar = require('./thumbs-onar');
 const devamYukleme = require('./devam-yukleme');
 
 
@@ -3243,6 +3244,16 @@ async function processJob(auth, job) {
       zipYolu: zipPath, yayineviAdi: job.publisherName, calisma: work, log,
     });
 
+    // KÜÇÜK GÖRSEL ONARIMI (06.10, 11845 book4: 10 sayfa, 1 şifreli thumb → kabul KALDI): sayfası olup
+    // geçerli thumb'ı olmayan kitaplara thumb üretilir. Saf JS (kasada sips/zip yok). Hata üretimi
+    // durdurmaz (zip değişmez, kabul ölçer). EMPP_THUMBS_ONAR=0 kapatır. Manuel build'e dokunulmaz (M1).
+    if (kaynak.tur !== 'manuel' && process.env.EMPP_THUMBS_ONAR !== '0') {
+      try {
+        job.thumbsOnar = await thumbsOnar.thumbsOnar({ zip: zipPath, log, warn });
+      } catch (e) {
+        warn(`${thumbsOnar.ISARET} HATA (üretim sürüyor, zip değişmedi): ${e.message}`);
+      }
+    }
     // MENÜ KAPAK GARANTİSİ (06.10, 59835 Super Monsters 2: Teacher's Pack + Worksheets kapaksız):
     // üreteç link kartına coverUrl yazmaz, kabuk images/book1.png'ye düşer, dosya pakette yok.
     // Menü yazan BÜTÜN adımlardan (üreteç, set eki, kabuk, panel) SONRA, R2/paketleyiciden ÖNCE:

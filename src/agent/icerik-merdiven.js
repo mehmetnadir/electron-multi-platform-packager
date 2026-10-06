@@ -825,7 +825,7 @@ async function icerikMerdiveni(o) {
 module.exports = {
   ISARET, DURUM, merdivenAcik, icerikMerdiveni, s0Olc, s0Kaynaktan, s1Uygula,
   menuKonumlari, ucSablonu, teklifUrl, teklifYorumla, imparkKimligiMi, kimlikKarari, kitapIdOku, ornekAdlari,
-  yazmaIzinliMi, kokKorumaIhlalleri, zipDizini, zipGirdiOku, satirMetni, varsayilanGetir,
+  yazmaIzinliMi, kokKorumaIhlalleri, zipDizini, zipGirdiOku, crc32, satirMetni, varsayilanGetir,
   icerikOnbellekKoku, kanitKoku,
   // set-uyelik-ek.js (2026-09-30) eksik set kitabını AYNI indirme/önbellek yolundan alır.
   icerikZipiGetir, varsayilanIndir, komut, SIKISIK_UZANTILAR,
