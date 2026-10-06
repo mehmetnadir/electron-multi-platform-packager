@@ -354,3 +354,21 @@ test('argümanlar ve kilit', () => {
   assert.equal(H.kilitAl(cfg, Date.now()), true);
   H.kilitBirak(cfg);
 });
+
+test('S1 gece (06.10): Mac duraklatıldı → kur pardus satırından; pardus kuyruktaysa eylem yok', () => {
+  const k = [kitap('11845', '2026-10-06 14:59:06.128')];
+  const p = H.planKurAskida(k, [platS('11845', 'mac', 'completed'), platS('11845', 'pardus', 'completed')],
+    [], NOW_MS, NOW_DB, ['pardus']);
+  assert.equal(p.requeue.length, 1);
+  assert.equal(p.requeue[0].platform, 'pardus');
+  assert.equal(H.planKurAskida(k, [platS('11845', 'pardus', 'queued')], [], NOW_MS, NOW_DB, ['pardus']).requeue.length, 0);
+});
+
+test('S1: mac kalıcı hatalıysa pardus yedeği seçilir; kurPlatformlari duraklat bayrağına bakar', () => {
+  const k = [kitap('1', '2026-10-06 14:00:00')];
+  const s = [platS('1', 'mac', 'failed', 'kabul (KALDI)'), platS('1', 'pardus', 'completed')];
+  assert.equal(H.planKurAskida(k, s, [], NOW_MS, NOW_DB, ['mac', 'pardus']).requeue[0].platform, 'pardus');
+  const cfg = { macDuraklat: '/x/duraklat.istek' };
+  assert.deepEqual(H.kurPlatformlari(cfg, { dosyaVar: () => true }), ['pardus']);
+  assert.deepEqual(H.kurPlatformlari(cfg, { dosyaVar: () => false }), ['mac', 'pardus']);
+});
