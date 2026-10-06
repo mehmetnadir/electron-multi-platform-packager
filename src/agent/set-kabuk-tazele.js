@@ -37,6 +37,19 @@
  *
  * ANAHTAR: `EMPP_SET_KABUK_TAZELE=1` (varsayılan KAPALI). İkili: `EMPP_WEBZ_KABUK_URET` ya da
  * `~/.empp-agent/araclar/webz-kabuk-uret` (kurulum: `tools/set-kabuk/kur-webz-kabuk-uret.sh`).
+ *
+ * KABUK KAYNAĞI (06.10, `arastirma/set-kabuk-0510/kabuk-eki-tasarim.md`): `o.kabukKaynagi` ??
+ * `EMPP_SET_KABUK_KAYNAGI` ?? (darwin ? 'ikili' : 'yok').
+ *   'ikili' = Swift ikilisi (bugünkü yol, değişmez)
+ *   'yok'   = adım atlanır (bugünkü Linux davranışı)
+ *   'ek'    = ProBook: aynı JS ile girdi parmak izi (`girdiSha`) → CDN'deki kabuk eki
+ *             (`kabuk-ek.js`; Mac `tools/set-kabuk/ek-uret.js` üretir) → dosyalar gölge köke
+ *             (Swift'in yerine) → aşağıdaki BÜTÜN kapılar aynen. Ek yok/bayat/bozuk/ret, ağ hatası
+ *             ya da kapı RED → `durum: 'ertele'` (runner kilit + kira bırakır, failed YAZMAZ): eski
+ *             kabukla kaynak ÇIKMAZ (45551 2.51.3 dersi). Set uygun değilse (bookN yok, tek kitap)
+ *             bugünkü gibi 'atlandi'.
+ * `o.ekCikti` (yalnız 'ikili'): kapı GEÇTİ'den sonra, rename'den önce üretilen kabuk dosyaları
+ * dışarı verilir (Mac ek paketleyicisi). Kabuk zaten güncelse mevcut zip kapıdan geçerse yine.
  */
 
 const fs = require('fs');
@@ -53,6 +66,7 @@ const uretecKaynak = require('./uretec-kaynak');
 const { webZKabukIndexiMi } = require('../packaging/set-menu-bicim');
 const { motorKopyasiMi } = require('../packaging/set-menu');
 const A1 = require('../packaging/a1-duzen');
+const ig = require('../runtime/icerik-guncelleme');
 
 const ISARET = '[set-kabuk]';
 /** İkili sözleşmesi: tek motorlu sette `--kip tek-motor` (a1-arayuz.md). */
@@ -70,10 +84,130 @@ const DIL_BETIGI = 'scripts/language-set.js';
 const YAMA = 'scripts/cevrimdisi-yama.js';
 const AYAR = 'config/settings.json';
 const ARAC_SURESI_MS = 120000;
+const KABUK_KAYNAKLARI = new Set(['ikili', 'ek', 'yok']);
+const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const KAPAK_ALT_SINIR = 1024; // 9 baytlık 404 gövdeleri kapak değildir (pilot)
 
 function acik(env = process.env) {
   return String(env.EMPP_SET_KABUK_TAZELE || '') === '1';
+}
+
+/**
+ * Kabuk kaynağı seçimi. SAF. Boş dize "verilmedi" sayılır (ProBook acil geri dönüşü: boşalt).
+ * @param {{kabukKaynagi?: string|null, env?: object, platform?: string}} [o]
+ * @returns {string} 'ikili' | 'ek' | 'yok' | (bilinmeyen değer aynen — kabukTazele atlar)
+ */
+function kabukKaynagiSec({
+  kabukKaynagi = null, env = process.env, platform = process.platform,
+} = {}) {
+  const dolu = (v) => (v == null || String(v).trim() === '' ? null : String(v).trim());
+  return dolu(kabukKaynagi) ?? dolu(env.EMPP_SET_KABUK_KAYNAGI)
+    ?? (platform === 'darwin' ? 'ikili' : 'yok');
+}
+
+/** Kabuk eki modülü (Parça A) — TEMBEL: modül yokken dosya yüklenebilsin; testler `o.kabukEk` verir. */
+function kabukEkModulu(o = {}) {
+  return o.kabukEk || require('./kabuk-ek');
+}
+
+/** Ek içindeki yol güvenli mi (göreli; `..`/mutlak/`_` önekli değil). SAF. Beyaz liste ayrı. */
+function ekYoluGuvenli(yol) {
+  const y = String(yol || '');
+  if (!y || y.startsWith('/') || y.includes('\\') || /^[a-z]:/i.test(y)) return false;
+  const parca = y.split('/');
+  return !parca.some((p) => p === '' || p === '.' || p === '..') && !parca[0].startsWith('_');
+}
+
+/** Kabuk eki imza açık anahtarının (PEM) yolu. */
+function ekAcikAnahtarYolu(env = process.env) {
+  return env.EMPP_KABUK_EK_ACIK_ANAHTAR
+    || path.join(os.homedir(), '.empp-agent', 'kabuk-ek-acik.pem');
+}
+
+/**
+ * `kaynak-kur` DEĞİŞMEZİ (06.10, birleşik inceleme K1): Mac (darwin) Swift ikilisiyle kabuğu kurar.
+ * Başka platform build'i ancak kabuk tazeleme AÇIK + kabuk kaynağı 'ek' + GEÇERLİ ed25519 açık
+ * anahtarı varken kurar; yoksa kabuk ESKİ kalıp yeni build.zip geçerli olur (45551 2.51.3).
+ * Anahtarın yalnız varlığı yetmez: boş/bozuk/RSA dosya her eki `ek-imza` ile ertelerdi.
+ * Heartbeat (yetenek ilanı) ve r2-kur iş anı aynı karardan geçer. SAF (oku enjekte).
+ * @returns {{uygun: boolean, neden: string|null}}
+ */
+function kaynakKurKabukKarari({
+  platform = process.platform, env = process.env, oku = fs.readFileSync,
+} = {}) {
+  if (platform === 'darwin') return { uygun: true, neden: null };
+  const red = (neden) => ({ uygun: false, neden: `${platform}: ${neden}` });
+  if (!acik(env)) return red('kabuk tazeleme kapalı (EMPP_SET_KABUK_TAZELE)');
+  const k = kabukKaynagiSec({ env, platform });
+  if (k !== 'ek') return red(`kabuk kaynağı '${k}' (yalnız 'ek' kurabilir)`);
+  const anahtar = ekAcikAnahtarYolu(env);
+  let pem;
+  try { pem = oku(anahtar, 'utf8'); } catch (_) {
+    return red(`kabuk eki açık anahtarı yok (${anahtar})`);
+  }
+  let tur = null;
+  try { tur = crypto.createPublicKey(String(pem)).asymmetricKeyType; } catch (_) { tur = null; }
+  if (tur !== 'ed25519') {
+    return red(`kabuk eki açık anahtarı geçersiz (${anahtar}: ${tur || 'okunamadı'}, ed25519 değil)`);
+  }
+  return { uygun: true, neden: null };
+}
+
+/**
+ * A1 girdi ÖZETİ (girdi parmak izi için; birleşik inceleme D9). Swift yalnız şu alanları okur:
+ * menüde kapak kimliği + `actName`, `BookContent.xml`'de İLK `<Unit name>`, motor sayfasının
+ * varlığı. Dosyanın tamamı yerine bu alanların sha'sı girer: merdiven iki makinede farklı içerik
+ * (sürüm özniteliği, ünite gövdesi) üretse de aynı kabuk girdisi aynı parmak izini verir. SAF.
+ * @param {Map<string, Buffer>} a1Girdi
+ * @returns {Object<string, string>} yol → sha256 hex
+ */
+function a1GirdiOzeti(a1Girdi) {
+  const out = {};
+  for (const [y, v] of a1Girdi) {
+    if (/^assets\/[^/]+\/data\/BookContent\.xml$/.test(y)) {
+      const m = /<Unit\b[^>]*?\bname\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(v.toString('utf8'));
+      const ad = m ? String(m[1] ?? m[2] ?? '').trim() : '';
+      out[y] = sha256(`ilk-unite:${ad}`);
+    } else if (y === A1_MENU) {
+      let liste = null;
+      try {
+        const xml = ig.menuCoz(v);
+        if (xml) {
+          liste = ig.kapaklar(xml).map((c) => {
+            const a = /\bactName\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(c.etiket || '');
+            return [String(c.ID || ''), a ? String(a[1] ?? a[2] ?? '').trim() : ''];
+          });
+        }
+      } catch (_) { liste = null; }
+      out[y] = liste ? sha256(`menu-kapaklar:${JSON.stringify(liste)}`) : sha256(v);
+    } else {
+      out[y] = sha256(v);
+    }
+  }
+  return out;
+}
+
+/**
+ * r2-kur ön kontrolü (runner, taban indirilmeden): Mac bu kitap için ek yayınlamış mı. Fırlatmaz.
+ * @returns {Promise<{var: boolean, neden: string|null, son?: object}>}
+ */
+async function ekSonKontrol({ bookId, getir = null, kabukEk = null } = {}) {
+  let son;
+  try {
+    // getir verilmezse modülün kendi CDN getiricisi ({status, buffer} biçimi) kullanılır.
+    const EK = kabukEkModulu({ kabukEk });
+    son = await EK.sonOku({ bookId: String(bookId), ...(getir ? { getir } : {}) });
+  } catch (e) {
+    const m = String(e && e.message || e).slice(0, 120);
+    return { var: false, neden: `son.json okunamadı: ${m}` };
+  }
+  if (!son || typeof son !== 'object') {
+    return { var: false, neden: 'son.json yok (Mac bu kitap için ek üretmedi)' };
+  }
+  if (son.bookId != null && String(son.bookId) !== String(bookId)) {
+    return { var: false, neden: `son.json başka kitabın (${son.bookId})` };
+  }
+  return { var: true, neden: null, son };
 }
 
 function ikiliYolu(env = process.env) {
@@ -385,9 +519,12 @@ function ikiliKostur(cmd, args, { zamanAsimiMs = ARAC_SURESI_MS } = {}) {
  * Adımı koşturur. Hiçbir hata FIRLATMAZ (runner işi düşürmez); iş kopyası ya kapıdan geçmiş yeni
  * hâli ya aynen eskisidir.
  * @param {{zip: string, calisma: string, job: object, log?: Function, warn?: Function, env?: object,
- *   getir?: Function, komut?: Function, ikili?: string, platform?: string, webzKoku?: string}} o
- * @returns {Promise<{durum: 'uygulandi'|'guncel'|'atlandi', neden: string|null, kisaKod?: string,
- *   kitaplar?: string[], notlar?: string[], dosyaSayisi?: number, sureMs: number}>}
+ *   getir?: Function, komut?: Function, ikili?: string, platform?: string, webzKoku?: string,
+ *   kabukKaynagi?: string, kabukEk?: object, cdnGetir?: Function, ekCikti?: Function}} o
+ * @returns {Promise<{durum: 'uygulandi'|'guncel'|'atlandi'|'ertele', neden: string|null,
+ *   kod?: string, kisaKod?: string, kitaplar?: string[], notlar?: string[], dosyaSayisi?: number,
+ *   girdiSha?: string|null, girdi?: object, yazilanDosyalar?: string[], bookId?: string,
+ *   sureMs: number}>}
  */
 async function kabukTazele(o) {
   const log = o.log || (() => {});
@@ -398,22 +535,36 @@ async function kabukTazele(o) {
   const platform = o.platform || process.platform;
   const webzKoku = o.webzKoku || WEBZ_KOKU;
   const basla = Date.now();
-  const rapor = { durum: 'atlandi', neden: null };
+  const bookId = o.job && o.job.bookId != null ? String(o.job.bookId) : '';
+  const kaynagi = kabukKaynagiSec({ kabukKaynagi: o.kabukKaynagi, env, platform });
+  const ekKipi = kaynagi === 'ek';
+  const rapor = { durum: 'atlandi', neden: null, kabukKaynagi: kaynagi };
   const bitir = (neden, ek = {}) => {
     Object.assign(rapor, ek, { neden, sureMs: Date.now() - basla });
-    const etiket = { uygulandi: 'UYGULANDI', guncel: 'GÜNCEL' }[rapor.durum] || 'ATLANDI';
+    const etiket = { uygulandi: 'UYGULANDI', guncel: 'GÜNCEL', ertele: 'ERTELE' }[rapor.durum]
+      || 'ATLANDI';
     const satir = `${ISARET} ${etiket}`
-      + `${neden ? ` — ${neden}` : ''}${o.job && o.job.bookId ? ` (${o.job.bookId})` : ''}`;
-    (rapor.durum === 'atlandi' ? warn : log)(satir);
+      + `${neden ? ` — ${neden}` : ''}${bookId ? ` (${bookId})` : ''}`;
+    (rapor.durum === 'atlandi' || rapor.durum === 'ertele' ? warn : log)(satir);
     return rapor;
   };
+  // 'ek' kipinde set uygunsa her başarısızlık ERTELE: eski kabukla kaynak çıkmaz (§3 tablosu).
+  const ertele = (kodu, neden, ek = {}) => {
+    rapor.durum = 'ertele';
+    return bitir(`kabuk eki (${kodu}): ${neden} — iş ertelenmeli, iş kopyası DEĞİŞMEDİ`,
+      { kod: kodu, bookId, girdiSha: rapor.girdiSha ?? null, ...ek });
+  };
 
-  if (platform !== 'darwin') return bitir('yalnız Mac (darwin) — başsız Swift ikilisi');
-  const ikili = o.ikili || ikiliYolu(env);
-  try { fs.accessSync(ikili, fs.constants.X_OK); } catch (_) { return bitir(`ikili yok: ${ikili}`); }
-  const kod = o.job && o.job.kisaKod ? String(o.job.kisaKod).trim() : '';
-  if (!/^[a-z0-9]{3,12}$/i.test(kod)) return bitir('kisaKod yok (claim) — Web-Z adresi kurulamaz');
-  rapor.kisaKod = kod;
+  if (!KABUK_KAYNAKLARI.has(kaynagi)) return bitir(`bilinmeyen kabuk kaynağı: ${kaynagi}`);
+  if (kaynagi === 'yok') {
+    return bitir('yalnız Mac (darwin) — başsız Swift ikilisi (kabuk kaynağı yok)');
+  }
+  let ikili = null;
+  if (!ekKipi) {
+    if (platform !== 'darwin') return bitir('yalnız Mac (darwin) — başsız Swift ikilisi');
+    ikili = o.ikili || ikiliYolu(env);
+    try { fs.accessSync(ikili, fs.constants.X_OK); } catch (_) { return bitir(`ikili yok: ${ikili}`); }
+  }
 
   // 1. Uygunluk (merkez dizin; içerik açılmaz).
   let once;
@@ -430,26 +581,35 @@ async function kabukTazele(o) {
   if (a1) rapor.kip = 'a1';
   // A1 yolunda her ATLANDI nedeni "A1 atlandı" ile başlar (log'da eski davranışın korunduğu görünsün).
   const atla = (neden, ek) => bitir(a1 ? `A1 atlandı — ${neden} (eski düzen korundu)` : neden, ek);
+  // Uygun sette başarısızlık: 'ikili' → ATLANDI (bugünkü), 'ek' → ERTELE.
+  const dur = (kodu, neden, ek) => (ekKipi ? ertele(kodu, neden, ek) : atla(neden, ek));
+  // kisaKod denetimi uygunluktan SONRA: set olmayan iş 'ek' kipinde de ertelenmez (atlandi).
+  const kod = o.job && o.job.kisaKod ? String(o.job.kisaKod).trim() : '';
+  if (!/^[a-z0-9]{3,12}$/i.test(kod)) return dur('claim', 'kisaKod yok (claim) — Web-Z adresi kurulamaz');
+  rapor.kisaKod = kod;
 
   // 2. Web-Z ayarı.
   const taban = `${webzKoku}/go/${kod}/web-stream`;
   let ayar;
+  let webzSettingsSha = null;
   try {
     const r = await getir(`${taban}/config/settings.json`);
-    if (r.status !== 200) return atla(`Web-Z settings.json HTTP ${r.status}`);
+    if (r.status !== 200) return dur('ag', `Web-Z settings.json HTTP ${r.status}`);
     ayar = JSON.parse(r.govde.toString('utf8'));
+    webzSettingsSha = sha256(r.govde);
   } catch (e) {
-    return atla(`Web-Z settings.json alınamadı: ${String(e && e.message || e).slice(0, 120)}`);
+    return dur('ag', `Web-Z settings.json alınamadı: ${String(e && e.message || e).slice(0, 120)}`);
   }
   const liste = webzListesi(ayar);
-  if (!liste.some((g) => !g.link)) return bitir('Web-Z listesinde kitap yok');
+  // 'ek' kipinde uygun sette boş Web-Z listesi ERTELE (eski kabukla kaynak çıkmaz); ikili: atlandi.
+  if (!liste.some((g) => !g.link)) return dur('esleme', 'Web-Z listesinde kitap yok');
 
   // 3. Kimlik eşlemesi (yazma kapısının çözümü; liste = Web-Z).
   let kapi;
   try {
     kapi = K.yazmaKapisi({ zipYolu: o.zip, setListesi: uretecKaynak.ayarlardanListe(ayar) || '' });
   } catch (e) {
-    return atla(`kimlik çözümü: ${String(e && e.message || e).slice(0, 120)}`);
+    return dur('esleme', `kimlik çözümü: ${String(e && e.message || e).slice(0, 120)}`);
   }
   // K1 (inceleme 05.10): tek kitaplı İmpark paketi de kök ImWin32 + motor index taşır; A1 yalnız
   // ≥2 kapaklı tek motorlu settir (yazma kapısı `kokMenuKapaklari` ve Windows kapısı `tekMotorMu`
@@ -459,7 +619,7 @@ async function kabukTazele(o) {
     if (idli.length < 2) return atla(`tek kitaplı paket (${idli.length} kapak) — A1 yalnız ≥2 kapaklı tek motorlu set`);
   }
   const es = eslemeKur({ liste, kapi, setAdi: String(ayar.setTitle || ''), kip: a1 ? KIP_TEK_MOTOR : null });
-  if (!es.girdi) return atla(`eşlenemeyen Web-Z üyesi: ${es.eksik.join('; ')}`, { notlar: es.notlar });
+  if (!es.girdi) return dur('esleme', `eşlenemeyen Web-Z üyesi: ${es.eksik.join('; ')}`, { notlar: es.notlar });
   rapor.notlar = es.notlar;
   for (const n of es.notlar) log(`${ISARET} eşleme: ${n}`);
 
@@ -469,18 +629,21 @@ async function kabukTazele(o) {
     const kok = path.join(sahne, 'kok');
     const kapakDizini = path.join(sahne, 'kapak');
     await fsp.mkdir(kapakDizini, { recursive: true });
+    /** Kapak dosyası adı → sha256 (girdi parmak izinin parçası; ek bu kapaklara bağlı). */
+    const kapakSha = {};
     // 4a. Kapaklar (Web-Z anahtarıyla istenir, klasör adıyla verilir). Biri eksikse adım atlanır.
     for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
       let r;
       try {
         r = await getir(`${taban}/images/${encodeURIComponent(k.anahtar)}.png?a=${encodeURIComponent(k.assetId)}`);
       } catch (e) {
-        return atla(`kapak alınamadı (${k.anahtar}): ${String(e && e.message || e).slice(0, 80)}`);
+        return dur('ag', `kapak alınamadı (${k.anahtar}): ${String(e && e.message || e).slice(0, 80)}`);
       }
       if (!r || r.status !== 200 || !kapakGecerli(r.govde)) {
-        return atla(`kapak geçersiz (${k.anahtar}): HTTP ${r && r.status}, ${r && r.govde ? r.govde.length : 0} bayt`);
+        return dur('ag', `kapak geçersiz (${k.anahtar}): HTTP ${r && r.status}, ${r && r.govde ? r.govde.length : 0} bayt`);
       }
       await fsp.writeFile(path.join(kapakDizini, `kapak-${k.klasor}.png`), r.govde);
+      kapakSha[`kapak-${k.klasor}.png`] = sha256(r.govde);
     }
     // 4b. Gölge kök: yalnız bookN/index.html taslakları (ikili klasör varlığını bundan ölçer).
     //     A1 (Swift 49bf319f arayüzü): ikili kökte motor menüsünü (`classlibraries/ImWin32.dll`),
@@ -502,12 +665,12 @@ async function kabukTazele(o) {
       };
       let motorHtml;
       if (u.motorKaynagi === 'index.html') {
-        try { motorHtml = Buffer.from(A1.baslikEkle(eskiIndex)); } catch (e) { return atla(String(e.message)); }
+        try { motorHtml = Buffer.from(A1.baslikEkle(eskiIndex)); } catch (e) { return dur('girdi', String(e.message)); }
       } else {
         motorHtml = zipGirdi(A1.A1_MOTOR_SAYFASI);
       }
       const menu = zipGirdi(A1_MENU);
-      if (!motorHtml || !menu) return atla(`A1 girdisi okunamadı (${!menu ? A1_MENU : A1.A1_MOTOR_SAYFASI})`);
+      if (!motorHtml || !menu) return dur('girdi', `A1 girdisi okunamadı (${!menu ? A1_MENU : A1.A1_MOTOR_SAYFASI})`);
       a1Girdi.set(A1.A1_MOTOR_SAYFASI, motorHtml);
       a1Girdi.set(A1_MENU, menu);
       for (const k of es.girdi.kitaplar.filter((x) => x.contentType !== 'link')) {
@@ -527,36 +690,140 @@ async function kabukTazele(o) {
       ...es.girdi, kitaplar: es.girdi.kitaplar.map(({ anahtar, ...k }) => k),
     };
     await fsp.writeFile(girdiYolu, JSON.stringify(girdi, null, 2));
-    const argumanlar = a1 ? ['--kip', KIP_TEK_MOTOR, kok, girdiYolu, kapakDizini] : [kok, girdiYolu, kapakDizini];
-    const r = await ikiliKostur(ikili, argumanlar, { zamanAsimiMs: o.aracSuresiMs || ARAC_SURESI_MS });
-    if (r.code !== 0) {
-      const ham = String(r.stderr || '').trim().slice(-200);
-      // Eski ikili `--kip`i tanımaz (kullanım satırı / çıkış ≠ 0): A1 atlanır, iş kopyası aynen kalır.
-      return atla(a1 ? `webz-kabuk-uret tek-motor kipini tanımıyor ya da başarısız (çıkış ${r.code}): ${ham}`
-        : `webz-kabuk-uret çıkış ${r.code}: ${ham}`);
+    rapor.girdi = girdi;
+    // Girdi parmak izi (kabuk eki anahtarı): Swift'e giden girdi + kapak sha'ları + A1 girdi
+    // sha'ları. Mac ('ikili') ve ProBook ('ek') AYNI JS ile hesaplar; ikili kipte modül yoksa null.
+    const ekKipAdi = a1 ? 'a1' : 'bookN';
+    const a1Sha = a1 ? a1GirdiOzeti(a1Girdi) : null;
+    const izGirdisi = { kip: ekKipAdi, girdi, kapaklar: kapakSha, a1Girdi: a1Sha };
+    if (ekKipi) {
+      let EK;
+      try {
+        EK = kabukEkModulu(o);
+        rapor.girdiSha = EK.girdiParmakIzi(izGirdisi);
+      } catch (e) {
+        const m = String(e && e.message || e).slice(0, 120);
+        return ertele('hata', `parmak izi hesaplanamadı: ${m}`);
+      }
+      // Kapak yolları (`images/<klasör>.png|jpg`) yalnız bu setin klasörleriyle sınırlanır.
+      const klasorler = new Set(girdi.kitaplar.map((k) => k.klasor));
+      // İmza açık anahtarı (PEM metni): `o.acikAnahtar` ya da EMPP_KABUK_EK_ACIK_ANAHTAR dosyası.
+      // Okunamazsa eke HİÇ gidilmez (imzasız ek uygulanmaz).
+      let acikAnahtar = o.acikAnahtar != null ? String(o.acikAnahtar) : null;
+      if (acikAnahtar == null) {
+        try {
+          acikAnahtar = fs.readFileSync(ekAcikAnahtarYolu(env), 'utf8');
+        } catch (_) { acikAnahtar = null; }
+      }
+      if (!acikAnahtar || !acikAnahtar.trim()) {
+        return ertele('ek-imza-anahtari-yok', `açık anahtar okunamadı (${ekAcikAnahtarYolu(env)})`);
+      }
+      let g;
+      try {
+        // CDN getiricisi modülündür ({status, buffer}); Web-Z `getir`'i ({status, govde}) VERİLMEZ.
+        // A: imza yok/geçersiz → {durum:'hata', kod:'imza'} → ertele 'ek-imza'.
+        g = await EK.ekGetir({
+          bookId, girdiSha: rapor.girdiSha, kip: ekKipAdi, klasorler, acikAnahtar,
+          ...(o.cdnGetir ? { getir: o.cdnGetir } : {}),
+        });
+      } catch (e) {
+        g = { durum: 'hata', kod: 'ag', mesaj: String(e && e.message || e) };
+      }
+      const sha12 = String(rapor.girdiSha || '').slice(0, 12);
+      if (!g || g.durum === 'yok') {
+        // Teşhis (Önemli-3b): Mac son.json'u başka girdiSha'yı gösteriyorsa iki makine aynı seti
+        // farklı tabandan kuruyor (merdiven/set eki ayrışması) — kod `ek-sapma`, iki sha raporda.
+        let son = o.ekSon;
+        if (son === undefined) {
+          try {
+            son = await EK.sonOku({ bookId, ...(o.cdnGetir ? { getir: o.cdnGetir } : {}) });
+          } catch (_) { son = null; }
+        }
+        const mac = son && son.girdiSha ? String(son.girdiSha) : null;
+        if (mac && mac !== String(rapor.girdiSha)) {
+          return ertele('ek-sapma', `Mac ${mac.slice(0, 12)} ≠ ProBook ${sha12} (taban ayrışması)`,
+            { macGirdiSha: mac });
+        }
+        return ertele('ek-yok', `ek yok (girdiSha ${sha12})`);
+      }
+      if (g.durum === 'ret') {
+        return ertele('ek-ret', `Mac ek üretemedi (ret işareti): ${String(g.neden || '-').slice(0, 160)}`);
+      }
+      if (g.durum !== 'var') {
+        const m = String(g.mesaj || g.kod || g.durum).slice(0, 160);
+        return ertele(`ek-${g.kod || 'hata'}`, `ek alınamadı: ${m}`);
+      }
+      const mSha = g.manifest && g.manifest.girdiSha != null ? String(g.manifest.girdiSha) : null;
+      if (mSha != null && mSha !== String(rapor.girdiSha)) {
+        return ertele('ek-bayat', `manifest girdiSha ${mSha.slice(0, 12)} ≠ yerel ${sha12}`);
+      }
+      const ekDosyalari = g.dosyalar instanceof Map ? g.dosyalar : new Map();
+      const yasak = [...ekDosyalari.keys()].filter((y) => !ekYoluGuvenli(y)
+        || !kabukDosyasiMi(y, klasorler) || !Buffer.isBuffer(ekDosyalari.get(y)));
+      if (!ekDosyalari.size) return ertele('ek-bozuk', 'ek boş');
+      if (yasak.length) {
+        return ertele('ek-yol', `ekte izin dışı yol: ${yasak.slice(0, 3).join(', ')}`);
+      }
+      // Swift'in yerine: dosyalar gölge köke (aşağıdaki kapılar ikili çıktısıyla AYNI ölçer).
+      for (const [y, v] of ekDosyalari) {
+        await fsp.mkdir(path.dirname(path.join(kok, y)), { recursive: true });
+        await fsp.writeFile(path.join(kok, y), v);
+      }
+      log(`${ISARET} kabuk eki gölge köke yazıldı: ${ekDosyalari.size} dosya, girdiSha ${sha12}`);
+    } else {
+      try {
+        rapor.girdiSha = kabukEkModulu(o).girdiParmakIzi(izGirdisi);
+      } catch (_) {
+        rapor.girdiSha = null; // modül yok (A birleşmeden) — ikili yolu etkilenmez
+      }
+      const argumanlar = a1 ? ['--kip', KIP_TEK_MOTOR, kok, girdiYolu, kapakDizini] : [kok, girdiYolu, kapakDizini];
+      const r = await ikiliKostur(ikili, argumanlar, { zamanAsimiMs: o.aracSuresiMs || ARAC_SURESI_MS });
+      if (r.code !== 0) {
+        const ham = String(r.stderr || '').trim().slice(-200);
+        // Eski ikili `--kip`i tanımaz (kullanım satırı / çıkış ≠ 0): A1 atlanır, iş kopyası aynen kalır.
+        return atla(a1 ? `webz-kabuk-uret tek-motor kipini tanımıyor ya da başarısız (çıkış ${r.code}): ${ham}`
+          : `webz-kabuk-uret çıkış ${r.code}: ${ham}`);
+      }
     }
     const hepsi = await dosyalariTopla(kok);
     // İkili bookN/ altına HİÇBİR şey yazmamalı (taslak index.html boş kalmalı): yazdıysa araç yanlış
     // köke yazıyordur — çıktı güvenilmez, adım atlanır (bookN içeriği zaten zip'e gitmez).
     const bookNYazilan = hepsi.filter((y) => bookNMi(y.split('/')[0])
       && !(y === `${y.split('/')[0]}/index.html` && fs.statSync(path.join(kok, y)).size === 0));
-    if (bookNYazilan.length) return atla(`ikili bookN altına yazdı: ${bookNYazilan.slice(0, 3).join(', ')}`);
+    if (bookNYazilan.length) return dur('ek-bozuk', `ikili bookN altına yazdı: ${bookNYazilan.slice(0, 3).join(', ')}`);
     // A1: motor sayfasını (kapak/**) ve diğer girdileri YALNIZ bu adım yazar; ikili değiştirdiyse ya da
     // kapak/ altına yeni dosya koyduysa çıktı güvenilmez.
     if (a1) {
       const bozulan = [...a1Girdi].filter(([y, v]) => {
         try { return !fs.readFileSync(path.join(kok, y)).equals(v); } catch (_) { return true; }
       }).map(([y]) => y);
-      if (bozulan.length) return atla(`ikili girdi dosyasını değiştirdi: ${bozulan.slice(0, 3).join(', ')}`);
+      if (bozulan.length) return dur('ek-bozuk', `ikili girdi dosyasını değiştirdi: ${bozulan.slice(0, 3).join(', ')}`);
     }
     const kapakYazilan = hepsi.filter((y) => y.split('/')[0] === 'kapak' && !a1Girdi.has(y));
-    if (kapakYazilan.length) return atla(`ikili kapak/ altına yazdı: ${kapakYazilan.slice(0, 3).join(', ')}`);
+    if (kapakYazilan.length) return dur('ek-bozuk', `ikili kapak/ altına yazdı: ${kapakYazilan.slice(0, 3).join(', ')}`);
     // `_` önekli kök dizin (araç `_eski/`'ye arşivler) ve A1 girdileri zip'e YAZILMAZ.
     const yazilan = hepsi.filter((y) => !bookNMi(y.split('/')[0]) && !/^_/.test(y.split('/')[0])
       && !a1Girdi.has(y)).sort();
     if (!yazilan.includes('index.html') || !yazilan.includes(DIL_BETIGI)) {
-      return atla(`ikili kabuk yazmadı (${yazilan.length} dosya)`);
+      return dur('ek-bozuk', `ikili kabuk yazmadı (${yazilan.length} dosya)`);
     }
+    rapor.yazilanDosyalar = [...yazilan];
+    // Ek çıktısı (yalnız 'ikili' + kanca): ikilinin yazdığı kök dosyaları, değişmezlik
+    // süzgecinden ÖNCE (spec §2). Gölge kök önekle taşınmadan önce okunur. A1 motor sayfası YOK.
+    const ekCiktiDosyalari = o.ekCikti && !ekKipi
+      ? new Map(yazilan.map((y) => [y, fs.readFileSync(path.join(kok, y))])) : null;
+    const ekCiktiVer = async (ek = {}) => {
+      if (!ekCiktiDosyalari) return;
+      try {
+        await o.ekCikti({
+          girdiSha: rapor.girdiSha ?? null, kip: ekKipAdi, girdi, dosyalar: ekCiktiDosyalari,
+          kapaklar: kapakSha, a1Girdi: a1Sha, webzSettingsSha, ...ek,
+        });
+      } catch (e) {
+        rapor.ekCiktiHata = String(e && e.message || e).slice(0, 200);
+        warn(`${ISARET} ek çıktısı kancası hata verdi (adım etkilenmez): ${rapor.ekCiktiHata}`);
+      }
+    };
     // 4b'. A1 ilk dönüşüm: kökteki motor index.html → kapak/index.html (A1 başlığıyla). Zaten A1
     //      ise (motor kapak/index.html'de) motor sayfasına dokunulmaz.
     //      Dosya gölgede ikiliden önce kondu (4b); burada yalnız zip'e yazılacaklara eklenir.
@@ -571,7 +838,7 @@ async function kabukTazele(o) {
       const motorRef = new Set(K.indexYerelReferanslari(a1Girdi.get(A1.A1_MOTOR_SAYFASI).toString('utf8')));
       const cakisan = yazilan.filter((y) => y !== 'index.html'
         && ((ilk && once.has(`${onEk}${y}`)) || motorRef.has(y)));
-      if (cakisan.length) return atla(`kabuk dosyası motor dosyasıyla çakışıyor: ${cakisan.slice(0, 3).join(', ')}`);
+      if (cakisan.length) return dur('ek-bozuk', `kabuk dosyası motor dosyasıyla çakışıyor: ${cakisan.slice(0, 3).join(', ')}`);
     }
     if (a1 && u.motorKaynagi === 'index.html') {
       yazilan.push(A1.A1_MOTOR_SAYFASI);
@@ -588,6 +855,25 @@ async function kabukTazele(o) {
       return g.boyut !== v.length || g.crc !== zlib.crc32(v);
     });
     if (!degisen.length) {
+      if (ekCiktiDosyalari) {
+        // Zip'teki kabuk = üretilen kabuk: mevcut zip kapıdan geçerse ek yine verilir (Mac'in
+        // kurduğu build'den sonra ProBook aynı girdiyle eki bulsun). RED → ek yok, durum aynı.
+        const m = (y) => metinAl(o.zip, once, `${onEk}${y}`);
+        const ihlalG = kapiDenetle({
+          once, sonra: once, onEk, yazilan, beklenen: girdi, kip: a1 ? 'a1' : null,
+          motorKaynagi: null,
+          metin: {
+            dil: m(DIL_BETIGI), yama: m(YAMA), ayar: m(AYAR), index: m('index.html'),
+            ...(a1 ? { kapak: m(A1.A1_MOTOR_SAYFASI) } : {}),
+          },
+        });
+        if (ihlalG.length) {
+          rapor.ekCiktiHata = `güncel zip kapıdan geçmedi (${ihlalG[0]}) — ek verilmedi`;
+          warn(`${ISARET} ${rapor.ekCiktiHata}`);
+        } else {
+          await ekCiktiVer({ guncel: true });
+        }
+      }
       rapor.durum = 'guncel';
       return bitir('kabuk zaten güncel (değişen dosya yok) — zip değişmedi');
     }
@@ -606,7 +892,7 @@ async function kabukTazele(o) {
       girdiler = yazilan.map((y) => `${onEk}${y}`);
     }
     const z = await komut('zip', ['-q', '-D', '-X', '-n', M.SIKISIK_UZANTILAR, path.resolve(aday), ...girdiler], { cwd });
-    if (z.code !== 0) return atla(`zip yazılamadı (${z.code}): ${String(z.stderr).slice(-200)}`);
+    if (z.code !== 0) return dur('hata', `zip yazılamadı (${z.code}): ${String(z.stderr).slice(-200)}`);
     const sonra = M.zipDizini(aday);
     const ihlal = kapiDenetle({
       once, sonra, onEk, yazilan, beklenen: girdi,
@@ -621,8 +907,9 @@ async function kabukTazele(o) {
       },
     });
     if (ihlal.length) {
-      return atla(`kapı RED (${ihlal.length}; ilk: ${ihlal[0]}) — iş kopyası DEĞİŞMEDİ`, { ihlal });
+      return dur('kapi-red', `kapı RED (${ihlal.length}; ilk: ${ihlal[0]}) — iş kopyası DEĞİŞMEDİ`, { ihlal });
     }
+    await ekCiktiVer();
     await fsp.rename(aday, o.zip);
     rapor.durum = 'uygulandi';
     return bitir(null, {
@@ -630,7 +917,7 @@ async function kabukTazele(o) {
       setAdi: girdi.setTitle,
     });
   } catch (e) {
-    return atla(`beklenmeyen hata: ${String(e && e.message || e).slice(0, 200)} — iş kopyası DEĞİŞMEDİ`);
+    return dur('hata', `beklenmeyen hata: ${String(e && e.message || e).slice(0, 200)} — iş kopyası DEĞİŞMEDİ`);
   } finally {
     await fsp.rm(aday, { force: true }).catch(() => {});
     await fsp.rm(sahne, { recursive: true, force: true }).catch(() => {});
@@ -640,4 +927,6 @@ async function kabukTazele(o) {
 module.exports = {
   ISARET, WEBZ_KOKU, IMZA, acik, ikiliYolu, onEkBul, uygunluk, webzListesi, eslemeKur, kapakGecerli,
   kapiDenetle, kabukDosyasiMi, ikiliKostur, kabukTazele, KIP_TEK_MOTOR, A1_KART_IMZASI,
+  kabukKaynagiSec, kabukEkModulu, ekYoluGuvenli, ekSonKontrol, ekAcikAnahtarYolu,
+  kaynakKurKabukKarari, a1GirdiOzeti,
 };
