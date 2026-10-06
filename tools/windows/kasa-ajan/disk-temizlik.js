@@ -35,7 +35,7 @@ const os = require('os');
 const path = require('path');
 const cp = require('child_process');
 
-const GB = 1e9;
+const GB = 1024 ** 3; // GiB: Windows (Get-PSDrive) ve ProBook betiği (df KB/1048576) ile aynı birim
 /** kabul.py KORUNAN ile aynı: makinenin kendi programları (Programs altında). */
 const PROGRAMS_KORUNAN = new Set(['common', 'ollama', 'opera', 'python', 'waypoint9-shell']);
 const HAZIR_ARSIVLER = ['yayinlandi', 'reddedildi', 'eskiler', 'bayat', 'olculemedi'];
