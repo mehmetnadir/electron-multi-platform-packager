@@ -296,7 +296,10 @@ async function yukle(a, ops = {}) {
 function e2eIndexi(ham, uretim) {
   const temiz = String(ham).replace(E2E_ISARET_DESENI, '');
   const isaret = `<!-- empp-g-e2e ${uretim} -->\n`;
-  const i = temiz.toLowerCase().lastIndexOf('</html>');
+  // Konum ÖZGÜN dizgide aranır: `toLowerCase()` "İ"yi iki kod birimine açar, konum kayar
+  // ve işaret `</html>`in içine girer (45550 kuru koşusu, 06.10).
+  let i = -1;
+  for (const m of temiz.matchAll(/<\/html\s*>/gi)) i = m.index;
   return i === -1 ? temiz + isaret : temiz.slice(0, i) + isaret + temiz.slice(i);
 }
 

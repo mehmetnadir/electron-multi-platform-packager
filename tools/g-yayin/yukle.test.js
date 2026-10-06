@@ -337,6 +337,16 @@ test('e2eIndexi: eski işaret atılır, yenisi </html> önüne', () => {
   assert.match(b, /<!-- empp-g-e2e T2 -->\n<\/html>$/);
 });
 
+test('e2eIndexi: "İ" içeren index — </html> bölünmez (45550 kuru koşu, 06.10)', () => {
+  // `toLowerCase()` "İ"yi iki kod birimine açar; konum kayıyordu → "<<!-- … -->\n/html>".
+  const ham = '<html><body>KAYDEDİLDİ İNDİR</body>\n</HTML>\n';
+  const c = yk.e2eIndexi(ham, 'T3');
+  assert.equal(c, '<html><body>KAYDEDİLDİ İNDİR</body>\n<!-- empp-g-e2e T3 -->\n</HTML>\n');
+  assert.equal(yk.e2eIndexi(c, 'T3'), c);
+  // `</html>` yoksa sona eklenir.
+  assert.equal(yk.e2eIndexi('<p>İ</p>', 'T4'), '<p>İ</p><!-- empp-g-e2e T4 -->\n');
+});
+
 /* ------------------------------------------------ Android G ucu yüklenir + doğrulanır (26.09) */
 /*
  * Android istemcisi (`src/platforms/android/empp-g-istemci.js` `kimlikKoku`) G tabanında
