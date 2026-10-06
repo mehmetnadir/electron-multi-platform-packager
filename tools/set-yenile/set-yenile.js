@@ -3,8 +3,9 @@
 /**
  * SET YENİLE — YDS set paketlerinin Windows + Pardus yenilemesini TEK KOMUTA çevirir.
  *
- *   ön kontrol → (1) kabuk eki (Mac) → (2) kaynak kur isteği (DB) → (3) yeni kaynağı bekle
- *   → (4) platform requeue (DB) → (5) kasa imza önceliği → (6) izle + özet bildirim
+ *   ön kontrol → (1) kabuk eki (Mac) → (2) kaynak kur isteği (DB) → (3) HEMEN requeue (DB)
+ *   → (4) kasa imza önceliği → (5) yeni build satırını bekle (ret/tavan) → (6) izle + özet bildirim
+ *   Requeue beklemeden önce gelir: sunucu kaynak kurulumunu YALNIZ kuyruktaki iş kiralanınca verir.
  *
  * Kullanım:
  *   node tools/set-yenile/set-yenile.js <bookId...> [--platform windows,pardus] [--uygula] [--izle]
@@ -559,7 +560,7 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     if (kuru) {
       yaz(`  ${k.id}: (2) yedek: ${y.komut}`);
       yaz(`  ${k.id}: (2) SQL: ${sql.kurIstegi(k.id).replace(/\n/g, ' ')}`);
-      yaz(`  ${k.id}: (3) bekle: kaynak_build_surumleri set_id=${k.id} durum='gecerli' olusturma > t0 YENİ satır (tavan ${o.kurTavanDk} dk, 60 sn); ret = kaynak_kur_ret_at > t0`);
+      k.kuruKurVar = true;
       continue;
     }
     adimBasla(k, 'kur');
@@ -577,21 +578,38 @@ async function yurut(o, cfg, d, durum, durumYolu) {
     for (const k of canli()) {
       for (const p of k.platformlar) {
         const y = yedekKomutu(cfg, { stamp: durum.damga, id: k.id, tablo: 'pipeline_platform_summaries', etiket: 'requeue' });
-        yaz(`  ${k.id}: (4) ${p}: yedek ${y.dosya}; SQL: ${sql.requeue(k.id, p).replace(/\n/g, ' ')}`);
+        yaz(`  ${k.id}: (3) ${p}: yedek ${y.dosya}; SQL: ${sql.requeue(k.id, p).replace(/\n/g, ' ')}`);
       }
       if (k.platformlar.includes('windows')) {
         const eski = await kasa.oncelikOku();
         const eskiUtf = eski === null ? '' : Buffer.from(eski, 'latin1').toString('utf8');
         const yeni = oncelikBirlestir(eskiUtf, [k.id]);
         const goster = (s) => s.trim().split(/\r?\n/).join(' | ') || 'yok';
-        yaz(`  ${k.id}: (5) kasa ${cfg.oncelikDosyasi}: şimdi [${goster(eskiUtf)}] → [${goster(yeni)}] (önce .once-<damga> yedeği)`);
+        yaz(`  ${k.id}: (4) kasa ${cfg.oncelikDosyasi}: şimdi [${goster(eskiUtf)}] → [${goster(yeni)}] (önce .once-<damga> yedeği)`);
+      }
+      if (k.kuruKurVar) {
+        yaz(`  ${k.id}: (5) bekle: kaynak_build_surumleri set_id=${k.id} durum='gecerli' olusturma > t0 YENİ satır `
+          + `(tavan ${o.kurTavanDk} dk, 60 sn); ret = kaynak_kur_ret_at > t0`);
       }
     }
     if (o.izle) yaz(`  (6) izle: completed/failed olana kadar 2 dk aralık, tavan ${o.izleTavanSa} sa; windows yayını ${cfg.bekciLog} 'yayinlandi' satırıyla`);
     return { plan, kod: canli().length === idler.length ? 0 : 1 };
   }
 
-  // 3-6) Bekleme / requeue / öncelik / izleme döngüsü (beklemeler paralel izlenir).
+  // 3) Requeue HEMEN (kur isteği yazıldıktan sonra). 06.10 45550 dersi: sunucu r2-kur'u YALNIZ
+  // kuyruktaki bir platform işi kiralanınca verir (book-update ajan-claim-sql.ts
+  // kaynakBekleDislamasi). Satırlar completed iken kur isteği tek başına hiçbir şey başlatmaz.
+  // İstek önce yazıldığı için kaynak-kur yeteneği olmayan ajan (kasa) işi almaz, bekler (b);
+  // yeteneği olan (ProBook) alır ve kurar.
+  for (const k of canli().filter((x) => bitmis(x.adimlar.kur) && !bitmis(x.adimlar.requeue))) {
+    await requeueAdimi(k);
+  }
+  // 4) Kasa imza önceliği.
+  for (const k of canli().filter((x) => bitmis(x.adimlar.requeue) && !bitmis(x.adimlar.oncelik))) {
+    await oncelikAdimi(k);
+  }
+
+  // 5-6) Yeni build satırını bekle (bilgi + ret yakalama) ve izle (paralel).
   const kurTavanMs = o.kurTavanDk * 60000;
   const izleTavanMs = o.izleTavanSa * 3600000;
   let sonIzleMs = -Infinity;
@@ -609,7 +627,12 @@ async function yurut(o, cfg, d, durum, durumYolu) {
           adimBit(k, 'bekle', 'tamam', { kanit: { surum: ev.surum, kaynak: ev.kaynak, olusturma: ev.olusturma } });
           yaz(`  ✓ ${k.id}: yeni kaynak geçerli (sürüm ${ev.surum}, kaynak ${ev.kaynak || '?'}, oluşturma ${ev.olusturma})`);
         } else if (ev.durum === 'ret') {
-          await durdur(k, 'bekle', `kaynak kurulumu REDDEDİLDİ (${ev.zaman}): ${ev.nedenler.join(' · ').slice(0, 300)}`);
+          // ret > istek iken claim SQL'i (kaynakBekleDislamasi) geçerli build varsa iki ajanı da
+          // bekletir: kasa (b) istek > geçerli olusturma, ProBook (e) ret > istek. Kuyruğa alınan
+          // satırlar eski kaynakla ÜRETİLMEZ, asılı kalır. Karar insanın: yeni istek ya da geri alma.
+          await durdur(k, 'bekle', `kaynak kurulumu REDDEDİLDİ (${ev.zaman}): ${ev.nedenler.join(' · ').slice(0, 260)}`
+            + ` — kuyruktaki ${k.platformlar.join(',')} satırları asılı kalır (eski kaynakla üretilmez);`
+            + ' karar: düzeltip yeni kur isteği ya da requeue yedeğinden geri al');
         } else if (ev.durum === 'hata') {
           await durdur(k, 'bekle', ev.neden);
         } else if (d.simdi() - k.adimlar.bekle.basMs > kurTavanMs) {
@@ -617,13 +640,6 @@ async function yurut(o, cfg, d, durum, durumYolu) {
         }
       }
       kaydet();
-    }
-
-    for (const k of canli().filter((x) => bitmis(x.adimlar.bekle) && !bitmis(x.adimlar.requeue))) {
-      await requeueAdimi(k);
-    }
-    for (const k of canli().filter((x) => bitmis(x.adimlar.requeue) && !bitmis(x.adimlar.oncelik))) {
-      await oncelikAdimi(k);
     }
 
     let izlemeSuruyor = false;

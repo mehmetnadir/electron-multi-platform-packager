@@ -233,7 +233,7 @@ test('kuru kip: hiçbir yazma komutu çağrılmaz, durum dosyası yazılmaz', as
   assert.deepEqual(w.cagrilar.filter(YAZMA), []);
   assert.deepEqual(Object.keys(w.yazilan), []);
   assert.ok(w.loglar.some((l) => /\(2\) SQL: SELECT NOW\(3\); UPDATE pipeline_book_summaries/.test(l)));
-  assert.ok(w.loglar.some((l) => /11845: \(5\) kasa .*\[# 05\.10 Nadir \| 73768\] → \[11845 \| # 05\.10 Nadir \| 73768\]/.test(l)));
+  assert.ok(w.loglar.some((l) => /11845: \(4\) kasa .*\[# 05\.10 Nadir \| 73768\] → \[11845 \| # 05\.10 Nadir \| 73768\]/.test(l)));
   assert.equal(w.oncelik, '# 05.10 Nadir\r\n73768\r\n', 'kasa dosyası değişmedi');
 });
 
@@ -309,17 +309,19 @@ test('ret yolu o kitabı durdurur, diğer kitap sürer', async () => {
   assert.equal(st.kitaplar['45550'].durdu, null);
   assert.equal(st.kitaplar['45550'].adimlar.requeue.platformlar.pardus.durum, 'tamam');
   const requeueler = mariadbCagrilari(w).filter((c) => /UPDATE pipeline_platform_summaries/.test(c.girdi));
-  assert.equal(requeueler.length, 1);
-  assert.match(requeueler[0].girdi, /book_id='45550'/);
+  // Requeue kur beklemesinden ÖNCE yapılır: iki kitap da kuyruğa alındı; ret yalnız 11845'i durdurdu.
+  assert.equal(requeueler.length, 2);
+  assert.match(st.kitaplar['11845'].durdu.neden, /asılı kalır/);
   assert.ok(w.bildirimler.some((b) => /11845 durdu/.test(b[1])));
 });
 
-test('kur tavanı dolunca eylemsiz durur ve bildirir', async () => {
+test('kur tavanı dolunca eylemsiz durur ve bildirir (requeue önceden yapılmıştır)', async () => {
   const { w, d } = sahteDunya();
   const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '3'], d, CFG);
   assert.equal(kod, 1);
   assert.match(durumOku(w).kitaplar['45550'].durdu.neden, /3 dk içinde bitmedi/);
-  assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 0);
+  assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 1);
+  assert.ok(w.bildirimler.some((b) => /45550 durdu \(bekle\)/.test(b[1])));
 });
 
 test('manuel kaynak: ek, kur ve bekle atlanır; doğrudan requeue', async () => {
@@ -418,11 +420,50 @@ test('akış: t0 öncesi açık kilit bekletmez; yeni geçerli satır gelince re
   assert.ok(w.loglar.some((l) => /kilidi açık.*bilgi; bekletmez/.test(l)));
 });
 
-test('akış: kurulum_* dolsa da yeni geçerli satır yoksa başarı sayılmaz (tavan, requeue yok)', async () => {
+test('akış: kurulum_* dolsa da yeni geçerli satır yoksa başarı sayılmaz (tavanda durur)', async () => {
   const { w, d } = sahteDunya({
     tikHook: (x) => { if (x.tik === 1) Object.assign(x.kitaplar['45550'], { kaynak_kurulum_bitis: '2026-10-06 09:30:00.000', kaynak_kurulum_surum: '2.25.7' }); },
   });
   const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--platform', 'pardus', '--kur-tavan', '3'], d, CFG);
   assert.equal(kod, 1);
-  assert.equal(mariadbCagrilari(w).filter((c) => /pipeline_platform_summaries/.test(c.girdi)).length, 0);
+  const k = durumOku(w).kitaplar['45550'];
+  assert.equal(k.adimlar.bekle.durum, 'hata');
+  assert.match(k.durdu.neden, /bitmedi/);
+});
+
+test('sıra: kur isteği → requeue → öncelik → yeni build bekleme (requeue beklemeden önce)', async () => {
+  const { w, d } = sahteDunya({ tikHook: kurBitir('45550', 1) });
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla'], d, CFG);
+  assert.equal(kod, 0, w.loglar.join('\n'));
+  const son = (c) => (c.args ? c.args[c.args.length - 1] : '');
+  const i = (f) => w.cagrilar.findIndex(f);
+  const kur = i((c) => /UPDATE pipeline_book_summaries/.test(c.girdi || ''));
+  const rq = i((c) => /UPDATE pipeline_platform_summaries/.test(c.girdi || ''));
+  const onc = i((c) => /^powershell /.test(son(c)));
+  const bekleOku = w.cagrilar.findIndex((c, n) => n > kur && /FROM kaynak_build_surumleri/.test(c.girdi || ''));
+  assert.ok(kur >= 0 && rq > kur, 'requeue kur isteğinden sonra');
+  assert.ok(onc > rq, 'öncelik requeue sonrası');
+  assert.ok(bekleOku > onc, 'yeni build bekleme okuması requeue ve öncelikten SONRA');
+  assert.equal(durumOku(w).kitaplar['45550'].adimlar.bekle.durum, 'tamam');
+});
+
+test('--kur-atla: (2) kur isteği ve bekleme yok, requeue + öncelik yine yapılır', async () => {
+  const { w, d } = sahteDunya();
+  const kod = await S.ana(['45550', '--uygula', '--ek-atla', '--kur-atla'], d, CFG);
+  assert.equal(kod, 0);
+  const q = mariadbCagrilari(w).map((c) => c.girdi);
+  assert.equal(q.filter((x) => /UPDATE pipeline_book_summaries/.test(x)).length, 0);
+  assert.equal(q.filter((x) => /UPDATE pipeline_platform_summaries/.test(x)).length, 2);
+  const k = durumOku(w).kitaplar['45550'];
+  assert.equal(k.adimlar.kur.durum, 'atlandi');
+  assert.equal(k.adimlar.bekle.durum, 'atlandi');
+  assert.equal(k.adimlar.oncelik.durum, 'tamam');
+  assert.equal(w.tik, 0, 'bekleme döngüsüne girmedi');
+});
+
+test('kur isteği başarısızsa (yedek yok) requeue YAPILMAZ: eski kaynakla üretim açılmaz', async () => {
+  const { w, d } = sahteDunya({ yedekBozuk: true });
+  await S.ana(['45550', '--uygula', '--ek-atla'], d, CFG);
+  assert.equal(w.cagrilar.filter((c) => /mariadb-dump .*pipeline_platform_summaries/.test(c.args ? c.args[c.args.length - 1] : '')).length, 0);
+  assert.equal(mariadbCagrilari(w).length, 0);
 });

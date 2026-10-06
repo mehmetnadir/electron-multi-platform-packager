@@ -32,8 +32,8 @@ node tools/set-yenile/set-yenile.js 45550 --uygula --izle
 ## Akış
 
 ```
-ön kontrol → (1) kabuk eki (Mac) → (2) kur isteği (DB) → (3) yeni kaynağı bekle
-           → (4) windows+pardus requeue (DB) → (5) kasa imza önceliği → (6) izle + özet bildirim
+ön kontrol → (1) kabuk eki (Mac) → (2) kur isteği (DB) → (3) HEMEN requeue (DB)
+           → (4) kasa imza önceliği → (5) yeni build satırını bekle → (6) izle + özet bildirim
 ```
 
 | Adım | Ne yapar | Kanıt |
@@ -41,12 +41,27 @@ node tools/set-yenile/set-yenile.js 45550 --uygula --izle
 | 0 ön kontrol | Kitap satırı, platform satırları, tohum kaynak, srv21/kasa/ProBook erişimi | SELECT sonuçları |
 | 1 ek | `node ek-uret.js --set <id>` | `son.json` `girdiSha` + `uretildi` (adım başlangıcından sonra) |
 | 2 kur | Yedek, sonra `kaynak_kur_istegi_at = NOW(3)` | t0 = DB `NOW(3)`, ROW_COUNT 1 |
-| 3 bekle | 60 sn aralıkla okur | `kaynak_build_surumleri`: `durum='gecerli'` ve `olusturma > t0` olan YENİ satır (sürüm + kaynak raporlanır) |
-| 4 requeue | Yedek, sonra platform satırını `queued` yapar | ROW_COUNT 1 |
-| 5 öncelik | Kasada `imza-oncelik.txt` başına id ekler | Geri okuma bayt eşitliği |
+| 3 requeue | Yedek, sonra platform satırını `queued` yapar | ROW_COUNT 1 |
+| 4 öncelik | Kasada `imza-oncelik.txt` başına id ekler | Geri okuma bayt eşitliği |
+| 5 bekle | 60 sn aralıkla okur (bilgi + ret yakalama) | `kaynak_build_surumleri`: `durum='gecerli'` ve `olusturma > t0` olan YENİ satır (sürüm + kaynak raporlanır) |
 | 6 izle | 2 dk aralıkla platform satırlarını okur | completed/failed; Windows için bekçi logu |
 
 Çok kitapta (1) ve (2) sırayla koşar. Beklemeleri tek döngü paralel izler.
+
+**DİKKAT:** Requeue beklemeden ÖNCE gelir. Sunucu kaynak kurulumunu (r2-kur) yalnız kuyruktaki
+bir platform işi kiralanınca verir (book-update `lib/ajan-claim-sql.ts` `kaynakBekleDislamasi`).
+Satırlar `completed` iken kur isteği tek başına hiçbir şey başlatmaz. 06.10'da 45550 bu yüzden beklemede kaldı.
+
+```
+(2) kur isteği yazılır → (3) satırlar queued
+   ├─ kasa (kaynak-kur yok): istek > geçerli build → işi ALMAZ, bekler
+   └─ ProBook (kaynak-kur var): işi alır → kaynağı kurar → kaynak_build_surumleri yeni satır
+                                     → kasa yeni build ile windows işini alır
+```
+
+- İstek requeue'dan önce yazılır. Bu yüzden kasanın eski kaynakla işi alma yarışı yoktur.
+- `--kur-atla`: (2) ve (5) atlanır. Requeue ve öncelik yine yapılır.
+- Kur isteği başarısızsa (yedek, ROW_COUNT) requeue yapılmaz. Eski kaynakla üretim açılmaz.
 
 **DİKKAT:** Sıra önemlidir. Ek hattında kaynağı ProBook kurar.
 Ek, kur isteğinden ÖNCE yayımlanmış olmalıdır.
@@ -56,7 +71,7 @@ Ek, kur isteğinden ÖNCE yayımlanmış olmalıdır.
 ```
 
 - Ek yoksa ProBook kurulumu erteler. `son.json` değişince ProBook yeniden dener.
-- set-yenile bu durumu (3) adımında bekleyerek karşılar. Ek ayrıca bir eylem istemez.
+- set-yenile bu durumu (5) adımında bekleyerek karşılar. Ek ayrıca bir eylem istemez.
 - ek-uret çıkış kodları: 0 tamam, 1 hata, 2 eylem yok (kaynak yok). Çıkış 2'de kitap durur.
 
 ## Kurallar
@@ -74,7 +89,11 @@ Ek, kur isteğinden ÖNCE yayımlanmış olmalıdır.
   `kaynak_kurulum_surum` canlıda dolmaz (06.10 ölçümü: 0 satır). Araç bu alanları yalnız bilgi olarak gösterir.
 - Başlangıç dolu ve bitiş boşsa araç uyarı basar: "kurulum kilidi açık, ajan: …, başlangıç: …".
   Açık kilit kitabı bekletmez. Yeni geçerli satır gelirse adım başarılıdır.
-- Ret gelirse (`kaynak_kur_ret_at > t0`) o kitap durur. Diğer kitaplar sürer.
+- Ret gelirse (`kaynak_kur_ret_at > t0`) o kitap durur ve bildirim gider. Diğer kitaplar sürer.
+  Ret istek zamanını silmez (`kurRetYaz` yalnız ret alanlarını yazar). Geçerli build varsa
+  kuyruktaki satırlar ASILI kalır: kasa bekler (istek > geçerli build), ProBook bekler (ret > istek).
+  Eski kaynakla üretim olmaz. Karar insanın: kapı nedenini düzelt ve yeni kur isteği at, ya da
+  satırları requeue yedeğinden geri al.
 - Tavan dolarsa araç eylem yapmaz. Kitap durur ve bildirim gider.
 - `kaynak_modu = manuel` ise (1)-(3) atlanır.
 - Tohum kaynak yoksa kitap durur. Tohum = `kaynak_build_surumleri` geçerli satırı ya da
