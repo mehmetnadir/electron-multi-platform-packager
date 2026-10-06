@@ -414,7 +414,8 @@ test('taban kapsama istisnası: panel hizalı dönerse KORUNUR — üreteç koş
   assert.match(r.hata.message, /packager upload-build failed/, r.hata.stack);
   assert.equal(casus.uretec, 0);
   assert.doesNotMatch(r.loglar, /GERİ ALINDI/);
-  assert.match(r.loglar, /kapı set listesi PANELDEN \(2 üye\); claim fazla \[999\], panel yeni \[222\]/);
+  assert.match(r.loglar, /kart geri kuruldu 999/);
+  assert.match(r.loglar, /kapı set listesi PANELDEN \(3 üye\); claim fazla \[-\], panel yeni \[222\]/);
 });
 
 test('setListesiPanelFarki: yerel hazır kaydına girer (jobOzeti), /result gövdesine girmez', () => {
