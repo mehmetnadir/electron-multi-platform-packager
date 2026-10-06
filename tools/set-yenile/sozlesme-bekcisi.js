@@ -584,6 +584,27 @@ async function havuz(ogeler, n, fn) {
   return out;
 }
 
+async function ayarOku(olcSetler, db, d, cfg) {
+  const kitapMap = new Map(db.kitaplar.map((r) => [String(r.book_id), r]));
+  const listeMap = new Map(db.listeler.map((r) => [String(r.book_id), hexMetin(r.liste_hex)]));
+  const ayar = new Map();
+  await havuz(olcSetler, 6, async (s) => {
+    const ham = listeMap.get(s);
+    const db_ = listeOgeleri(ham);
+    if (db_.length) { ayar.set(s, { kaynak: 'db', ogeler: db_ }); return; }
+    const kod = kitapMap.get(s) && kitapMap.get(s).kisa_kod;
+    if (!kod || !/^[a-z0-9]{3,12}$/i.test(kod)) { ayar.set(s, { kaynak: null, ogeler: null, sebep: 'DB listesi boş, kisa_kod yok' }); return; }
+    const url = `${cfg.workerKoku}/go/${kod}/web-stream/config/settings.json`;
+    const c = await d.getir(url);
+    if (c.status !== 200) { ayar.set(s, { kaynak: null, ogeler: null, sebep: `KV ${kod}: HTTP ${c.status || c.hata}` }); return; }
+    let j = null;
+    try { j = JSON.parse(c.govde); } catch (_) { j = null; }
+    const kv = listeOgeleri(uretec.ayarlardanListe(j));
+    ayar.set(s, kv.length ? { kaynak: `kv:${kod}`, ogeler: kv } : { kaynak: null, ogeler: null, sebep: `KV ${kod}: kitap yok` });
+  });
+  return ayar;
+}
+
 async function olc(o, cfg, d, istisnaListe) {
   const simdi = d.simdi();
   const setler = o.setler || [...VARSAYILAN_SETLER];
@@ -612,23 +633,8 @@ async function olc(o, cfg, d, istisnaListe) {
   }
 
   // İSTEK: ayar listesi (DB → KV).
-  const kitapMap = new Map(db.kitaplar.map((r) => [String(r.book_id), r]));
-  const listeMap = new Map(db.listeler.map((r) => [String(r.book_id), hexMetin(r.liste_hex)]));
-  const ayar = new Map();
-  await havuz(olcSetler, 6, async (s) => {
-    const ham = listeMap.get(s);
-    const db_ = listeOgeleri(ham);
-    if (db_.length) { ayar.set(s, { kaynak: 'db', ogeler: db_ }); return; }
-    const kod = kitapMap.get(s) && kitapMap.get(s).kisa_kod;
-    if (!kod || !/^[a-z0-9]{3,12}$/i.test(kod)) { ayar.set(s, { kaynak: null, ogeler: null, sebep: 'DB listesi boş, kisa_kod yok' }); return; }
-    const url = `${cfg.workerKoku}/go/${kod}/web-stream/config/settings.json`;
-    const c = await d.getir(url);
-    if (c.status !== 200) { ayar.set(s, { kaynak: null, ogeler: null, sebep: `KV ${kod}: HTTP ${c.status || c.hata}` }); return; }
-    let j = null;
-    try { j = JSON.parse(c.govde); } catch (_) { j = null; }
-    const kv = listeOgeleri(uretec.ayarlardanListe(j));
-    ayar.set(s, kv.length ? { kaynak: `kv:${kod}`, ogeler: kv } : { kaynak: null, ogeler: null, sebep: `KV ${kod}: kitap yok` });
-  });
+  const ayar = await ayarOku(olcSetler, db, d, cfg);
+  const kitapMap = new Map((db.kitaplar || []).map((r) => [String(r.book_id), r]));
 
   // ÜRETİLEN: geçerli build.
   const buildMap = new Map();
@@ -645,13 +651,38 @@ async function olc(o, cfg, d, istisnaListe) {
     const b = buildMap.get(s);
     if (b && b.length === 1) for (const k of b[0].kitaplar || []) if (ID_RE.test(k.id)) sorulacak.add(k.id);
   }
+  const icsMap = new Map();
+  try {
+    const icsSatirlar = await srv.oku('SELECT impark_kitap_id, vs FROM impark_icerik_surumleri');
+    for (const r of icsSatirlar) {
+      if (r.impark_kitap_id && r.vs != null) icsMap.set(String(r.impark_kitap_id), Number(r.vs));
+    }
+  } catch (e) { genel.push(`İmpark DB okunurken hata: ${e.message}`); }
+
   const surumler = new Map();
   const sablon = `${cfg.panelTaban}/TestlerMobil/GetKitapGuncellemeBilgi?id={bookId}&setMi={isSet}&versiyon={version}`;
   await havuz([...sorulacak], 6, async (id) => {
     const c = await d.getir(merdiven.teklifUrl(sablon, id, 0));
     const y = merdiven.teklifYorumla({ id, surum: 0 }, c.hata ? { hata: c.hata } : { status: c.status, govde: c.govde });
-    if (y.durum === merdiven.DURUM.GERIDE) surumler.set(id, { vs: y.vs, not: 'ok' });
-    else surumler.set(id, { vs: null, not: y.durum === merdiven.DURUM.GUNCEL ? 'İmpark zip yok (Data boş)' : y.not });
+    
+    let teklifVs = null;
+    let teklifNot = y.durum === merdiven.DURUM.GUNCEL ? 'İmpark zip yok (Data boş)' : y.not;
+    if (y.durum === merdiven.DURUM.GERIDE) {
+      teklifVs = y.vs;
+      teklifNot = 'ok';
+    }
+    
+    const dbVs = icsMap.get(id);
+    if (teklifVs != null && dbVs != null) {
+      if (teklifVs > dbVs) surumler.set(id, { vs: teklifVs, not: 'ok (teklif)' });
+      else surumler.set(id, { vs: dbVs, not: 'ok (db)' });
+    } else if (teklifVs != null) {
+      surumler.set(id, { vs: teklifVs, not: 'ok (teklif)' });
+    } else if (dbVs != null) {
+      surumler.set(id, { vs: dbVs, not: 'ok (db)' });
+    } else {
+      surumler.set(id, { vs: null, not: teklifNot });
+    }
   });
 
   // İSTEK: panel set listesi (GetPackageBooks).
@@ -968,7 +999,7 @@ module.exports = {
   K, SK, CIKIS, TAVAN, PLATFORMLAR, VARSAYILAN_SETLER, SEMA, SISTEMIK_OLCULEMEZ,
   ayarlar, argAyristir, istisnaDogrula, setIstisnalari, gEklemeYokMu, yerelMs, kisaZaman, yerelGun,
   r2Ayristir, listeOgeleri, buildKitaplari, paketSurumu, kitapKiyasla, hucreKarari, r2Karari, gKarari,
-  listeKarari, defterOku, eylemPlani, bildirimPlani, bildirimGruplari, OZET_ESIK, sql, yedekKomutu, olc, eylemUygula, raporMd, kos,
+  listeKarari, defterOku, eylemPlani, bildirimPlani, bildirimGruplari, OZET_ESIK, sql, yedekKomutu, ayarOku, havuz, olc, eylemUygula, raporMd, kos,
   kilitAl, kilitBirak, varsayilanBag, ana,
 };
 
