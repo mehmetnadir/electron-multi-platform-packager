@@ -76,6 +76,8 @@ const ENV_ESLEME = {
   EMPP_KABUK_KANONIK: 'kabuk-kanonik-yok.json',
   // Üye kitap yedeği (icerik-yedek.js): testler gerçek İmpark SMB bağlamasını (~/Impark) görmesin.
   EMPP_IMPARK_SMB_KOKU: 'impark-smb-yok',
+  // İmzalı son sürüm arşivi (06.10, imzali-arsiv.js): kasada testler gerçek D:\empp-imzali-son'a yazmasın.
+  EMPP_IMZALI_ARSIV_KOKU: 'imzali-son',
 };
 
 /**

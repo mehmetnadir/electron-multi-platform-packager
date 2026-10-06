@@ -20,6 +20,8 @@
  *        c. windows-serit `imzaliYayinZinciri` — runner'ın AYNI imza + Authenticode + imzalı kabul
  *           fonksiyonu, AYNI imza kilidi (`winImzaKilit`); ikinci bir imza yolu YOK;
  *        d. runner `postResultSuccess` (R2 + /result completed), kanıt, `yayinlandi/`'ye TAŞI.
+ *        e. imzalı kopya `D:\empp-imzali-son\<bookId>\` (src/agent/imzali-arsiv.js; Nadir 06.10): sha
+ *           doğrulanınca aynı klasördeki eski *.exe silinir. Hata yayını düşürmez (uyarı + bildir bekci).
  *        İmzalı kopya kabulden KALDI → `reddedildi/`'ye taşı + bildir (paket kusuru). İmza/doğrulama/
  *        yükleme hatası → kayıt yerinde kalır, `sonHata` yazılır, tur DURUR (kuyruk tek yuvalı).
  *   4. Bildirim: bekleyen varken yuva erişilemiyorsa ya da en eski bekleyen 3 saati aştıysa
@@ -42,6 +44,7 @@ const runner = require('../../src/agent/runner.js');
 const { ikiliKomutu } = require('../../src/agent/bildir-ikili');
 const W = require('../../src/agent/windows-serit');
 const H = require('../../src/agent/windows-hazir');
+const A = require('../../src/agent/imzali-arsiv');
 const { WIN_KASA_KABUL_ISARETI, ertelenebilirKaynakHatasi } = require('../../src/agent/runner-helpers');
 
 const IMPARK_PROBLARI = ['172.17.2.21', '172.17.2.22', '172.17.2.23', '172.17.2.24'];
@@ -57,6 +60,8 @@ function bekciAyarlari(env = process.env) {
     // kabul ÖLÇÜLEMEDİ olur ve aynı exe sonraki turda yeniden imzalanır. Bekçi kilidi uzun bekler.
     bekciKasaKilitBeklemeMs: Math.max(0, Number(env.EMPP_BEKCI_KILIT_BEKLEME_DK || 120) || 120) * 60 * 1000,
     bekciBildirIkili: env.EMPP_BILDIR_IKILI || path.join(os.homedir(), '.local', 'bin', 'bildir'),
+    // İmzalı son sürüm arşivi (Nadir 06.10): win32 varsayılanı D:\empp-imzali-son; win32 dışı/`0` → kapalı.
+    imzaliArsivKoku: A.arsivKoku(env),
   };
 }
 
@@ -200,18 +205,46 @@ async function kaydiIsle(giris, d) {
       return { durum: 'bayat', sebep: b.sebep, dizin: b.dizin };
     }
     await W.yayinKaniti(zincir, yayin, cfg, log);
+    const yayinZamani = new Date().toISOString();
     const s = await H.sonuclandir(cfg, giris, 'yayinlandi', {
       durum: 'yayinlandi', imzali: zincir.kanit.imzali,
-      yayin: { r2ObjectKey: yayin.r2ObjectKey, publicUrl: yayin.publicUrl, zaman: new Date().toISOString(), yayinlayan: 'imza-bekcisi' },
+      yayin: { r2ObjectKey: yayin.r2ObjectKey, publicUrl: yayin.publicUrl, zaman: yayinZamani, yayinlayan: 'imza-bekcisi' },
     });
     await yayinBildir(d, m, job);
-    return { durum: 'yayinlandi', dizin: s.dizin };
+    // İmzalı kopya `work`'te durur: `finally` work'ü silmeden ÖNCE D: arşivine. Yayını etkilemez.
+    const arsiv = await imzaliArsivle(d, {
+      kaynak: zincir.imzaliYol, m, job, imzali: zincir.kanit && zincir.kanit.imzali, yayin, yayinZamani,
+    });
+    return { durum: 'yayinlandi', dizin: s.dizin, arsiv: arsiv.durum };
   } catch (e) {
     try { await H.manifestGuncelle(giris.dizin, { sonHata: e.message, sonDeneme: new Date().toISOString() }); } catch (_) { /* kayıt taşınmış olabilir */ }
     return { durum: 'hata', sebep: e.message };
   } finally {
     await kilit();
     await fsp.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Yayın SONRASI imzalı son sürüm arşivi (`<arşiv kökü>\<bookId>\<özgün Setup adı>.exe` + son.json;
+ * eski *.exe yalnız sha doğrulandıktan sonra silinir). ASLA fırlatmaz; hata → uyarı + `bildir bekci`.
+ */
+async function imzaliArsivle(d, { kaynak, m, job, imzali, yayin, yayinZamani }) {
+  const { cfg, log } = d;
+  try {
+    const iz = imzali || {};
+    return await A.arsivle({
+      kaynak, bookId: m.bookId, exeAdi: m.exe, beklenenSha256: iz.sha256 || null,
+      meta: {
+        baslik: (job && job.bookTitle) || null, surum: m.surum || null, imzaZamani: iz.zamanDamgasi || null,
+        yayinZamani, r2Anahtari: (yayin && yayin.r2ObjectKey) || null,
+      },
+      kok: cfg.imzaliArsivKoku || null, log,
+      bildir: d.arsivBildir || A.varsayilanBildir({ ikili: cfg.bekciBildirIkili, komutKos: d.komutKos, log }),
+    });
+  } catch (e) {
+    log(`imza-bekçisi: UYARI imzalı arşiv adımı: ${e.message}`);
+    return { durum: 'hata', sebep: e.message };
   }
 }
 
@@ -335,4 +368,4 @@ if (require.main === module) {
   ana().then(() => process.exit(0)).catch((e) => { console.error('imza-bekçisi HATA:', e && e.stack); process.exit(1); });
 }
 
-module.exports = { yayinMesaji, yayinBildir, bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };
+module.exports = { imzaliArsivle, yayinMesaji, yayinBildir, bekciAyarlari, kabulKaldiMi, kiraBizdeDegilMi, diskBagla, kaydiIsle, tur, ana, IMPARK_PROBLARI };

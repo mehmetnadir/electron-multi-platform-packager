@@ -39,6 +39,7 @@ function ortam({ yuva = false, ping = false, sudo = false, diskYuvaKurar = true 
     ...W.varsayilanAyarlar(), ...B.bekciAyarlari({}),
     winHazirKoku: path.join(d, 'windows-hazir'), winImzaYuvaKoku: yuvaKok, winImzaYuvaSunucu: '', winYuvaSmbSart: false, // sahte YEREL yuva (04.10 df kanıtı testte kapalı)
     winKanitDizini: path.join(d, 'kanit'), bekciDiskBetigi: disk, bekciBildirIkili: bildir,
+    imzaliArsivKoku: null, // kasada (win32) testler gerçek D:\empp-imzali-son'a yazmasın; ölçen test açar
   };
   const cagri = { ping: 0, sudo: 0, zincir: [], yayin: [], presign: 0 };
   const komutKos = async (argv, o) => {
@@ -462,4 +463,63 @@ test('bekçi imzalı kabul zincirine kasa kilit beklemesini 120 dk geçirir (env
   d.imzaliYayinZinciri = async (a) => { gorulen.push(a.cfg.winKasaKilitBeklemeMs); return asil(a); };
   await B.tur(d);
   assert.deepEqual(gorulen, [120 * 60 * 1000]);
+});
+
+test('İMZALI ARŞİV (Nadir 06.10): yayın sonrası imzalı kopya <kök>/<bookId>/<özgün Setup adı> + son.json; eski sürüm silinir', async () => {
+  const o = ortam({ yuva: true });
+  const birim = fs.mkdtempSync(path.join(os.tmpdir(), 'bekci-D-'));
+  o.cfg.imzaliArsivKoku = path.join(birim, 'empp-imzali-son');
+  const k = path.join(o.cfg.imzaliArsivKoku, '301');
+  fs.mkdirSync(k, { recursive: true });
+  fs.writeFileSync(path.join(k, 'runner-301-T-2.1.0-Setup.exe'), 'eski');
+  const h = await o.ekle('301');
+  const z = await B.tur(o.bagimlilik());
+  assert.equal(z.yayinlanan, 1);
+  const exe = path.join(k, 'runner-301-T-2.1.1-Setup.exe');
+  assert.deepEqual(fs.readFileSync(exe), Buffer.concat([h.govde, Buffer.from('IMZA')]), 'arşivdeki kopya İMZALI olan');
+  assert.deepEqual(fs.readdirSync(k).sort(), ['runner-301-T-2.1.1-Setup.exe', 'son.json']);
+  const son = JSON.parse(fs.readFileSync(path.join(k, 'son.json'), 'utf8'));
+  assert.equal(son.bookId, '301');
+  assert.equal(son.baslik, 'Kitap 301');
+  assert.equal(son.surum, '2.1.1');
+  assert.equal(son.r2Anahtari, 'softwares/301/x.exe');
+  assert.ok(son.yayinZamani && son.sha256 && son.boyut);
+  assert.doesNotMatch(o.oku(), /^bildir bekci/m);
+  fs.rmSync(birim, { recursive: true, force: true });
+});
+
+test('İMZALI ARŞİV: sha uyuşmazlığı yayını DÜŞÜRMEZ — kayıt yayinlandi, eski sürüm yerinde, bildir bekci tek satır', async () => {
+  const o = ortam({ yuva: true });
+  const birim = fs.mkdtempSync(path.join(os.tmpdir(), 'bekci-D-'));
+  o.cfg.imzaliArsivKoku = path.join(birim, 'empp-imzali-son');
+  const k = path.join(o.cfg.imzaliArsivKoku, '302');
+  fs.mkdirSync(k, { recursive: true });
+  fs.writeFileSync(path.join(k, 'runner-302-T-2.1.0-Setup.exe'), 'eski');
+  await o.ekle('302');
+  const d = o.bagimlilik();
+  const asil = d.imzaliYayinZinciri;
+  d.imzaliYayinZinciri = async (a) => { const r = await asil(a); r.kanit.imzali.sha256 = '0'.repeat(64); return r; };
+  const z = await B.tur(d);
+  assert.equal(z.yayinlanan, 1, 'yayın başarılı sayıldı');
+  assert.equal(o.cagri.yayin.length, 1);
+  assert.deepEqual(fs.readdirSync(k), ['runner-302-T-2.1.0-Setup.exe'], 'eski kaldı, yeni yerleşmedi');
+  const satirlar = o.oku().split('\n').filter((s) => s.startsWith('bildir bekci'));
+  assert.equal(satirlar.length, 1, o.oku());
+  assert.match(satirlar[0], /İmzalı arşiv 302: kopya: sha256 uyuşmadı/);
+  fs.rmSync(birim, { recursive: true, force: true });
+});
+
+test('İMZALI ARŞİV: D: yoksa atlanır, yayın etkilenmez, bildirim yok', async () => {
+  const o = ortam({ yuva: true });
+  o.cfg.imzaliArsivKoku = path.join(os.tmpdir(), `yok-D-${process.pid}-${Date.now()}`, 'empp-imzali-son');
+  await o.ekle('303');
+  const z = await B.tur(o.bagimlilik());
+  assert.equal(z.yayinlanan, 1);
+  assert.equal(fs.existsSync(path.dirname(o.cfg.imzaliArsivKoku)), false);
+  assert.doesNotMatch(o.oku(), /^bildir bekci/m);
+});
+
+test('bekciAyarlari: arşiv kökü env ile, "0" kapatır', () => {
+  assert.equal(B.bekciAyarlari({ EMPP_IMZALI_ARSIV_KOKU: 'E:\\a' }).imzaliArsivKoku, 'E:\\a');
+  assert.equal(B.bekciAyarlari({ EMPP_IMZALI_ARSIV_KOKU: '0' }).imzaliArsivKoku, null);
 });
