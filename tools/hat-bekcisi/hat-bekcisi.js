@@ -223,6 +223,25 @@ function planKasaSurum(macMd5, kasaMd5, onceki) {
   return { bildirim: b, yeni: imza, durum: 'farkli' };
 }
 
+/**
+ * S8: ProBook kod sürümü (07.10 gecesi). ProBook 06.10 14:32'den beri 87ff6bc'de kaldı: güncelleme
+ * elle koşturuluyordu, LAN yolu kapalıydı → içeriksiz üye atlama kuralı Pardus'a ulaşmadı, 45479
+ * her turda ertelendi. Mac HEAD ≠ ProBook `.serit-surum` öneki ve ProBook boşta → kur.sh koşar
+ * (Tailscale); pardus derlemesi sürüyorsa bekler. Ölçülemezse susar.
+ */
+function planProbookSurum(macHead, pbSurum, pardusMesgul, onceki) {
+  if (!macHead || !pbSurum) return { eylem: null, bildirim: null, yeni: onceki || null, durum: 'olculemedi' };
+  const pb = String(pbSurum).trim().split('+')[0];
+  if (pb === macHead || pb.startsWith(macHead) || macHead.startsWith(pb)) return { eylem: null, bildirim: null, yeni: null, durum: 'esit' };
+  if (pardusMesgul) return { eylem: null, bildirim: null, yeni: onceki || null, durum: 'farkli-mesgul' };
+  const imza = `${macHead}:${pb}`;
+  const b = onceki === imza ? null : {
+    kanal: 'bekci', yuksek: false, baslik: 'Hat bekçisi',
+    mesaj: `ProBook kod sapması: Mac ${macHead} ≠ ProBook ${pb} — kur.sh koşturuluyor`,
+  };
+  return { eylem: 'guncelle', bildirim: b, yeni: imza, durum: 'farkli' };
+}
+
 const ISO = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/;
 const KAPALI = /kap\S{0,4}\s+KAPALI/i;
 /** S7: üretim kapısı kapalı + kabul işçisi durgun. onceki: 'kapali' | null. */
@@ -325,7 +344,9 @@ function ayarlar(env = process.env, ev = os.homedir()) {
     kasaRunner: 'C:\\empp-ajan\\paketleyici\\src\\agent\\runner.js',
     kasaAgentLog: 'C:\\empp-ajan\\log\\agent.log',
     kasaKabulLog: 'C:\\empp-ajan\\log\\kabul-iscisi.log',
-    probookIp: env.EMPP_PROBOOK_IP || '192.168.1.70',
+    probookIp: env.EMPP_PROBOOK_IP || '100.73.161.76', // Tailscale; LAN 192.168.1.70 ofis dışında kapalı
+    probookSsh: env.EMPP_PROBOOK_SSH || 'etapadmin@100.73.161.76',
+    macRepo: env.EMPP_MAC_REPO || '/Users/nadir/01dev/electron-multi-platform-packager',
     macDuraklat: path.join(ev, '.empp-agent', 'duraklat.istek'),
   };
 }
@@ -385,6 +406,17 @@ async function dbOku(cfg, d) {
     ad: r.name, hostname: r.hostname, dk: r.dk == null ? null : Number(r.dk), iptal: r.revoked === '1',
   }));
   return { srv, simdi, satirlar, kitaplar, ajanlar };
+}
+
+async function probookOlc(cfg, d, sshAcik) {
+  const sonuc = { macHead: null, pbSurum: null };
+  const g = await d.calistir('/usr/bin/git', ['-C', cfg.macRepo, 'rev-parse', '--short=7', 'HEAD'], { zamanAsimiMs: 8000 });
+  if (g.kod === 0) sonuc.macHead = String(g.stdout || '').trim() || null;
+  if (!sshAcik) return sonuc;
+  const r = await d.calistir('ssh', ['-n', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ControlPath=none', cfg.probookSsh,
+    'cat ~/empp-serit/repo/.serit-surum'], { zamanAsimiMs: 20000 });
+  if (r.kod === 0) sonuc.pbSurum = String(r.stdout || '').trim() || null;
+  return sonuc;
 }
 
 async function kasaOlc(cfg, d) {
@@ -468,6 +500,10 @@ async function kos(o, cfg, d) {
   const probookSsh = nc.kod === 0;
   const ajan = planAjan(db.ajanlar, durum.ajanlar || {}, probookSsh);
 
+  const pbOlcum = await probookOlc(cfg, d, probookSsh);
+  const pardusMesgul = db.satirlar.some((r) => r.platform === 'pardus' && r.status === 'running' && !r.kiraDoldu);
+  const pbSurum = planProbookSurum(pbOlcum.macHead, pbOlcum.pbSurum, pardusMesgul, durum.probookSurum || null);
+
   const kasa = await kasaOlc(cfg, d);
   let macMd5 = null;
   try { macMd5 = d.md5Dosya(cfg.macRunner); } catch (_) { macMd5 = null; }
@@ -476,16 +512,23 @@ async function kos(o, cfg, d) {
     ? planUretimKapisi(kasa.agentSatirlari, kasa.kabulSon, nowMs, durum.kapi || null)
     : { bildirim: null, yeni: durum.kapi || null, durum: 'olculemedi' };
   const ozet = bildirimOzeti(hata.kalici, tavanlar, damgalar, nowMs);
-  const bildirimler = [...ajan.bildirimler, surum.bildirim, kapi.bildirim, ozet].filter(Boolean);
+  const bildirimler = [...ajan.bildirimler, surum.bildirim, pbSurum.bildirim, kapi.bildirim, ozet].filter(Boolean);
 
   const plan = {
     requeue, tavanlar, bekleyen: hata.bekleyen, kalici: hata.kalici, bildirimler, probookSsh,
-    surumDurum: surum.durum, kapiDurum: kapi.durum, ajanDurum: ajan.yeni,
+    surumDurum: surum.durum, probookDurum: pbSurum.durum, kapiDurum: kapi.durum, ajanDurum: ajan.yeni,
   };
   let eylem = null;
   if (o.uygula) {
-    eylem = { yazim: await yazimUygula(requeue, db, cfg, d), bildirim: [] };
-    const yeni = { ...durum, damgalar: { ...damgalar }, ajanlar: ajan.yeni, surumImza: surum.yeni, kapi: kapi.yeni };
+    eylem = { yazim: await yazimUygula(requeue, db, cfg, d), bildirim: [], probook: null };
+    let pbYeni = pbSurum.yeni;
+    if (pbSurum.eylem === 'guncelle') {
+      const k = await d.calistir('bash', [path.join(cfg.macRepo, 'tools/probook/kur.sh'), '--arsivsiz', '--host', cfg.probookSsh],
+        { zamanAsimiMs: 15 * DK });
+      eylem.probook = k.kod === 0 ? 'guncellendi' : `kur.sh rc=${k.kod}`;
+      if (k.kod !== 0) pbYeni = durum.probookSurum || null; // sonraki koşu yeniden dener
+    }
+    const yeni = { ...durum, damgalar: { ...damgalar }, ajanlar: ajan.yeni, surumImza: surum.yeni, kapi: kapi.yeni, probookSurum: pbYeni };
     for (const b of bildirimler) {
       const ok = await bildirGonder(cfg, d, b);
       eylem.bildirim.push({ mesaj: b.mesaj, ok });
@@ -515,7 +558,8 @@ function rapor(r, o) {
   const aj = Object.entries(p.ajanDurum).map(([k, v]) => `${k}:${v}`).join(' ');
   L.push(`| S5 ajanlar | ${aj} | ProBook ssh22 ${p.probookSsh ? 'açık' : 'KAPALI'} |`);
   L.push(`| S6 kasa sürüm | ${p.surumDurum} | - |`);
-  L.push(`| S7 üretim kapısı | ${p.kapiDurum} | - |`, '');
+  L.push(`| S7 üretim kapısı | ${p.kapiDurum} | - |`);
+  L.push(`| S8 ProBook sürüm | ${p.probookDurum} | ${r.eylem && r.eylem.probook ? r.eylem.probook : '-'} |`, '');
   for (const x of p.requeue) L.push(`- requeue ${x.set}/${x.platform} [${x.tur}] ${x.sebep}${x.oneAl ? ` (öne: ${x.oneAl})` : ''}`);
   for (const x of p.bekleyen) L.push(`- bekle ${x.set}/${x.platform} ${Math.ceil(x.kalanDk)} dk`);
   for (const x of p.tavanlar) L.push(`- TAVAN ${x.tur} ${x.set}/${x.platform}`);
@@ -551,7 +595,7 @@ module.exports = {
   kurPlatformlari,
   CIKIS, TAVAN, BEKLEME_DK, TUR, KALICI_KALIPLAR, GECICI_KALIPLAR, AJANLAR,
   hataSinifla, dkFark, defterOku, son24Say, planHata, planKira, planKurAskida, requeueBirlestir,
-  planAjan, planKasaSurum, planUretimKapisi, bildirimOzeti, sql, yedekKomutu, ayarlar, argAyristir,
+  planAjan, planKasaSurum, planProbookSurum, planUretimKapisi, bildirimOzeti, sql, yedekKomutu, ayarlar, argAyristir,
   kilitAl, kilitBirak, yazimUygula, kos, rapor, varsayilanBag, ana,
 };
 

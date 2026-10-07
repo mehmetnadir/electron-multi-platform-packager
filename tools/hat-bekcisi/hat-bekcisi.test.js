@@ -372,3 +372,27 @@ test('S1: mac kalıcı hatalıysa pardus yedeği seçilir; kurPlatformlari durak
   assert.deepEqual(H.kurPlatformlari(cfg, { dosyaVar: () => true }), ['pardus']);
   assert.deepEqual(H.kurPlatformlari(cfg, { dosyaVar: () => false }), ['mac', 'pardus']);
 });
+
+// ─── S8 ProBook sürümü (07.10) ────────────────────────────────────────────────────────────
+
+test('S8: sürüm eşitse eylem yok; farklı + boşta → kur.sh; meşgulse bekle; ölçülemezse sus', () => {
+  assert.equal(H.planProbookSurum('ad4086f', 'ad4086f+calisma-agaci-20261007', false, null).durum, 'esit');
+  assert.equal(H.planProbookSurum('ad4086f', 'ad4086f', false, 'x').yeni, null);
+  const p = H.planProbookSurum('ad4086f', '87ff6bc', false, null);
+  assert.equal(p.eylem, 'guncelle');
+  assert.match(p.bildirim.mesaj, /Mac ad4086f ≠ ProBook 87ff6bc/);
+  const tekrar = H.planProbookSurum('ad4086f', '87ff6bc', false, p.yeni);
+  assert.equal(tekrar.eylem, 'guncelle', 'kur.sh yine denenir');
+  assert.equal(tekrar.bildirim, null, 'aynı sapma ikinci kez bildirilmez');
+  const m = H.planProbookSurum('ad4086f', '87ff6bc', true, null);
+  assert.equal(m.eylem, null, 'pardus derlemesi sürerken ProBook yeniden başlatılmaz');
+  assert.equal(m.durum, 'farkli-mesgul');
+  assert.equal(H.planProbookSurum(null, '87ff6bc', false, null).eylem, null);
+  assert.equal(H.planProbookSurum('ad4086f', null, false, null).durum, 'olculemedi');
+});
+
+test('S8: varsayılan ProBook adresi Tailscale (LAN değil)', () => {
+  const cfg = H.ayarlar({}, '/ev');
+  assert.equal(cfg.probookIp, '100.73.161.76');
+  assert.equal(cfg.probookSsh, 'etapadmin@100.73.161.76');
+});
