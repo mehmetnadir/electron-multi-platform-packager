@@ -593,3 +593,15 @@ test('main: argüman hatası çıkış 2; --json geçerli JSON', async () => {
   const m = await oy.main(['45550', '--json'], { ...ops, getir: sahteGetir({}), sql: sahteSql() });
   assert.equal(JSON.parse(m.metin).setler[0].karar, 'sec');
 });
+
+test('sentetik set id: menü panel listesinden kurulamıyorsa açık sebeple atlanır', async () => {
+  const { ops } = ortam();
+  const id = '9000001';
+  const r = await oy.kos(oy.argsAyristir([id]), {
+    ...ops,
+    getir: sahteGetir({}),
+    sql: sahteSql({ id }),
+  });
+  assert.equal(r.setler[0].karar, 'atla');
+  assert.match(r.setler[0].sebep, /sentetik set — menü panel listesinden kurulamadı/);
+});

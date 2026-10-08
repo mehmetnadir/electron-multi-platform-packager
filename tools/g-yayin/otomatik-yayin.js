@@ -80,6 +80,7 @@ const anahtar = require('./anahtar');
 const yukleMod = require('./yukle');
 const durum = require('./durum');
 const menuKaynak = require('./menu-kaynak');
+const { sentetikIdMi } = require('../../src/agent/sentetik-id');
 
 const AJAN = path.join(os.homedir(), '.empp-agent');
 const HEDEF_PLATFORMLAR = Object.freeze(['windows', 'pardus', 'mac', 'android']);
@@ -763,6 +764,12 @@ async function setiDegerlendir(id, { a, db, kanonik, cikti, acik, ops }) {
     const mk = menuKaynagiBul(id, bs.gecerli, ops);
     const mkr = menuKarari(mk, s.canli.manifest);
     s.menu = { durum: mkr.durum, farkli: mkr.farkli || [] };
+    if (sentetikIdMi(id) && ['kaynak-yok', 'okunamadi', 'red'].includes(mkr.durum)) {
+      return Object.assign(s, {
+        karar: 'atla',
+        sebep: `sentetik set — menü panel listesinden kurulamadı: ${mkr.hata || mkr.durum}`,
+      });
+    }
     const menuYolu = ['farkli', 'ayni'].includes(mkr.durum) ? null : mkr.durum;
     if (mkr.durum === 'farkli') {
       s.menuKaynakYolu = mk.yol;
