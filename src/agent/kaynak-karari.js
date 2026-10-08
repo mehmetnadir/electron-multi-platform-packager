@@ -70,7 +70,7 @@ const r2TuruMu = (job) => R2_TURLERI.includes(kaynakTuruOku(job));
 function manuelKaynakUrl(job) {
   if (!job || typeof job !== 'object') return null;
   const url = typeof job.downloadUrl === 'string' ? job.downloadUrl.trim() : '';
-  if (!url || exeYoluMu(url)) return null;
+  if (!url || exeYoluMu(url) || url.startsWith('sentetik://')) return null;
   const tur = kaynakTuruOku(job);
   // R2 türlerinde `downloadUrl` YOKTUR (sözleşme); olsa bile manuel sayılmaz — kaynak R2 build'idir.
   if (R2_TURLERI.includes(tur)) return null;

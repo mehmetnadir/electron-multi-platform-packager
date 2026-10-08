@@ -50,6 +50,7 @@ const setEk = require('../../src/agent/set-uyelik-ek');
 const uretec = require('../../src/agent/uretec-kaynak');
 const merdiven = require('../../src/agent/icerik-merdiven');
 const gSurum = require('../g-yayin/g-surum');
+const { sentetikIdMi } = require('../../src/agent/sentetik-id');
 
 const PLATFORMLAR = Object.freeze(['windows', 'pardus', 'mac', 'android']);
 const UZANTI = Object.freeze({ windows: '.exe', pardus: '.impark', mac: '.dmg', android: '.apk' });
@@ -660,8 +661,17 @@ async function olc(o, cfg, d, istisnaListe) {
   } catch (e) { genel.push(`İmpark DB okunurken hata: ${e.message}`); }
 
   const surumler = new Map();
+  for (const s of olcSetler) {
+    if (sentetikIdMi(s)) {
+      surumler.set(String(s), { vs: null, not: 'sentetik set — İmpark set sorgusu yok' });
+    }
+  }
   const sablon = `${cfg.panelTaban}/TestlerMobil/GetKitapGuncellemeBilgi?id={bookId}&setMi={isSet}&versiyon={version}`;
   await havuz([...sorulacak], 6, async (id) => {
+    if (sentetikIdMi(id)) {
+      surumler.set(String(id), { vs: null, not: 'sentetik set — İmpark set sorgusu yok' });
+      return;
+    }
     const c = await d.getir(merdiven.teklifUrl(sablon, id, 0));
     const y = merdiven.teklifYorumla({ id, surum: 0 }, c.hata ? { hata: c.hata } : { status: c.status, govde: c.govde });
     

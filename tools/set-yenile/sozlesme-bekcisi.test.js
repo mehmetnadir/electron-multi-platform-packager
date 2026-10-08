@@ -577,3 +577,28 @@ test('şema eksikse koşu durur (veri modeli uydurulmaz)', async () => {
   };
   await assert.rejects(B.kos(B.argAyristir(['--setler', '45550']), cfg, d), /şema doğrulanamadı/);
 });
+
+test('Sentetik set id: GetKitapGuncellemeBilgi ile İmpark set sorgusu atlanır', async () => {
+  const f = fikstur({
+    kitaplar: [{ book_id: '9000001', book_title: 'Sentetik Set', kaynak_kur_istegi_at: null, kaynak_modu: null, set_paket_sayaci: 1, kisa_kod: 'snt1' }],
+    platformlar: B.PLATFORMLAR.map((p) => ({
+      book_id: '9000001', platform: p, status: 'completed', hata_hex: null, last_run_at: '2026-10-06 09:00:00',
+      last_queued_at: '2026-10-06 08:08:07', kabuk_surum: '1.13.14', kabuk_durum: 'guncel', motor_sha12: '03e8af70a0f3',
+      build_method: 'build', paket_sayaci: 1, r2_object_key: `softwares/9000001/SW.${p}`,
+      file_size_bytes: 100,
+    })),
+    listeler: [{ book_id: '9000001', liste_hex: hex('25776 | Member Book | \n') }],
+    buildler: [{
+      set_id: '9000001', surum: '2.25.7', durum: 'gecerli', kaynak: 'uretec', olusturma: '2026-10-06 08:08:16.958',
+      kitaplar_hex: hex(JSON.stringify([{ n: 1, id: '25776', vs: 13 }])),
+    }],
+    impark: { 25776: 13 },
+    panel: { 9000001: [] },
+    r2: { 9000001: ['exe', 'impark', 'dmg', 'apk'].map((u) => `      100 2026-10-06 09:00:05.000000000 SW.${u}`).join('\n') },
+    g: { 9000001: { status: 200, govde: JSON.stringify({ surum: '2.25.8', uretim: '2026-10-06T08:36:42.003Z', setKimligi: '9000001' }) } },
+  });
+  const { d } = await kos(f, ['--setler', '9000001']);
+  const getSorgulari = d.kayit.getir.filter((u) => u.includes('GetKitapGuncellemeBilgi'));
+  assert.ok(!getSorgulari.some((u) => u.includes('id=9000001')));
+  assert.ok(getSorgulari.some((u) => u.includes('id=25776')));
+});
