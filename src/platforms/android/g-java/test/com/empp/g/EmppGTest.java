@@ -208,6 +208,35 @@ public final class EmppGTest {
         EmppGKatman.KitapSonucu kc = kk.kitapKur("book9", "https://t.test/ciplak.zip", sha(zc), zc.length, 1000);
         dogru(!kc.indexShimli && !kc.shimVar && !kc.manifestVar, "kitap: Android'e hazırlanmamış arşiv işaretleri false (karar JS'de)");
 
+        // --- gerileme testi: bugünkü Android reddini GERÇEK Java EmppGKatman.incele() ile yeniden üretme ---
+        File sahteElectronKitap = gecici();
+        File indexElectron = new File(sahteElectronKitap, "index.html");
+        try (FileOutputStream os = new FileOutputStream(indexElectron)) {
+            os.write("<html><body>Salt Electron Kitap</body></html>".getBytes(StandardCharsets.UTF_8));
+        }
+        EmppGKatman.KitapSonucu sRet = EmppGKatman.incele(sahteElectronKitap);
+        dogru(!sRet.indexShimli, "incele: salt Electron dizin -> indexShimli=false (ret sinyali)");
+        dogru(!sRet.shimVar, "incele: salt Electron dizin -> shimVar=false (ret sinyali)");
+        dogru(!sRet.manifestVar, "incele: salt Electron dizin -> manifestVar=false");
+
+        File shimliAndroidKitap = gecici();
+        File indexShim = new File(shimliAndroidKitap, "index.html");
+        try (FileOutputStream os = new FileOutputStream(indexShim)) {
+            os.write("<html><head><script src=\"empp-android-shim.js\"></script></head><body>Android Kitap</body></html>".getBytes(StandardCharsets.UTF_8));
+        }
+        File shimDosya = new File(shimliAndroidKitap, "empp-android-shim.js");
+        try (FileOutputStream os = new FileOutputStream(shimDosya)) {
+            os.write("// android shim".getBytes(StandardCharsets.UTF_8));
+        }
+        File manifestDosya = new File(shimliAndroidKitap, "empp-manifest.json");
+        try (FileOutputStream os = new FileOutputStream(manifestDosya)) {
+            os.write("{}".getBytes(StandardCharsets.UTF_8));
+        }
+        EmppGKatman.KitapSonucu sKabul = EmppGKatman.incele(shimliAndroidKitap);
+        dogru(sKabul.indexShimli, "incele: shimli dizin -> indexShimli=true");
+        dogru(sKabul.shimVar, "incele: shimli dizin -> shimVar=true");
+        dogru(sKabul.manifestVar, "incele: shimli dizin -> manifestVar=true");
+
         // engine + kitap + çıkar birlikte
         byte[] motor = "/*motor-yeni*/".getBytes(StandardCharsets.UTF_8);
         String msha = sha(motor);

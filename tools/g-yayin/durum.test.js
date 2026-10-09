@@ -210,3 +210,45 @@ test('önceki manifestte G kapsamı dışı yol RED (sessiz taşıma yok)', () =
     /bozuk kitap/,
   );
 });
+
+test('birlestir: ekle girdisine androidKaynak, androidSha256, androidBoyut alanları eklenir ve eski kayıtla uyumludur', () => {
+  const r = d.birlestir(null, {
+    index: oz('a'),
+    ekle: {
+      book4: {
+        ...oz('c'),
+        kaynak: 'https://x/k.zip',
+        androidKaynak: 'https://x/k-android.zip',
+        androidSha256: 'd'.repeat(64),
+        androidBoyut: 15,
+      },
+    },
+  });
+  const b4 = r.kitaplar.find((k) => k.dizin === 'book4');
+  assert.equal(b4.androidKaynak, 'https://x/k-android.zip');
+  assert.equal(b4.androidSha256, 'd'.repeat(64));
+  assert.equal(b4.androidBoyut, 15);
+
+  // Eski kayıt (android alanları yok) sorunsuz birleşir ve taşınır.
+  const r2 = d.birlestir({ kabuk: r.kabuk, kitaplar: r.kitaplar }, { motorlar: { book1: oz('b') } });
+  const b4Eski = r2.kitaplar.find((k) => k.dizin === 'book4');
+  assert.equal(b4Eski.androidKaynak, 'https://x/k-android.zip');
+
+  // Bozuk android özeti RED.
+  assert.throws(
+    () =>
+      d.birlestir(null, {
+        index: oz('a'),
+        ekle: {
+          book5: {
+            ...oz('c'),
+            kaynak: 'https://x/k.zip',
+            androidKaynak: 'https://x/k-android.zip',
+            androidSha256: 'bozuk-sha',
+            androidBoyut: 15,
+          },
+        },
+      }),
+    /android arşiv özeti bozuk/,
+  );
+});

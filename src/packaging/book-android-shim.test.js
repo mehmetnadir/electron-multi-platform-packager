@@ -380,48 +380,126 @@ test('kısmi hata YOKSA özet TAMAM olarak (hatasız) tek satırda loglanır', a
   assert.ok(summaryLine, `hatasiz durumda da bir "tamam" ozeti olmali (alinan log satirlari: ${JSON.stringify(logLines)})`);
 });
 
-// --- Kaynak-sentinel ---
-test('kaynak-sentinel: normalizeBookViewerViewports her bookN icin buildAndroidManifest + shim kopyasi cagirir', () => {
+// --- 09.10: taşınan adımlar (viewport, empp-app-mode, window.isApp) SERVİS seviyesinde de kilitli ---
+// Taşıma öncesi bu üç adımın servis testi YOKTU; modüle taşınırken sessizce düşebilirdi.
+test('(vi) normalizeBookViewerViewports: bookN/index.html viewport normalize + eski empp-app-mode script temizlenir', async () => {
+  const www = tempWwwDir();
+  await buildFakeSet(www);
+  await fsExtra.writeFile(path.join(www, 'book1', 'index.html'),
+    '<!doctype html><html><head><meta name="viewport" content="width=1024"><script id="empp-app-mode">window.APP=1;</script></head><body>book</body></html>');
+
+  await packagingService.normalizeBookViewerViewports(www);
+
+  const html = fs.readFileSync(path.join(www, 'book1', 'index.html'), 'utf8');
+  assert.strictEqual((html.match(/<meta\s+name="viewport"/g) || []).length, 1, 'tek viewport meta');
+  assert.ok(html.includes('content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"'), 'viewport kanonik degere cevrilmeli');
+  assert.ok(!html.includes('width=1024'), 'eski viewport degeri kalmamali');
+  assert.ok(!html.includes('empp-app-mode'), 'eski empp-app-mode script kalintisi temizlenmeli');
+});
+
+test('(vii) normalizeBookViewerViewports: bookN ust-duzey bundle\'da window.isApp=true zorlanir, alt dizin DOKUNULMAZ', async () => {
+  const www = tempWwwDir();
+  await buildFakeSet(www);
+  const bundle = 'var a=1;window.isApp=Boolean(location.search.indexOf("app=1")>-1);var b=2;';
+  await fsExtra.writeFile(path.join(www, 'book1', 'bundle.js'), bundle);
+  await fsExtra.writeFile(path.join(www, 'book1', 'core', 'deep.js'), bundle);
+
+  const logLines = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logLines.push(args.join(' ')); };
+  try {
+    await packagingService.normalizeBookViewerViewports(www);
+  } finally {
+    console.log = originalLog;
+  }
+
+  const js = fs.readFileSync(path.join(www, 'book1', 'bundle.js'), 'utf8');
+  assert.ok(js.includes('window.isApp=true||Boolean(location.search'), 'ust-duzey bundle isApp yamasi almali');
+  assert.ok(!js.includes('window.isApp=Boolean('), 'eski ifade kalmamali');
+  const deep = fs.readFileSync(path.join(www, 'book1', 'core', 'deep.js'), 'utf8');
+  assert.strictEqual(deep, bundle, 'alt dizindeki js dosyasina dokunulmamali (deep content disi)');
+  assert.ok(logLines.some((l) => l.includes('book1') && l.includes('window.isApp=true zorlandı (1 dosya)')),
+    `isApp yamasi log satiri (1 dosya) olmali: ${JSON.stringify(logLines)}`);
+});
+
+test('(viii) uyarlama hatasinda "📐 Viewport ..." basari satiri YAZILMAZ (yalan log yok)', async (t) => {
+  if (isRootProcess()) {
+    t.skip('root altında 0400 yazmayı engellemez (EACCES oluşmaz) — chmod tabanlı test anlamsız, atlanıyor');
+    return;
+  }
+  const www = tempWwwDir();
+  await buildFakeSet(www);
+  const book1Idx = path.join(www, 'book1', 'index.html');
+  fs.chmodSync(book1Idx, 0o400);
+  const logLines = [];
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = (...args) => { logLines.push(args.join(' ')); };
+  console.warn = () => {};
+  try {
+    await packagingService.normalizeBookViewerViewports(www);
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    fs.chmodSync(book1Idx, 0o644);
+  }
+  assert.ok(!logLines.some((l) => l.includes('📐') && l.includes('book1/')), 'book1 basarisizken basari satiri yazilmamali');
+  assert.ok(logLines.some((l) => l.includes('📐') && l.includes('book2/')), 'book2 basari satiri yazilmali');
+});
+
+// --- Kaynak-sentinel (09.10: adımlar android-arsiv-uretec.js modülünde; sentinel oraya bakar) ---
+const MODUL_YOLU = path.join(__dirname, 'android-arsiv-uretec.js');
+
+function normalizeFnBody() {
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
   const fnStart = src.indexOf('async normalizeBookViewerViewports(wwwPath)');
   assert.notStrictEqual(fnStart, -1);
   const fnEnd = src.indexOf('\n  }\n\n  // WebView', fnStart);
-  const fnBody = src.slice(fnStart, fnEnd === -1 ? fnStart + 5000 : fnEnd);
-  assert.match(fnBody, /this\.buildAndroidManifest\(bookDir\)/);
+  return src.slice(fnStart, fnEnd === -1 ? fnStart + 6000 : fnEnd);
+}
+
+test('kaynak-sentinel: normalizeBookViewerViewports her bookN icin ortak modulu (kitapDizininiAndroidIcinUyarla) cagirir', () => {
+  const fnBody = normalizeFnBody();
+  assert.match(fnBody, /await kitapDizininiAndroidIcinUyarla\(bookDir,/);
   assert.match(fnBody, /empp-android-shim\.js/);
+  // Yorum satırına çevrilmiş eski kod kalıntısı YASAK (sentinel'i yorumla geçmek).
+  assert.ok(!/\/\/\s*this\.buildAndroidManifest/.test(fnBody), 'yorum satirinda buildAndroidManifest kalintisi olmamali');
+  assert.ok(!/\/\/\s*if \(!html\.includes/.test(fnBody), 'yorum satirinda eski enjeksiyon kodu kalintisi olmamali');
 });
 
-test('kaynak-sentinel: buildAndroidManifest tam olarak 2 yerden cagrilir (kok + bookN) - kopya kod yok', () => {
+test('kaynak-sentinel: manifest agaci (tree/dirs) TEK yerde uretilir — modulde; packagingService kok icin oraya delege eder', () => {
   const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  const calls = src.match(/this\.buildAndroidManifest\(/g) || [];
-  assert.strictEqual(calls.length, 2, 'initializeCapacitorProject (kok) + normalizeBookViewerViewports (bookN) = 2 cagri');
+  const mod = fs.readFileSync(MODUL_YOLU, 'utf8');
+  assert.strictEqual((src.match(/tree\[rel\] = ents/g) || []).length, 0, 'packagingService icinde agac uretim kodu KALMAMALI (kopya kod yok)');
+  assert.strictEqual((mod.match(/tree\[rel\] = ents/g) || []).length, 1, 'agac uretimi modulde TEK');
+  assert.strictEqual((src.match(/this\.buildAndroidManifest\(/g) || []).length, 1, 'initializeCapacitorProject (kok) tek cagri');
+  assert.match(src, /async buildAndroidManifest\(rootPath\) \{\s*return buildAndroidManifest\(rootPath\);/);
 });
 
-test('kaynak-sentinel: android shim tag compat shim\'den ONCE enjekte edilecek sekilde kodlanmis', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  const androidTagIdx = src.indexOf("if (!html.includes('empp-android-shim.js')) toInject += androidShimTag;");
-  const compatTagIdx = src.indexOf("if (!html.includes('__webviewCompatShim')) toInject += (toInject ? '\\n' : '') + requireShim;");
+test('kaynak-sentinel: modulde android shim tag compat shim\'den ONCE enjekte edilecek sekilde kodlanmis', () => {
+  const mod = fs.readFileSync(MODUL_YOLU, 'utf8');
+  const androidTagIdx = mod.indexOf("if (!html.includes('empp-android-shim.js')) toInject += androidShimTag;");
+  const compatTagIdx = mod.indexOf("if (!html.includes('__webviewCompatShim')) toInject += (toInject ? '\\n' : '') + requireShim;");
   assert.notStrictEqual(androidTagIdx, -1);
   assert.notStrictEqual(compatTagIdx, -1);
   assert.ok(androidTagIdx < compatTagIdx, 'toInject stringine android shim ONCE eklenmeli (sira = enjeksiyon sirasi)');
+  // Adım sırası: shim kopyası → manifest → index.html → isApp (orijinal packagingService sırası)
+  const kopya = mod.indexOf('await androidShimKopyala(shimHedef');
+  const manifest = mod.indexOf('await buildAndroidManifest(kitapDizini)');
+  const yaz = mod.indexOf('await fs.writeFile(idx, html)');
+  const isApp = mod.indexOf("window.isApp=Boolean(");
+  assert.ok(kopya > -1 && manifest > kopya && yaz > manifest && isApp > yaz, 'adim sirasi: shim → manifest → index.html → isApp');
 });
 
-test('kaynak-sentinel (K9b): index.html/bundle enjeksiyonu kendi try/catch\'inde - EACCES digerlerini durdurmaz', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'packagingService.js'), 'utf8');
-  const fnStart = src.indexOf('async normalizeBookViewerViewports(wwwPath)');
-  assert.notStrictEqual(fnStart, -1);
-  const fnEnd = src.indexOf('\n  }\n\n  // WebView', fnStart);
-  const fnBody = src.slice(fnStart, fnEnd === -1 ? fnStart + 6000 : fnEnd);
-  // for dongusu icinde, index.html okuma/yazma satirindan ONCE bir 'try {' olmali
-  // (dis genel try/catch'ten AYRI, alt-kitaba OZEL bir koruma) ki bir kitabin
-  // EACCES/ENOENT'i digerlerini domino ile durdurmasin.
-  const idxLine = fnBody.indexOf("const idx = path.join(bookDir, 'index.html');");
-  const innerTryIdx = fnBody.lastIndexOf('try {', idxLine);
-  const htmlCatchIdx = fnBody.indexOf('} catch (htmlErr) {', idxLine);
+test('kaynak-sentinel (K9b): modul cagrisi for dongusunun ICINDE kendi try/catch\'inde - EACCES digerlerini durdurmaz', () => {
+  const fnBody = normalizeFnBody();
+  const callIdx = fnBody.indexOf('await kitapDizininiAndroidIcinUyarla(bookDir,');
+  const innerTryIdx = fnBody.lastIndexOf('try {', callIdx);
+  const catchIdx = fnBody.indexOf('} catch (htmlErr) {', callIdx);
   const forIdx = fnBody.indexOf('for (const relBookDir of subBookDirs)');
-  assert.notStrictEqual(idxLine, -1);
+  assert.notStrictEqual(callIdx, -1);
   assert.notStrictEqual(innerTryIdx, -1);
-  assert.notStrictEqual(htmlCatchIdx, -1, 'index.html/bundle blogunu kapatan ayri bir catch(htmlErr) olmali');
-  assert.ok(innerTryIdx > forIdx, 'index.html enjeksiyonundan once, for dongusunun ICINDE ayri bir try olmali');
-  assert.ok(htmlCatchIdx > idxLine, 'catch(htmlErr) index.html islemlerinden SONRA gelmeli (ayni bloğu kapatir)');
+  assert.notStrictEqual(catchIdx, -1, 'modul cagrisini kapatan ayri bir catch(htmlErr) olmali');
+  assert.ok(innerTryIdx > forIdx, 'modul cagrisindan once, for dongusunun ICINDE ayri bir try olmali');
+  assert.ok(catchIdx > callIdx, 'catch(htmlErr) modul cagrisindan SONRA gelmeli (ayni blogu kapatir)');
 });

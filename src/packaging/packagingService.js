@@ -51,6 +51,7 @@ const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
 const { shimKopyala: androidShimKopyala } = require('../platforms/android/cevrimici-yoklama');
 const { gradleKomutu, javaIkiliYolu, androidSdkKoku, javaHomeAdaylari } = require('./android-win32');
+const { kitapDizininiAndroidIcinUyarla, androidArsiviUret, buildAndroidManifest } = require('./android-arsiv-uretec');
 
 class PackagingService {
   constructor() {
@@ -4448,27 +4449,7 @@ if (!window.cordova) {
   // `book-android-shim.test.js`'teki `kaynak-sentinel: buildAndroidManifest tam
   // olarak 2 yerden cagrilir` ve `(ii) book1/empp-manifest.json...` testleri kırılır.
   async buildAndroidManifest(rootPath) {
-    const tree = {}; const dirs = [];
-    const listDir = async (rel) => {
-      const abs = path.join(rootPath, rel);
-      const ents = await fs.readdir(abs, { withFileTypes: true }).catch(() => []);
-      tree[rel] = ents.map((e) => e.name).filter((n) => n !== 'empp-manifest.json');
-      for (const e of ents) if (e.isDirectory()) dirs.push(rel ? `${rel}/${e.name}` : e.name);
-    };
-    await listDir('');
-    for (const top of ['assets', 'classlibraries', 'temp', 'core']) {
-      if (await fs.pathExists(path.join(rootPath, top))) {
-        await listDir(top);
-        if (top === 'assets') {
-          for (const id of tree.assets || []) {
-            if ((await fs.stat(path.join(rootPath, 'assets', id)).catch(() => null))?.isDirectory()) {
-              await listDir(`assets/${id}`);
-            }
-          }
-        }
-      }
-    }
-    return { tree, dirs };
+    return buildAndroidManifest(rootPath);
   }
 
   // Check connected Android devices
@@ -4824,8 +4805,9 @@ public class MainActivity extends BridgeActivity {
   // tag kaldırılırsa bookN sayfası boş kalır...` ve kaynak-sentinel testleri kırılır.
   async normalizeBookViewerViewports(wwwPath) {
     try {
-      const viewportMeta = '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">';
-      const androidShimTag = '<script src="empp-android-shim.js"></script>';
+      // 09.10: adımların KENDİSİ `android-arsiv-uretec.js` → `kitapDizininiAndroidIcinUyarla`
+      // (shim kopyası → empp-manifest.json → viewport/empp-app-mode/shim sırası → window.isApp).
+      // Aynı modül G yayınında Android arşivini üretir; APK ile G aynı baytları alır.
       const requireShim = this._buildWebViewRequireShim();
       // K8 (2026-09-09, Tudem kaniti): ad deseni (`^book\d*$`) DEGIL, motor imzasi
       // (index.html + app.config.js) ile bulunur — bkz. sub-book-dirs.js NEDEN bloğu.
@@ -4845,79 +4827,29 @@ public class MainActivity extends BridgeActivity {
       for (const relBookDir of subBookDirs) {
         const bookDir = path.join(wwwPath, relBookDir);
 
-        // --- empp-android-shim.js + kitabın kendi empp-manifest.json'ı (K3) ---
-        try {
-          await androidShimKopyala(path.join(bookDir, 'empp-android-shim.js'),
-            { kaynakYolu: path.join(__dirname, '../platforms/android/empp-android-shim.js') });
-          const bookManifest = await this.buildAndroidManifest(bookDir);
-          await fs.writeJson(path.join(bookDir, 'empp-manifest.json'), bookManifest, { spaces: 0 });
-        } catch (shimErr) {
-          console.warn(`⚠️ ${relBookDir}: empp-android-shim/manifest kurulamadı:`, shimErr.message);
-          injectFailedBooks.push(relBookDir);
-        }
-
         // K9b — NEDEN: tek bir kitabın index.html'i OKUNAMAZ/YAZILAMAZ durumdaysa
         // (örn. Tudem ISO'larından bsdtar ile chmod'suz çıkarılmış, 0400 salt-okunur
         // dosyalar — gerçek vaka: tudem-apk-batch 2026-09-09, 27 fasikülden yalnız
-        // 1'i işlenip döngü tamamen durdu) bu try/catch'siz blok EACCES'i for
-        // döngüsünün DIŞINDAKİ tek genel catch'e fırlatıyordu — bu da kalan TÜM
-        // alt-kitapları (bir sonraki relBookDir'den itibaren) hiç işlenmeden
-        // bırakıyordu. BELİRTİ: shim dosyası yalnız kök + ilk alt-kitapta (fs.copy
-        // yeni dosya oluşturur, dizin-yazma yeter); script tag'i HİÇBİR html'de yok
-        // (mevcut dosyaya yazma dosya-izni ister, o da EACCES verir). KANIT: repro
-        // (book2/index.html 0400) → book3 shim dosyası da, tag'i de HİÇ almadı.
-        // BOZARSAN: `book-android-shim.test.js`'teki
+        // 1'i işlenip döngü tamamen durdu) try/catch'siz blok EACCES'i for
+        // döngüsünün DIŞINDAKİ tek genel catch'e fırlatıyordu — kalan TÜM alt-kitaplar
+        // hiç işlenmeden kalıyordu. Bu try alt-kitaba ÖZELDİR: bir kitabın hatası
+        // yalnız o kitabı düşürür. BOZARSAN: `book-android-shim.test.js`'teki
         // `GERİLEME: bir alt-kitabın index.html'i yazılamazsa DİĞER alt-kitaplar da
         // atlanır (domino etkisi)` testi kırılır.
         try {
-          // --- index.html: viewport + android shim + require shim ---
-          const idx = path.join(bookDir, 'index.html');
-          if (await fs.pathExists(idx)) {
-            let html = await fs.readFile(idx, 'utf8');
-
-            if (/<meta\s+name=["']viewport["'][^>]*>/i.test(html)) {
-              html = html.replace(/<meta\s+name=["']viewport["'][^>]*>/i, viewportMeta);
-            } else if (/<\/head>/i.test(html)) {
-              html = html.replace(/<\/head>/i, viewportMeta + '</head>');
-            }
-
-            // Kök ile aynı davranış: eski empp-app-mode script kalıntısı temizlenir.
-            html = html.replace(/<script id="empp-app-mode">[\s\S]*?<\/script>/, '');
-
-            // Shim'leri <head>'in HEMEN başına koy (app.config.js ve SPA bundle'larından
-            // önce), SIRAYLA: empp-android-shim.js ÖNCE, __webviewCompatShim SONRA.
-            // Tek regex replace'te BİRLİKTE eklenir ki sıra garanti olsun (iki ayrı
-            // replace çağrısı sondan-başa eklerdi). Her parça kendi başına idempotent.
-            let toInject = '';
-            if (!html.includes('empp-android-shim.js')) toInject += androidShimTag;
-            if (!html.includes('__webviewCompatShim')) toInject += (toInject ? '\n' : '') + requireShim;
-            if (toInject) {
-              html = html.replace(/<head[^>]*>/i, (m) => m + '\n' + toInject);
-            }
-
-            await fs.writeFile(idx, html);
-            console.log(`📐 Viewport + android shim + require shim: ${relBookDir}/index.html`);
-          }
-
-          // --- bundle: window.isApp=true zorla (top-level .js dosyalarında) ---
-          let patched = 0;
-          const files = await fs.readdir(bookDir, { withFileTypes: true });
-          for (const f of files) {
-            if (!f.isFile() || !f.name.endsWith('.js')) continue;
-            const jsPath = path.join(bookDir, f.name);
-            let js = await fs.readFile(jsPath, 'utf8');
-            if (js.includes('window.isApp=Boolean(')) {
-              js = js.split('window.isApp=Boolean(').join('window.isApp=true||Boolean(');
-              await fs.writeFile(jsPath, js);
-              patched++;
-            }
-          }
+          // --- shim kopyası + empp-manifest.json (K3) + index.html + window.isApp ---
+          const sonuc = await kitapDizininiAndroidIcinUyarla(bookDir, {
+            kaynakYolu: path.join(__dirname, '../platforms/android/empp-android-shim.js'),
+            requireShim
+          });
+          console.log(`📐 Viewport + android shim + require shim: ${relBookDir}/index.html`);
+          const patched = sonuc.dosyalar.filter((p) => p.endsWith('.js') && path.basename(p) !== 'empp-android-shim.js').length;
           if (patched > 0) {
             console.log(`✅ ${relBookDir}: window.isApp=true zorlandı (${patched} dosya) — localStorage kalıcılık`);
           }
         } catch (htmlErr) {
-          console.warn(`⚠️ ${relBookDir}: index.html/bundle enjeksiyonu başarısız (diğer alt-kitaplar ETKİLENMEZ):`, htmlErr.message);
-          if (!injectFailedBooks.includes(relBookDir)) injectFailedBooks.push(relBookDir);
+          console.warn(`⚠️ ${relBookDir}: Android uyarlaması başarısız (diğer alt-kitaplar ETKİLENMEZ):`, htmlErr.message);
+          injectFailedBooks.push(relBookDir);
         }
       }
 

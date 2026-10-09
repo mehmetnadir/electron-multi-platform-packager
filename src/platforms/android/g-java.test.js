@@ -41,7 +41,7 @@ function javaDosyalari(kok) {
 
 test('G Java: EmppGKatman + EmppGRota JVM birim testleri (70+ madde) geçer', (t) => {
   const jdk = jdkBul();
-  if (!jdk) { t.skip('JDK yok — Java birim testleri KOŞMADI'); return; }
+  assert.ok(jdk, 'JDK bulunamadı — Java birim testleri derlenemiyor ve koşulamıyor');
   const cikti = fs.mkdtempSync(path.join(os.tmpdir(), 'emppg-jv-'));
   const kaynaklar = [
     ...javaDosyalari(path.join(G, 'test', 'stub')),
