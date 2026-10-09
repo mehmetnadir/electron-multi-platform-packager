@@ -55,6 +55,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const cdpAc = require('../pardus/cdp-kitap-ac');
 const ig = require('../../src/runtime/icerik-guncelleme');
+const { surecGrubunuOldur } = require('./surec-oldur');
 const { guncelDegilOneri } = require('./guncel-degil-oneri');
 
 const K4_DURUM = Object.freeze({
@@ -343,7 +344,7 @@ function kosumBaslat({ ikili, girdiYolu, ev, kanit }) {
       try { fs.writeFileSync(durDosyasi, 'dur\n'); } catch (_) { /* aşağıda öldürülür */ }
       const r = await Promise.race([bitti, bekle(12000).then(() => null)]);
       if (r) return r;
-      try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* ölü */ }
+      surecGrubunuOldur(cocuk.pid); // win32'de eksi PID fırlatır → taskkill /T
       return Promise.race([bitti, bekle(3000).then(() => ({ kod: null, sinyal: 'SIGKILL', zorla: true }))]);
     },
   };

@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
-const { sdkIkilileri, kanitDizini, sdkKoku } = require('./android-cihaz');
+const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn } = require('./android-cihaz');
 
 test('sdkKoku: win32 env yokken null döndürür', () => {
   assert.equal(sdkKoku({}, 'win32'), null);
@@ -56,4 +56,15 @@ test('kanitDizini: darwin varsayılan ve EMPP_KABUL_KANIT_KOK ile ezilmiş dizin
 
   const envOzel = { EMPP_KABUL_KANIT_KOK: '/tmp/kanit-dizini' };
   assert.equal(kanitDizini('45469', 'darwin', envOzel), '/tmp/kanit-dizini/android/45469');
+});
+
+test('bootZamanAsimiSn: win32 varsayılanı 600 (kasa soğuk açılış 259 sn ölçüldü), darwin 240', () => {
+  assert.equal(bootZamanAsimiSn({}, {}, 'win32'), 600);
+  assert.equal(bootZamanAsimiSn({}, {}, 'darwin'), 240);
+});
+
+test('bootZamanAsimiSn: çağıran bootSn > EMPP_KABUL_BOOT_SN > platform varsayılanı', () => {
+  assert.equal(bootZamanAsimiSn({ bootSn: 90 }, { EMPP_KABUL_BOOT_SN: '700' }, 'win32'), 90);
+  assert.equal(bootZamanAsimiSn({}, { EMPP_KABUL_BOOT_SN: '700' }, 'darwin'), 700);
+  assert.equal(bootZamanAsimiSn({ bootSn: 0 }, { EMPP_KABUL_BOOT_SN: 'x' }, 'win32'), 600);
 });

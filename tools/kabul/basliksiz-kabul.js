@@ -45,6 +45,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const O = require('./olcutler');
+const { surecGrubunuOldur } = require('./surec-oldur');
 const { platformTahmin, platformNormalize, paketiAc, kokEnvanteri } = require('./paket-cikar');
 const { calismaZamaniHazirla, odakCaldiIsaretle } = require('./calisma-zamani');
 const { onUygulama, uygulamaTuru, odakIzleyici } = require('./odak');
@@ -174,7 +175,7 @@ function kosumCalistir({ ikili, girdiYolu, calisma, kanit, agKapali, toplamSn, l
     const oldur = setTimeout(() => {
       zamanAsimi = true;
       log(`koşum ${toplamSn + 15} sn içinde bitmedi — süreç grubu öldürülüyor`);
-      try { process.kill(-cocuk.pid, 'SIGKILL'); } catch (_) { /* zaten ölü */ }
+      surecGrubunuOldur(cocuk.pid); // win32'de eksi PID fırlatır → taskkill /T
     }, (toplamSn + 15) * 1000);
     cocuk.on('exit', (kod, sinyal) => {
       clearTimeout(oldur);

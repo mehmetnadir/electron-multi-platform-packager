@@ -1,7 +1,7 @@
 'use strict';
 /**
  * Başsız kabul kapısının Electron ÇALIŞMA ZAMANI: paketin kendi Electron sürümünü bulur,
- * eşleşen macOS çalışma zamanını ODAK ÇALMAYACAK biçimde hazırlar.
+ * eşleşen çalışma zamanını ODAK ÇALMAYACAK biçimde hazırlar.
  *
  * Sürüm nereden okunur (paket türüne göre, ölçüldü 2026-09-26):
  *   • mac   : `<App>.app/Contents/Frameworks/Electron Framework.framework/Resources/Info.plist`
@@ -12,13 +12,16 @@
  *   • APK Electron TAŞIMAZ (Capacitor WebView) → sürüm yok, varsayılana düşülür.
  *
  * Çalışma zamanı nereden gelir:
- *   1. `~/Library/Caches/electron/**\/electron-v<sürüm>-darwin-<mimari>.zip` (electron/get önbelleği)
+ *   1. Önbellek:
+ *      - darwin: `~/Library/Caches/electron/**\/electron-v<sürüm>-darwin-<mimari>.zip`
+ *      - win32 : `%LOCALAPPDATA%/electron/Cache/**\/electron-v<sürüm>-win32-<mimari>.zip`
  *   2. yoksa odaksız KANITLI sürüm (27.3.11) → UYARI.
  *   3. node_modules/electron (39) yalnız EMPP_KABUL_KANITSIZ_ZAMAN=1 ile: 26.09'da odak çaldığı ölçüldü.
  *
- * ODAK: kopyanın Info.plist'ine LSUIElement=YES yazılır (Dock simgesi yok, açılışta
+ * ODAK (darwin): kopyanın Info.plist'ine LSUIElement=YES yazılır (Dock simgesi yok, açılışta
  * etkinleşmez), kimliği ayrı bir paket kimliğine çevrilir ve ad-hoc yeniden imzalanır.
  * node_modules'taki özgün Electron'a DOKUNULMAZ — her zaman KOPYA yamalanır.
+ * Win32'de Info.plist/lsregister/codesign adımları atlanır.
  */
 const fs = require('fs');
 const os = require('os');
@@ -35,10 +38,14 @@ function varsayilanKok() {
     || path.join(os.homedir(), '.empp-agent', 'kabul-kanit', '_calisma-zamani');
 }
 
-function varsayilanOnbellekler() {
+function varsayilanOnbellekler(platform = process.platform) {
   const l = [];
   if (process.env.electron_config_cache) l.push(process.env.electron_config_cache);
-  l.push(path.join(os.homedir(), 'Library', 'Caches', 'electron'));
+  if (platform === 'win32') {
+    l.push(path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'electron', 'Cache'));
+  } else {
+    l.push(path.join(os.homedir(), 'Library', 'Caches', 'electron'));
+  }
   return l;
 }
 
@@ -103,9 +110,10 @@ function versionDosyasi(dizin) {
 }
 
 /** Önbellek dizinlerinde (iki düzey derinliğe kadar) eşleşen zip'i arar. */
-function onbellekZipBul(surum, mimari, onbellekler = varsayilanOnbellekler()) {
-  const ad = `electron-v${surum}-darwin-${mimari}.zip`;
-  for (const kok of onbellekler) {
+function onbellekZipBul(surum, mimari, onbellekler, platform = process.platform) {
+  const kokler = onbellekler || varsayilanOnbellekler(platform);
+  const ad = `electron-v${surum}-${platform}-${mimari}.zip`;
+  for (const kok of kokler) {
     const dogrudan = path.join(kok, ad);
     if (fs.existsSync(dogrudan)) return dogrudan;
     let altlar = [];
@@ -127,26 +135,25 @@ function calistir(komut, argumanlar) {
 }
 
 /** Kopyanın Info.plist'ini odaksız çalışacak biçimde yamalar ve ad-hoc imzalar. */
-function odaksizYap(appYolu) {
+function odaksizYap(appYolu, calistirFn = calistir) {
   const plist = path.join(appYolu, 'Contents', 'Info.plist');
-  calistir('plutil', ['-replace', 'LSUIElement', '-bool', 'YES', plist]);
-  calistir('plutil', ['-replace', 'CFBundleIdentifier', '-string', KIMLIK, plist]);
-  calistir('plutil', ['-replace', 'CFBundleName', '-string', 'EMPP Basliksiz Kabul', plist]);
+  calistirFn('plutil', ['-replace', 'LSUIElement', '-bool', 'YES', plist]);
+  calistirFn('plutil', ['-replace', 'CFBundleIdentifier', '-string', KIMLIK, plist]);
+  calistirFn('plutil', ['-replace', 'CFBundleName', '-string', 'EMPP Basliksiz Kabul', plist]);
   spawnSync('xattr', ['-dr', 'com.apple.quarantine', appYolu]);
-  // Yalnız dış paket yeniden imzalanır (--deep DEĞİL): iç yardımcılara dokunulmadı, imzaları
-  // geçerli. npm'in açtığı node_modules/electron'da çerçeve sembolik bağları düz dosyaya
-  // dönmüş olabiliyor; --deep orada "bundle format is ambiguous" ile düşüyor (ölçüldü, v39).
-  calistir('codesign', ['--force', '--sign', '-', appYolu]);
-  // LaunchServices kaydını AÇMADAN önceden yap: kayıt ilk açılışa kalmasın.
+  calistirFn('codesign', ['--force', '--sign', '-', appYolu]);
   spawnSync(LSREGISTER, ['-f', appYolu]);
 }
 
-function ikiliYolu(kok) {
+function ikiliYolu(kok, platform = process.platform) {
+  if (platform === 'win32') {
+    return path.join(kok, 'electron.exe');
+  }
   return path.join(kok, 'Electron.app', 'Contents', 'MacOS', 'Electron');
 }
 
-function hazirMi(hedef) {
-  return fs.existsSync(path.join(hedef, HAZIR_ISARETI)) && fs.existsSync(ikiliYolu(hedef));
+function hazirMi(hedef, platform = process.platform) {
+  return fs.existsSync(path.join(hedef, HAZIR_ISARETI)) && fs.existsSync(ikiliYolu(hedef, platform));
 }
 
 function hazirIsaretle(hedef, bilgi) {
@@ -178,17 +185,30 @@ function odakCaldiIsaretle(dizin, kanit) {
 }
 
 /** Zip'ten ya da dist'ten KOPYA hazırlar (yarım deneme silinmez, kenara alınır). */
-function hazirla(hedef, kaynak, surum, log) {
+function hazirla(hedef, kaynak, surum, log, platform = process.platform, calistirFn = calistir) {
   log(`çalışma zamanı hazırlanıyor: ${kaynak}`);
   const gecici = `${hedef}.hazirlaniyor-${process.pid}`;
   fs.mkdirSync(gecici, { recursive: true });
-  if (kaynak.endsWith('.zip')) {
-    calistir('ditto', ['-x', '-k', kaynak, gecici]);
+  if (platform === 'win32') {
+    if (kaynak.endsWith('.zip')) {
+      calistirFn('tar', ['-xf', kaynak, '-C', gecici]);
+    } else {
+      fs.cpSync(kaynak, gecici, { recursive: true });
+    }
   } else {
-    calistir('ditto', [path.join(kaynak, 'Electron.app'), path.join(gecici, 'Electron.app')]);
-    fs.copyFileSync(path.join(kaynak, 'version'), path.join(gecici, 'version'));
+    if (kaynak.endsWith('.zip')) {
+      calistirFn('ditto', ['-x', '-k', kaynak, gecici]);
+    } else {
+      calistirFn('ditto', [path.join(kaynak, 'Electron.app'), path.join(gecici, 'Electron.app')]);
+      fs.copyFileSync(path.join(kaynak, 'version'), path.join(gecici, 'version'));
+    }
+    odaksizYap(path.join(gecici, 'Electron.app'), calistirFn);
   }
-  odaksizYap(path.join(gecici, 'Electron.app'));
+  if (!fs.existsSync(path.join(gecici, 'version'))) {
+    try {
+      fs.writeFileSync(path.join(gecici, 'version'), surum ? (surum.startsWith('v') ? surum : `v${surum}`) : `v${surum}`);
+    } catch (_) {}
+  }
   hazirIsaretle(gecici, { surum, kaynak });
   if (fs.existsSync(hedef)) fs.renameSync(hedef, `${hedef}.eski-${Date.now()}`);
   fs.renameSync(gecici, hedef);
@@ -204,13 +224,15 @@ function hazirla(hedef, kaynak, surum, log) {
  * pid 18787). Odak çaldığı ölçülen her çalışma zamanı kalıcı işaretlenir ve atlanır.
  *
  * @param {{surum?: string|null, kok?: string, mimari?: string, onbellekler?: string[],
- *          yedekDist?: string, kanitsizIzin?: boolean, log?: Function}} p
+ *          yedekDist?: string, kanitsizIzin?: boolean, platform?: string, calistir?: Function, log?: Function}} p
  * @returns {{ikili:string, surum:string, eslesti:boolean, kaynak:string, dizin:string, uyari:string|null, atlananlar:string[]}}
  */
 function calismaZamaniHazirla(p = {}) {
   const log = p.log || (() => {});
   const kok = p.kok || varsayilanKok();
+  const platform = p.platform || process.platform;
   const mimari = p.mimari || (process.arch === 'arm64' ? 'arm64' : 'x64');
+  const calistirFn = p.calistir || calistir;
   const kanitsizIzin = p.kanitsizIzin !== undefined ? p.kanitsizIzin : process.env.EMPP_KABUL_KANITSIZ_ZAMAN === '1';
   fs.mkdirSync(kok, { recursive: true });
   const atlananlar = [];
@@ -227,24 +249,27 @@ function calismaZamaniHazirla(p = {}) {
         ? `UYARI: paketin Electron sürümü v${p.surum} için odaksız çalışma zamanı yok — v${surum} ile koşuldu`
         : `paket Electron taşımıyor — odaksız kanıtlı v${surum} ile koşuldu`;
     }
-    return { ikili: ikiliYolu(hedef), surum, eslesti, kaynak, dizin: hedef, uyari, atlananlar };
+    return { ikili: ikiliYolu(hedef, platform), surum, eslesti, kaynak, dizin: hedef, uyari, atlananlar };
   };
 
   for (const surum of surumler) {
-    const hedef = path.join(kok, `electron-v${surum}-darwin-${mimari}`);
+    const hedef = path.join(kok, `electron-v${surum}-${platform}-${mimari}`);
     if (odakCaldiMi(hedef)) { atlananlar.push(`v${surum}: daha önce odak çaldı (işaretli)`); continue; }
-    if (hazirMi(hedef)) return sonuc(surum, hedef, hedef);
-    const zip = onbellekZipBul(surum, mimari, p.onbellekler);
-    if (zip) { hazirla(hedef, zip, surum, log); return sonuc(surum, hedef, zip); }
-    atlananlar.push(`v${surum}: önbellekte darwin-${mimari} zip'i yok`);
+    if (hazirMi(hedef, platform)) return sonuc(surum, hedef, hedef);
+    const zip = onbellekZipBul(surum, mimari, p.onbellekler, platform);
+    if (zip) { hazirla(hedef, zip, surum, log, platform, calistirFn); return sonuc(surum, hedef, zip); }
+    atlananlar.push(`v${surum}: önbellekte ${platform}-${mimari} zip'i yok`);
   }
 
   const dist = p.yedekDist || path.join(__dirname, '..', '..', 'node_modules', 'electron', 'dist');
   const yedekSurum = versionDosyasi(dist);
-  if (kanitsizIzin && yedekSurum && fs.existsSync(path.join(dist, 'Electron.app'))) {
-    const hedef = path.join(kok, `electron-v${yedekSurum}-darwin-${mimari}`);
+  const distVarMi = platform === 'win32'
+    ? fs.existsSync(path.join(dist, 'electron.exe'))
+    : fs.existsSync(path.join(dist, 'Electron.app'));
+  if (kanitsizIzin && yedekSurum && distVarMi) {
+    const hedef = path.join(kok, `electron-v${yedekSurum}-${platform}-${mimari}`);
     if (!odakCaldiMi(hedef)) {
-      if (!hazirMi(hedef)) hazirla(hedef, dist, yedekSurum, log);
+      if (!hazirMi(hedef, platform)) hazirla(hedef, dist, yedekSurum, log, platform, calistirFn);
       const r = sonuc(yedekSurum, hedef, dist);
       r.uyari = `UYARI: odaksız kanıtı OLMAYAN v${yedekSurum} ile koşuldu (EMPP_KABUL_KANITSIZ_ZAMAN=1)`;
       return r;
@@ -265,7 +290,12 @@ module.exports = {
   onbellekZipBul,
   calismaZamaniHazirla,
   varsayilanKok,
+  varsayilanOnbellekler,
+  ikiliYolu,
+  hazirMi,
+  hazirla,
   ODAKSIZ_KANITLI,
   odakCaldiMi,
   odakCaldiIsaretle,
+  calistir,
 };
