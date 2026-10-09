@@ -508,6 +508,19 @@ function kirp(veri, genislik, yukseklik, s) {
  * adb gerçek hatayı ("adb: failed to install …: Failure […]") stderr'e, "Performing Streamed Install"
  * satırını stdout'a basar — yalnız stdout gösterilince kök neden gizleniyordu (45482, 26.09). Saf.
  */
+/**
+ * `adb install` ek argümanları. Saf. Windows'ta (kasa, x86_64 emülatör) AKIŞLI kurulum
+ * ("Performing Streamed Install") 398 MB APK'da 92 sn sonra rc=1 ve BOŞ sebeple düşer;
+ * `--no-streaming` (push + pm install) aynı APK'da 52 sn'de Success (ölçüm 09.10,
+ * emu-spawn-olc.js). Mac'te akışlı kurulum çalışıyor, davranışı değişmez.
+ * `EMPP_KABUL_ADB_AKISSIZ=1` her platformda `--no-streaming`, `=0` win32'de bile akışlı.
+ */
+function kurulumArgumanlari(env = process.env, platform = process.platform) {
+  if (env.EMPP_KABUL_ADB_AKISSIZ === '1') return ['--no-streaming'];
+  if (env.EMPP_KABUL_ADB_AKISSIZ === '0') return [];
+  return platform === 'win32' ? ['--no-streaming'] : [];
+}
+
 function kurulumSebebi(r) {
   const x = r || {};
   const parcalar = [x.stdout, x.stderr].map((v) => String(v || '').trim()).filter(Boolean);
@@ -824,7 +837,7 @@ async function cihazKabulu(p) {
 
     if (!p.kurulumYok) {
       const kurBas = Date.now();
-      const kur = adbKos(arac, seri, ['install', '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
+      const kur = adbKos(arac, seri, ['install', ...kurulumArgumanlari(), '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
       sonuc.kurulumSn = Math.round((Date.now() - kurBas) / 1000);
       if (kur.status !== 0 || !/Success/.test(String(kur.stdout))) {
         sonuc.sebepler.push(`adb install düştü: ${kurulumSebebi(kur)}`);
@@ -992,6 +1005,7 @@ function avdAdaylari(verilen) {
 module.exports = {
   YASAK_AVD,
   bootZamanAsimiSn,
+  kurulumArgumanlari,
   VARSAYILAN_AVD,
   CIHAZ_KITAP_SN,
   YABANCI_ANR_ORTULME_MIN_SAYI,
