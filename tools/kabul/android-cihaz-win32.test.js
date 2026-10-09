@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
-const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn } = require('./android-cihaz');
+const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn, kurulumArgumanlari } = require('./android-cihaz');
 
 test('sdkKoku: win32 env yokken null döndürür', () => {
   assert.equal(sdkKoku({}, 'win32'), null);
@@ -67,4 +67,11 @@ test('bootZamanAsimiSn: çağıran bootSn > EMPP_KABUL_BOOT_SN > platform varsay
   assert.equal(bootZamanAsimiSn({ bootSn: 90 }, { EMPP_KABUL_BOOT_SN: '700' }, 'win32'), 90);
   assert.equal(bootZamanAsimiSn({}, { EMPP_KABUL_BOOT_SN: '700' }, 'darwin'), 700);
   assert.equal(bootZamanAsimiSn({ bootSn: 0 }, { EMPP_KABUL_BOOT_SN: 'x' }, 'win32'), 600);
+});
+
+test('kurulumArgumanlari: win32 --no-streaming (akışlı kurulum kasada boş sebeple düştü), darwin akışlı', () => {
+  assert.deepEqual(kurulumArgumanlari({}, 'win32'), ['--no-streaming']);
+  assert.deepEqual(kurulumArgumanlari({}, 'darwin'), []);
+  assert.deepEqual(kurulumArgumanlari({ EMPP_KABUL_ADB_AKISSIZ: '1' }, 'darwin'), ['--no-streaming']);
+  assert.deepEqual(kurulumArgumanlari({ EMPP_KABUL_ADB_AKISSIZ: '0' }, 'win32'), []);
 });
