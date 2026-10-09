@@ -574,6 +574,18 @@ async function agHazirBekle(arac, seri, log, zamanAsimiSn = 20) {
   return tamam;
 }
 
+/**
+ * Emülatör açılış bekleme süresi (sn). Saf. Öncelik: çağıran `bootSn` > `EMPP_KABUL_BOOT_SN`
+ * > platform varsayılanı. Windows (kasa) varsayılanı 600: swiftshader + `-read-only` ile soğuk
+ * açılış 09.10'da 259 sn ölçüldü (Mac 240 sn sınırında "açılmadı" ile ÖLÇÜLEMEDİ veriyordu);
+ * Mac varsayılanı 240 değişmez.
+ */
+function bootZamanAsimiSn(p = {}, env = process.env, platform = process.platform) {
+  if (Number(p.bootSn) > 0) return Number(p.bootSn);
+  if (Number(env.EMPP_KABUL_BOOT_SN) > 0) return Number(env.EMPP_KABUL_BOOT_SN);
+  return platform === 'win32' ? 600 : 240;
+}
+
 async function bootBekle(arac, seri, zamanAsimiSn, log, bitti = () => false) {
   const bas = Date.now();
   let son = '';
@@ -772,7 +784,7 @@ async function cihazKabulu(p) {
         try { fs.writeFileSync(p.durumDosyasi, JSON.stringify({ pid: emu.pid, seri, avd })); } catch (_) { /* yok */ }
       }
       sonuc.emulator.komut = `emulator ${emuArg.join(' ')}`;
-      bootSn = await bootBekle(arac, seri, p.bootSn || 240, log, () => Boolean(emuCikti));
+      bootSn = await bootBekle(arac, seri, bootZamanAsimiSn(p), log, () => Boolean(emuCikti));
       const deneme = { avd, bootSn, cikti: emuCikti };
       if (bootSn === null) {
         let son = '';
@@ -979,6 +991,7 @@ function avdAdaylari(verilen) {
 
 module.exports = {
   YASAK_AVD,
+  bootZamanAsimiSn,
   VARSAYILAN_AVD,
   CIHAZ_KITAP_SN,
   YABANCI_ANR_ORTULME_MIN_SAYI,
