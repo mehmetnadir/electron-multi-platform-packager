@@ -32,7 +32,7 @@ function manifest(ek = {}) {
       { yol: `book1/${MOTOR}`, sha256: sha(MOTOR_YENI), boyut: MOTOR_YENI.length },
     ],
     kitaplar: [
-      { dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234 },
+      { dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234, androidKaynak: 'https://cdn.g.test/book7.zip', androidSha256: 'a'.repeat(64), androidBoyut: 1234 },
       { dizin: 'book3', durum: 'cikar' },
     ],
     ...ek,
@@ -270,7 +270,7 @@ test('plan tutarlılığı: yinelenen yol, çıkarılan kitabın motoru, bozuk �
   assert.strictEqual(r(m1), 'kabuk-yinelenen:index.html');
   const m2 = manifest(); m2.kabuk.push({ yol: `book3/${MOTOR}`, sha256: 'e'.repeat(64), boyut: 1 });
   assert.strictEqual(r(m2), `cikarilan-kitabin-motoru:book3/${MOTOR}`);
-  assert.strictEqual(r(manifest({ kitaplar: [{ dizin: 'book7', durum: 'ekle', kaynak: 'http://x/y.zip', sha256: 'a'.repeat(64), boyut: 1 }] })),
+  assert.strictEqual(r(manifest({ kitaplar: [{ dizin: 'book7', durum: 'ekle', androidKaynak: 'http://x/y.zip', androidSha256: 'a'.repeat(64), androidBoyut: 1 }] })),
     'uyelik-kaynak-https-degil:book7');
   assert.strictEqual(r(manifest({ kitaplar: [{ dizin: '../book7', durum: 'cikar' }] })), 'uyelik-dizini-gecersiz');
   assert.strictEqual(r(manifest({ kitaplar: [{ dizin: 'book2', durum: 'cikar' }, { dizin: 'book2', durum: 'cikar' }] })), 'uyelik-yinelenen:book2');
@@ -421,7 +421,7 @@ test('KURAL 2 kimlik (tetik): surum.json başka seti söylüyorsa manifest HİÇ
 
 test('KURAL 3 ya hep ya hiç: SON kitap düşerse uygula HİÇ çağrılmaz (kabuk + ilk kitap yalnız hazırlıkta)', async () => {
   const m = manifest();
-  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99 });
+  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99, androidKaynak: 'https://cdn.g.test/book8.zip', androidSha256: 'b'.repeat(64), androidBoyut: 99 });
   const { yerel, kayit } = kur({ ...imzali(m), kitapHata: 'book8' });
   const r = await G.guncellemeyiCalistir(ortam(yerel));
   assert.strictEqual(r.durum, 'atlandi');
@@ -441,7 +441,7 @@ test('KURAL 3 ya hep ya hiç: kabuk dosyası inmezse kitap kurulmaz, uygula yok'
 
 test('KURAL 3 ya hep ya hiç: bütün hazırlık (yaz, kitapKur) TEK uygula\'dan ÖNCE; uygula tam bir kez', async () => {
   const m = manifest();
-  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99 });
+  m.kitaplar.push({ dizin: 'book8', durum: 'ekle', kaynak: 'https://cdn.g.test/book8.zip', sha256: 'b'.repeat(64), boyut: 99, androidKaynak: 'https://cdn.g.test/book8.zip', androidSha256: 'b'.repeat(64), androidBoyut: 99 });
   const { yerel, kayit } = kur(imzali(m));
   const r = await G.guncellemeyiCalistir(ortam(yerel));
   assert.strictEqual(r.durum, 'guncellendi');
@@ -450,4 +450,149 @@ test('KURAL 3 ya hep ya hiç: bütün hazırlık (yaz, kitapKur) TEK uygula\'dan
   assert.strictEqual(p.dosyalar.length, 3);
   assert.deepStrictEqual(p.kitaplar.map((k) => k.dizin), ['book7', 'book8']);
   assert.deepStrictEqual(p.cikarilan, ['book3']);
+});
+
+/* ------------------------------------------------------------------------------------------------
+ * Android Arşiv Alanları Denetimi (09.10 - Kalıcı Donma Kırılması)
+ * ---------------------------------------------------------------------------------------------- */
+
+test('Android arşiv alanları eksik → red/atlanır, indirme çağrısı 0', async () => {
+  const m = manifest({
+    kitaplar: [
+      { dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234 }
+    ]
+  });
+  const { yerel, kayit } = kur(imzali(m));
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(kayit.kitapKur.length, 0, 'indirme çağrısı 0 olmalı');
+  const p = G.planKur(m, kabuk);
+  assert.deepStrictEqual(p.atlanan, ['android-arsivi-eksik:book7'], 'planKur atlanan listesi');
+  assert.deepStrictEqual(r.atlanan, ['android-arsivi-eksik:book7'], 'atlanan kitap RAPORDA görünür (sessiz değil)');
+  assert.deepStrictEqual(r.eklenen, []);
+});
+
+test('GÜVENLİK: android alanı eksik kitap olsa da imza ÖNCE gelir — bozuk imza RED, planKur/atlanan yoluna hiç girilmez', async () => {
+  const m = manifest({ kitaplar: [{ dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234 }] });
+  const govde = Buffer.from(JSON.stringify(m));
+  const s = Buffer.from(imzala(govde), 'base64'); s[10] ^= 1;
+  const { yerel, kayit } = kur({ man: m, sig: s.toString('base64') });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'red');
+  assert.strictEqual(r.sebep, 'manifest-imzasi-gecersiz:imza-tutmadi');
+  assert.deepStrictEqual(r.atlanan, [], 'imza düşünce plan kurulmaz, atlanan boş kalır');
+  assert.strictEqual(kayit.yaz.length + kayit.kitapKur.length + kayit.uygula.length, 0);
+});
+
+test('GÜVENLİK: androidKaynak/androidSha256/androidBoyut İMZA KAPSAMINDA — imzadan sonra tek alan oynarsa RED', async () => {
+  const temiz = manifest();
+  const sig = imzala(Buffer.from(JSON.stringify(temiz)));
+  for (const [alan, deger] of [['androidKaynak', 'https://kotu.test/book7.zip'], ['androidSha256', 'b'.repeat(64)], ['androidBoyut', 1235]]) {
+    const m = manifest();
+    m.kitaplar[0][alan] = deger;
+    const { yerel, kayit } = kur({ man: m, sig });
+    const r = await G.guncellemeyiCalistir(ortam(yerel));
+    assert.strictEqual(r.durum, 'red', alan);
+    assert.strictEqual(r.sebep, 'manifest-imzasi-gecersiz:imza-tutmadi', alan);
+    assert.strictEqual(kayit.kitapKur.length + kayit.uygula.length, 0, alan);
+  }
+});
+
+test('DONMA GERÇEKTEN KIRILIR mı: atlanan kitap AYNI sürümde tekrar denenmez (sürüm damgalanır), Android alanlı YENİ sürümde kurulur', async () => {
+  // 1) 2.51.2: book7 android alansız → atlanır, motor uygulanır, sürüm 2.51.2 damgalanır.
+  const m1 = manifest({ kitaplar: [{ dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234 }] });
+  const k1 = kur(imzali(m1));
+  const r1 = await G.guncellemeyiCalistir(ortam(k1.yerel));
+  assert.strictEqual(r1.durum, 'guncellendi');
+  assert.deepStrictEqual(r1.atlanan, ['android-arsivi-eksik:book7']);
+  assert.strictEqual(k1.kayit.uygula[0].surum, '2.51.2');
+  // 2) Aynı 2.51.2 yeniden: sürüm eşit → manifest HİÇ istenmez → book7 tekrar denenmez (bilinçli: sessiz döngü yok,
+  //    ama atlanan kitap yalnız yeni yayınla gelir).
+  const k2 = kur({ ...imzali(m1), yerelSurum: '2.51.2' });
+  const r2 = await G.guncellemeyiCalistir(ortam(k2.yerel));
+  assert.strictEqual(r2.durum, 'guncel');
+  assert.strictEqual(k2.kayit.getir.length, 1, 'yalnız surum.json');
+  assert.strictEqual(k2.kayit.kitapKur.length, 0);
+  // 3) 2.51.3: yayıncı book7'ye Android alanlarını ekledi → kurulur.
+  const m3 = manifest({ surum: '2.51.3', kitaplar: [{ dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234,
+    androidKaynak: 'https://cdn.g.test/book7-android.zip', androidSha256: 'c'.repeat(64), androidBoyut: 777 }] });
+  const k3 = kur({ ...imzali(m3), surum: '2.51.3', yerelSurum: '2.51.2' });
+  const r3 = await G.guncellemeyiCalistir(ortam(k3.yerel));
+  assert.strictEqual(r3.durum, 'guncellendi', JSON.stringify(r3));
+  assert.deepStrictEqual(r3.atlanan, []);
+  assert.deepStrictEqual(r3.eklenen, ['book7']);
+  assert.deepStrictEqual(k3.kayit.kitapKur[0], { dizin: 'book7', adres: 'https://cdn.g.test/book7-android.zip', sha256: 'c'.repeat(64), boyut: 777 });
+});
+
+test('Android arşiv alanları var → androidKaynak/Sha256/Boyut ile indirme yapılır', async () => {
+  const m = manifest({
+    kitaplar: [
+      {
+        dizin: 'book7',
+        durum: 'ekle',
+        kaynak: 'https://cdn.g.test/book7-electron.zip',
+        sha256: 'e'.repeat(64),
+        boyut: 9999,
+        androidKaynak: 'https://cdn.g.test/book7-android.zip',
+        androidSha256: 'a'.repeat(64),
+        androidBoyut: 1234
+      }
+    ]
+  });
+  const { yerel, kayit } = kur(imzali(m));
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'guncellendi');
+  assert.strictEqual(kayit.kitapKur.length, 1);
+  assert.deepStrictEqual(kayit.kitapKur[0], {
+    dizin: 'book7',
+    adres: 'https://cdn.g.test/book7-android.zip',
+    sha256: 'a'.repeat(64),
+    boyut: 1234
+  });
+});
+
+test('bir kitap red (android-arsivi-eksik) + manifestteki motor düzeltmesi yine uygulanır (kalıcı donma kırılır)', async () => {
+  const m = manifest({
+    kitaplar: [
+      { dizin: 'book7', durum: 'ekle', kaynak: 'https://cdn.g.test/book7.zip', sha256: 'a'.repeat(64), boyut: 1234 }
+    ]
+  });
+  const { yerel, kayit } = kur(imzali(m));
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'guncellendi');
+  assert.strictEqual(kayit.kitapKur.length, 0);
+  assert.strictEqual(kayit.uygula.length, 1);
+  assert.strictEqual(kayit.uygula[0].surum, '2.51.2');
+  assert.deepStrictEqual(kayit.uygula[0].kitaplar, []);
+  assert.ok(kayit.uygula[0].dosyalar.some((d) => d.yol === `book1/${MOTOR}`));
+});
+
+test('Android sha256 uyuşmazlığı → red', async () => {
+  const m1 = manifest({
+    kitaplar: [
+      {
+        dizin: 'book7',
+        durum: 'ekle',
+        androidKaynak: 'https://cdn.g.test/book7-android.zip',
+        androidSha256: 'gecersiz-sha256',
+        androidBoyut: 1234
+      }
+    ]
+  });
+  assert.strictEqual(G.planKur(m1, kabuk).red, 'uyelik-ozet-boyut:book7');
+
+  const m2 = manifest({
+    kitaplar: [
+      {
+        dizin: 'book7',
+        durum: 'ekle',
+        androidKaynak: 'https://cdn.g.test/book7-android.zip',
+        androidSha256: 'b'.repeat(64),
+        androidBoyut: 1234
+      }
+    ]
+  });
+  const { yerel } = kur({ ...imzali(m2), kitapHata: 'book7' });
+  const r = await G.guncellemeyiCalistir(ortam(yerel));
+  assert.strictEqual(r.durum, 'atlandi');
+  assert.match(r.sebep, /^kitap-alinamadi:book7/);
 });

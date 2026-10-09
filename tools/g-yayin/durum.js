@@ -109,16 +109,27 @@ function oncekiDurum(onceki) {
       g.durum === 'ekle' &&
       ozetGecerliMi(g) &&
       typeof g.kaynak === 'string' &&
+      (g.androidKaynak === undefined ||
+        (typeof g.androidKaynak === 'string' &&
+          SHA256_RE.test(g.androidSha256) &&
+          Number.isSafeInteger(g.androidBoyut) &&
+          g.androidBoyut >= 0)) &&
       (g.dosyalar === undefined || dosyalarGecerliMi(g.dosyalar))
     ) {
-      kitaplar.set(g.dizin, {
+      const kayit = {
         dizin: g.dizin,
         durum: 'ekle',
         kaynak: g.kaynak,
         sha256: g.sha256,
         boyut: g.boyut,
-        ...(g.dosyalar !== undefined ? { dosyalar: g.dosyalar } : {}),
-      });
+      };
+      if (typeof g.androidKaynak === 'string') {
+        kayit.androidKaynak = g.androidKaynak;
+        kayit.androidSha256 = g.androidSha256;
+        kayit.androidBoyut = g.androidBoyut;
+      }
+      if (g.dosyalar !== undefined) kayit.dosyalar = g.dosyalar;
+      kitaplar.set(g.dizin, kayit);
     } else throw new Error(`önceki manifestte bozuk kitap girdisi: ${g.dizin}`);
   }
   return { kabuk, kitaplar };
@@ -175,6 +186,16 @@ function birlestir(onceki, d) {
   for (const [k, v] of Object.entries(ekle)) {
     if (!ozetGecerliMi(v) || typeof v.kaynak !== 'string' || !v.kaynak)
       throw new Error(`${k} arşiv özeti bozuk`);
+    if (
+      (v.androidKaynak !== undefined || v.androidSha256 !== undefined || v.androidBoyut !== undefined) &&
+      (typeof v.androidKaynak !== 'string' ||
+        !v.androidKaynak ||
+        !SHA256_RE.test(v.androidSha256) ||
+        !Number.isSafeInteger(v.androidBoyut) ||
+        v.androidBoyut < 0)
+    ) {
+      throw new Error(`${k} android arşiv özeti bozuk`);
+    }
     if (v.dosyalar !== undefined && !dosyalarGecerliMi(v.dosyalar))
       throw new Error(`${k} dosyalar listesi bozuk`);
   }
@@ -205,14 +226,18 @@ function birlestir(onceki, d) {
     kabuk.delete(motorYolu(k));
   }
   for (const [k, v] of Object.entries(ekle)) {
-    kitaplar.set(k, {
+    const kayit = {
       dizin: k,
       durum: 'ekle',
       kaynak: v.kaynak,
       sha256: v.sha256,
       boyut: v.boyut,
-      ...(v.dosyalar !== undefined ? { dosyalar: v.dosyalar } : {}),
-    });
+    };
+    if (v.androidKaynak !== undefined) kayit.androidKaynak = v.androidKaynak;
+    if (v.androidSha256 !== undefined) kayit.androidSha256 = v.androidSha256;
+    if (v.androidBoyut !== undefined) kayit.androidBoyut = v.androidBoyut;
+    if (v.dosyalar !== undefined) kayit.dosyalar = v.dosyalar;
+    kitaplar.set(k, kayit);
     // Yeni arşiv kendi motorunu taşır; eski (taşınan) motor girdisi onu ezmesin.
     kabuk.delete(motorYolu(k));
   }

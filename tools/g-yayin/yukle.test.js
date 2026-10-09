@@ -248,7 +248,7 @@ test('değişmez anahtar farklıysa yükleme yok; yarıda düşen yükleme surum
     { setKimligi: '74390', cikti: o.cikti, onayli: true },
     { ...c, beklenenAcik: o.acik },
   );
-  const zipAd = fs.readdirSync(path.join(o.cikti, 'set', '74390', 'kitap'))[0];
+  const zipAd = fs.readdirSync(path.join(o.cikti, 'set', '74390', 'kitap')).find((f) => !f.endsWith('-android.zip'));
   fs.writeFileSync(path.join(c.kova, 'guncelleme', 'set', '74390', 'kitap', zipAd), 'kurcalanmış');
   const r = await yk.yukle(
     { setKimligi: '74390', cikti: o.cikti, onayli: true },
@@ -257,6 +257,24 @@ test('değişmez anahtar farklıysa yükleme yok; yarıda düşen yükleme surum
   assert.equal(r.gecti, false);
   assert.match(r.cakisma.join(';'), /değişmez anahtar/);
   assert.equal(r0.surum, '2.7.2');
+
+  // Android zip arşivi de doğrulama kapısına tabidir: canlıda bozuksa doğrulama reddeder.
+  const zipAdAndroid = fs.readdirSync(path.join(o.cikti, 'set', '74390', 'kitap')).find((f) => f.endsWith('-android.zip'));
+  if (zipAdAndroid) {
+    const oA = ortam();
+    const cA = sahteCanli();
+    await yayinlaOrnek(oA);
+    await yk.yukle(
+      { setKimligi: '74390', cikti: oA.cikti, onayli: true },
+      { ...cA, beklenenAcik: oA.acik },
+    );
+    fs.writeFileSync(path.join(cA.kova, 'guncelleme', 'set', '74390', 'kitap', zipAdAndroid), 'kurcalanmış');
+    const rA = await yk.yukle(
+      { setKimligi: '74390', cikti: oA.cikti, onayli: true },
+      { ...cA, beklenenAcik: oA.acik },
+    );
+    assert.equal(rA.gecti, false);
+  }
 
   // Canlı daha yeni sürümdeyse eski yerel durum yüklenmez (başka bir yayını geri götürmez).
   const surumYolu = path.join(c.kova, 'guncelleme', 'set', '74390', 'surum.json');

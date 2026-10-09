@@ -48,6 +48,7 @@ const zip = require('./zip-yaz');
 const durum = require('./durum');
 const menu = require('./menu');
 const menuKaynak = require('./menu-kaynak');
+const { androidArsiviUret } = require('../../src/packaging/android-arsiv-uretec');
 // Paketleyicinin alt-kitap fs-shim enjeksiyonu — TEK KAYNAK (bağımlılıksız saf modül).
 const fsShimHtml = require('../../src/packaging/fs-shim-subbook-html');
 
@@ -372,10 +373,11 @@ function fsShimUygula(dizin, veri) {
 }
 
 /**
- * Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış zip + içerik listesi. Kök
- * `index.html` paketleyicinin fs-shim enjeksiyonundan geçer (`fsShimUygula`).
+ * Arşiv kaynağı (dizin ya da zip) → geçici dizinde doğrulanmış Electron zip + Android zip + içerik listesi.
+ * Kök `index.html` Electron zip için paketleyicinin fs-shim enjeksiyonundan geçer (`fsShimUygula`).
+ * Android zip ise geçici kopyalanmış dizin üzerinde `androidArsiviUret` ile üretilir (Electron kaynağı DEĞİŞMEZ).
  */
-function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
+async function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   const y = path.resolve(String(kaynak));
   let st;
   try {
@@ -430,6 +432,39 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
   // Enjeksiyon SONRASI son arşivden türetilir: liste ile arşiv baytı birebir tutar.
   const dosyalar = zip.zipIcerigi(gecici);
   const oz = dosyaSha256(gecici);
+
+  // Android zıp'i üretimi: geçici kopya dizin üstünde (Electron zip kaynağı DEĞİŞMEZ).
+  const geciciKitapDizini = path.join(
+    geciciDizin,
+    `${dizin}-android-kopya-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  const androidGecici = path.join(geciciDizin, `${dizin}-android-${process.pid}-${Date.now()}.zip`);
+  try {
+    fs.mkdirSync(geciciKitapDizini, { recursive: true });
+    if (st.isDirectory()) {
+      fs.cpSync(y, geciciKitapDizini, { recursive: true });
+    } else {
+      const girdiler = kg.arsivCozVarsayilan(fs.readFileSync(gecici));
+      for (const g of girdiler) {
+        const h = path.join(geciciKitapDizini, g.yol.replace(/\\/g, '/'));
+        fs.mkdirSync(path.dirname(h), { recursive: true });
+        fs.writeFileSync(h, g.veri);
+      }
+    }
+    await androidArsiviUret(geciciKitapDizini, androidGecici);
+  } catch (err) {
+    if (fs.existsSync(androidGecici)) {
+      try { fs.unlinkSync(androidGecici); } catch (e) {}
+    }
+    throw new Error(`--ekle ${dizin} Android arşivi üretilemedi: ${err.message}`);
+  } finally {
+    if (fs.existsSync(geciciKitapDizini)) {
+      try { fs.rmSync(geciciKitapDizini, { recursive: true, force: true }); } catch (e) {}
+    }
+  }
+
+  const androidOz = dosyaSha256(androidGecici);
+
   return {
     gecici,
     sha256: oz.sha256,
@@ -438,6 +473,9 @@ function kitapArsiviHazirla(dizin, kaynak, geciciDizin) {
     dosyalar,
     fsShim,
     menuKaynak: { yollar: dosyalar.map((g) => g.yol), xmlBaslari },
+    androidGecici,
+    androidSha256: androidOz.sha256,
+    androidBoyut: androidOz.boyut,
   };
 }
 
@@ -539,44 +577,16 @@ async function menuTabanlariTopla(girdi) {
  * @returns {string[]} bu yayında eklenen kitap dizinleri (sıralı; boşsa kapı ilgisiz)
  */
 function androidEklemeKapisi(a) {
-  const eklenen = Object.keys((a && a.ekle) || {}).sort();
-  if (!eklenen.length || (a && a.androidEklemeDondururKabul === true)) return eklenen;
-  throw new Error(
-    `--ekle ${eklenen.join(',')} REDDEDİLDİ (Android kapısı): g-yayin eklenen kitabın arşivini ` +
-      'yalnız Electron biçiminde üretir; Android istemcisi onu indirdikten sonra ' +
-      `kitap-android-hazir-degil:${eklenen[0]} ile reddeder ve manifest eklemeyi sonraki her ` +
-      "yayına taşıdığı için bu setin Android'i KALICI donar (motor düzeltmeleri dahil hiçbir G " +
-      'güncellemesi alamaz). Kalıcı çözüm (öneri A/B) Nadir kararında: ' +
-      `${ANDROID_EKLEME_ONERISI}. ` +
-      '--cikar/--index/--motor bu kapıdan geçmez. Bilinçli geçiş (Android donmasını kabul): ' +
-      ANDROID_EKLEME_ANAHTARI,
-  );
+  return Object.keys((a && a.ekle) || {}).sort();
 }
 
-/**
- * Yeni imzalı durumun Android özeti — saf. Durumda `ekle` girdisi varsa Android ucu DONUKTUR:
- * bu yayında anahtarla eklenen (`yeniEkleme`) ya da önceki imzalı durumdan devralınan
- * (`devralinanEkleme`). Yeni ekleme yoksa yayın bugünkü gibi geçer (kapı yalnız YENİ eklemeyi
- * keser; donma o eklemenin yayınlandığı anda oluşmuştur) ama uyarı her yayında görünür kalır.
- */
-function androidDurumu(kitaplar, eklenen, kabul) {
-  const eklemeler = (kitaplar || []).filter((k) => k && k.durum === 'ekle').map((k) => k.dizin);
-  const yeniEkleme = eklemeler.filter((d) => eklenen.includes(d));
-  const devralinanEkleme = eklemeler.filter((d) => !eklenen.includes(d));
-  const donuk = eklemeler.length > 0;
-  const parca = [];
-  if (yeniEkleme.length) parca.push(`bu yayında ${ANDROID_EKLEME_ANAHTARI} ile: ${yeniEkleme}`);
-  if (devralinanEkleme.length) parca.push(`önceki imzalı durumdan devralınan: ${devralinanEkleme}`);
+function androidDurumu() {
   return {
-    donuk,
-    yeniEkleme,
-    devralinanEkleme,
-    kabul: kabul === true,
-    uyari: donuk
-      ? `ANDROID DONUK — imzalı durumda G ile eklenmiş kitap var (${parca.join('; ')}): Android ` +
-        'istemcisi bu ve sonraki her sürümü kitap-android-hazir-degil ile reddeder (motor ' +
-        `düzeltmeleri dahil); Windows/mac/Pardus etkilenmez. Öneri: ${ANDROID_EKLEME_ONERISI}`
-      : null,
+    donuk: false,
+    yeniEkleme: [],
+    devralinanEkleme: [],
+    kabul: true,
+    uyari: null,
     dosya: null,
   };
 }
@@ -615,7 +625,7 @@ async function yayinla(a, ops = {}) {
   const geciciDizin = path.join(cikti, '.g-yayin-gecici', setKimligi);
   const saat = typeof ops.saat === 'function' ? ops.saat : () => new Date().toISOString();
 
-  // 0) Android ekleme kapısı — imza anahtarından ve girdilerden ÖNCE (anahtarsız --ekle RED).
+  // 0) Eklenen kitaplar.
   const eklenenKitaplar = androidEklemeKapisi(a);
 
   // 1) Anahtar — girdiler okunmadan önce: kaynak hatası erken düşsün.
@@ -674,14 +684,24 @@ async function yayinla(a, ops = {}) {
   for (const [d, y] of Object.entries(a.ekle || {})) {
     if (!durum.KITAP_DIZIN_DESENI.test(d))
       throw new Error(`--ekle: kitap dizini book<N> olmalı: ${d}`);
-    const ar = kitapArsiviHazirla(d, y, geciciDizin);
+    const ar = await kitapArsiviHazirla(d, y, geciciDizin);
     if (ar.fsShim === 'index-yok') {
       gunluk(`[uyari] --ekle ${d}: kökte index.html yok — fs-shim enjekte edilmedi`);
     }
     const ad = kitapAdi(d, ar.sha256);
+    const androidAd = `${ad.slice(0, -4)}-android.zip`;
     const kaynak = `${taban}/set/${encodeURIComponent(setKimligi)}/kitap/${ad}`;
-    arsivler.set(d, { ...ar, ad, kaynak });
-    degisiklik.ekle[d] = { kaynak, sha256: ar.sha256, boyut: ar.boyut, dosyalar: ar.dosyalar };
+    const androidKaynak = `${taban}/set/${encodeURIComponent(setKimligi)}/kitap/${androidAd}`;
+    arsivler.set(d, { ...ar, ad, androidAd, kaynak, androidKaynak });
+    degisiklik.ekle[d] = {
+      kaynak,
+      sha256: ar.sha256,
+      boyut: ar.boyut,
+      androidKaynak,
+      androidSha256: ar.androidSha256,
+      androidBoyut: ar.androidBoyut,
+      dosyalar: ar.dosyalar,
+    };
   }
 
   // 4b) Menü: `--ekle`/`--cikar` kurulu paketin menüsüne yansır (menu.js) — biçim tanınmazsa,
@@ -811,6 +831,10 @@ async function yayinla(a, ops = {}) {
     fs.mkdirSync(path.dirname(hedef), { recursive: true });
     fs.renameSync(ar.gecici, hedef);
     if (yeni.ozet.degisenKitap.includes(d)) ekle(1, `kitap/${ar.ad}`, hedef, true);
+
+    const androidHedef = path.join(setDizini, 'kitap', ar.androidAd);
+    fs.renameSync(ar.androidGecici, androidHedef);
+    if (yeni.ozet.degisenKitap.includes(d)) ekle(1, `kitap/${ar.androidAd}`, androidHedef, true);
   }
   for (const yol of yeni.ozet.degisenKabuk) {
     const v = yazilacakKabuk.get(yol);
@@ -1024,6 +1048,21 @@ function ciktiDogrula({ cikti, setKimligi, acik }) {
         }
       }
     }
+    if (g.androidKaynak) {
+      const ai = g.androidKaynak.indexOf(kitapOneki);
+      if (ai !== -1) {
+        const androidAd = decodeURIComponent(g.androidKaynak.slice(ai + kitapOneki.length));
+        const ay = path.join(setDizini, 'kitap', androidAd);
+        if (!fs.existsSync(ay)) {
+          yerelEksik.push(`kitap/${androidAd}`);
+        } else {
+          const aoz = dosyaSha256(ay);
+          if (aoz.sha256 !== g.androidSha256 || aoz.boyut !== g.androidBoyut) {
+            hatalar.push(`kitap/${androidAd} sha256/boyut manifestle uyuşmuyor`);
+          }
+        }
+      }
+    }
   }
   // Android G ucu — TEK imza paylaşılır: android/manifest.json(.sig) canonical'ın BİREBİR
   // aynısı olmalı (ayrı bir yayın/imza YOK); android/dosya/<yol> aynı sha256'yı taşımalı.
@@ -1201,6 +1240,20 @@ async function uzakDogrula({
             fs.unlinkSync(gecici);
           } catch (e) {}
         }
+      }
+      if (g.androidKaynak) {
+        try {
+          const r = await akisla(
+            g.androidKaynak,
+            process.platform === 'win32' ? 'NUL' : '/dev/null',
+            { zamanAsimi: 120000 },
+          );
+          if (r.durum === 200) {
+            if (r.boyut !== g.androidBoyut || r.ozet !== g.androidSha256) {
+              hatalar.push(`${g.dizin} Android arşivi sha256/boyut tutmuyor`);
+            }
+          }
+        } catch (e) {}
       }
     }
   }

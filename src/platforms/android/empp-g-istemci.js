@@ -245,7 +245,7 @@
     if (typeof n.surum !== 'string' || !n.surum.trim()) return { red: 'manifest-surum-yok' };
     if (!Array.isArray(n.kabuk)) return { red: 'manifest-kabuk-yok' };
     var kitaplarHam = Array.isArray(n.kitaplar) ? n.kitaplar : [];
-    var plan = { surum: n.surum.trim(), kabuk: [], platform: [], ekle: [], cikar: [] };
+    var plan = { surum: n.surum.trim(), kabuk: [], platform: [], ekle: [], cikar: [], atlanan: [] };
     var dizinler = {};
     for (var i = 0; i < kitaplarHam.length; i++) {
       var k = kitaplarHam[i];
@@ -254,11 +254,22 @@
       dizinler[k.dizin] = k.durum;
       if (k.durum === 'cikar') { plan.cikar.push(k.dizin); continue; }
       if (k.durum !== 'ekle') return { red: 'uyelik-durumu-gecersiz:' + k.dizin };
-      if (!adresGuvenliMi(k.kaynak)) return { red: 'uyelik-kaynak-https-degil:' + k.dizin };
-      if (typeof k.sha256 !== 'string' || !SHA256_RE.test(k.sha256) || !tamSayiMi(k.boyut)) {
+      // 09.10 (kalıcı donma gerekçesi): Android istemcisinde Electron alanları (kaynak, sha256, boyut) yerine
+      // Android özel arşiv alanları (androidKaynak, androidSha256, androidBoyut) beklenir.
+      // Alan eksikse indirme başlamadan o kitap ATLANIR (plan.atlanan → rapor.atlanan, günlükte görünür);
+      // atlanan ekleme manifestin diğer kısımlarını (motor/kabuk düzeltmeleri) ENGELLEMEZ (kalıcı donma kırılır).
+      // BİLİNÇLİ SONUÇ: `uygula` manifest sürümünü damgalar → aynı sürüm bir daha istenmez; atlanan kitap
+      // ancak yayıncı Android alanlı YENİ bir sürüm yayınlayınca kurulur (sessiz değil, raporda `atlanan`).
+      // Bu dal da imza doğrulamasından SONRA çalışır (planKur yalnız doğrulanmış ham baytlardan çağrılır).
+      if (!k.androidKaynak || !k.androidSha256 || k.androidBoyut == null) {
+        plan.atlanan.push('android-arsivi-eksik:' + k.dizin);
+        continue;
+      }
+      if (!adresGuvenliMi(k.androidKaynak)) return { red: 'uyelik-kaynak-https-degil:' + k.dizin };
+      if (typeof k.androidSha256 !== 'string' || !SHA256_RE.test(k.androidSha256) || !tamSayiMi(k.androidBoyut)) {
         return { red: 'uyelik-ozet-boyut:' + k.dizin };
       }
-      plan.ekle.push({ dizin: k.dizin, kaynak: k.kaynak, sha256: k.sha256.toLowerCase(), boyut: k.boyut });
+      plan.ekle.push({ dizin: k.dizin, kaynak: k.androidKaynak, sha256: k.androidSha256.toLowerCase(), boyut: k.androidBoyut });
     }
     var goruldu = {};
     for (var j = 0; j < n.kabuk.length; j++) {
@@ -289,7 +300,7 @@
   function bosRapor() {
     return {
       platform: PLATFORM, setKimligi: null, durum: 'atlandi', sebep: '', istek: 0, imzaYolu: null, kuruluSurum: null,
-      kabukIndirilen: 0, kabukAyni: 0, platformAtlanan: 0, eklenen: [], cikarilan: [], surum: null, hata: ''
+      kabukIndirilen: 0, kabukAyni: 0, platformAtlanan: 0, eklenen: [], atlanan: [], cikarilan: [], surum: null, hata: ''
     };
   }
 
@@ -375,6 +386,7 @@
       plan = planKur(n, kabuk);
       if (plan.red) throw new Bitis('red', plan.red);
       rapor.platformAtlanan = plan.platform.length;
+      rapor.atlanan = plan.atlanan.slice();
       var yollar = plan.kabuk.map(function (g) { return g.yol; });
       return yollar.length ? yerel.ozetler({ yollar: yollar }) : { ozetler: {} };
     }).then(function (oz) {

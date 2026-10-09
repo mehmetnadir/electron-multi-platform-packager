@@ -57,8 +57,15 @@ test('shimKopyala: kapalı bayt bayt aynı; açık kapı true; satırsız kaynak
 
 test('packagingService: iki shim kopyalama noktası da kapıdan geçer; CapacitorHttp AÇIK kalır', () => {
   const src = fs.readFileSync(path.join(__dirname, '../../packaging/packagingService.js'), 'utf8');
+  // 09.10: alt-kitap kopyası ortak modüle taşındı (android-arsiv-uretec.js); iki nokta = kök (packagingService)
+  // + alt kitap (modül). İkisi de kapıdan (shimKopyala) geçer, hiçbiri ham fs.copy kullanmaz.
+  const mod = fs.readFileSync(path.join(__dirname, '../../packaging/android-arsiv-uretec.js'), 'utf8');
   assert.ok(!/fs\.copy\([^)]*empp-android-shim\.js/.test(src), 'ham fs.copy ile shim kopyalanmamalı');
-  assert.strictEqual(src.split('await androidShimKopyala(').length - 1, 2, 'kök + alt kitap');
+  assert.ok(!/fs\.copy\(/.test(mod), 'modülde ham fs.copy ile shim kopyalanmamalı');
+  assert.strictEqual(src.split('await androidShimKopyala(').length - 1, 1, 'kök (packagingService)');
+  assert.strictEqual(mod.split('await androidShimKopyala(').length - 1, 1, 'alt kitap (android-arsiv-uretec)');
   assert.ok(/require\('\.\.\/platforms\/android\/cevrimici-yoklama'\)/.test(src));
+  assert.ok(/require\('\.\.\/platforms\/android\/cevrimici-yoklama'\)/.test(mod));
+  assert.match(src, /kitapDizininiAndroidIcinUyarla\(bookDir,/, 'alt kitap kopyası modül üstünden gider');
   assert.ok(/plugins: \{ CapacitorHttp: \{ enabled: true \} \}/.test(src), 'aktivasyon CORS için CapacitorHttp şart');
 });

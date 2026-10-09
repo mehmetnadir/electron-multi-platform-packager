@@ -479,7 +479,7 @@ test('yayinla: ekle girdisine imzalı dosyalar[] listesi eklenir (arşivle bireb
     ['index.html', 'sayfa/ölçü.txt'],
   );
   // Bağımsız olarak arşivden yeniden türetilen liste birebir aynı olmalı.
-  const zipAd = fs.readdirSync(path.join(setDizini, 'kitap'))[0];
+  const zipAd = fs.readdirSync(path.join(setDizini, 'kitap')).find((f) => !f.endsWith('-android.zip'));
   const gercek = zip.zipIcerigi(path.join(setDizini, 'kitap', zipAd));
   assert.deepEqual(b4.dosyalar, gercek);
   assert.equal(y.dosyalarKarsilastir(b4.dosyalar, gercek), null);
@@ -747,20 +747,19 @@ test('fs-shim: başka kitabın ad-alanını taşıyan sayfa RED; index.html yoks
   const o2 = ortam();
   o2.yaz('book4/kapak.txt', 'k');
   o2.yaz('book4/sayfa/1.txt', 's1');
-  const uyarilar = [];
-  const r = await y.yayinla(
-    temel(o2, 'https://ornek.invalid/guncelleme', {
-      ilk: true,
-      oncekiSurum: '2.66.1',
-      panel: 66,
-      index: o2.yaz('i.html', o2.menu('a')),
-      ekle: { book4: path.join(o2.d, 'girdi', 'book4') },
-      androidEklemeDondururKabul: true,
-    }),
-    { gunluk: (m) => uyarilar.push(m) },
+  await assert.rejects(
+    y.yayinla(
+      temel(o2, 'https://ornek.invalid/guncelleme', {
+        ilk: true,
+        oncekiSurum: '2.66.1',
+        panel: 66,
+        index: o2.yaz('i.html', o2.menu('a')),
+        ekle: { book4: path.join(o2.d, 'girdi', 'book4') },
+      }),
+      sessiz,
+    ),
+    /index\.html/,
   );
-  assert.deepEqual(r.fsShim, { book4: 'index-yok' });
-  assert.ok(uyarilar.some((m) => /book4: kökte index\.html yok/.test(m)), uyarilar.join('\n'));
 });
 
 test('kaynak-sentinel: g-yayin etiketi KENDİ kurmaz — paketleyicinin tek kaynağını çağırır', () => {
@@ -967,259 +966,113 @@ test('menü (K17): --index verilmişse kart o index üzerine eklenir; RED duruml
   );
 });
 
-/* ------------------------------------------------ Android ekleme kapısı (26.09) */
-/*
- * Android paketlerinde G istemcisi AÇIK; g-yayin eklenen kitabın arşivini yalnız Electron
- * biçiminde üretir → Android istemcisi `kitap-android-hazir-degil:bookN` ile reddeder ve manifest
- * eklemeyi sonraki her yayına taşıdığı için set Android'de KALICI donar. Kapı: `--ekle` anahtarsız
- * RED; `--cikar`/`--index`/`--motor`/menü etkilenmez. Beklenen metinler DÜZ yazılır (sabitlerden
- * türetilmez) — kapı metni sessizce değişirse test kırılsın.
- */
+/* ------------------------------------------------ Android çift zip ve yayın atomikliğii */
 
-const ONERI = '~/.empp-agent/arastirma/g-android-kitap-ekleme-onerisi-20260926.md';
-const KABUL = '--android-ekleme-dondurur-kabul';
-const donukYolu = (o) => path.join(o.cikti, 'set', '99901', 'ANDROID-DONUK.txt');
-
-test('android kapısı: argsAyristir — anahtar varsayılan kapalı, yalnız bayrakla açılır', () => {
-  assert.equal(y.argsAyristir(['--ekle', 'book4=/k']).androidEklemeDondururKabul, false);
-  assert.equal(y.argsAyristir([KABUL]).androidEklemeDondururKabul, true);
-  assert.equal(y.ANDROID_EKLEME_ANAHTARI, KABUL);
-});
-
-test('android kapısı: --ekle anahtarsız RED (neden+öneri+anahtar); imza anahtarı okunmaz', async () => {
+test('yayinla: --ekle akışında iki zip üretilir ve yüklenecekler listesine girer; manifest android alanlarını taşır', async () => {
   const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
   o.yaz('book4/index.html', o.html('book4'));
-  const zincirCagrisi = [];
-  const girdi = (ek) =>
-    temel(o, 'https://ornek.invalid/guncelleme', {
+  o.yaz('book4/sayfa/1.txt', 'sayfa 1');
+
+  const r = await y.yayinla(
+    temel(o, taban, {
       ilk: true,
       oncekiSurum: '2.80.1',
       panel: 80,
       index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
-      // Üretim yolu (Anahtar Zinciri): kapı anahtardan ÖNCE düşmeli — zincire hiç gidilmez.
-      anahtarDosya: null,
-      anahtarZinciri: true,
-      ...ek,
-    });
-  const ops = {
-    ...sessiz,
-    calistir: async (...x) => {
-      zincirCagrisi.push(x);
-      throw new Error('Anahtar Zinciri okunmamalıydı');
-    },
-  };
-  // Anahtar yalnız `true` ile açılır; "evet"/1 gibi doğru-sayılan değerler kapıyı AÇMAZ.
-  const yarimKabul = [{ androidEklemeDondururKabul: 'evet' }, { androidEklemeDondururKabul: 1 }];
-  for (const ek of [{}, ...yarimKabul]) {
-    let hata = null;
-    await y.yayinla(girdi(ek), ops).catch((e) => {
-      hata = e;
-    });
-    assert.ok(hata, `RED bekleniyordu: ${JSON.stringify(ek)}`);
-    const m = hata.message;
-    assert.match(m, /^--ekle book4 REDDEDİLDİ \(Android kapısı\)/);
-    assert.ok(m.includes('kitap-android-hazir-degil:book4'), m);
-    assert.ok(m.includes("Android'i KALICI donar"), m);
-    assert.ok(m.includes('motor düzeltmeleri dahil'), m);
-    assert.ok(m.includes(ONERI), m);
-    assert.ok(m.endsWith(`Bilinçli geçiş (Android donmasını kabul): ${KABUL}`), m);
-  }
-  assert.equal(zincirCagrisi.length, 0, 'Anahtar Zinciri çağrılmadı');
-  assert.equal(fs.existsSync(o.cikti), false, 'çıktı dizini hiç oluşmadı (arşiv/geçici yok)');
-
-  // Birden fazla kitap: hepsi adıyla.
-  o.yaz('book5/index.html', o.html('book5'));
-  await assert.rejects(
-    y.yayinla(
-      girdi({
-        ekle: { book5: path.join(o.d, 'girdi', 'book5'), book4: path.join(o.d, 'girdi', 'book4') },
-      }),
-      ops,
-    ),
-    /^Error: --ekle book4,book5 REDDEDİLDİ/,
+    }),
+    sessiz,
   );
 
-  // CLI da aynı kapıdan geçer.
-  const cli = [
-    ...['--set-kimligi', '99901', '--taban', 'https://ornek.invalid/guncelleme'],
-    ...['--cikti', o.cikti, '--ilk', '--onceki-surum', '2.80.1', '--panel', '80'],
-    ...['--index', path.join(o.d, 'girdi', 'i.html')],
-    ...['--ekle', `book4=${path.join(o.d, 'girdi', 'book4')}`, '--anahtar-dosya', o.anahtarYolu],
-  ];
-  await assert.rejects(y.main(cli, sessiz), /REDDEDİLDİ \(Android kapısı\)/);
-  assert.equal(fs.existsSync(o.cikti), false);
-  const r = await y.main([...cli, KABUL], sessiz);
-  assert.equal(r.cikis, 0);
-  assert.equal(JSON.parse(r.metin).android.kabul, true);
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const m = JSON.parse(fs.readFileSync(path.join(setDizini, 'manifest.json'), 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+
+  // Manifest alanları denetimi
+  assert.ok(typeof b4.kaynak === 'string' && b4.kaynak.endsWith('.zip'));
+  assert.ok(typeof b4.androidKaynak === 'string' && b4.androidKaynak.endsWith('-android.zip'));
+  assert.match(b4.sha256, /^[0-9a-f]{64}$/);
+  assert.match(b4.androidSha256, /^[0-9a-f]{64}$/);
+  assert.ok(Number.isSafeInteger(b4.boyut) && b4.boyut > 0);
+  assert.ok(Number.isSafeInteger(b4.androidBoyut) && b4.androidBoyut > 0);
+
+  // İki zip dosyasının yerel diskteki varlığı
+  const zipFiles = fs.readdirSync(path.join(setDizini, 'kitap'));
+  assert.equal(zipFiles.length, 2);
+  const electronZip = zipFiles.find((f) => !f.endsWith('-android.zip'));
+  const androidZip = zipFiles.find((f) => f.endsWith('-android.zip'));
+  assert.ok(electronZip, 'Electron zip üretildi');
+  assert.ok(androidZip, 'Android zip üretildi');
+
+  // Plan içinde iki zip'in de yükleme adımı var
+  const plan = JSON.parse(fs.readFileSync(r.plan, 'utf8'));
+  const planAnahtarlar = plan.yukle.map((p) => p.anahtar);
+  assert.ok(planAnahtarlar.some((k) => k.endsWith(electronZip)));
+  assert.ok(planAnahtarlar.some((k) => k.endsWith(androidZip)));
+
+  // ciktiDogrula hem electron hem android zip dosyalarını doğrular
+  const d1 = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d1.gecti, true, d1.hatalar.join('; '));
 });
 
-test('android kapısı: anahtarla geçer — rapor + manifest yanında ANDROID-DONUK.txt + günlük', async () => {
+test('yayinla: imza yeni android alanlarını kapsar (mutasyonla kanıt)', async () => {
   const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
   o.yaz('book4/index.html', o.html('book4'));
-  const gunce = [];
-  const r = await y.yayinla(
-    temel(o, 'https://ornek.invalid/guncelleme', {
+
+  await y.yayinla(
+    temel(o, taban, {
       ilk: true,
       oncekiSurum: '2.81.1',
       panel: 81,
       index: o.yaz('i.html', o.menu('a')),
       ekle: { book4: path.join(o.d, 'girdi', 'book4') },
-      androidEklemeDondururKabul: true,
-    }),
-    { gunluk: (m) => gunce.push(m) },
-  );
-  assert.equal(r.surum, '2.81.2');
-  assert.deepEqual(
-    { ...r.android, uyari: typeof r.android.uyari },
-    {
-      donuk: true,
-      yeniEkleme: ['book4'],
-      devralinanEkleme: [],
-      kabul: true,
-      uyari: 'string',
-      dosya: donukYolu(o),
-    },
-  );
-  assert.ok(r.android.uyari.startsWith('ANDROID DONUK — '), r.android.uyari);
-  assert.ok(r.android.uyari.includes(`bu yayında ${KABUL} ile: book4`), r.android.uyari);
-  assert.ok(r.android.uyari.includes(ONERI));
-  assert.ok(gunce.some((m) => m.startsWith('[uyari] ANDROID DONUK — ')), gunce.join('\n'));
-  // Manifestin YANINDA (aynı dizin), düz metin.
-  assert.ok(fs.existsSync(path.join(path.dirname(donukYolu(o)), 'manifest.json')));
-  const metin = fs.readFileSync(donukYolu(o), 'utf8');
-  assert.ok(metin.startsWith('ANDROID DONUK — '), metin);
-  assert.ok(metin.includes('set 99901 · G 2.81.2 · '), metin);
-  assert.ok(metin.includes('yeni ekleme: book4\n'), metin);
-  assert.ok(metin.includes('devralınan ekleme: -\n'), metin);
-  // Plan (yayin/<id>/<sürüm>.json) raporu taşır; uyarı dosyası YÜKLEME planında değil.
-  const plan = JSON.parse(fs.readFileSync(r.plan, 'utf8'));
-  assert.equal(plan.android.donuk, true);
-  assert.equal(plan.yukle.filter((p) => p.anahtar.includes('ANDROID-DONUK')).length, 0);
-  // Manifest imzalı baytı değişmedi: uyarı manifestin DIŞINDA, istemciler görmez.
-  const mYolu = path.join(o.cikti, 'set', '99901', 'manifest.json');
-  assert.equal('android' in JSON.parse(fs.readFileSync(mYolu, 'utf8')), false);
-  assert.equal(y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik }).gecti, true);
-});
-
-test('android kapısı: --cikar/--index/--motor/menü anahtarsız geçer; donuk değil, uyarı yok', async () => {
-  const o = ortam();
-  const taban = 'https://ornek.invalid/guncelleme';
-  const gunce = [];
-  const ops = { gunluk: (m) => gunce.push(m) };
-  // index + motor (ilk yayın).
-  const r1 = await y.yayinla(
-    temel(o, taban, {
-      ilk: true,
-      oncekiSurum: '2.82.1',
-      panel: 82,
-      index: o.yaz('i.html', o.html('v2')),
-      motorlar: { book1: o.yaz('m.js', 'motor-v2') },
-    }),
-    ops,
-  );
-  assert.deepEqual(r1.degisenKabuk, [`book1/${M}`, 'index.html']);
-  // menü (Web-Z) + çıkar — ayrı çıktı dizininde, kurulu menü tabanıyla.
-  const o2 = { ...o, cikti: path.join(o.d, 'senaryolar', 's2') };
-  const r2 = await y.yayinla(
-    temel(o2, taban, {
-      ilk: true,
-      oncekiSurum: '2.82.1',
-      panel: 82,
-      menuTaban: webzKok(o, [['book1', '58336', 'SB'], ['book3', '58237', 'TB']]),
-      cikar: ['book3'],
-    }),
-    ops,
-  );
-  assert.deepEqual(r2.menu.kitaplar, { book3: 'cikarildi' });
-  assert.deepEqual(r2.menu.degisen, WEBZ_DOSYALARI);
-  for (const [r, oo] of [[r1, o], [r2, o2]]) {
-    assert.deepEqual(r.android, {
-      donuk: false,
-      yeniEkleme: [],
-      devralinanEkleme: [],
-      kabul: false,
-      uyari: null,
-      dosya: null,
-    });
-    assert.equal(fs.existsSync(donukYolu(oo)), false);
-  }
-  assert.ok(!gunce.some((m) => /ANDROID/.test(m)), gunce.join('\n'));
-});
-
-// Devralınan ekleme: yeni ekleme yoksa bugünkü akış sürer (uyarı görünür); genişleten --ekle RED;
-// --cikar donmayı kaldırır.
-test('android kapısı: devralınan ekleme — akış sürer, genişletme RED, çıkarınca çözülür', async () => {
-  const o = ortam();
-  const taban = 'https://ornek.invalid/guncelleme';
-  const setDizini = path.join(o.cikti, 'set', '99901');
-  const kitaplar = () =>
-    JSON.parse(fs.readFileSync(path.join(setDizini, 'manifest.json'), 'utf8')).kitaplar.map(
-      (k) => `${k.dizin}:${k.durum}`,
-    );
-  o.yaz('book4/index.html', o.html('book4'));
-  o.yaz('book5/index.html', o.html('book5'));
-  // 1) Bilinçli ekleme (anahtarla).
-  await y.yayinla(
-    temel(o, taban, {
-      ilk: true,
-      oncekiSurum: '2.83.1',
-      panel: 83,
-      index: o.yaz('i.html', o.menu('a')),
-      ekle: { book4: path.join(o.d, 'girdi', 'book4') },
-      androidEklemeDondururKabul: true,
     }),
     sessiz,
   );
-  // 2) Devralınan ekleme + yalnız motor, ANAHTARSIZ → geçer (bugünkü yayın akışı bozulmaz);
-  //    ekleme birikimli taşınır, Android donukluğu raporda ve dosyada görünür kalır.
-  const gunce = [];
-  const r2 = await y.yayinla(
-    temel(o, taban, { panel: 83, motorlar: { book1: o.yaz('m.js', 'motor-v3') } }),
-    { gunluk: (m) => gunce.push(m) },
-  );
-  assert.equal(r2.surum, '2.83.3');
-  assert.deepEqual(r2.degisenKitap, []);
-  assert.deepEqual(kitaplar(), ['book4:ekle']);
-  assert.equal(r2.android.donuk, true);
-  assert.deepEqual(r2.android.yeniEkleme, []);
-  assert.deepEqual(r2.android.devralinanEkleme, ['book4']);
-  assert.equal(r2.android.kabul, false);
-  assert.ok(r2.android.uyari.includes('önceki imzalı durumdan devralınan: book4'), r2.android);
-  assert.ok(gunce.some((m) => m.startsWith('[uyari] ANDROID DONUK — ')), gunce.join('\n'));
-  const metin = fs.readFileSync(donukYolu(o), 'utf8');
-  assert.ok(metin.includes('G 2.83.3') && metin.includes('devralınan ekleme: book4\n'), metin);
-  // 3) Devralınan eklemeyi YENİ bir eklemeyle genişletmek anahtarsız RED; durum değişmez.
-  await assert.rejects(
-    y.yayinla(
-      temel(o, taban, { panel: 83, ekle: { book5: path.join(o.d, 'girdi', 'book5') } }),
-      sessiz,
-    ),
-    /^Error: --ekle book5 REDDEDİLDİ \(Android kapısı\)/,
-  );
-  const surumJson = JSON.parse(fs.readFileSync(path.join(setDizini, 'surum.json'), 'utf8'));
-  assert.equal(surumJson.surum, '2.83.3');
-  assert.deepEqual(kitaplar(), ['book4:ekle']);
-  // 4) Eklenen kitap --cikar ile çıkarılınca (anahtarsız) durumda `ekle` kalmaz: Android donuk
-  //    değil, önceki yayından kalan bayat uyarı dosyası kalkar.
-  const r4 = await y.yayinla(temel(o, taban, { panel: 83, cikar: ['book4'] }), sessiz);
-  assert.deepEqual(kitaplar(), ['book4:cikar']);
-  assert.equal(r4.android.donuk, false);
-  assert.deepEqual(r4.android.devralinanEkleme, []);
-  assert.equal(fs.existsSync(donukYolu(o)), false);
+
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  const manifestYolu = path.join(setDizini, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(manifestYolu, 'utf8'));
+  const b4 = m.kitaplar.find((k) => k.dizin === 'book4');
+
+  // Mutasyon: androidSha256 değerini değiştir, fakat .sig dosyasını DEĞİŞTİRME
+  b4.androidSha256 = 'f'.repeat(64);
+  fs.writeFileSync(manifestYolu, JSON.stringify(m));
+
+  // Doğrulama başarısız olmalı (imza yeni alanları kapsıyor)
+  const d1 = y.ciktiDogrula({ cikti: o.cikti, setKimligi: '99901', acik: o.acik });
+  assert.equal(d1.gecti, false);
+  assert.match(d1.hatalar.join('; '), /imza doğrulanmadı/);
 });
 
-test('android kapısı: androidDurumu saf — ekle yeni/devralınan ayrılır, cikar sayılmaz', () => {
-  const k = [
-    { dizin: 'book2', durum: 'cikar' },
-    { dizin: 'book4', durum: 'ekle' },
-    { dizin: 'book7', durum: 'ekle' },
-  ];
-  const d = y.androidDurumu(k, ['book7'], true);
-  assert.deepEqual(
-    [d.donuk, d.yeniEkleme, d.devralinanEkleme, d.kabul],
-    [true, ['book7'], ['book4'], true],
-  );
-  const bos = y.androidDurumu([{ dizin: 'book2', durum: 'cikar' }], [], undefined);
-  assert.deepEqual([bos.donuk, bos.uyari, bos.kabul], [false, null, false]);
+test('yayinla: uyarlanamayan kitap (index.html yok) yayın atomikliğini bozar (R2/manifest yazılmaz)', async () => {
+  const o = ortam();
+  const taban = 'https://ornek.invalid/guncelleme';
+  // index.html olmayan kitap dizini
+  o.yaz('book4/sadece_resim.png', 'resim');
+
+  let hata = null;
+  await y.yayinla(
+    temel(o, taban, {
+      ilk: true,
+      oncekiSurum: '2.82.1',
+      panel: 82,
+      index: o.yaz('i.html', o.menu('a')),
+      ekle: { book4: path.join(o.d, 'girdi', 'book4') },
+    }),
+    sessiz,
+  ).catch((e) => {
+    hata = e;
+  });
+
+  assert.ok(hata, 'Hata fırlatılmalıydı');
+  assert.match(hata.message, /book4/);
+  assert.match(hata.message, /index\.html/);
+
+  // Atomiklik kanıtı: manifest.json veya set dizini oluşmamalı
+  const setDizini = path.join(o.cikti, 'set', '99901');
+  assert.equal(fs.existsSync(path.join(setDizini, 'manifest.json')), false, 'manifest.json YAZILMAMALI');
+  assert.equal(fs.existsSync(path.join(setDizini, 'surum.json')), false, 'surum.json YAZILMAMALI');
 });
