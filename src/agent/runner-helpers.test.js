@@ -486,6 +486,17 @@ test('etkinYetenekler: Mac evde android de düşer; ofiste ya da android-serbest
   assert.deepEqual(etkinYetenekler(['android', 'macos'], { ...k, ofiste: false, androidSerbest: true, macSerbest: true }), ['android', 'macos']);
 });
 
+test('etkinYetenekler: androidDurdur kasa devraldığında android yeteneğini tamamen düşürür (09.10)', () => {
+  // androidDurdur true + ofiste → android yok
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, androidDurdur: true }), ['macos']);
+  // androidDurdur true + androidSerbest → android yok
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: false, androidSerbest: true, androidDurdur: true }), []);
+  // androidDurdur false + ofiste → android var
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, androidDurdur: false }), ['android', 'macos']);
+  // androidDurdur undefined → eski davranış
+  assert.deepEqual(etkinYetenekler(['android', 'macos'], { ofiste: true, androidDurdur: undefined }), ['android', 'macos']);
+});
+
 test('etkinYetenekler: androidEvKurali vermeyen ajan (srv21) evde de android tutar', () => {
   assert.deepEqual(etkinYetenekler(['android'], { ofiste: false }), ['android']);
   assert.deepEqual(etkinYetenekler(['android', 'pardus'], { ofiste: false, androidEvKurali: false }), ['android', 'pardus']);

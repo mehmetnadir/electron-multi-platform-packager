@@ -94,7 +94,9 @@ test('kaynak-sentinel: runGradleBuild build başlamadan ÖNCE preflight çağır
   assert.match(src, /require\(['"]\.\/android-preflight['"]\)/);
   const fnStart = src.indexOf('async runGradleBuild(webAppPath, task)');
   assert.notStrictEqual(fnStart, -1);
-  const spawnIdx = src.indexOf("spawn('./gradlew'", fnStart);
+  // 09.10: gradle komutu platforma göre (gradlew.bat / ./gradlew) — android-win32.gradleKomutu
+  const spawnIdx = src.indexOf('spawn(gCmd.komut', fnStart);
+  assert.notStrictEqual(spawnIdx, -1, 'runGradleBuild gradle spawn\'ı gCmd.komut ile yapmalı');
   const preflightIdx = src.indexOf('checkAndroidGradleHeapPreflight()', fnStart);
   assert.notStrictEqual(preflightIdx, -1, 'runGradleBuild preflight\'i çağırmalı');
   assert.ok(preflightIdx < spawnIdx, 'preflight gradle spawn\'ından ÖNCE çağrılmalı');

@@ -50,6 +50,7 @@ const nsisKurulum = require('./nsis-kurulum');
 const acilisZamanlama = require('./acilis-zamanlama');
 const surumTuret = require('./surum-turet');
 const { shimKopyala: androidShimKopyala } = require('../platforms/android/cevrimici-yoklama');
+const { gradleKomutu, javaIkiliYolu, androidSdkKoku, javaHomeAdaylari } = require('./android-win32');
 
 class PackagingService {
   constructor() {
@@ -5174,7 +5175,7 @@ public class MainActivity extends BridgeActivity {
 
     const javaMajor = (home) => {
       try {
-        const bin = home && path.join(home, 'bin', 'java');
+        const bin = home && javaIkiliYolu(home, process.platform);
         if (!bin || !fs.existsSync(bin)) return 0;
         const { execSync } = require('child_process');
         const out = execSync(`"${bin}" -version 2>&1`, { encoding: 'utf8' });
@@ -5185,16 +5186,15 @@ public class MainActivity extends BridgeActivity {
       }
     };
 
-    const candidates = [];
-    if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME);
-    candidates.push('/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home'); // Homebrew (Intel)
-    candidates.push('/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home'); // Homebrew (Apple Silicon)
-    try {
-      const { execSync } = require('child_process');
-      const def = execSync('/usr/libexec/java_home', { encoding: 'utf8' }).trim();
-      if (def) candidates.push(def);
-    } catch (e) {
-      console.error('⚠️ /usr/libexec/java_home çözülemedi:', e.message);
+    const candidates = javaHomeAdaylari(process.env, process.platform);
+    if (process.platform === 'darwin') {
+      try {
+        const { execSync } = require('child_process');
+        const def = execSync('/usr/libexec/java_home', { encoding: 'utf8' }).trim();
+        if (def) candidates.push(def);
+      } catch (e) {
+        console.error('⚠️ /usr/libexec/java_home çözülemedi:', e.message);
+      }
     }
 
     // Önce JDK 21+ olan ilk geçerli home
@@ -5224,7 +5224,8 @@ public class MainActivity extends BridgeActivity {
 
     return new Promise(async (resolve, reject) => {
       const androidPath = path.join(webAppPath, 'android');
-      const gradlePath = path.join(androidPath, 'gradlew');
+      const gCmd = gradleKomutu(process.platform);
+      const gradlePath = path.join(androidPath, gCmd.komut);
       
       // Gradle wrapper dosyasının varlığını kontrol et
       if (!await fs.pathExists(gradlePath)) {
@@ -5232,27 +5233,37 @@ public class MainActivity extends BridgeActivity {
         return;
       }
       
-      // Gradle wrapper'ı executable yap
-      try {
-        await fs.chmod(gradlePath, 0o755);
-        console.log('✅ Gradle wrapper executable yapıldı');
-      } catch (chmodError) {
-        console.error('⚠️ Gradle wrapper chmod hatası:', chmodError.message);
+      // Gradle wrapper'ı executable yap (yalnızca gerekiyorsa)
+      if (gCmd.chmod) {
+        try {
+          await fs.chmod(gradlePath, 0o755);
+          console.log('✅ Gradle wrapper executable yapıldı');
+        } catch (chmodError) {
+          console.error('⚠️ Gradle wrapper chmod hatası:', chmodError.message);
+        }
       }
       
       console.log(`🔧 Gradle task çalıştırılıyor: ${task}`);
       console.log(`📁 Working directory: ${androidPath}`);
       console.log(`🛠️ Gradle path: ${gradlePath}`);
       
+      let sdkPath;
+      try {
+        sdkPath = androidSdkKoku(process.env, process.platform);
+      } catch (sdkError) {
+        reject(sdkError);
+        return;
+      }
+
       const buildEnv = {
         ...process.env,
-        ANDROID_HOME: process.env.ANDROID_HOME || '/Users/nadir/Library/Android/sdk',
-        ANDROID_SDK_ROOT: process.env.ANDROID_SDK_ROOT || '/Users/nadir/Library/Android/sdk'
+        ANDROID_HOME: sdkPath,
+        ANDROID_SDK_ROOT: sdkPath
       };
       const javaHome = this.getJavaHome();
       if (javaHome) buildEnv.JAVA_HOME = javaHome;
 
-      const child = spawn('./gradlew', [task], {
+      const child = spawn(gCmd.komut, [task], {
         cwd: androidPath,
         shell: true,
         env: buildEnv

@@ -14,6 +14,8 @@
  *   S5 ajan ölü (20 dk)     → `bildir bekci` yüksek, yalnız durum değişince
  *   S6 kasa kod sapması     → runner.js md5 Mac ≠ kasa → `bildir bekci` (dağıtım YOK)
  *   S7 üretim kapısı kapalı → kasa logu 30 dk yalnız "KAPALI" + kabul işçisi 45 dk durgun → bekci
+ *   S8 ProBook sürüm        → Mac HEAD ≠ ProBook .serit-surum → kur.sh (pardus derlemesi yoksa)
+ *   S9 Android şeridi       → kasa canlı+android ise bayrak 'koy' (Mac durdur), değilse 'kaldir'
  *
  * Her DB yazımından önce mariadb-dump yedeği (Dump completed + INSERT ≥1) ZORUNLU; yedek
  * doğrulanmazsa yazım yok. Eylem kaydı ~/.empp-agent/hat-bekcisi/eylem.jsonl (tavanlar buradan).
@@ -259,6 +261,48 @@ function planUretimKapisi(agentSatirlari, kabulSonSatir, nowMs, onceki) {
   return { bildirim: b, yeni: kapali ? 'kapali' : null, durum: kms == null ? 'olculemedi' : (kapali ? 'kapali' : 'ok') };
 }
 
+/** S9: Android şeridi devralma. Kasa ajanı canlı + android ise Mac durdurulur. */
+function planAndroidSerit(ajanlar = [], nowMs, onceki, esikDk = 15) {
+  let kasaAndroid = false;
+  let sessizDk = null;
+  for (const a of ajanlar) {
+    if (!a) continue;
+    const revoked = a.revoked === '1' || a.revoked === 1 || a.revoked === true;
+    if (revoked) continue;
+    const caps = String(a.capabilities || '').toLowerCase();
+    if (caps.includes('windows')) {
+      const lsMs = typeof a.last_seen_at === 'number'
+        ? a.last_seen_at
+        : (a.last_seen_at instanceof Date ? a.last_seen_at.getTime() : dbMs(a.last_seen_at));
+      if (lsMs != null && lsMs <= nowMs) sessizDk = Math.round((nowMs - lsMs) / DK);
+      if (caps.includes('android')) {
+        if (lsMs != null && lsMs <= nowMs && (nowMs - lsMs) < esikDk * DK) {
+          kasaAndroid = true;
+          break;
+        }
+      }
+    }
+  }
+  const durum = kasaAndroid ? 'kasa' : 'mac';
+  const yeni = durum;
+  let bayrak = null;
+  if (kasaAndroid) {
+    bayrak = onceki === 'kasa' ? null : 'koy';
+  } else {
+    bayrak = onceki === 'mac' ? null : 'kaldir'; // ilk koşuda da kaldır: bayat bayrak temizlenir
+  }
+  let bildirim = null;
+  if (onceki ? onceki !== durum : durum === 'kasa') {
+    if (durum === 'kasa') {
+      bildirim = { kanal: 'bekci', yuksek: false, baslik: 'Hat bekçisi', mesaj: 'Android şeridi: kasa devraldı — Mac android-durdur' };
+    } else {
+      const nStr = sessizDk != null ? `${sessizDk} dk` : '? dk';
+      bildirim = { kanal: 'bekci', yuksek: false, baslik: 'Hat bekçisi', mesaj: `Android şeridi: kasa sessiz (${nStr}) — Mac devraldı` };
+    }
+  }
+  return { bayrak, bildirim, yeni, durum };
+}
+
 /** S3 + tavan bildirimleri: aynı anahtar 24 saatte 1. Tek özet mesajı. */
 function bildirimOzeti(kalici, tavanlar, damgalar, nowMs) {
   const imzaHata = (h) => crypto.createHash('sha1')
@@ -303,7 +347,7 @@ const sql = {
   kitaplar: () => 'SELECT book_id, kaynak_modu, kaynak_kur_istegi_at, kaynak_kurulum_baslangic, '
     + 'kaynak_kurulum_bitis FROM pipeline_book_summaries WHERE deleted_at IS NULL '
     + 'AND kaynak_kur_istegi_at IS NOT NULL',
-  ajanlar: () => 'SELECT name, hostname, revoked, last_seen_at, '
+  ajanlar: () => 'SELECT name, hostname, revoked, last_seen_at, capabilities, '
     + 'TIMESTAMPDIFF(MINUTE, last_seen_at, NOW()) AS dk FROM build_agents',
   /** kosul: bitmis (completed/failed/idle) | kira (running + kira dolu). oneAl: eski last_queued_at. */
   requeue: (set, platform, kosul, oneAl) => [
@@ -348,6 +392,7 @@ function ayarlar(env = process.env, ev = os.homedir()) {
     probookSsh: env.EMPP_PROBOOK_SSH || 'etapadmin@100.73.161.76',
     macRepo: env.EMPP_MAC_REPO || '/Users/nadir/01dev/electron-multi-platform-packager',
     macDuraklat: path.join(ev, '.empp-agent', 'duraklat.istek'),
+    androidDurdurFlag: path.join(ev, '.empp-agent', 'android-durdur.istek'),
   };
 }
 
@@ -403,7 +448,8 @@ async function dbOku(cfg, d) {
     baslangic: r.kaynak_kurulum_baslangic, bitis: r.kaynak_kurulum_bitis,
   }));
   const ajanlar = (await srv.oku(sql.ajanlar())).map((r) => ({
-    ad: r.name, hostname: r.hostname, dk: r.dk == null ? null : Number(r.dk), iptal: r.revoked === '1',
+    name: r.name, ad: r.name, hostname: r.hostname, dk: r.dk == null ? null : Number(r.dk), iptal: r.revoked === '1',
+    capabilities: r.capabilities, last_seen_at: r.last_seen_at, revoked: r.revoked,
   }));
   return { srv, simdi, satirlar, kitaplar, ajanlar };
 }
@@ -511,15 +557,25 @@ async function kos(o, cfg, d) {
   const kapi = kasa.agentSatirlari && kasa.kabulSon != null
     ? planUretimKapisi(kasa.agentSatirlari, kasa.kabulSon, nowMs, durum.kapi || null)
     : { bildirim: null, yeni: durum.kapi || null, durum: 'olculemedi' };
+  const androidSerit = planAndroidSerit(db.ajanlar, nowMs, durum.androidSerit || null);
   const ozet = bildirimOzeti(hata.kalici, tavanlar, damgalar, nowMs);
-  const bildirimler = [...ajan.bildirimler, surum.bildirim, pbSurum.bildirim, kapi.bildirim, ozet].filter(Boolean);
+  const bildirimler = [...ajan.bildirimler, surum.bildirim, pbSurum.bildirim, kapi.bildirim, androidSerit.bildirim, ozet].filter(Boolean);
 
   const plan = {
     requeue, tavanlar, bekleyen: hata.bekleyen, kalici: hata.kalici, bildirimler, probookSsh,
     surumDurum: surum.durum, probookDurum: pbSurum.durum, kapiDurum: kapi.durum, ajanDurum: ajan.yeni,
+    androidSeritDurum: androidSerit.durum,
   };
   let eylem = null;
   if (o.uygula) {
+    if (androidSerit.bayrak === 'koy') {
+      try {
+        fs.mkdirSync(path.dirname(cfg.androidDurdurFlag), { recursive: true });
+        fs.writeFileSync(cfg.androidDurdurFlag, '');
+      } catch (_) {}
+    } else if (androidSerit.bayrak === 'kaldir') {
+      try { fs.unlinkSync(cfg.androidDurdurFlag); } catch (_) {}
+    }
     eylem = { yazim: await yazimUygula(requeue, db, cfg, d), bildirim: [], probook: null };
     let pbYeni = pbSurum.yeni;
     if (pbSurum.eylem === 'guncelle') {
@@ -528,7 +584,7 @@ async function kos(o, cfg, d) {
       eylem.probook = k.kod === 0 ? 'guncellendi' : `kur.sh rc=${k.kod}`;
       if (k.kod !== 0) pbYeni = durum.probookSurum || null; // sonraki koşu yeniden dener
     }
-    const yeni = { ...durum, damgalar: { ...damgalar }, ajanlar: ajan.yeni, surumImza: surum.yeni, kapi: kapi.yeni, probookSurum: pbYeni };
+    const yeni = { ...durum, damgalar: { ...damgalar }, ajanlar: ajan.yeni, surumImza: surum.yeni, kapi: kapi.yeni, probookSurum: pbYeni, androidSerit: androidSerit.yeni };
     for (const b of bildirimler) {
       const ok = await bildirGonder(cfg, d, b);
       eylem.bildirim.push({ mesaj: b.mesaj, ok });
@@ -539,6 +595,7 @@ async function kos(o, cfg, d) {
       if (ad) yeni.ajanlar[ad.ad] = (durum.ajanlar || {})[ad.ad];
       if (b === surum.bildirim) yeni.surumImza = durum.surumImza || null;
       if (b === kapi.bildirim) yeni.kapi = durum.kapi || null;
+      if (b === androidSerit.bildirim) yeni.androidSerit = durum.androidSerit || null;
     }
     for (const a of Object.keys(yeni.damgalar)) if (nowMs - yeni.damgalar[a] > 2 * SA24) delete yeni.damgalar[a];
     d.dosyaYaz(cfg.bildirimDurumu, `${JSON.stringify(yeni, null, 1)}\n`);
@@ -559,7 +616,8 @@ function rapor(r, o) {
   L.push(`| S5 ajanlar | ${aj} | ProBook ssh22 ${p.probookSsh ? 'açık' : 'KAPALI'} |`);
   L.push(`| S6 kasa sürüm | ${p.surumDurum} | - |`);
   L.push(`| S7 üretim kapısı | ${p.kapiDurum} | - |`);
-  L.push(`| S8 ProBook sürüm | ${p.probookDurum} | ${r.eylem && r.eylem.probook ? r.eylem.probook : '-'} |`, '');
+  L.push(`| S8 ProBook sürüm | ${p.probookDurum} | ${r.eylem && r.eylem.probook ? r.eylem.probook : '-'} |`);
+  L.push(`| S9 Android şeridi | ${p.androidSeritDurum} | - |`, '');
   for (const x of p.requeue) L.push(`- requeue ${x.set}/${x.platform} [${x.tur}] ${x.sebep}${x.oneAl ? ` (öne: ${x.oneAl})` : ''}`);
   for (const x of p.bekleyen) L.push(`- bekle ${x.set}/${x.platform} ${Math.ceil(x.kalanDk)} dk`);
   for (const x of p.tavanlar) L.push(`- TAVAN ${x.tur} ${x.set}/${x.platform}`);
@@ -594,8 +652,8 @@ async function ana(argv = process.argv.slice(2), d = varsayilanBag(), cfg = ayar
 module.exports = {
   kurPlatformlari,
   CIKIS, TAVAN, BEKLEME_DK, TUR, KALICI_KALIPLAR, GECICI_KALIPLAR, AJANLAR,
-  hataSinifla, dkFark, defterOku, son24Say, planHata, planKira, planKurAskida, requeueBirlestir,
-  planAjan, planKasaSurum, planProbookSurum, planUretimKapisi, bildirimOzeti, sql, yedekKomutu, ayarlar, argAyristir,
+  hataSinifla, dbMs, dkFark, defterOku, son24Say, planHata, planKira, planKurAskida, requeueBirlestir,
+  planAjan, planKasaSurum, planProbookSurum, planUretimKapisi, planAndroidSerit, bildirimOzeti, sql, yedekKomutu, ayarlar, argAyristir,
   kilitAl, kilitBirak, yazimUygula, kos, rapor, varsayilanBag, ana,
 };
 

@@ -44,23 +44,56 @@ const YABANCI_ANR_ORTULME_ORAN_ESIGI = 0.4;
  */
 const CIHAZ_KITAP_SN = 120;
 
-function sdkKoku() {
-  return process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || path.join(os.homedir(), 'Library', 'Android', 'sdk');
+function sdkKoku(env = process.env, platform = process.platform) {
+  if (env.ANDROID_HOME) return env.ANDROID_HOME;
+  if (env.ANDROID_SDK_ROOT) return env.ANDROID_SDK_ROOT;
+  if (platform === 'win32') return null;
+  return path.join(env.HOME || os.homedir(), 'Library', 'Android', 'sdk');
+}
+
+/** SDK ikililerinin (adb, emulator) olası yolları. Saf. */
+function sdkIkilileri(sdk, platform = process.platform) {
+  const koku = sdk || '';
+  if (platform === 'win32') {
+    return {
+      adbAday: [path.win32.join(koku, 'platform-tools', 'adb.exe')],
+      emulatorAday: [path.win32.join(koku, 'emulator', 'emulator.exe')],
+    };
+  }
+  return {
+    adbAday: [path.join(koku, 'platform-tools', 'adb'), '/usr/local/bin/adb', '/opt/homebrew/bin/adb'],
+    emulatorAday: [path.join(koku, 'emulator', 'emulator')],
+  };
+}
+
+/** Kabul kanıtının yazıldığı varsayılan dizin. Saf. */
+function kanitDizini(bookId = '', platform = process.platform, env = process.env) {
+  const bId = String(bookId || '');
+  const kok = env.EMPP_KABUL_KANIT_KOK;
+  if (platform === 'win32') {
+    const taban = kok || 'D:\\empp-kabul';
+    return path.win32.join(taban, 'android', bId);
+  }
+  const taban = kok || path.join(env.HOME || os.homedir(), '.empp-agent', 'kabul-kanit');
+  return path.join(taban, 'android', bId);
 }
 
 function aracBul() {
   const sdk = sdkKoku();
-  const adbAday = [path.join(sdk, 'platform-tools', 'adb'), '/usr/local/bin/adb', '/opt/homebrew/bin/adb'];
-  const adb = adbAday.find((a) => fs.existsSync(a)) || null;
-  const emulator = [path.join(sdk, 'emulator', 'emulator')].find((a) => fs.existsSync(a)) || null;
+  const ikililer = sdkIkilileri(sdk, process.platform);
+  const adb = ikililer.adbAday.find((a) => fs.existsSync(a)) || null;
+  const emulator = ikililer.emulatorAday.find((a) => fs.existsSync(a)) || null;
   let aapt = null;
-  try {
-    const surumler = fs.readdirSync(path.join(sdk, 'build-tools')).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-    for (let i = surumler.length - 1; i >= 0 && !aapt; i -= 1) {
-      const y = path.join(sdk, 'build-tools', surumler[i], 'aapt');
-      if (fs.existsSync(y)) aapt = y;
-    }
-  } catch (_) { /* build-tools yok */ }
+  const aaptAd = process.platform === 'win32' ? 'aapt.exe' : 'aapt';
+  if (sdk) {
+    try {
+      const surumler = fs.readdirSync(path.join(sdk, 'build-tools')).sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
+      for (let i = surumler.length - 1; i >= 0 && !aapt; i -= 1) {
+        const y = path.join(sdk, 'build-tools', surumler[i], aaptAd);
+        if (fs.existsSync(y)) aapt = y;
+      }
+    } catch (_) { /* build-tools yok */ }
+  }
   return { adb, emulator, aapt, sdk };
 }
 
@@ -72,7 +105,12 @@ function yukKanitYaz(kanitDizin, veri) {
 }
 
 function kos(komut, argumanlar, secenek = {}) {
-  const r = spawnSync(komut, argumanlar, { encoding: secenek.ham ? null : 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: secenek.zamanAsimiMs || 120000, ...secenek });
+  const r = spawnSync(komut, argumanlar, {
+    encoding: secenek.ham ? null : 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    timeout: secenek.zamanAsimiMs || 120000,
+    ...secenek,
+  });
   return r;
 }
 
@@ -645,7 +683,7 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
 async function cihazKabulu(p) {
   const log = p.log || (() => {});
   const sonuc = { durum: O.DURUM.OLCULEMEDI, sebepler: [], notlar: [], sistemDiyaloglari: [] };
-  const kanitDizin = path.join(p.kanit, 'android');
+  const kanitDizin = p.kanit ? path.join(p.kanit, 'android') : kanitDizini(p.bookId || p.kitapId || '');
   fs.mkdirSync(kanitDizin, { recursive: true });
 
   // yükKayit: {asama, yuk} — kosum.json kalibrasyonu için etiketli örnekler (koordinatör
@@ -720,7 +758,10 @@ async function cihazKabulu(p) {
         '-gpu', process.env.EMPP_KABUL_EMU_GPU || 'swiftshader_indirect',
         '-memory', process.env.EMPP_KABUL_EMU_RAM || '3072', '-no-snapshot-save'];
       emuCikti = null;
-      emu = spawn(arac.emulator, emuArg, { detached: true, stdio: ['ignore', emuLog, emuLog] });
+      emu = spawn(arac.emulator, emuArg, {
+        detached: true,
+        stdio: ['ignore', emuLog, emuLog],
+          });
       const buEmu = emu;
       buEmu.on('exit', (k, sg) => { if (buEmu === emu) emuCikti = { kod: k, sinyal: sg }; });
       sonuc.emulator.avd = avd;
@@ -919,7 +960,10 @@ async function emulatoruKapat(arac, seri, emu, cikti) {
   if (!cikti()) adbKos(arac, seri, ['emu', 'kill'], { zamanAsimiMs: 15000 });
   for (let i = 0; i < 20 && !cikti(); i += 1) await bekle(1000);
   if (cikti()) return true;
-  try { process.kill(-emu.pid, 'SIGKILL'); } catch (_) { /* ölü */ }
+  try {
+    if (process.platform === 'win32') process.kill(emu.pid, 'SIGKILL');
+    else process.kill(-emu.pid, 'SIGKILL');
+  } catch (_) { /* ölü */ }
   return false;
 }
 
@@ -939,6 +983,9 @@ module.exports = {
   CIHAZ_KITAP_SN,
   YABANCI_ANR_ORTULME_MIN_SAYI,
   YABANCI_ANR_ORTULME_ORAN_ESIGI,
+  sdkKoku,
+  sdkIkilileri,
+  kanitDizini,
   avdAdaylari,
   badgingCoz,
   kurulumSebebi,
