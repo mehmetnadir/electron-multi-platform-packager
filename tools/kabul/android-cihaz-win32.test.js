@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
-const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn, kurulumArgumanlari } = require('./android-cihaz');
+const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn, kurulumArgumanlari, kurulumSebebi } = require('./android-cihaz');
 
 test('sdkKoku: win32 env yokken null döndürür', () => {
   assert.equal(sdkKoku({}, 'win32'), null);
@@ -74,4 +74,11 @@ test('kurulumArgumanlari: win32 --no-streaming (akışlı kurulum kasada boş se
   assert.deepEqual(kurulumArgumanlari({}, 'darwin'), []);
   assert.deepEqual(kurulumArgumanlari({ EMPP_KABUL_ADB_AKISSIZ: '1' }, 'darwin'), ['--no-streaming']);
   assert.deepEqual(kurulumArgumanlari({ EMPP_KABUL_ADB_AKISSIZ: '0' }, 'win32'), []);
+});
+
+test('kurulumSebebi: uzun hatada BAŞ (istisna metni) ve SON (yığın) birlikte kalır', () => {
+  const r = kurulumSebebi({ status: 1, stderr: 'Exception occurred while executing install: java.lang.SecurityException: SEBEP ' + 'x'.repeat(600) + ' SON-IZ' });
+  assert.match(r, /^rc=1 Exception occurred while executing install: java.lang.SecurityException: SEBEP/);
+  assert.match(r, /SON-IZ$/);
+  assert.ok(r.length <= 420);
 });
