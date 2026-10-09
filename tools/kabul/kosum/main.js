@@ -67,6 +67,14 @@ const bekci = setTimeout(() => {
 bekci.unref();
 
 app.commandLine.appendSwitch('use-mock-keychain');
+// Windows (kasa, 09.10): GPU süreci üst üste 0xC0000409 ile çöktü, pencere yok oldu
+// ("Object has been destroyed" gezinmeBekle). Offscreen koşumda donanım hızlandırma gereksiz;
+// win32'de kapatılır (EMPP_KABUL_GPU=1 ile açık bırakılır). darwin davranışı değişmez.
+if (process.platform === 'win32' && process.env.EMPP_KABUL_GPU !== '1') {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+}
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');

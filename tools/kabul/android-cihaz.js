@@ -527,7 +527,10 @@ function kurulumSebebi(r) {
   if (x.error) parcalar.push(`(${x.error.code || x.error.message || x.error})`);
   if (x.signal) parcalar.push(`(sinyal ${x.signal})`);
   const govde = parcalar.join(' | ').replace(/\s+/g, ' ').trim() || 'çıktı yok';
-  return `rc=${x.status === undefined ? '?' : x.status} ${govde}`.slice(-300);
+  // Baş + son: adb/pm hatasında istisna METNİ başta, yığın izi sonda — yalnız son 300 karakter
+  // metni yutuyordu (09.10 kasa: "IPackageManager$Stub.onTransact(...)" kaldı, sebep gitti).
+  const metin = `rc=${x.status === undefined ? '?' : x.status} ${govde}`;
+  return metin.length <= 400 ? metin : `${metin.slice(0, 300)} … ${metin.slice(-100)}`;
 }
 
 function adbKos(arac, seri, argumanlar, secenek = {}) {
