@@ -241,11 +241,83 @@ function macAc(paket, calisma, log) {
   }
 }
 
+/**
+ * ZIP/APK çıkarma komutunu ve bağımsız değişken fonksiyonunu seçer. Saf seçici.
+ * @param {{ platform?: string, unzipVar?: boolean }} [o]
+ * @returns {{ komut: string, arg: (zip: string, dizin: string) => string[] } | null}
+ */
+function zipAcmaKomutu({ platform = process.platform, unzipVar = false } = {}) {
+  if (unzipVar) {
+    return {
+      komut: 'unzip',
+      arg: (zip, dizin) => ['-q', '-o', zip, '-d', dizin],
+    };
+  }
+  if (platform === 'win32') {
+    return {
+      komut: 'tar',
+      arg: (zip, dizin) => ['-xf', zip, '-C', dizin],
+    };
+  }
+  return null;
+}
+
+/**
+ * Sistemde `unzip` komutunun çalışabilir durumda olup olmadığını kontrol eder. Saf seçicinin dışında tutulur.
+ * @param {Function} [kos]
+ * @param {string} [platform]
+ * @returns {boolean}
+ */
+function unzipVarMi(kos = calistir, platform = process.platform) {
+  const r = kos('unzip', ['-v']);
+  if (r && r.status === 0) return true;
+  if (platform === 'win32') {
+    const w = kos('where', ['unzip']);
+    if (w && w.status === 0 && String(w.stdout || '').trim()) return true;
+  }
+  return false;
+}
+
+/**
+ * ZIP veya APK paketini hedef dizine çıkarır.
+ * @param {string} paket
+ * @param {string} hedef
+ * @param {{ platform?: string, unzipVar?: boolean, kos?: Function }} [secenek]
+ */
+function zipPaketiAc(paket, hedef, secenek = {}) {
+  const platform = secenek.platform || process.platform;
+  const kos = secenek.kos || calistir;
+  const varMi = secenek.unzipVar !== undefined ? secenek.unzipVar : unzipVarMi(kos, platform);
+
+  const secim = zipAcmaKomutu({ platform, unzipVar: varMi });
+  if (!secim) {
+    throw new Error('unzip bulunamadı (PATH)');
+  }
+
+  fs.mkdirSync(hedef, { recursive: true });
+
+  const r = kos(secim.komut, secim.arg(paket, hedef));
+  if (r.error || r.status === null || r.status === undefined) {
+    if (secim.komut === 'unzip') {
+      throw new Error('unzip bulunamadı (PATH)');
+    }
+    throw new Error(`${secim.komut} bulunamadı (PATH)`);
+  }
+
+  if (secim.komut === 'unzip') {
+    if (r.status !== 0 && r.status !== 1) {
+      throw new Error(`unzip rc=${r.status}: ${(r.stderr || '').slice(-300)}`);
+    }
+  } else {
+    if (r.status !== 0) {
+      throw new Error(`${secim.komut} rc=${r.status}: ${(r.stderr || r.stdout || '').slice(-300)}`);
+    }
+  }
+}
+
 function androidAc(paket, calisma) {
   const hedef = path.join(calisma, 'apk');
-  fs.mkdirSync(hedef, { recursive: true });
-  const r = calistir('unzip', ['-q', '-o', paket, 'assets/public/*', '-d', hedef]);
-  if (r.status !== 0 && r.status !== 1) throw new Error(`unzip rc=${r.status}: ${(r.stderr || '').slice(-300)}`);
+  zipPaketiAc(paket, hedef);
   const kok = path.join(hedef, 'assets', 'public');
   if (!fs.existsSync(path.join(kok, 'index.html'))) throw new Error('APK içinde assets/public/index.html yok');
   return {
@@ -334,9 +406,7 @@ function dizinAc(paket) {
 
 function zipAc(paket, calisma) {
   const hedef = path.join(calisma, 'zip');
-  fs.mkdirSync(hedef, { recursive: true });
-  const r = calistir('unzip', ['-q', '-o', paket, '-d', hedef]);
-  if (r.status !== 0 && r.status !== 1) throw new Error(`unzip rc=${r.status}: ${(r.stderr || '').slice(-300)}`);
+  zipPaketiAc(paket, hedef);
   return dizinAc(hedef);
 }
 
@@ -350,7 +420,7 @@ function paketiAc({ paket, platform, calisma, log = () => {} }) {
     case 'android': return androidAc(paket, calisma, log);
     case 'pardus': return pardusAc(paket, calisma, log);
     case 'windows': return windowsAc(paket, calisma, log);
-    case 'dizin': return dizinAc(paket, calisma, log);
+    case 'dizin': return dizinAc(paket, calisma);
     case 'zip': return zipAc(paket, calisma, log);
     default: throw new Error(`bilinmeyen platform: ${platform}`);
   }
@@ -365,4 +435,7 @@ module.exports = {
   paketiAc,
   yedizBul,
   WIN_YEDIZ_YOLLARI,
+  zipAcmaKomutu,
+  unzipVarMi,
+  zipPaketiAc,
 };
