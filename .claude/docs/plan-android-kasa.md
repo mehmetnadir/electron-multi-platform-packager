@@ -1,6 +1,6 @@
 # Plan — Android üretimi ve kabulü kasaya (Windows) taşınır, Mac yedek kalır
 
-Tarih: 09.10.2026 · Durum: TASLAK, Nadir kararı bekliyor · Yazan: Şef (ölçümle)
+Tarih: 09.10.2026 · Durum: A ve B UYGULANDI (10:03), D koşuyor; C ve A7 (caps) Nadir kararı bekliyor · Yazan: Şef (ölçümle)
 
 ## 1. Bugünkü durum (ölçüm 08-09.10)
 
@@ -78,6 +78,28 @@ Kasa kendi `debug.keystore`unu üretirse APK imzası değişir. Kurulu uygulama 
 - Mac'te `android` yeteneği kalır. B4 kapısı kasa canlıyken düşürür.
 - Kasa ≥15 dk sessiz → Mac devralır; ev kuralı (`android-serbest.istek`) aynen geçerli.
 - Kasa geri gelince Mac yeni iş almaz; süren işi bitirir.
+
+## 3b. Uygulama günlüğü (09.10)
+
+| Saat | Adım | Sonuç |
+|---|---|---|
+| 09:58–10:02 | A1–A6 `android-kur.ps1` (schtasks ile ayrık koşu) | JDK 21.0.12.1 · SDK paketleri 6/6 rc=0 · AEHD 2.2 RUNNING, **yeniden başlatma gerekmedi** · AVD Pixel_Fold_API_35 x86_64 · `emulator -accel-check` "AEHD is installed and usable" · Defender dışlaması 0x800106ba (başarısız, Defender yönetilmiyor) |
+| 09:21–09:56 | İlk iki deneme | Invoke-WebRequest 100 KB/s → curl.exe 63 MB/s (memory `kasa-invoke-webrequest-yavas-curl-exe`); `$ErrorActionPreference=Stop` + `2>&1` java -version'ı hata saydı |
+| 09:5x | B1–B6 kod | agy-filo 4 iş; şef düzeltmeleri: `shell:true` kaldırıldı, S9 ilk koşuda bayat bayrağı da kaldırır, preflight testi `gCmd.komut`; hedef testler 176/176; tam takım fark = yalnız `_graveyard` bağımlı testler (ana ağaçta geçiyor) |
+| 09:5x | commit a72eb32 → merge 2210998 → push; kasaya 5 dosya md5 kapılı | OK |
+| 10:01 | A7 kısmi: `ortam-android-ek.ps1` (JAVA_HOME, ANDROID_*, GRADLE_USER_HOME, EMPP_KABUL_KANIT_KOK, Path) — **AGENT_CAPS değişmedi** | parse ok |
+| 10:02–10:03 | paketleyici + runner `kasa-paketleyici-yeniden.ps1` ile yeniden (işler arası) | app.js 10:02:59, runner 10:03:00 |
+| 10:03 | D1: `kasa-android-dogrula.js 60014` (yayınsız; upload 4 sn, job 28a8838c) | koşuyor |
+| 10:02 | emülatör açılış dumanı `emu-duman.ps1` | ✅ soğuk açılış 158 sn (`-no-window`, AEHD, `-accel on`); adb `sys.boot_completed=1`; `emu kill` ile kapandı |
+| 10:1x | D1 sonucu: 60014 APK kasada 7,7 dk (398 MB, sha256 d9009d8d…) | ✅ üretim |
+| 10:2x | Kabul 1. koşu | ÖLÇÜLEMEDİ: `unzip rc=null` → `paket-cikar.js` win32'de bsdtar (`tar -xf`) |
+| 10:4x | Kabul 2. koşu | ÖLÇÜLEMEDİ: "emülatör açılamadı" + "Electron çalışma zamanı yok (darwin-x64 zip)" |
+| 10:50–10:55 | Ölçüm `emu-spawn-olc.js` (aynı argümanlar, schtasks) | **soğuk açılış 259 sn** (swiftshader + `-read-only` → snapshot kullanılmaz); eski sınır 240 sn → sebep buydu. exit olayı `emu kill` sonrası 2 sn'de geliyor (kod doğru) |
+| 10:55 | `android-cihaz.js bootZamanAsimiSn` — win32 varsayılanı 600 sn, `EMPP_KABUL_BOOT_SN` ile ezilir | 47/47 test; kasaya md5 kapılı |
+| 10:51–10:59 | agy-filo `cz-win32`: `calisma-zamani.js` win32 (LOCALAPPDATA\electron\Cache, `tar -xf`, electron.exe; darwin aynı) | 5 yeni test; kasada 27.3.11 win32-x64 zip önbellekte var |
+| 11:0x | `surec-oldur.js`: eksi PID win32'de fırlatır → `taskkill /PID /T /F`; basliksiz-kabul.js + k4-guncellik.js kullanır | 3 test; kabul takımı 93/93; commit f90d98b → merge 5ab25c7 → push; kasaya 5 dosya md5 kapılı |
+| 10:57–11:03 | Kabul 3. koşu (600 sn sınırıyla) | emülatör **238 sn'de açıldı** ✅ · okuyucu sürümü / menü kapak / menü içerik GEÇTİ ✅ · cihaz katmanı ÖLÇÜLEMEDİ: `adb install` rc=1, sebep metni boş (araştırılıyor: probe `emu-spawn-olc.js` install adımıyla) · içerik katmanı: Electron zamanı (port kasaya 11:05'te gitti, bu koşu eski kodla) |
+| 11:08 | G-Android (1b373b3) kasaya: packagingService.js, android-arsiv-uretec.js, empp-g-istemci.js; paketleyici `empp-paketleyici-yeniden` | md5 OK; /api/health startedAt 08:09:57Z |
 
 ## 4. Riskler
 
