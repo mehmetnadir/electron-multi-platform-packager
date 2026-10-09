@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
-const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn, kurulumArgumanlari, kurulumSebebi } = require('./android-cihaz');
+const { sdkIkilileri, kanitDizini, sdkKoku, bootZamanAsimiSn, kurulumArgumanlari, kurulumSebebi, emuEkArgumanlari } = require('./android-cihaz');
 
 test('sdkKoku: win32 env yokken null döndürür', () => {
   assert.equal(sdkKoku({}, 'win32'), null);
@@ -81,4 +81,10 @@ test('kurulumSebebi: uzun hatada BAŞ (istisna metni) ve SON (yığın) birlikte
   assert.match(r, /^rc=1 Exception occurred while executing install: java.lang.SecurityException: SEBEP/);
   assert.match(r, /SON-IZ$/);
   assert.ok(r.length <= 420);
+});
+
+test('emuEkArgumanlari: win32 -cores 4 (system_server düşmesi), darwin boş, env ezer', () => {
+  assert.deepEqual(emuEkArgumanlari({}, 'win32'), ['-cores', '4']);
+  assert.deepEqual(emuEkArgumanlari({}, 'darwin'), []);
+  assert.deepEqual(emuEkArgumanlari({ EMPP_KABUL_EMU_CORES: '2' }, 'win32'), ['-cores', '2']);
 });
