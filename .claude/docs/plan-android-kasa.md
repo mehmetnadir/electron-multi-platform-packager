@@ -100,6 +100,11 @@ Kasa kendi `debug.keystore`unu üretirse APK imzası değişir. Kurulu uygulama 
 | 11:0x | `surec-oldur.js`: eksi PID win32'de fırlatır → `taskkill /PID /T /F`; basliksiz-kabul.js + k4-guncellik.js kullanır | 3 test; kabul takımı 93/93; commit f90d98b → merge 5ab25c7 → push; kasaya 5 dosya md5 kapılı |
 | 10:57–11:03 | Kabul 3. koşu (600 sn sınırıyla) | emülatör **238 sn'de açıldı** ✅ · okuyucu sürümü / menü kapak / menü içerik GEÇTİ ✅ · cihaz katmanı ÖLÇÜLEMEDİ: `adb install` rc=1, sebep metni boş (araştırılıyor: probe `emu-spawn-olc.js` install adımıyla) · içerik katmanı: Electron zamanı (port kasaya 11:05'te gitti, bu koşu eski kodla) |
 | 11:08 | G-Android (1b373b3) kasaya: packagingService.js, android-arsiv-uretec.js, empp-g-istemci.js; paketleyici `empp-paketleyici-yeniden` | md5 OK; /api/health startedAt 08:09:57Z |
+| 11:1x | Probe: `adb install` akışlı rc=1 BOŞ sebep; push 108 sn + `pm install -r` **Success**; `--no-streaming` **Success** (52 sn) | `kurulumArgumanlari` win32 `--no-streaming` (fc39e3c) |
+| 11:2x | Kabul 4. koşu (`--no-streaming` + Electron win32) | içerik: Electron açıldı ama GPU süreci 3× 0xC0000409 çöktü, pencere yok oldu → "koşum 165 sn içinde bitmedi" · cihaz: `pm install` Java yığını (sebep metni kesik) |
+| 11:3x | `kosum/main.js` win32 GPU kapalı (`EMPP_KABUL_GPU=1` açar) · `kurulumSebebi` baş+son | 72/72; 148ac49; kasaya md5 kapılı |
+| 11:3x | Probe: emülatör **commit yetersiz** (Remaining 3,5 GB < Needed 4 GB; süreç özel bellek 9,7 GB + çekirdek ~5,5 GB; pagefile otomatik 2,7 GB) | AEHD yeniden başlatma etkisiz. Creative Cloud/Everything/OneDrive süreçleri kapatıldı → 5,5 GB. Pagefile: C: 4-8 GB, D: 8-16 GB (yeniden başlatma sonrası etkin; kasa yeniden BAŞLATILMADI — empp-ajan "Interactive only") |
+| 11:4x | Probe: push 99 sn sonra `cmd: Can't find service: package` → konuk **system_server çöktü**; sonraki `pm install` NPE `PackageManagerInternal` (yeniden başlıyor). Önceki probe'da aynı adımlar Success → aralıklı | v5 probe: `-memory 4096 -cores 4`, logcat Watchdog/AndroidRuntime/lowmemorykiller yakalama |
 
 ## 4. Riskler
 
