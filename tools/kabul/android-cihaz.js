@@ -515,6 +515,17 @@ function kirp(veri, genislik, yukseklik, s) {
  * emu-spawn-olc.js). Mac'te akışlı kurulum çalışıyor, davranışı değişmez.
  * `EMPP_KABUL_ADB_AKISSIZ=1` her platformda `--no-streaming`, `=0` win32'de bile akışlı.
  */
+/**
+ * Emülatör ek argümanları. Saf. win32 (kasa i7-7700, 8 iş parçacığı): `-cores 4` — AVD'nin
+ * 2 çekirdeğiyle 400 MB APK push'u sırasında konuk system_server düştü ("Can't find service:
+ * package", 09.10); 4 çekirdekle aynı adımlar Success. `EMPP_KABUL_EMU_CORES` ile ezilir;
+ * darwin'de ek argüman yok (davranış değişmez).
+ */
+function emuEkArgumanlari(env = process.env, platform = process.platform) {
+  if (env.EMPP_KABUL_EMU_CORES) return ['-cores', String(env.EMPP_KABUL_EMU_CORES)];
+  return platform === 'win32' ? ['-cores', '4'] : [];
+}
+
 function kurulumArgumanlari(env = process.env, platform = process.platform) {
   if (env.EMPP_KABUL_ADB_AKISSIZ === '1') return ['--no-streaming'];
   if (env.EMPP_KABUL_ADB_AKISSIZ === '0') return [];
@@ -784,7 +795,7 @@ async function cihazKabulu(p) {
       emuLog = fs.openSync(logYolu, 'w');
       const emuArg = ['-avd', avd, '-no-window', '-no-audio', '-no-boot-anim', '-read-only', '-port', String(port),
         '-gpu', process.env.EMPP_KABUL_EMU_GPU || 'swiftshader_indirect',
-        '-memory', process.env.EMPP_KABUL_EMU_RAM || '3072', '-no-snapshot-save'];
+        '-memory', process.env.EMPP_KABUL_EMU_RAM || '3072', '-no-snapshot-save', ...emuEkArgumanlari()];
       emuCikti = null;
       emu = spawn(arac.emulator, emuArg, {
         detached: true,
@@ -1009,6 +1020,7 @@ module.exports = {
   YASAK_AVD,
   bootZamanAsimiSn,
   kurulumArgumanlari,
+  emuEkArgumanlari,
   VARSAYILAN_AVD,
   CIHAZ_KITAP_SN,
   YABANCI_ANR_ORTULME_MIN_SAYI,
