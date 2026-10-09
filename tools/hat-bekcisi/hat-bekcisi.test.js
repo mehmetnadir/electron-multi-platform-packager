@@ -396,3 +396,69 @@ test('S8: varsayılan ProBook adresi Tailscale (LAN değil)', () => {
   assert.equal(cfg.probookIp, '100.73.161.76');
   assert.equal(cfg.probookSsh, 'etapadmin@100.73.161.76');
 });
+
+// ─── S9 Android şeridi ────────────────────────────────────────────────────────────────────
+
+test('S9: planAndroidSerit 6 durum', () => {
+  const nowMs = H.dbMs(NOW_DB);
+  const kasaCanli = [
+    { name: 'windows-kasa', capabilities: 'windows,android', last_seen_at: '2026-10-06 16:25:00', revoked: '0' },
+  ];
+
+  // 1) kasa canlı+android → koy/kasa + bildirim (onceki null)
+  const r1 = H.planAndroidSerit(kasaCanli, nowMs, null);
+  assert.equal(r1.durum, 'kasa');
+  assert.equal(r1.bayrak, 'koy');
+  assert.equal(r1.yeni, 'kasa');
+  assert.equal(r1.bildirim.kanal, 'bekci');
+  assert.equal(r1.bildirim.yuksek, false);
+  assert.equal(r1.bildirim.baslik, 'Hat bekçisi');
+  assert.equal(r1.bildirim.mesaj, 'Android şeridi: kasa devraldı — Mac android-durdur');
+
+  // 2) onceki kasa → bayrak null, bildirim yok
+  const r2 = H.planAndroidSerit(kasaCanli, nowMs, 'kasa');
+  assert.equal(r2.durum, 'kasa');
+  assert.equal(r2.bayrak, null);
+  assert.equal(r2.yeni, 'kasa');
+  assert.equal(r2.bildirim, null);
+
+  // 3) kasa 20 dk sessiz → kaldir/mac + bildirim
+  const kasaSessiz = [
+    { name: 'windows-kasa', capabilities: 'windows,android', last_seen_at: '2026-10-06 16:10:00', revoked: '0' },
+  ];
+  const r3 = H.planAndroidSerit(kasaSessiz, nowMs, 'kasa');
+  assert.equal(r3.durum, 'mac');
+  assert.equal(r3.bayrak, 'kaldir');
+  assert.equal(r3.yeni, 'mac');
+  assert.equal(r3.bildirim.kanal, 'bekci');
+  assert.equal(r3.bildirim.yuksek, false);
+  assert.equal(r3.bildirim.baslik, 'Hat bekçisi');
+  assert.equal(r3.bildirim.mesaj, 'Android şeridi: kasa sessiz (20 dk) — Mac devraldı');
+
+  // 4) kasa android ilan etmiyor → mac
+  const kasaNoAndroid = [
+    { name: 'windows-kasa', capabilities: 'windows', last_seen_at: '2026-10-06 16:25:00', revoked: '0' },
+  ];
+  const r4 = H.planAndroidSerit(kasaNoAndroid, nowMs, null);
+  assert.equal(r4.durum, 'mac');
+  assert.equal(r4.bayrak, 'kaldir'); // ilk koşu: bayat bayrak temizlenir (unlink yoksa sessiz)
+  assert.equal(r4.yeni, 'mac');
+  assert.equal(r4.bildirim, null);
+
+  // 5) revoked kasa → mac
+  const kasaRevoked = [
+    { name: 'windows-kasa', capabilities: 'windows,android', last_seen_at: '2026-10-06 16:25:00', revoked: '1' },
+  ];
+  const r5 = H.planAndroidSerit(kasaRevoked, nowMs, null);
+  assert.equal(r5.durum, 'mac');
+  assert.equal(r5.bayrak, 'kaldir'); // ilk koşu: bayat bayrak temizlenir (unlink yoksa sessiz)
+  assert.equal(r5.yeni, 'mac');
+  assert.equal(r5.bildirim, null);
+
+  // 6) ajan listesi boş → mac
+  const r6 = H.planAndroidSerit([], nowMs, null);
+  assert.equal(r6.durum, 'mac');
+  assert.equal(r6.bayrak, 'kaldir'); // ilk koşu: bayat bayrak temizlenir (unlink yoksa sessiz)
+  assert.equal(r6.yeni, 'mac');
+  assert.equal(r6.bildirim, null);
+});

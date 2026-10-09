@@ -255,11 +255,11 @@ function etkinYetenekler(caps, durum) {
   // yuva erişilemese de ilan edilir — paket üretilir, kabulden geçer, imzasız hâliyle hazır kuyruğa
   // girer, yayına ÇIKMAZ; imzayı yuva açılınca bekçi atar. `imzaBekleme` verilmezse eski kural.
   const windowsIzin = d.windowsAcik === true && (d.imzaYuvasi === true || d.imzaBekleme === true);
-  // ANDROID EVDE (Nadir 05.10): evdeyken yalnız ofis makineleri (Pardus ProBook, Windows kasa)
-  // üretir. Mac'in apk yüklemesi (paket başına ~1,3 GB) ev hattını dmg gibi boğar. Kural yalnız
-  // `androidEvKurali` veren ajanda (Mac) uygulanır; srv21 gibi ofis dışı sunucu ajanları etkilenmez.
-  // `android-serbest.istek` evde de açar.
-  const androidIzin = d.androidEvKurali !== true || Boolean(d.ofiste) || Boolean(d.androidSerbest);
+  // ANDROID EVDE VEYA KASA DEVRALMA (Nadir 05.10 / 09.10): kasa Android ilan ederken hat bekçisi
+  // `android-durdur.istek` bayrağını koyar (d.androidDurdur); Mac Android almaz. Kasa sessizleşip bayrak
+  // kalkınca Mac devralabilir. Evdeyken yalnız ofis makineleri üretir (`androidEvKurali`); `android-serbest.istek`
+  // evde de açar.
+  const androidIzin = !d.androidDurdur && (d.androidEvKurali !== true || Boolean(d.ofiste) || Boolean(d.androidSerbest));
   return caps.filter((c) => (izin || !macMi(c)) && (windowsIzin || c !== 'windows')
     && (androidIzin || c !== 'android'));
 }

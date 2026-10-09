@@ -175,6 +175,8 @@ const CONFIG = {
   macDurdurFlag: path.join(os.homedir(), '.empp-agent', 'macos-durdur.istek'),
   // Android de Mac'te yalnız ofiste (apk yüklemesi ~1,3 GB — Nadir 05.10). Bayrak kalıcıdır.
   androidSerbestFlag: path.join(os.homedir(), '.empp-agent', 'android-serbest.istek'),
+  // ANDROID DEVRALMA (09.10): kasa Android ilan ederken hat bekçisi bu bayrağı koyar, Mac Android almaz; kasa sessizse bekçi kaldırır. Bayrak kalıcıdır.
+  androidDurdurFlag: path.join(os.homedir(), '.empp-agent', 'android-durdur.istek'),
   // `kaynak-kur` yeteneği (Dalga B, B4): build'i kurup R2'ye 1–3 GB yüklemek YALNIZ yüksek bantta —
   // ofis ağı ya da bu bayrak (macOS kuralıyla aynı desen). EMPP_KAYNAK_KUR=0 acil kapatma.
   kaynakKur: process.env.EMPP_KAYNAK_KUR !== '0',
@@ -496,12 +498,14 @@ function kaynakKurDurumu() {
 let _sonYetenek = '';
 let _sonYetenekListesi = null; // son hesaplanan liste; siradakiIs iş isteme kapısı okur
 function guncelYetenekler() {
+  const androidDurdur = pauseRequested(CONFIG.androidDurdurFlag);
   let caps = etkinYetenekler(CONFIG.caps, {
     ofiste: ofisteMi(),
     macSerbest: pauseRequested(CONFIG.macSerbestFlag),
     macDurdur: pauseRequested(CONFIG.macDurdurFlag),
     androidEvKurali: CONFIG.caps.some((c) => c === 'macos' || c === 'mac'),
     androidSerbest: pauseRequested(CONFIG.androidSerbestFlag),
+    androidDurdur,
     // Araç zinciri yalnız mac istenen durumlarda ölçülür — pardus/android koşarken
     // boşuna xcrun çağırmayalım.
     macAraci: CONFIG.caps.some((c) => c === 'macos' || c === 'mac') ? macAraciSaglamMi() : undefined,
@@ -547,6 +551,7 @@ function guncelYetenekler() {
   const imza = caps.join(',');
   if (imza !== _sonYetenek) {
     log('etkin yetenekler:', imza || '(yok)', '| ofiste=' + _konum.ofiste,
+      '| android-durdur=' + androidDurdur,
       '| macAraç=' + (_macArac.saglam === null ? 'ölçülmedi' : (_macArac.saglam ? 'sağlam' : 'BOZUK')),
       ...(seritDenetcisi ? ['| pardus şeridi=' + seritDenetcisi.ozet()] : []),
       ...(pardusVar ? ['| probook=' + (probookErisimi === true ? 'erişilir' : (probookErisimi === false ? 'ERİŞİLEMEZ' : 'ölçülmedi'))] : []),
