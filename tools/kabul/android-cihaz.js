@@ -190,36 +190,59 @@ function webViewSiniri(dugumler) {
 function cihazKartlari(dugumler, kitapAdlari = []) {
   const adlar = kitapAdlari.map((a) => String(a || '').trim().toLocaleLowerCase('tr')).filter(Boolean);
   const bulunan = new Map();
-  for (const d of dugumler) {
+  // Kartın kendi düğümü ("<ad> kitabını aç") önce: yalın ad metni yalnız kartsız menüde kart olur
+  // (60014: kart dışındaki başlık metni ilk kart sanılıyordu).
+  const kartDugumuMu = (d) => /kitabını aç$/i.test(`${d.aciklama || ''} ${d.metin || ''}`.trim());
+  const sirali = [...dugumler.filter(kartDugumuMu), ...dugumler.filter((d) => !kartDugumuMu(d))];
+  for (const d of sirali) {
     if (!d.sinir) continue;
     const etiket = `${d.aciklama || ''} ${d.metin || ''}`.trim();
     if (!etiket) continue;
     const kucuk = etiket.toLocaleLowerCase('tr');
     let anahtar = null;
     let ks = 1;
+    let adaGore = false; // ad tabanlı eşleşme: aynı ad birden çok kartta olabilir
     const grupMi = /^(.+?) serisi, (\d+) kitap$/i.exec(etiket);
     if (grupMi) {
       anahtar = `grup:${grupMi[1].toLowerCase()}`;
       ks = parseInt(grupMi[2], 10) || 1;
     } else {
       const acMi = /(.+?)\s+kitabını aç$/i.exec(etiket);
-      if (acMi) anahtar = acMi[1].trim().toLocaleLowerCase('tr');
-      else if (adlar.includes(kucuk)) anahtar = kucuk;
+      if (acMi) { anahtar = acMi[1].trim().toLocaleLowerCase('tr'); adaGore = true; }
+      else if (adlar.includes(kucuk)) anahtar = kucuk; // yalın başlık metni: kartın dışında da durur → tekil
       else {
         const btnMi = /^book(\d+)-button$/i.exec(etiket);
         if (btnMi) anahtar = `book${btnMi[1]}`;
       }
     }
-    if (!anahtar || bulunan.has(anahtar)) continue;
+    if (!anahtar) continue;
+    // bookN / grup / yalın başlık: tekil. Aynı adlı kart düğümü varsa başlık metni ikinci kart değildir.
+    if (!adaGore && (bulunan.has(anahtar) || [...bulunan.values()].some((k) => k.adKoku === anahtar))) continue;
+    const x = Math.round((d.sinir.x1 + d.sinir.x2) / 2);
+    const y = Math.round((d.sinir.y1 + d.sinir.y2) / 2);
+    // Aynı ad tek başına "aynı kart" demek değil (12.10 kasa 60014: beş kitabın beşi de
+    // "Sonic-Monic kitabını aç" → ada göre tekilleştirme 5 kartı 1 saydı). Aynı kart =
+    // aynı adlı düğümlerden birinin merkezi ötekinin sınırı içinde (kapak + düğme + metin).
+    const ayniAdlilar = adaGore ? [...bulunan.values()].filter((k) => k.adKoku === anahtar) : [];
+    const ayniKart = ayniAdlilar.some((k) => icinde(x, y, k.sinir) || icinde(k.x, k.y, d.sinir));
+    if (ayniKart) continue;
     const item = {
-      anahtar,
-      x: Math.round((d.sinir.x1 + d.sinir.x2) / 2),
-      y: Math.round((d.sinir.y1 + d.sinir.y2) / 2),
+      anahtar: ayniAdlilar.length ? `${anahtar}#${ayniAdlilar.length + 1}` : anahtar,
+      x,
+      y,
     };
+    Object.defineProperty(item, 'adKoku', { value: anahtar, enumerable: false });
+    Object.defineProperty(item, 'sinir', { value: d.sinir, enumerable: false });
     if (ks > 1) item.kitapSayisi = ks;
-    bulunan.set(anahtar, item);
+    bulunan.set(item.anahtar, item);
   }
-  return [...bulunan.values()];
+  // Okuma sırası (satır, sonra soldan sağa): ileri adım ekrandaki ilk karta dokunur.
+  return [...bulunan.values()].sort((p, q) => (Math.round(p.y / 60) - Math.round(q.y / 60)) || (p.x - q.x));
+}
+
+/** (x,y) noktası sınır kutusunun içinde mi (kenar dahil). Saf. */
+function icinde(x, y, s) {
+  return !!s && x >= s.x1 && x <= s.x2 && y >= s.y1 && y <= s.y2;
 }
 
 /**
