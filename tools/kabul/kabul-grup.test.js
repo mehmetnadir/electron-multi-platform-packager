@@ -114,3 +114,11 @@ test('(h) cihazKartlari: aynı kartın kapak + düğme düğümü (iç içe) →
   ];
   assert.equal(cihazKartlari(dugumler).length, 1);
 });
+
+test('(i) geciciKurulumHatasi: paket hizmeti kopukluğu geçici, paket hatası değil (12.10 kasa)', () => {
+  const { geciciKurulumHatasi: g } = require('./android-cihaz');
+  assert.equal(g({ status: 224, stdout: 'Performing Push Install', stderr: 'cmd: Failure calling service package: Broken pipe (32)' }), true);
+  assert.equal(g({ status: 1, stdout: '', stderr: "cmd: Can't find service: package" }), true);
+  assert.equal(g({ status: 1, stdout: '', stderr: 'Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]' }), false);
+  assert.equal(g({ status: 0, stdout: 'Success', stderr: '' }), false);
+});

@@ -577,6 +577,24 @@ function kurulumSebebi(r) {
   return metin.length <= 400 ? metin : `${metin.slice(0, 300)} … ${metin.slice(-100)}`;
 }
 
+/** Kurulum çıktısı cihaz tarafı GEÇİCİ hata mı (paket hizmeti kopuk/yok)? Saf. */
+function geciciKurulumHatasi(r) {
+  if (!r || (r.status === 0 && /Success/.test(String(r.stdout)))) return false;
+  const metin = `${r.stdout || ''} ${r.stderr || ''}`;
+  return /Failure calling service package|Can't find service: package|Broken pipe|DeadObjectException/i.test(metin);
+}
+
+/** `pm path android` cevap verene dek bekler (paket hizmeti ayakta). Ayaktaysa true. */
+async function paketHizmetiBekle(arac, seri, tavanSn) {
+  const bas = Date.now();
+  while ((Date.now() - bas) / 1000 < tavanSn) {
+    await bekle(5000);
+    const r = adbKos(arac, seri, ['shell', 'pm', 'path', 'android'], { zamanAsimiMs: 30000 });
+    if (r.status === 0 && /package:/.test(String(r.stdout))) return true;
+  }
+  return false;
+}
+
 function adbKos(arac, seri, argumanlar, secenek = {}) {
   return kos(arac.adb, ['-s', seri, ...argumanlar], secenek);
 }
@@ -885,7 +903,16 @@ async function cihazKabulu(p) {
 
     if (!p.kurulumYok) {
       const kurBas = Date.now();
-      const kur = adbKos(arac, seri, ['install', ...kurulumArgumanlari(), '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
+      let kur = adbKos(arac, seri, ['install', ...kurulumArgumanlari(), '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
+      // Yavaş emülatörde (kasa) system_server paket hizmeti kurulum ortasında kopabilir
+      // (12.10: "Failure calling service package: Broken pipe"; 09.10: "Can't find service: package").
+      // Paket hatası değil, cihaz hatası: hizmet geri gelince en çok 2 kez yeniden dene.
+      for (let deneme = 1; deneme <= 2 && geciciKurulumHatasi(kur); deneme += 1) {
+        log(`cihaz: kurulum geçici hata (${deneme}/2) — paket hizmeti bekleniyor`);
+        sonuc.kurulumYenidenDeneme = deneme;
+        await paketHizmetiBekle(arac, seri, 180);
+        kur = adbKos(arac, seri, ['install', ...kurulumArgumanlari(), '-r', '-g', p.apk], { zamanAsimiMs: 600000 });
+      }
       sonuc.kurulumSn = Math.round((Date.now() - kurBas) / 1000);
       if (kur.status !== 0 || !/Success/.test(String(kur.stdout))) {
         sonuc.sebepler.push(`adb install düştü: ${kurulumSebebi(kur)}`);
@@ -1071,6 +1098,7 @@ function avdAdaylari(verilen) {
 }
 
 module.exports = {
+  geciciKurulumHatasi,
   YASAK_AVD,
   bootZamanAsimiSn,
   kurulumArgumanlari,
