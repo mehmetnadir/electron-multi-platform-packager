@@ -68,7 +68,7 @@ const kabul = (s) => A.cihazKabulu({
   mevcutSeri: 'emulator-5999', menuBekleSn: 1,
 });
 
-test('kurulumSebebi: stdout + stderr birlikte, çıkış kodu başta, son 300 karakter', () => {
+test('kurulumSebebi: stdout + stderr birlikte, çıkış kodu başta, baş 300 + son 100 karakter', () => {
   const r = {
     status: 1,
     stdout: 'Performing Streamed Install\n',
@@ -77,8 +77,10 @@ test('kurulumSebebi: stdout + stderr birlikte, çıkış kodu başta, son 300 ka
   assert.equal(A.kurulumSebebi(r),
     'rc=1 Performing Streamed Install | adb: failed to install /a.apk: Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]');
   const uzun = A.kurulumSebebi({ status: 1, stdout: 'x'.repeat(50), stderr: `${'y'.repeat(400)} SON` });
-  assert.equal(uzun.length, 300);
-  assert.ok(uzun.endsWith('SON'), 'kırpma sondan: gerçek hata satırı sonda kalır');
+  // 09.10 kasa: istisna metni başta, yığın izi sonda → ikisi de kalır (300 + ' … ' + 100).
+  assert.equal(uzun.length, 403);
+  assert.ok(uzun.startsWith('rc=1 xxxxx'), 'baş korunur: istisna metni başta kalır');
+  assert.ok(uzun.endsWith('SON'), 'son korunur: gerçek hata satırı sonda kalır');
   assert.equal(A.kurulumSebebi({ status: null, signal: 'SIGKILL', stdout: '', stderr: '' }), 'rc=null (sinyal SIGKILL)');
   assert.equal(A.kurulumSebebi({ status: 1 }), 'rc=1 çıktı yok');
   assert.equal(A.kurulumSebebi(null), 'rc=? çıktı yok');

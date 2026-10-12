@@ -290,9 +290,18 @@ function asamaKarari(olcum, beklenti) {
     if (okuyucuBasligiMi(olcum.baslik)) {
       sebepler.push(`SET kökünde okuyucu başlığı "${OKUYUCU_BASLIGI}" — menü yerine okuyucu açılmış`);
     }
-    const kart = Number(olcum.kartSayisi) || 0;
-    if (kart !== beklenti.beklenenKart) {
-      sebepler.push(`menü kartı ${kart} ≠ beklenen ${beklenti.beklenenKart}`);
+    const gorunenKart = Number(olcum.kartSayisi) || 0;
+    const kitapKart = typeof olcum.kitapKartSayisi === 'number' ? olcum.kitapKartSayisi : gorunenKart;
+    const kartlar = Array.isArray(olcum.kartlar) ? olcum.kartlar : [];
+    const grupSayisi = kartlar.filter((k) => k && (k.tip === 'webz-grup' || (k.kitapSayisi && k.kitapSayisi > 1))).length;
+
+    if (grupSayisi > 0) {
+      notlar.push(`menüde grup var: ${gorunenKart} kart (${grupSayisi} grup) → toplam ${kitapKart} kitap`);
+    }
+
+    if (kitapKart !== beklenti.beklenenKart) {
+      const ekGrup = grupSayisi > 0 ? ` (${gorunenKart} kart, ${grupSayisi} grup)` : '';
+      sebepler.push(`menü kartı ${kitapKart} ≠ beklenen ${beklenti.beklenenKart}${ekGrup}`);
     }
   }
   const yk = Array.isArray(olcum.yukleniyor) ? olcum.yukleniyor : [];

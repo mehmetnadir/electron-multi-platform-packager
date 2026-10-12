@@ -315,9 +315,46 @@ async function kos() {
   }
 
   if (setMi && G.ileriAdim && (menu.kartlar || []).length) {
-    const kart = menu.kartlar[0];
+    let kart = menu.kartlar[0];
     const adim = { kart, yontem: null, gezinilen: null };
     sonuc.ileriAdim = adim;
+
+    if (kart.tip === 'webz-grup') {
+      await tikla(win, kart);
+      const basGrup = Date.now();
+      let acilanKart = null;
+      let domTiklandi = false;
+      while ((Date.now() - basGrup) < 5000) {
+        await bekle(300);
+        const araDom = await yokla(win);
+        const araKartlar = araDom.kartlar || [];
+        // Seri açıldı = grup kartı artık görünmüyor (karışık menüde tek kitaplar zaten görünür).
+        const aday = araKartlar.some((k) => k.tip === 'webz-grup') ? null
+          : araKartlar.find((k) => k.tip === 'webz' && k.secici);
+        if (aday) {
+          acilanKart = aday;
+          break;
+        }
+        if (!domTiklandi && (Date.now() - basGrup) >= 1500) {
+          domTiklandi = true;
+          try {
+            await win.webContents.executeJavaScript(
+              `(() => { const el = document.querySelector('.book-item.book-group'); if (el) { el.click(); return true; } return false; })()`,
+              true,
+            );
+          } catch (_) { /* ignore */ }
+        }
+      }
+      if (acilanKart) {
+        adim.grupAcildi = true;
+        kart = acilanKart;
+      } else {
+        adim.grupAcildi = false;
+        adim.hata = 'grup kartı açılmadı';
+        adim.sebep = 'grup kartı açılmadı';
+      }
+    }
+
     let gez = gezinmeBekle(win, 12000);
     await tikla(win, kart);
     adim.yontem = 'fare';

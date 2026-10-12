@@ -196,19 +196,28 @@ function cihazKartlari(dugumler, kitapAdlari = []) {
     if (!etiket) continue;
     const kucuk = etiket.toLocaleLowerCase('tr');
     let anahtar = null;
-    const acMi = /(.+?)\s+kitabını aç$/i.exec(etiket);
-    if (acMi) anahtar = acMi[1].trim().toLocaleLowerCase('tr');
-    else if (adlar.includes(kucuk)) anahtar = kucuk;
-    else {
-      const btnMi = /^book(\d+)-button$/i.exec(etiket);
-      if (btnMi) anahtar = `book${btnMi[1]}`;
+    let ks = 1;
+    const grupMi = /^(.+?) serisi, (\d+) kitap$/i.exec(etiket);
+    if (grupMi) {
+      anahtar = `grup:${grupMi[1].toLowerCase()}`;
+      ks = parseInt(grupMi[2], 10) || 1;
+    } else {
+      const acMi = /(.+?)\s+kitabını aç$/i.exec(etiket);
+      if (acMi) anahtar = acMi[1].trim().toLocaleLowerCase('tr');
+      else if (adlar.includes(kucuk)) anahtar = kucuk;
+      else {
+        const btnMi = /^book(\d+)-button$/i.exec(etiket);
+        if (btnMi) anahtar = `book${btnMi[1]}`;
+      }
     }
     if (!anahtar || bulunan.has(anahtar)) continue;
-    bulunan.set(anahtar, {
+    const item = {
       anahtar,
       x: Math.round((d.sinir.x1 + d.sinir.x2) / 2),
       y: Math.round((d.sinir.y1 + d.sinir.y2) / 2),
-    });
+    };
+    if (ks > 1) item.kitapSayisi = ks;
+    bulunan.set(anahtar, item);
   }
   return [...bulunan.values()];
 }
@@ -416,7 +425,8 @@ function asamaKarari(p) {
     const k = webViewYokKarari(ad, o, logcat);
     if (k.ortulen) ortulen.push(k.mesaj); else stajSebepleri.push(k.mesaj);
   }
-  if (setMenu && o.kartSayisi !== beklenenKart) stajSebepleri.push(`${ad}: menü kartı ${o.kartSayisi} ≠ beklenen ${beklenenKart}`);
+  const kart = o.kitapKartSayisi ?? o.kartSayisi;
+  if (setMenu && kart !== beklenenKart) stajSebepleri.push(`${ad}: menü kartı ${kart} ≠ beklenen ${beklenenKart}`);
   if (o.yukleniyor && o.yukleniyor.length) stajSebepleri.push(`${ad}: ${o.beklenenSn} sn sonra hâlâ yükleniyor (${o.yukleniyor.join(', ')})`);
   const pk = O.pikselKarari(o.piksel, { aktivasyon });
   if (pk.olculemedi) stajSebepleri.push(`${ad}: ekran görüntüsü alınamadı`);
@@ -686,6 +696,7 @@ async function asamaOlc(arac, seri, { paket, etiket, kitapAdlari, beklemeSn, yet
       xml,
     };
     son.kartSayisi = son.kartlar.length;
+    son.kitapKartSayisi = son.kartlar.reduce((toplam, k) => toplam + (k.kitapSayisi || 1), 0);
     if (yeterli(son)) { ardisik += 1; if (ardisik >= 2) break; } else ardisik = 0;
   }
   son = son || {};
@@ -873,7 +884,7 @@ async function cihazKabulu(p) {
 
     const kitapAdlari = p.kitapAdlari || [];
     const menuYeterli = (o) => o.surecCanli && !o.yukleniyor.length && O.pikselKarari(o.piksel, { aktivasyon: p.aktivasyon }).gecti
-      && (!p.setMi || o.kartSayisi >= p.beklenenKart);
+      && (!p.setMi || (o.kitapKartSayisi ?? o.kartSayisi) >= p.beklenenKart);
     const menu = await asamaOlc(arac, seri, {
       paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.menuBekleSn || 60, yeterli: menuYeterli,
       kanitDizin, ad: 'menu', ekranId, diyaloglar: sonuc.sistemDiyaloglari,
@@ -881,11 +892,31 @@ async function cihazKabulu(p) {
     sonuc.menu = menu;
     yukOrnekAl('menu'); // yük örneği: menü ölçümü sonrası
     if (p.setMi && menu.kartlar && menu.kartlar.length) {
-      const kart = menu.kartlar[0];
-      adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
-      sonuc.ileriAdim = { kart };
+      let kart = menu.kartlar[0];
+      let acilanKart = null;
+      if (kart.anahtar.startsWith('grup:') || (kart.kitapSayisi && kart.kitapSayisi > 1)) {
+        adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
+        // Yavaş emülatör (kasa): seri açılışı 1,5 sn'yi geçebilir → en çok 4 döküm (~6 sn).
+        for (let deneme = 0; deneme < 4 && !acilanKart; deneme += 1) {
+          await bekle(1500);
+          const kartlarGrup = cihazKartlari(uiDugumleri(uiDokum(arac, seri, null)), kitapAdlari);
+          // Seri açıldı = grup düğümü artık yok (karışık menüde tek kitaplar zaten görünür).
+          acilanKart = kartlarGrup.some((k) => k.anahtar.startsWith('grup:')) ? null
+            : kartlarGrup.find((k) => !k.anahtar.startsWith('grup:')) || null;
+        }
+        if (acilanKart) {
+          kart = acilanKart;
+          adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
+          sonuc.ileriAdim = { kart: menu.kartlar[0], acilanKart, grupAcildi: true };
+        } else {
+          sonuc.ileriAdim = { kart: menu.kartlar[0], grupAcildi: false, hata: 'grup kartı açılmadı' };
+        }
+      } else {
+        adbKos(arac, seri, ['shell', 'input', 'tap', String(kart.x), String(kart.y)]);
+        sonuc.ileriAdim = { kart };
+      }
       const kitapYeterli = (o) => o.surecCanli && !o.yukleniyor.length && O.pikselKarari(o.piksel, { aktivasyon: p.aktivasyon }).gecti
-        && !o.kartSayisi;
+        && !(o.kitapKartSayisi ?? o.kartSayisi);
       sonuc.kitap = await asamaOlc(arac, seri, {
         paket: paketBilgi.paket, etiket: paketBilgi.etiket, kitapAdlari, beklemeSn: p.kitapBekleSn || CIHAZ_KITAP_SN, yeterli: kitapYeterli,
         kanitDizin, ad: 'kitap', ekranId, diyaloglar: sonuc.sistemDiyaloglari,

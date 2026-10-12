@@ -72,7 +72,53 @@ const { guncelDegilOneri } = require('../kabul/guncel-degil-oneri');
 const GUNCELLEME_DESENI = /\/GetKitapGuncellemeBilgi(?:[/?#]|$)/i;
 const KITAP_URL_DESENI = /\/book\d+\//i;
 const CIKIS = Object.freeze({ GECTI: 0, RED: 1, OLCULEMEDI: 4 });
-const YOKLAMA_IFADESI = `(${domYokla.toString()})()`;
+const YOKLAMA_IFADESI = `(() => {
+  const y = (${domYokla.toString()})();
+  if (y && Array.isArray(y.kartlar)) {
+    const grupEl = document.querySelectorAll('.book-item.book-group');
+    let idx = 0;
+    y.kartlar.forEach((k) => {
+      if (k.tip === 'webz-grup') {
+        const el = grupEl[idx++] || document.querySelector('.book-item.book-group');
+        if (el) {
+          k.secici = '.book-item.book-group';
+          k.ariaLabel = el.getAttribute('aria-label') || '';
+          const badge = el.querySelector('.book-group-badge');
+          k.badgeText = badge ? (badge.innerText || '').trim() : '';
+        }
+      }
+    });
+  }
+  return y;
+})()`;
+
+/** Grup kartından kitap adedini (N) çözer. Bulunamazsa 1. Saf. */
+function grupAdetCoz(ariaLabel, badgeText, metin) {
+  for (const s of [ariaLabel, badgeText, metin]) {
+    if (!s) continue;
+    const m = /(\d+)\s*kitap/i.exec(String(s));
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return 1;
+}
+
+/** Menü kartlarının toplam kitap sayısını hesaplar (grup kartını N kitap sayar). Saf. */
+function kartSayisiHesapla(kartlar = []) {
+  if (!Array.isArray(kartlar)) return 0;
+  let toplam = 0;
+  for (const k of kartlar) {
+    if (!k) continue;
+    if (k.tip === 'webz-grup' || k.seri || k.grup) {
+      toplam += grupAdetCoz(k.ariaLabel, k.badgeText, k.metin);
+    } else {
+      toplam += 1;
+    }
+  }
+  return toplam;
+}
 
 function argumanlar(argv) {
   const a = {
@@ -693,10 +739,27 @@ async function kos(a, sonuc) {
   if (tur === 'set') {
     let kart = kartSec(yoklama.kartlar);
     if (kart && kart.tip === 'webz-grup') {
-      await cdp.degerlendir(tiklamaIfadesi(kart), 5000).catch(() => false);
-      await bekle(Math.max(200, a.aralikMs * 2));
-      const ic = await yokla(cdp);
-      kart = kartSec((ic.kartlar || []).filter((k) => k.tip !== 'webz-grup')) || kart;
+      try { await cdp.degerlendir(tiklamaIfadesi(kart), 5000); } catch (_) { /* ignore */ }
+      const gBas = Date.now();
+      let acildi = false;
+      while ((Date.now() - gBas) < 5000) {
+        await bekle(Math.min(500, a.aralikMs));
+        const ic = await yokla(cdp);
+        const icKartlar = ic.kartlar || [];
+        // Seri açıldı = grup kartı artık görünmüyor (karışık menüde tek kitaplar zaten görünür).
+        const yaprak = icKartlar.some((k) => k && k.tip === 'webz-grup') ? null
+          : icKartlar.find((k) => k && k.tip !== 'webz-grup');
+        if (yaprak) {
+          kart = yaprak;
+          acildi = true;
+          break;
+        }
+      }
+      if (!acildi) {
+        sonuc.e6 = { durum: 'RED', sebep: 'grup kartı açılmadı' };
+        await kanitYaz(cdp, a, 'kitap-cdp', true);
+        return;
+      }
     }
     const adim = { kart: kart && { tip: kart.tip, anahtar: kart.anahtar, metin: kart.metin }, yontem: 'dom' };
     sonuc.adim = adim;
@@ -858,7 +921,7 @@ if (require.main === module) {
 
 module.exports = {
   GUNCELLEME_DESENI, KITAP_URL_DESENI, CIKIS, argumanlar, tekSatir, guncellemeCevabiCoz, e7Ozetle,
-  sayfaTuru, kartSec, tiklamaIfadesi, ana,
+  sayfaTuru, kartSec, tiklamaIfadesi, ana, grupAdetCoz, kartSayisiHesapla,
   KAYDEDICI_ANAHTAR, KAYDEDICI_KAYNAK, kayitlariBirlestir, desenleHedefSec,
   CEVRIMICI_ANAHTAR, CEVRIMICI_KAYNAK, CEVRIMICI_TANI, INDIRME_KESIK_ANAHTAR, K4_INDIRME_DESENI,
 };

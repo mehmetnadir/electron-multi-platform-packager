@@ -54,11 +54,26 @@ function domYokla() {
     if (!id && !grup) return;
     if (!gorunur(el)) return;
     const hedef = el.querySelector('.book-cover') || el;
+    let ks = 1;
+    if (grup) {
+      const ariaLabel = el.getAttribute('aria-label') || '';
+      const badgeEl = el.querySelector('.book-group-badge');
+      const badgeMetin = badgeEl ? (badgeEl.innerText || badgeEl.textContent || '') : '';
+      const m1 = /,\s*(\d+)\s+kitap/i.exec(ariaLabel);
+      if (m1) {
+        ks = parseInt(m1[1], 10);
+      } else {
+        const m2 = /(\d+)\s+kitap/i.exec(badgeMetin);
+        if (m2) ks = parseInt(m2[1], 10);
+      }
+      if (isNaN(ks) || ks < 1) ks = 1;
+    }
     webz.push({
       anahtar: id ? `webz:${id}` : `grup:${i}`,
       tip: grup ? 'webz-grup' : 'webz',
+      kitapSayisi: ks,
       metin: (el.innerText || '').trim().slice(0, 80),
-      secici: id ? `.book-item[data-book-id="${id}"]` : null,
+      secici: id ? `.book-item[data-book-id="${id}"]` : (grup ? '.book-item.book-group' : null),
       ...merkez(hedef),
     });
   });
@@ -74,6 +89,7 @@ function domYokla() {
     yolKartlari.set(kitap, {
       anahtar: `yol:${kitap}`,
       tip: 'yol',
+      kitapSayisi: 1,
       kitap,
       metin: (el.innerText || el.getAttribute('alt') || '').trim().slice(0, 80),
       ...merkez(el),
@@ -85,11 +101,12 @@ function domYokla() {
     const id = String(el.getAttribute('data-id') || '');
     if (!/^book\d+$/.test(id) || !gorunur(el)) return;
     tema.push({
-      anahtar: `tema:${id}`, tip: 'tema', kitap: id, metin: (el.innerText || '').trim().slice(0, 80),
+      anahtar: `tema:${id}`, tip: 'tema', kitapSayisi: 1, kitap: id, metin: (el.innerText || '').trim().slice(0, 80),
       secici: `.flashy-card[data-id="${id}"]`, ...merkez(el),
     });
   });
   const kartlar = [webz, yol, tema].reduce((a, b) => (b.length > a.length ? b : a));
+  const kitapKartSayisi = kartlar.reduce((toplam, k) => toplam + (k.kitapSayisi || 1), 0);
 
   // --- Yükleniyor göstergeleri ---------------------------------------------
   const yukleniyor = [];
@@ -177,6 +194,7 @@ function domYokla() {
     baslik: document.title,
     readyState: document.readyState,
     kartSayisi: kartlar.length,
+    kitapKartSayisi,
     kartlar,
     kartBicimleri: { webz: webz.length, yol: yol.length },
     yukleniyor,
@@ -189,4 +207,14 @@ function domYokla() {
   };
 }
 
-module.exports = { domYokla };
+function grupKitapSayisi(ariaLabel, badgeMetin) {
+  const al = String(ariaLabel || '');
+  const m1 = /,\s*(\d+)\s+kitap/i.exec(al);
+  if (m1) return parseInt(m1[1], 10);
+  const bm = String(badgeMetin || '');
+  const m2 = /(\d+)\s+kitap/i.exec(bm);
+  if (m2) return parseInt(m2[1], 10);
+  return 1;
+}
+
+module.exports = { domYokla, grupKitapSayisi };

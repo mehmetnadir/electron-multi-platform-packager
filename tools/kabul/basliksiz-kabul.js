@@ -512,7 +512,13 @@ async function calis(argv, yazici) {
         };
         if (kosum && kosum.asamalar) {
           const m = kosum.asamalar.menu || {};
-          say(`menü: başlık "${m.baslik}" · kart ${m.kartSayisi}/${beklenenKart} · yükleniyor ${JSON.stringify(m.yukleniyor || [])}`
+          const kKart = typeof m.kitapKartSayisi === 'number' ? m.kitapKartSayisi : m.kartSayisi;
+          const kartlar = Array.isArray(m.kartlar) ? m.kartlar : [];
+          const grupSayisi = kartlar.filter((k) => k && (k.tip === 'webz-grup' || (k.kitapSayisi && k.kitapSayisi > 1))).length;
+          const kartMetni = grupSayisi > 0
+            ? `kart ${m.kartSayisi} (${grupSayisi} grup → ${kKart} kitap)`
+            : `kart ${m.kartSayisi}`;
+          say(`menü: başlık "${m.baslik}" · ${kartMetni}/${beklenenKart} · yükleniyor ${JSON.stringify(m.yukleniyor || [])}`
             + ` · sapma=${m.piksel && m.piksel.sapma} koyu=${m.piksel && m.piksel.koyu} renk=${m.piksel && m.piksel.renk} (${m.beklenenSn} sn)`);
           const kt = kosum.asamalar.kitap;
           if (kosum.ileriAdim) {

@@ -353,7 +353,8 @@ JS_MENU = r"""
  let l=[...document.querySelectorAll('img.button[data-url]')].map((e,i)=>
    Object.assign({varyant:'A',indis:i,id:e.id||null,url:e.dataset.url,ad:e.id||'',seri:false},kutu(e)));
  if(!l.length) l=[...document.querySelectorAll('.book-item')].filter(e=>!e.classList.contains('book-group-back')).map((e,i)=>
-   Object.assign({varyant:'B',indis:i,id:'book'+(i+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:e.classList.contains('book-group')},kutu(e)));
+   Object.assign({varyant:'B',indis:i,id:'book'+(i+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:e.classList.contains('book-group'),
+     ariaLabel:e.getAttribute('aria-label')||'',badgeText:(e.querySelector('.book-group-badge')?.innerText||'').trim()},kutu(e)));
  if(!l.length) l=[...document.images].filter(i=>/images\/book\d+\.(png|jpe?g)/i.test(i.currentSrc||i.src||''))
    .map((i,n)=>{const e=i.closest('a, div')||i;
      return Object.assign({varyant:'C',indis:n,id:'book'+(n+1),url:null,ad:(e.innerText||'').trim().slice(0,40),seri:false},kutu(e));});
@@ -362,6 +363,29 @@ JS_MENU = r"""
    Object.assign({varyant:'D',indis:i,id:e.dataset.id||('book'+(i+1)),url:null,
      ad:((e.querySelector('.fc-title')||e).innerText||'').trim().slice(0,40),seri:false},kutu(e)));
  return JSON.stringify(l.filter(o=>o.w>40&&o.h>40));})()"""
+
+def grup_adet_coz(aria_label=None, badge_text=None, metin=None):
+    """SAF KARAR: Grup kartindan kitap adedini (N) cozer (aria-label veya badge; bulunamazsa 1)."""
+    for s in (aria_label, badge_text, metin):
+        if not s: continue
+        m = re.search(r"(\d+)\s*kitap", str(s), re.IGNORECASE)
+        if m:
+            try:
+                n = int(m.group(1))
+                if n > 0: return n
+            except ValueError: pass
+    return 1
+
+def menu_kitap_sayisi_hesapla(kitaplar):
+    """SAF KARAR: Menu kartlarinin toplam kitap sayisini hesaplar (grup kartini N kitap sayar)."""
+    toplam = 0
+    for k in (kitaplar or []):
+        if not isinstance(k, dict): continue
+        if k.get("seri") or k.get("grup"):
+            toplam += grup_adet_coz(k.get("ariaLabel"), k.get("badgeText"), k.get("ad") or k.get("metin"))
+        else:
+            toplam += 1
+    return toplam
 
 # Menude kitap OLMAYAN ogeler: config/settings.json'da contentType/type "link" (45551 "Worksheets" ->
 # https://download.ydspublishing.com/...; tiklayinca tuval acilmaz). Olculdu 03.10: kabul bunu kitap
@@ -435,21 +459,37 @@ def js_kutu_guncelle(varyant, ad, indis):
       return JSON.stringify({{x:Math.round(cx),y:Math.round(cy),w:Math.round(r.width),h:Math.round(r.height)}});
     }})()"""
 
+def grup_ac_bekle(js_cagirici, kit, tavan_sn=5):
+    """SAF KARAR / YARDIMCI: Grup kartini tiklar ve ic serinin acilmasini en cok tavan_sn (5 sn) bekle."""
+    js_cagirici("kutu_guncelle", kit)
+    js_cagirici("tikla", kit)
+    bas = time.time()
+    while time.time() - bas < tavan_sn:
+        js_cagirici("bekle", 0.5)
+        ic_kitaplar = js_cagirici("menu_al", None) or []
+        yapraklar = [k for k in ic_kitaplar if not k.get("seri")]
+        # Seri acildi = grup karti artik gorunmuyor (karisik menude tek kitaplar zaten gorunur)
+        if yapraklar and not any(k.get("seri") for k in ic_kitaplar):
+            return yapraklar
+    return []
+
 def kitaplari_genislet(kitaplar, js_cagirici):
     """SAF KARAR: Ana menudeki kitaplarin icindeki serileri acar ve duz listeye genisletir.
     js_cagirici(islem, arg) -> e.g. js_cagirici('kutu_guncelle', kit) -> scroll+measure"""
     genisletilmis = []
     for kit in kitaplar:
         if kit.get("seri"):
-            js_cagirici("kutu_guncelle", kit)
-            js_cagirici("tikla", kit)
-            js_cagirici("bekle", 2)
-            ic_kitaplar = js_cagirici("menu_al", None) or []
-            for ic in ic_kitaplar:
-                ic_kopya = dict(ic)
-                ic_kopya["seri_ana"] = kit
-                ic_kopya["ad"] = f"{kit.get('ad')} / {ic_kopya.get('ad')}"
-                genisletilmis.append(ic_kopya)
+            yapraklar = grup_ac_bekle(js_cagirici, kit, 5)
+            if not yapraklar:
+                kit_kopya = dict(kit)
+                kit_kopya["hata"] = "grup kartı açılmadı"
+                genisletilmis.append(kit_kopya)
+            else:
+                for ic in yapraklar:
+                    ic_kopya = dict(ic)
+                    ic_kopya["seri_ana"] = kit
+                    ic_kopya["ad"] = f"{kit.get('ad')} / {ic_kopya.get('ad')}"
+                    genisletilmis.append(ic_kopya)
             js_cagirici("ana_menu", None)
             js_cagirici("bekle", 1)
         else:
@@ -1543,6 +1583,7 @@ def main():
 
 def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
     kitaplar, baglantilar = baglanti_ayir(kitaplar, c.jsj(JS_BAGLANTILAR))
+    ham_kitaplar = list(kitaplar)  # baglantilar ayrildiktan SONRA: link karti kitap sayilmaz
     if baglantilar:
         r["menuBaglantilar"] = baglantilar
         for b in baglantilar: log("BAGLANTI", bookId, str(b.get("ad")).split("\n")[0], b.get("url"))
@@ -1564,7 +1605,7 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
 
     kitaplar = kitaplari_genislet(kitaplar, cagirici)
 
-    r["menuKitapSayisi"] = len(kitaplar)
+    r["menuKitapSayisi"] = menu_kitap_sayisi_hesapla(ham_kitaplar)
     r["menuAdlar"] = [k.get("ad") or k.get("id") for k in kitaplar]
     # MENU EKRANI: "pakette var ama menude yok" sinifi ancak menuye BAKILARAK kanitlanir
     # (olculdu 2026-09-22: 60114'un paketinde 4 kitap asset'i var, menu 2 kitap gosteriyor).
@@ -1581,6 +1622,10 @@ def kitaplari_olc(r, c, bookId, baslik, dizin, menuUrl, kitaplar):
     else:
         for i, kit in enumerate(kitaplar, 1):
             t0 = time.time()
+            if kit.get("hata") == "grup kartı açılmadı":
+                r["kitaplar"].append({"sira": i, "id": kit.get("id"), "ad": kit.get("ad"),
+                                      "sonuc": "KALDI", "sebep": "grup kartı açılmadı"})
+                continue
             if kit.get("seri_ana"):
                 ana = kit["seri_ana"]
                 cagirici("kutu_guncelle", ana)
