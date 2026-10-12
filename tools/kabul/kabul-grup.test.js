@@ -92,3 +92,25 @@ test('(f) eski davranış: grupsuz 4 kart → kitapKartSayisi 4 ve asamaKarari G
   assert.equal(sonuc.sebepler.length, 0);
   assert.equal(sonuc.notlar.length, 0);
 });
+
+test('(g) cihazKartlari: beş kart aynı adı taşır ("Sonic-Monic kitabını aç") → 5 kart (12.10 kasa 60014)', () => {
+  const dugumler = [];
+  const kutular = [[168, 375, 587, 961], [651, 375, 1069, 961], [1134, 375, 1552, 961], [1616, 375, 2035, 961], [168, 1349, 587, 1840]];
+  for (const [x1, y1, x2, y2] of kutular) {
+    dugumler.push({ aciklama: 'Sonic-Monic kitabını aç', metin: '', sinir: { x1, y1, x2, y2 } });
+    // aynı kartın içindeki kapak metni: aynı kart sayılır, ikinci kart doğmaz
+    dugumler.push({ aciklama: '', metin: 'Sonic-Monic', sinir: { x1: x1 + 10, y1: y1 + 10, x2: x1 + 200, y2: y1 + 60 } });
+  }
+  const kartlar = cihazKartlari(dugumler, ['Sonic-Monic']);
+  assert.equal(kartlar.length, 5);
+  assert.deepEqual(kartlar.map((k) => k.anahtar),
+    ['sonic-monic', 'sonic-monic#2', 'sonic-monic#3', 'sonic-monic#4', 'sonic-monic#5']);
+});
+
+test('(h) cihazKartlari: aynı kartın kapak + düğme düğümü (iç içe) → 1 kart', () => {
+  const dugumler = [
+    { aciklama: 'Beyond kitabını aç', metin: '', sinir: { x1: 100, y1: 100, x2: 500, y2: 700 } },
+    { aciklama: 'Beyond kitabını aç', metin: '', sinir: { x1: 120, y1: 120, x2: 480, y2: 600 } },
+  ];
+  assert.equal(cihazKartlari(dugumler).length, 1);
+});
