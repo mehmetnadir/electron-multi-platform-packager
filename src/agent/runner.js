@@ -751,7 +751,9 @@ async function heartbeat(auth) {
     { headers: agentHeaders(auth), timeout: CONFIG.heartbeatTimeoutMs, validateStatus: () => true,
       httpsAgent: heartbeatAjani() },
   );
-  durumDosyasiYaz(auth).catch(() => {}); // menü çubuğu simgesi okur; nabzı bekletmez
+  // Menü çubuğu simgesi okur; nabzı bekletmez. YALNIZ canlı ajan: runner'ı modül olarak yükleyen
+  // testler gerçek ~/.empp-agent/durum.json'u ezmesin (13.10, test-yalitim-nobetci yakaladı).
+  if (require.main === module) durumDosyasiYaz(auth).catch(() => {});
   try {
     await postOnce();
   } catch (e) {
