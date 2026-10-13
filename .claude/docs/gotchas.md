@@ -206,3 +206,26 @@
   verir ve KOD GİRMEDEN ÖNCE `window.isOnline === false` şartı arar; ölçülemezse ya da true ise hiçbir kod girilmez
   (ÖLÇÜLEMEDİ). Electron 27'nin Node'u `HTTPS_PROXY`'yi kendiliğinden uygulamaz; ana sürecin ağa çıkıp çıkmadığı
   `--inspect` ile ÖLÇÜLÜR (`anaSurecAg` rapor alanı), varsayılmaz.
+
+## kabul kapısı: üç sahte RED sınıfı (2026-10-12/13, ölçüldü)
+
+- **Seri grup kartı 1 sayılıyordu.** SET menüsü aynı seriden kitapları tek `.book-item.book-group`
+  kartında toplar (aria-label `"<Seri> serisi, N kitap"`). Kart sayan kapı "menü kartı 1 ≠ 5" RED
+  verdi. Doğrusu: kart başına `kitapSayisi` (aria-label ya da rozetten), karar `kitapKartSayisi` ile.
+  İleri adım grup kartına basar ve hiç grup kartı görünmeyene kadar (≤5 sn) bekler; yalnız "ekranda
+  webz kartı var" ölçütü karışık menüde sahte "grup açıldı" üretir. Dört kapıda aynı kural:
+  Electron `kosum/dom-yoklama.js` + `olcutler.js` + `main.js`, Android `android-cihaz.js`, Pardus
+  `tools/pardus/cdp-kitap-ac.js`, Windows `tools/windows/kabul/kabul.py` (`ham_kitaplar` bağlantı
+  kartları AYRILDIKTAN sonra sayılır). Testler: `kabul-grup.test.js`, `cdp-kitap-ac-grup.test.js`,
+  `kabul_grup_test.py`.
+- **Aynı adlı kartlar birleşiyordu (Android).** UI dökümünde 5 kitabın adı aynı olabilir; ada göre
+  tekilleştirme 5 kartı 1 yaptı. `cihazKartlari` "kitabını aç" düğümlerini KONUMLA ayırır (`ad#2…`),
+  sonra okuma sırasına dizer. Kart dışındaki başlık ve bookN düğümleri katı tekilleştirmede kalır.
+- **Yavaş emülatörde paket hizmeti kopukluğu.** `adb install` "Broken pipe" / "Can't find service:
+  package" / `DeadObjectException` verir; paket bozuk değildir. `geciciKurulumHatasi` bunları tanır,
+  `paketHizmetiBekle` (`pm path android`, ≤180 sn) sonrası en çok 2 kez yeniden kurar.
+  `kurulumSebebi` 400 karakterden uzun çıktıyı baş 300 + son 100 olarak kısaltır (agy filosu bir kez
+  geri aldı; test çiviler).
+- **Kasa D: kanıt dizini bozuldu.** `D:\empp-kabul\kanit` altında dizin bozukluğu yazmayı düşürdü
+  (`chkdsk /scan` RC=6). Yeni kanıt dizini `D:\empp-kabul\kanit-1210\<kitap>`; `chkdsk D: /spotfix`
+  yeniden başlatmada, yalnız Windows kuyruğu boşken.
