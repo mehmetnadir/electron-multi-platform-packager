@@ -366,6 +366,14 @@ function macAraciSaglamMi() {
 // yeteneğini DÜŞÜRÜR; değilse
 // alır. Kod varsayılanı KAPALI (EMPP_PROBOOK_SERIT=1 ile açılır) → kapalıyken null, davranış aynı.
 // Nabız ARKA PLANDA okunur (heartbeat beklemez); ilk karar main()'de ilk heartbeat'ten önce.
+// BOŞTA KAPISI (13.10, Nadir): kullanıcı Mac'te çalışırken mac/android yeni iş almaz, süren iş
+// arka plan önceliğine iner; 10 dk boşta + düşük yükte üretim sürer (bosta-kapisi.js).
+// Yalnız canlı ajan sürecinde ölçer: runner'ı modül olarak yükleyen testler kullanıcı etkinliğinden
+// etkilenmesin (Mac'te test koşan kişi her zaman "etkin"dir).
+const bostaIzleyicisi = require('./bosta-kapisi').bostaIzleyicisiKur({
+  log, platform: require.main === module ? process.platform : 'test',
+});
+
 let seritDenetcisi = seritDenetcisiKur({
   env: process.env,
   caps: CONFIG.caps,
@@ -517,6 +525,7 @@ function guncelYetenekler() {
     // İMZA BEKLİYOR (§2a, 02.10): hazır kuyruk açıkken yuva kapalı da olsa windows ilan edilir.
     imzaBekleme: CONFIG.winHazirAcik === true,
   });
+  caps = require('./bosta-kapisi').bostaKapisiUygula(caps, bostaIzleyicisi.durum().durum);
   const winKabul = CONFIG.caps.includes('windows') && process.env.EMPP_RUNNER_WINDOWS === '1'
     ? winKabulDurumu() : undefined;
   if (seritDenetcisi) {
@@ -697,6 +706,42 @@ function heartbeatAjani() {
   return _hbAjan;
 }
 
+/**
+ * MENÜ ÇUBUĞU DURUMU (13.10, Nadir): `~/.empp-agent/durum.json` — süren iş, boşta kapısı kararı,
+ * duraklatma, sıradaki işler (sunucu `/sira`, salt okuma). SwiftBar eklentisi
+ * (`tools/menubar/empp.30s.sh`) bunu okur; duraklat/devam bayraklarını o yazar. 60 sn'de bir sıra çekilir.
+ */
+let _siraSon = { t: 0, isler: [], suren: [] };
+async function durumDosyasiYaz(auth) {
+  const platformlar = CONFIG.caps.filter((c) => ['mac', 'macos', 'android', 'pardus', 'windows'].includes(c));
+  if (platformlar.length && Date.now() - _siraSon.t > 60000) {
+    try {
+      const r = await axios.get(joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/sira`), {
+        headers: agentHeaders(auth), timeout: 15000, validateStatus: () => true,
+        params: { platformlar: platformlar.join(',') },
+      });
+      if (r.status === 200 && r.data) _siraSon = { t: Date.now(), isler: r.data.isler || [], suren: r.data.suren || [] };
+    } catch { /* ağ yoksa son bilinen sıra kalır */ }
+  }
+  const bosta = bostaIzleyicisi.durum();
+  const veri = {
+    zaman: new Date().toISOString(),
+    pid: process.pid,
+    suren: currentJob,
+    bosta: { durum: bosta.durum, sebep: bosta.sebep },
+    duraklatildi: pauseRequested(CONFIG.pauseFlag),
+    ofiste: ofisteMi(),
+    yetenekler: _sonYetenekListesi,
+    sira: _siraSon.isler,
+    sunucudaSuren: _siraSon.suren,
+    siraZamani: _siraSon.t ? new Date(_siraSon.t).toISOString() : null,
+  };
+  const hedef = path.join(os.homedir(), '.empp-agent', 'durum.json');
+  const gecici = `${hedef}.${process.pid}.tmp`;
+  await fs.promises.writeFile(gecici, `${JSON.stringify(veri, null, 2)}\n`);
+  await fs.promises.rename(gecici, hedef);
+}
+
 async function heartbeat(auth) {
   const postOnce = () => axios.post(
     joinUrl(CONFIG.apiBase, `agents/${auth.agentId}/heartbeat`),
@@ -706,6 +751,7 @@ async function heartbeat(auth) {
     { headers: agentHeaders(auth), timeout: CONFIG.heartbeatTimeoutMs, validateStatus: () => true,
       httpsAgent: heartbeatAjani() },
   );
+  durumDosyasiYaz(auth).catch(() => {}); // menü çubuğu simgesi okur; nabzı bekletmez
   try {
     await postOnce();
   } catch (e) {
