@@ -32,7 +32,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  KANONIK_YOLU_VARSAYILAN, kabukBirimleri, okuyucusuzMu, kabukKarari,
+  KANONIK_YOLU_VARSAYILAN, kabukBirimleri, okuyucusuzMu, kabukKarari, indexMainReferanslari,
 } = require('../../src/packaging/okuyucu-kabugu');
 const { rozetSurumuOku, surumParcala } = require('../../src/packaging/motor-surumu');
 const A1 = require('../../src/packaging/a1-duzen');
@@ -72,13 +72,39 @@ function olculemedSebebi(dir, sayfa, r) {
 }
 
 /**
+ * SET MENÜLÜ KÖK (16.10, Uçan Balık 36+): kök `index.html` yayıncının kendi menü sayfası (okuyucu ana
+ * girişi çağırmaz) ve üyeler `bookN` DEĞİL, ad taşıyan dizinlerdir (d1-portfolyo, e1-matematik …).
+ * `kabukBirimleri` bu düzende tek kök birim döner → kapı kökü ölçer, `*.main.js` bulamaz ve sahte
+ * ÖLÇÜLEMEDİ verirdi. Burada: kök sayfa okuyucu çağırmıyorsa, kendi `index.html`'i okuyucu ana
+ * girişini çağıran her doğrudan alt dizin bir birimdir. Üye yoksa null → eski davranış (kök, ÖLÇÜLEMEDİ).
+ * Tek kitap kökü (index.html okuyucu çağırır) ve A1 buraya girmez. I/O.
+ * @returns {Promise<Array<{rel:string, index:string, duzen:string}>|null>}
+ */
+async function setMenuUyeleri(kokDizin, birimler) {
+  if (birimler.length !== 1 || birimler[0].rel !== '' || birimler[0].duzen) return null;
+  let kokHtml;
+  try { kokHtml = fs.readFileSync(path.join(kokDizin, birimler[0].index), 'utf8'); } catch (_) { return null; }
+  if (indexMainReferanslari(kokHtml).js.length) return null;
+  let girisler;
+  try { girisler = fs.readdirSync(kokDizin, { withFileTypes: true }); } catch (_) { return null; }
+  const uyeler = [];
+  for (const g of girisler.filter((x) => x.isDirectory()).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    let html;
+    try { html = fs.readFileSync(path.join(kokDizin, g.name, 'index.html'), 'utf8'); } catch (_) { continue; }
+    if (indexMainReferanslari(html).js.length) uyeler.push({ rel: g.name, index: 'index.html', duzen: 'set-menu' });
+  }
+  return uyeler.length ? uyeler : null;
+}
+
+/**
  * Açılmış ağaçtaki her okuyucu birimini ölçer. I/O.
  * @returns {Promise<Array<{dizin:string, sayfa:string, duzen?:string, surum:string|null,
  *   main:string|null, parca:string|null, karar:string, sebep?:string}>>}
  */
 async function birimleriOlc(kokDizin, kanonikSurum) {
   const birimler = [];
-  for (const b of await kabukBirimleri(kokDizin)) {
+  const aday = await kabukBirimleri(kokDizin);
+  for (const b of (await setMenuUyeleri(kokDizin, aday)) || aday) {
     const dizin = b.rel || '.';
     const sayfa = b.rel ? `${b.rel}/${b.index}` : b.index;
     const kayit = { dizin, sayfa, surum: null, main: null, parca: null };
@@ -162,7 +188,8 @@ function asarGerekliMi(rel) {
   if (rel === A1.A1_MOTOR_SAYFASI || rel === 'classlibraries/ImWin32.dll' || rel === 'paket.json') return true;
   const p = rel.split('/');
   const ad = p[p.length - 1];
-  const duzeyUygun = p.length === 1 || (p.length === 2 && KITAP_DIZINI.test(p[0]));
+  // Derinlik 2: bookN ya da set menülü kökün ad taşıyan üyesi (bkz. setMenuUyeleri).
+  const duzeyUygun = p.length === 1 || p.length === 2;
   return duzeyUygun && (ad === 'index.html' || ad === 'app.config.js' || H20_JS.test(ad));
 }
 
@@ -404,6 +431,7 @@ async function calis(argv, yaz = (x) => process.stdout.write(`${x}\n`), env = pr
 }
 
 module.exports = {
+  setMenuUyeleri,
   KARAR,
   kip,
   kanonikSurumCoz,

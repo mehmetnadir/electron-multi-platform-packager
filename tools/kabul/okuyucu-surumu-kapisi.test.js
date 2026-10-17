@@ -157,6 +157,49 @@ test('kök sayfa main.js çağırmıyor (A1 işaretsiz set kabuğu = olay önces
   } finally { temizle(d); }
 });
 
+/** Set menülü kök (Uçan Balık 36+): kök menü sayfası okuyucu çağırmaz, üyeler bookN değil, ad taşır. */
+function adliSetAgaci(surumler, adlar) {
+  const d = gecici('adli-set');
+  fs.writeFileSync(path.join(d, 'index.html'), SET_KABUGU);
+  surumler.forEach((s, i) => {
+    const b = path.join(d, adlar[i]);
+    fs.mkdirSync(b);
+    fs.writeFileSync(path.join(b, 'index.html'), OKUYUCU_SAYFASI);
+    kabukYaz(b, s);
+  });
+  fs.mkdirSync(path.join(d, 'images')); // okuyucusuz yardımcı dizin: birim sayılmaz
+  return d;
+}
+
+test('set menülü kök, ad taşıyan üyeler (book1 değil) → üyeler ölçülür; güncel GEÇTİ', async () => {
+  const d = adliSetAgaci([KANONIK, KANONIK], ['d1-portfolyo', 'e1-matematik']);
+  try {
+    const r = await K.okuyucuSurumuOlc(d, { kanonik: KANONIK, env: ZORUNLU });
+    assert.equal(r.karar, 'GECTI', r.sebepler.join(' | '));
+    assert.deepEqual(r.birimler.map((b) => b.sayfa), ['d1-portfolyo/index.html', 'e1-matematik/index.html']);
+  } finally { temizle(d); }
+});
+
+test('set menülü kök, bir üye eski → RED (ölçülür, sahte ÖLÇÜLEMEDİ değil)', async () => {
+  const d = adliSetAgaci([KANONIK, '1.12.4'], ['d1-portfolyo', 'e1-matematik']);
+  try {
+    const r = await K.okuyucuSurumuOlc(d, { kanonik: KANONIK, env: ZORUNLU });
+    assert.equal(r.karar, 'RED');
+    assert.match(r.sebepler.join(' | '), /e1-matematik\/index\.html: okuyucu 1\.12\.4 < kanonik/);
+  } finally { temizle(d); }
+});
+
+test('asar: set menülü kökün ad taşıyan üyesi ölçüm ağacına çıkar', async () => {
+  const d = adliSetAgaci([KANONIK], ['d1-portfolyo']);
+  const asar = require('@electron/asar');
+  const ap = path.join(gecici('asar-adli'), 'app.asar');
+  try {
+    await asar.createPackage(d, ap);
+    const r = await K.okuyucuSurumuOlc(ap, { kanonik: KANONIK, env: ZORUNLU });
+    assert.equal(r.karar, 'GECTI', r.sebepler.join(' | '));
+  } finally { temizle(d, path.dirname(ap)); }
+});
+
 test('main.js eksik ya da rozetsiz → ÖLÇÜLEMEDİ, sebep dosyayı adlandırır', async () => {
   const d = setAgaci([KANONIK, KANONIK]);
   fs.renameSync(path.join(d, 'book1', MAIN), path.join(d, 'book1', 'kayip.txt'));
@@ -245,10 +288,11 @@ test('asar (mac/pardus/windows): A1 eski asar → RED, güncel asar → GEÇTİ 
 
 test('asarGerekliMi: yalnız ölçüm dosyaları (saf)', () => {
   for (const y of ['index.html', 'kapak/index.html', 'app.config.js', 'classlibraries/ImWin32.dll', 'paket.json',
-    MAIN, `${PARCA_H}.77.js`, 'book3/index.html', `book3/${MAIN}`, '0123456789abcdef0123.js']) {
+    MAIN, `${PARCA_H}.77.js`, 'book3/index.html', `book3/${MAIN}`, '0123456789abcdef0123.js',
+    `e1-matematik/${MAIN}`, 'e1-matematik/index.html']) {
     assert.equal(K.asarGerekliMi(y), true, y);
   }
-  for (const y of ['assets/a.png', 'kapak/x.js', `pages/${MAIN}`, 'book3/assets/index.html', 'main.js', 'book3/core/index.html']) {
+  for (const y of ['assets/a.png', 'kapak/x.js', `pages/deep/${MAIN}`, 'book3/assets/index.html', 'main.js', 'book3/core/index.html']) {
     assert.equal(K.asarGerekliMi(y), false, y);
   }
 });
